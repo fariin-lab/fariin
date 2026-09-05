@@ -1357,34 +1357,39 @@ struct ChatsView: View {
     /// ⚠️ THEIR PHOTO IS THEIR CHOICE. A search result is by definition somebody you may not know,
     /// so the Profile Picture audience is honoured here exactly as `NewChatView` honours it — the
     /// two are the same situation and must not answer it differently.
+    /// ⛔ THE BUTTON AND THE LIST-ROW MODIFIERS ARE GONE, and both for the same reason: this row is
+    /// a `UITableView` cell now. The table's `didSelectRowAt` owns the tap (see `openPerson`), and a
+    /// `Button` inside the cell would take that touch before the table ever saw it — the same
+    /// swallowing that made `chatListRow` attach its context menu to the label rather than the
+    /// Button. `listRowInsets`, `listRowSeparator`, `listRowBackground` and `selectionDisabled` were
+    /// instructions to a `List` that no longer exists; the table answers all four itself
+    /// (`margins(.all, 0)`, `separatorStyle = .none`, a clear cell, and `canEditRowAt` false for
+    /// this section).
     @ViewBuilder private func newPersonRow(_ u: UserProfile) -> some View {
-        Button {
-            let cid = ChatService.convId(me, u.id)
-            chatSearch = ""
-            path.append(ChatTarget(id: cid, name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl))
-            Task { try? await ChatService.openConversation(other: u) }
-        } label: {
-            HStack(spacing: 12) {
-                AvatarView(name: u.name.isEmpty ? u.handle : u.name,
-                           photoUrl: PrivacyPrefs.allows(u.privacy, "photo",
-                                                         contactOfMine: PrivacyPrefs.isContact(u.id))
-                                     ? u.photoUrl : nil,
-                           size: 56)
-                    .padding(.vertical, 12)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(u.name.isEmpty ? u.handle : u.name).font(.headline).foregroundStyle(.primary)
-                    Text("@\(u.handle)").font(.subheadline).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
+        HStack(spacing: 12) {
+            AvatarView(name: u.name.isEmpty ? u.handle : u.name,
+                       photoUrl: PrivacyPrefs.allows(u.privacy, "photo",
+                                                     contactOfMine: PrivacyPrefs.isContact(u.id))
+                                 ? u.photoUrl : nil,
+                       size: 56)
+                .padding(.vertical, 12)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(u.name.isEmpty ? u.handle : u.name).font(.headline).foregroundStyle(.primary)
+                Text("@\(u.handle)").font(.subheadline).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
-            .contentShape(Rectangle())
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-        .selectionDisabled(true)
+        .padding(.horizontal, 16)
+        .contentShape(Rectangle())
+    }
+
+    /// Tapping a stranger opens the chat with them, which is what creates it. Lifted out of the row
+    /// unchanged when the row stopped being a Button.
+    private func openPerson(_ u: UserProfile) {
+        let cid = ChatService.convId(me, u.id)
+        chatSearch = ""
+        path.append(ChatTarget(id: cid, name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl))
+        Task { try? await ChatService.openConversation(other: u) }
     }
 
     /// Ask the server who owns this username. Debounced by the trailing-edge check rather than by a
@@ -1649,6 +1654,76 @@ struct ChatsView: View {
     private func selectAll() { selection = Set(visible.map { $0.id }) }
 
     // System action list for a chat row's context menu (HIG order + SF Symbols).
+    /// The long-press menu, as `UIMenuElement`s for the table's `UIContextMenuConfiguration`.
+    ///
+    /// ⚠️ A STRAIGHT TRANSCRIPTION OF `chatMenu` BELOW, WHICH IS NOW DEAD AND KEPT ONLY AS THE
+    /// REFERENCE FOR THIS ONE. Every rule in its comments still applies and none of them was
+    /// re-derived here: `hasUnreadMark` rather than `unread(me) > 0` because a self-marked chat
+    /// stores −1 and would otherwise be offered "Unread" forever with no way back; the official
+    /// channel's mute is a plain on/off rather than a timer because a "Mute for 1 hour" that never
+    /// un-mutes is a label that lies; blocked chats are offered neither.
+    ///
+    /// ⚠️ THE ICONS ARE THE SAME TWO KINDS THE SwiftUI MENU USED — an `ic_` name is one of our own
+    /// drawings, anything else is an SF Symbol — so this reads the identical asset names rather than
+    /// substituting system glyphs that are merely close.
+    private func chatMenuElements(_ conv: Conversation) -> [UIMenuElement] {
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        var out: [UIMenuElement] = []
+
+        if !conv.isBlockedByMe(me) && conv.hasUnreadMark(me) {
+            out.append(UIAction(title: "Read", image: UIImage(systemName: "envelope.open")) { _ in
+                // Full parity with opening the chat: reset MY counter, send read receipts, and drop
+                // its delivered notifications + fix the app badge.
+                Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
+                NotificationCleaner.clear(cid: conv.id)
+            })
+        } else {
+            out.append(UIAction(title: "Unread", image: UIImage(named: "ic_menu_unread")) { _ in
+                Task { await ChatService.markUnread(conv.id) }
+            })
+        }
+
+        if OfficialChannel.isOfficial(conv.id) {
+            let quiet = conv.isMuted(me, now: nowMs)
+            out.append(UIAction(title: quiet ? "Unmute" : "Mute",
+                                image: UIImage(systemName: quiet ? "bell" : "bell.slash")) { _ in
+                Task { await ChatService.setMuted(conv.id, !quiet) }
+            })
+        } else {
+            var mutes: [UIAction] = []
+            if conv.isMuted(me, now: nowMs) {
+                mutes.append(UIAction(title: "Unmute") { _ in
+                    Task { await ChatService.setMute(conv.id, until: 0) }
+                })
+            }
+            for (label, hours) in [("Mute for 1 hour", 1), ("Mute for 8 hours", 8), ("Mute for 1 week", 168)] {
+                mutes.append(UIAction(title: label) { _ in
+                    Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(hours)) }
+                })
+            }
+            mutes.append(UIAction(title: "Mute Always") { _ in
+                Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) }
+            })
+            out.append(UIMenu(title: "Mute", image: UIImage(systemName: "bell.slash"), children: mutes))
+        }
+
+        let pinned = conv.isPinned(me)
+        out.append(UIAction(title: pinned ? "Unpin" : "Pin",
+                            image: pinned ? UIImage(systemName: "pin.slash") : UIImage(named: "ic_pin_menu")) { _ in
+            Task { await ChatService.setPinned(conv.id, !pinned) }
+        })
+        out.append(UIAction(title: "Archive", image: UIImage(named: "ic_archive")) { _ in
+            Task { await ChatService.setArchived(conv.id, true) }
+        })
+        // `.destructive` reddens the row itself, which is what `MenuIcon(ink: .systemRed)` was doing
+        // by hand on the SwiftUI side. The delete still goes through the app's own alert.
+        out.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"),
+                            attributes: .destructive) { _ in
+            pendingDelete = conv
+        })
+        return out
+    }
+
     @ViewBuilder private func chatMenu(_ conv: Conversation) -> some View {
         // Blocked-aware like the row badge (audit: the menu offered "Read" — which would leak read
         // receipts to the blocked person — for a chat whose row displays zero unread).
@@ -1800,11 +1875,80 @@ struct ChatsView: View {
                 set: { router.pendingInviteCode = $0?.code })
     }
 
-    /// THE LOADED CHAT LIST: the List, the stories row floating over it, and every modifier
-    /// the two need. Lifted out of `body` because the type-checker gave up on it — "unable to
-    /// type-check this expression in reasonable time". `body` was already close to the budget
-    /// and this is the heaviest part of it by a wide margin; splitting the value out is the
-    /// documented fix and costs nothing at runtime.
+    /// THE CHAT LIST, AND EVERYTHING THE SCREEN HAS TO HAND IT.
+    ///
+    /// ⚠️ A PROPERTY OF ITS OWN FOR THE SAME REASON `loadedChatList` IS ONE: this file's type-checker
+    /// budget is a known cost, and twenty-odd closures in one expression is exactly the shape that
+    /// produced "unable to type-check this expression in reasonable time" before. The explicit
+    /// `return` is part of that — a multi-statement body is not a result builder and is not searched
+    /// for overloads the same way.
+    ///
+    /// ⚠️ EVERY CLOSURE HERE IS A LIFT, NOT A REWRITE. Each one is the body the SwiftUI row or menu
+    /// already had, moved rather than re-derived, so the behaviour arguments settled over the last
+    /// two weeks are not reopened by this migration.
+    private var chatListTable: some View {
+        let split = chatSections
+        return ChatListTable(
+            pinned: split.pinned,
+            unpinned: split.rest,
+            // Only while searching. Empty at every other moment, which is what makes the third
+            // section vanish without anybody deciding it should.
+            people: searchTrimmed.isEmpty ? [] : newPeople,
+            me: me,
+            dark: dark,
+            onOpen: { conv in
+                path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
+                                       photo: conv.displayPhoto(me)))
+            },
+            onOpenPerson: { openPerson($0) },
+            personRow: { AnyView(newPersonRow($0)) },
+            onStoryTap: { conv in
+                // The ring has its own tap, which beats the row's. In Select mode it must still
+                // mean "tick this row" — opening a story from a list you are selecting in is not
+                // what the finger meant.
+                if selecting { toggleSelection(conv.id); return }
+                if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
+                    openStoryFromRing(conv, g)
+                }
+            },
+            storySeen: { storySeen($0) },
+            onCall: { $0.id == liveCallCid },
+            draft: { Drafts.shared.text($0.id) },
+            voiceDraftSecs: { AudioRecorder.draftIndex[$0.id] ?? 0 },
+            voiceUnplayed: { PlayedVoice.shared.lastVoiceUnplayed($0, me: me) },
+            selecting: selecting,
+            selection: $selection,
+            onToggleRead: { conv in
+                // Same two branches the menu has, and the same reason for the test: `hasUnreadMark`
+                // rather than `unread(me) > 0`, because a self-marked chat stores −1 and would
+                // otherwise be offered "Unread" for ever with no way back.
+                if conv.hasUnreadMark(me) {
+                    Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
+                    NotificationCleaner.clear(cid: conv.id)
+                } else {
+                    Task { await ChatService.markUnread(conv.id) }
+                }
+            },
+            onTogglePin: { conv in
+                Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
+            },
+            onArchive: { conv in Task { await ChatService.setArchived(conv.id, true) } },
+            // Both of these raise the screen's own alert rather than acting — the swipe is the
+            // question, not the answer. `pendingDelete` opens the alert, `pendingMute` the dialog.
+            onDelete: { pendingDelete = $0 },
+            onMute: { pendingMute = $0 },
+            menuActions: { chatMenuElements($0) },
+            // The peek is the same view the SwiftUI `contextMenu(preview:)` showed, in a hosting
+            // controller because that is what `UIContextMenuConfiguration` takes.
+            peek: { conv in UIHostingController(rootView: ChatPeekPreview(cid: conv.id, me: me)) }
+        )
+    }
+
+    /// THE LOADED CHAT LIST: the table, the empty state over it, and every modifier they need.
+    /// Lifted out of `body` because the type-checker gave up on it — "unable to type-check this
+    /// expression in reasonable time". `body` was already close to the budget and this is the
+    /// heaviest part of it by a wide margin; splitting the value out is the documented fix and
+    /// costs nothing at runtime.
     private var loadedChatList: some View {
                         ZStack(alignment: .top) {
                           // Selection is ALWAYS bound (a Set only selects in edit mode, so taps still OPEN
@@ -1812,82 +1956,49 @@ struct ChatsView: View {
                           // the List and made the edit-mode transition POP; a stable binding lets the
                           // native circles-slide-in + rows-shift-right animate smoothly (withAnimation on
                           // `selecting` at the tap sites drives it).
-                          List(selection: $selection) {
-                          // The way into the archive, above the chats. Empty when there is nothing
-                          // archived — the `if` lives inside the property so this body only grows by
-                          // one element (this file's type-checker budget is a known cost).
-                          // ⛔ THE ARCHIVE ROW MOVED TO THE BOTTOM OF THE LIST — owner, 2026-09-02,
-                          // off build 725: "archive row hide in chatlist", with "like the reference
-                          // app exactly" over the whole report. Theirs keeps Archived as the LAST
-                          // row, after every conversation, so it is out of sight until you scroll
-                          // for it and the list opens on actual chats. It used to sit above
-                          // everything here ("above the chats", his earlier call — this reverses
-                          // that on his newer word). Hidden, not deleted: it is still the only door
-                          // to archived chats, and a door has to exist somewhere.
-                          // ⛔ TWO SECTIONS, "Pinned" AND "Chats" — owner, 2026-09-02: "separate the
-                          // chat list into Pinned and Chats sections exactly like the reference app".
+                          // ⛔ THE LIST IS A `UITableView` NOW — his order, 2026-09-05, after the
+                          // pin animation had been reported three times. The note that used to hang
+                          // on `.animation(.snappy, value: pinnedKey)` a few lines below said both
+                          // what was missing and why it could not be fixed from here: "a row leaving
+                          // one `ForEach` for another is a delete and an insert to SwiftUI's diff",
+                          // so a pinned chat crossfades where theirs flies. It also said the fix was
+                          // this list becoming a table and that it was more than he had asked for.
+                          // He has now asked for it.
                           //
-                          // `visible` is ALREADY sorted with pinned chats first (its comparator
-                          // does that), so this splits a sorted array rather than re-sorting it —
-                          // the order inside each section is exactly the order the rows had before.
+                          // ⚠️ EVERY MODIFIER THAT USED TO HANG HERE MOVED, NONE WAS DROPPED:
+                          //   `.listStyle(.grouped)`       → `UITableView(style: .grouped)`
+                          //   `.scrollContentBackground`   → the table's own clear background
+                          //   `.listSectionSpacing(0)`     → `leastNormalMagnitude` headers + footers
+                          //   `.animation(_, pinnedKey)`   → `beginUpdates`/`endUpdates` + `moveRow`
+                          //   `.animation(_, visible)`     → the same transaction
+                          //   `listSettled` + its `.onAppear` grace period → `hasEverApplied`
+                          //   `.environment(\.editMode)`   → `setEditing` + multiple-selection-while-editing
+                          //   the swipes, the menu, the peek, the headings → the table's delegate
                           //
-                          // ⚠️ BOTH HEADERS APPEAR ONLY WHEN BOTH SECTIONS EXIST. Theirs does the
-                          // same: the header is `.leastNormalMagnitude` tall when it has no title,
-                          // so a list with nothing pinned shows no "Chats" heading either — it just
-                          // looks like the plain list it has always been. Showing a lone "Chats"
-                          // above every chat in the app would be a label with nothing to contrast
-                          // against.
-                          //
-                          // ⚠️ THE ROW BODY IS UNCHANGED AND THAT IS DELIBERATE. `chatListRow` owns
-                          // this row's structural identity — this file's own note explains that
-                          // changing it cross-faded two copies of every row when Select mode was
-                          // entered. Two label rows join the flow; no chat row is rebuilt.
-                          // ⚠️ Read ONCE into `split`. Naming it here is what keeps `visible` — a
-                          // filter and a sort over every conversation — to a single evaluation per
-                          // body pass; the un-sectioned branch rebuilds the same array from the two
-                          // halves rather than asking for it again. They concatenate back to
-                          // exactly `visible` because `visible` is already sorted pinned-first.
-                          let split = chatSections
-                          if split.pinned.isEmpty || split.rest.isEmpty {
-                              ForEach(split.pinned + split.rest) { conv in chatListRow(conv) }
-                          } else {
-                              // ⛔ REAL SECTIONS AGAIN, AND THE STYLE IS WHAT MAKES THEM SCROLL —
-                              // owner, 2026-09-02, after a pin and an unpin: "the Chats text jumps
-                              // before the chat card comes down, causing overlap… don't do what you
-                              // want, go read the reference app's real code and see how they do it".
-                              //
-                              // I read it. `ChatListViewController+Loading.applyRowChanges` inserts
-                              // and deletes SECTIONS (`insertSections` / `deleteSections`) inside
-                              // one `beginUpdates`/`endUpdates` transaction, so a heading moves as
-                              // part of its section and can never travel on its own. A pin is a
-                              // `moveRow` ACROSS sections, and their own comment beside it says why
-                              // they do not use delete-plus-insert there: "it results in a weird
-                              // animation". That comment is his bug, written down in their source.
-                              //
-                              // ⚠️ AND HEADINGS-AS-ROWS WAS MY WRONG ANSWER TO THE EARLIER REPORT.
-                              // He said the headings did not scroll; they were pinned because a
-                              // PLAIN list floats its headers. Their table is `style: .grouped`
-                              // (`CLVTableView.init`), where headers scroll with the content — so
-                              // the right fix was the list STYLE, not giving up sections. Turning
-                              // them into rows did stop the pinning, and it also made a heading a
-                              // peer of a chat row in SwiftUI's diff, free to animate across one.
-                              // See `.listStyle(.grouped)` below: the two are one decision.
-                              Section {
-                                  ForEach(split.pinned) { conv in chatListRow(conv) }
-                              } header: { chatSectionHeader("Pinned") }
-                              Section {
-                                  ForEach(split.rest) { conv in chatListRow(conv) }
-                              } header: { chatSectionHeader("Chats") }
-                          }
-                          // ⛔ PEOPLE YOU HAVE NEVER CHATTED WITH, UNDER THE CHATS — owner,
-                          // 2026-09-02. Only while searching, and only below every chat that
-                          // matched: what you are almost always looking for is a conversation you
-                          // already have, and a stranger pushed above those would be in the way of
-                          // the common answer to serve the rare one.
-                          if !searchTrimmed.isEmpty, !newPeople.isEmpty {
-                              chatSectionHeader("Other people")
-                              ForEach(newPeople) { u in newPersonRow(u) }
-                          }
+                          // ⚠️ AND THE TWO `.animation` MODIFIERS HAD TO GO RATHER THAN JUST BECOME
+                          // REDUNDANT. A SwiftUI animation wrapped around a representable animates
+                          // that representable's own updates — a second clock running on top of the
+                          // table's transaction. Two clocks over one rearrangement is exactly the
+                          // shape of his report that "the Chats text jumps before the chat card
+                          // comes down".
+                          chatListTable
+                          // ⚠️ THE SECTION SPLIT MOVED INTO `chatListTable`, WHICH TAKES THE TWO
+                          // HALVES SEPARATELY. The branch that used to flatten them into one
+                          // `ForEach` when either was empty is gone and is not missed: an empty
+                          // table section draws no rows and, by their own title rule, no heading —
+                          // so the flat case falls out of the section machinery instead of needing
+                          // a second code path that had to be kept in step with it.
+                          // ⚠️ ONE CORRECTION TO THE NOTE THAT USED TO BE HERE, because the next
+                          // person to read it would be misled the same way I was. It said their
+                          // `applyRowChanges` inserts and deletes the Pinned and Chats SECTIONS.
+                          // It does not. `CLVRenderState.makeSection` returns a Section for BOTH of
+                          // them unconditionally — only the TITLE is conditional — so pinning never
+                          // inserts or deletes a section at all. Their `insertSections` /
+                          // `deleteSections` calls are for the reminders, backup-progress, archive
+                          // and filter-footer sections, none of which we have. What actually moves
+                          // a pinned row is the `moveRow` across two sections that were both there
+                          // all along, and what makes the heading appear is a title changing on a
+                          // header that is never reloaded. See `ChatListTable.apply`.
                           // ⛔ NO ARCHIVED ROW IN THE LIST AT ALL — owner, 2026-09-02, with it
                           // ringed: "remove it completely from the chat list; when the user wants
                           // archive he clicks the filter button then Archive, never a row in the
@@ -1904,55 +2015,22 @@ struct ChatsView: View {
                           // then always-on when he reversed that. He is ending the argument by
                           // taking the row out of the list, and a menu entry cannot drift up and
                           // down a page.
-                        }
-                        // ⛔ GROUPED, THEIR STYLE, READ FROM SOURCE — `CLVTableView.init` is
-                        // `super.init(frame: .zero, style: .grouped)`. This is the modifier that
-                        // does the job headings-as-rows was doing: a PLAIN list floats its section
-                        // headers under the nav bar, a GROUPED one scrolls them with the content.
-                        // So we get non-sticky headings AND real sections, which is exactly the
-                        // pair their table has.
+                        // ⚠️ THE GROUPED STYLE AND ITS CHROME ARE THE TABLE'S PROBLEM NOW. Every
+                        // number that used to be argued for here — grouped so the headings scroll,
+                        // no separators, no system background, no inter-section spacing — is set
+                        // once on the `UITableView` itself, which is where their own source sets
+                        // it. See the file header of `ChatListTable.swift`.
+                        // ⚠️ THE `.animation(.snappy, value: pinnedKey)` THAT WAS HERE IS GONE, AND
+                        // ITS OWN CLOSING NOTE PREDICTED THIS COMMIT: "matching that last detail
+                        // means this list becoming a `UITableView`, which is a much bigger change
+                        // than he has asked for and I am not starting it unasked." He asked on
+                        // 2026-09-05. The transaction that animation was standing in for is now the
+                        // real one, in `ChatListTable.apply`, and leaving a SwiftUI animation
+                        // wrapped around the representable would run a second clock over it.
                         //
-                        // ⚠️ THE GROUPED CHROME IS TURNED OFF, not inherited. Grouped brings a
-                        // system background and its own inter-section spacing; theirs shows neither
-                        // (`separatorStyle = .none`, and every titleless header and footer returns
-                        // `.leastNormalMagnitude` "because we do not want that spacing"). The
-                        // background is hidden here and the spacing is already zeroed below.
-                        .listStyle(.grouped)
-                        .scrollContentBackground(.hidden)
-                        // ⛔ THE PIN IS ONE ANIMATED TRANSACTION, WHICH IS THE HALF I HAD MISSING —
-                        // owner, 2026-09-02, third report on this: "still not like the reference,
-                        // read the real code".
-                        //
-                        // I did, and the sections were only half of it. `applyRowChanges` wraps
-                        // every change in `beginUpdates()` / `endUpdates()` with
-                        // `defaultRowAnimation = .automatic`, so the whole rearrangement is ONE
-                        // animation the table runs. Ours had none at all: `setPinned` writes to the
-                        // server and the list moves whenever the listener echoes back, outside any
-                        // transaction, so the rows and the headings simply appeared in their new
-                        // places. That is the jump, and no amount of getting the sections right was
-                        // ever going to fix it, because there was nothing animating.
-                        //
-                        // ⚠️ KEYED ON THE PINNED SET, NOT ON THE WHOLE LIST. A message arriving
-                        // re-sorts this list all day; animating that would make every new message
-                        // slide the page around. This value changes when — and only when — a chat
-                        // is pinned or unpinned, so the animation runs for his action and nothing
-                        // else.
-                        //
-                        // ⚠️ WHAT THIS STILL IS NOT: their `moveRow(at:to:)` across sections, where
-                        // one row physically travels from Chats to Pinned. SwiftUI has no such call
-                        // — a row leaving one `ForEach` for another is a delete and an insert to its
-                        // diff — so ours crossfades in place instead of flying. Matching that last
-                        // detail means this list becoming a `UITableView`, which is a much bigger
-                        // change than he has asked for and I am not starting it unasked.
-                        .animation(.snappy(duration: 0.3), value: pinnedKey)
-                        // ⛔ THE SECTION GAP IS THE HEADER'S OWN 14, NOTHING MORE — owner,
-                        // 2026-09-02, off build 725: "space between chats and pinned chats, make
-                        // like the reference". The List adds its own inter-section spacing on top of
-                        // whatever a header pads, so the gap rendered as system-spacing PLUS 14
-                        // where theirs is a stated 14-above/8-below and nothing else
-                        // (`CLVTableDataSource`'s header insets). Zeroed here so the header's
-                        // numbers are the whole story.
-                        .listSectionSpacing(0)
+                        // The section gap went the same way: it was zeroed here because a `List`
+                        // adds its own spacing on top of the header's 14, and a `UITableView` adds
+                        // none once every titleless header and footer returns `leastNormalMagnitude`.
                         // THE STUCK GREY ROW, real cause. This List carries a `selection` binding for
                         // multi-select, and every row carries a `.tag`. A NavigationLink row does not only
                         // push - it ALSO sets the List's selection - and SwiftUI does not clear that on the
@@ -1966,52 +2044,20 @@ struct ChatsView: View {
                         .onChange(of: selecting) { _, on in
                             if !on, !selection.isEmpty { selection.removeAll() }   // leaving edit mode clears it
                         }
-                        // When a new message bumps a chat to the top, the rows
-                        // slide to their new order instead of popping. Scoped to the order/
-                        // membership only, so it won't animate unrelated content changes.
-                        // Nil until the list has settled, so a cold launch PAINTS its rows instead of
-                        // flying them in from nowhere on top of each other. See `listSettled`.
-                        .animation(listSettled ? .spring(response: 0.38, dampingFraction: 0.86) : nil,
-                                   value: visible.map(\.id))
-                        // A GRACE PERIOD FROM WHEN THE LIST FIRST EXISTS, not from `hasLoaded`.
+                        // ⚠️ THE REST OF THE LIST'S MODIFIERS WENT TO THE TABLE, AND TWO OF THEM
+                        // CARRY NUMBERS HE CHOSE, so they are named here rather than left to be
+                        // rediscovered: the 28pt bottom clearance that keeps rows out from under the
+                        // floating tab bar is the table's own `contentInset.bottom`, and the
+                        // selection tick's colour — `Theme.defaultBubble(dark)`, because the app's
+                        // `.primary` tint drew a white check on a white disc — is the table's
+                        // `tintColor`. The top margin stays 0 for the reason it was set to 0: their
+                        // heading's 14pt top margin is the only spacing their list allows above a
+                        // section, and anything here is added on top of it.
                         //
-                        // Keying it to `hasLoaded` looks right and is not: on a cold launch the skeleton
-                        // holds this branch until `hasLoaded` is ALREADY true, so the List first appears
-                        // on the far side of that flip and would unlock animation on its very first
-                        // frame. The official channel then lands from its own store a moment later and
-                        // flies in alone — the exact row he photographed sitting across another one.
-                        //
-                        // Timing from first appearance covers every path: skeleton-then-list,
-                        // cached-chats-render-instantly, and empty-then-populated alike.
-                        .onAppear {
-                            guard !listSettled else { return }   // warm return: already a list, animate now
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { listSettled = true }
-                        }
-                        .environment(\.editMode, .constant(selecting ? .active : .inactive))
-                        // The selection tick, same as the calls list — the app's `.primary` tint made
-                        // it a white check on a white disc. See the note there.
-                        .tint(Theme.defaultBubble(dark))
-                        // Rows start below the stories row; as the list scrolls, the row above is
-                        // offset by the same amount, so both move as ONE scroll surface.
-                        // ⛔ 0, AND IT HAS TO BE — read from their source, 2026-09-02. Their chat
-                        // list allows exactly one piece of spacing above a heading, the heading's
-                        // own 14pt top margin: every titleless header and every footer in
-                        // `CLVTableDataSource` returns `.leastNormalMagnitude`, with the comment
-                        // "we do not want that spacing". Any margin here is added ON TOP of the 14
-                        // and is the gap he measured against theirs.
-                        //
-                        // The 8 that was here was left over from the era when the stories row was
-                        // drawn OVER this list and the list had to start below it. The row has been
-                        // a page of its own for days; the number outlived its reason.
-                        .contentMargins(.top, 0, for: .scrollContent)
-                        // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
-                        // (its transparent margins otherwise show + tap-through to a row behind the pill).
-                        .contentMargins(.bottom, 28, for: .scrollContent)
-                        // Now that the list truly underlaps the nav bar (clip fix), the header draws
-                        // its HARD edge line whenever content is beneath it — in BOTH scroll
-                        // directions. Soft top edge = blur fade, no drawn line (bottom stays default,
-                        // which the user confirmed fixed).
-                        .scrollEdgeEffectStyle(.soft, for: .top)
+                        // `listSettled` and its 0.6s grace period are gone. It existed to stop a
+                        // cold launch flying every row in from nowhere; the table answers that with
+                        // `hasEverApplied`, which is a fact about whether a first render has
+                        // happened rather than a timer hoping it has.
 
                           // ⛔ THE STORIES ROW LEFT THIS PAGE — his call, 2026-08-30, off two
                           // mockups of the app: stories get a tab of their own

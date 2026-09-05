@@ -45,7 +45,7 @@ import UIKit
 /// carried over one at a time, each verified on his phone. Swapping the whole screen in one commit
 /// is how this file's own history says the chat list gets broken.
 enum ChatListSection: Int, CaseIterable {
-    case pinned, unpinned
+    case pinned, unpinned, people
 
     /// Nil means the header draws nothing and collapses — their rule for a section with no title,
     /// which is what a list with nothing pinned needs.
@@ -61,11 +61,18 @@ enum ChatListSection: Int, CaseIterable {
     /// except one case: a list where EVERY chat is pinned. Theirs says "Pinned" over it; ours said
     /// nothing, so the act of pinning the last unpinned chat silently removed a heading that had
     /// just appeared. Pinning is what turns the headings on, and it does not turn them back off.
-    func title(pinnedCount: Int, unpinnedCount: Int) -> String? {
-        guard pinnedCount > 0 else { return nil }
+    func title(pinnedCount: Int, unpinnedCount: Int, peopleCount: Int) -> String? {
         switch self {
-        case .pinned:   return "Pinned"
-        case .unpinned: return unpinnedCount > 0 ? "Chats" : nil
+        // ⛔ "OTHER PEOPLE" IS NOT PART OF THEIR RULE AND MUST NOT BE FOLDED INTO IT. It is ours,
+        // from his 2026-09-02 order: people you have never chatted with, under the chats, only while
+        // searching. Its heading depends on nothing but its own emptiness — a search that finds a
+        // stranger and no pinned chat still has to say what the stranger is.
+        case .people:
+            return peopleCount > 0 ? "Other people" : nil
+        case .pinned:
+            return pinnedCount > 0 ? "Pinned" : nil
+        case .unpinned:
+            return pinnedCount > 0 && unpinnedCount > 0 ? "Chats" : nil
         }
     }
 }
@@ -78,12 +85,23 @@ enum ChatListSection: Int, CaseIterable {
 struct ChatListRenderState: Equatable {
     var pinned: [String] = []
     var unpinned: [String] = []
+    /// Uids of people found by the search who are not already a chat above — his "Other people".
+    ///
+    /// ⚠️ THEY GO THROUGH THE SAME DIFF AS THE CHATS, deliberately, rather than being reloaded as a
+    /// block whenever the query changes. A uid and a conversation id can never collide (a conv id is
+    /// built from BOTH uids), so one id space covers all three sections and a stranger appearing or
+    /// leaving the results animates like any other row instead of the section blinking.
+    var people: [String] = []
 
     func ids(in section: ChatListSection) -> [String] {
-        section == .pinned ? pinned : unpinned
+        switch section {
+        case .pinned:   return pinned
+        case .unpinned: return unpinned
+        case .people:   return people
+        }
     }
 
-    var isEmpty: Bool { pinned.isEmpty && unpinned.isEmpty }
+    var isEmpty: Bool { pinned.isEmpty && unpinned.isEmpty && people.isEmpty }
 
     func indexPath(of id: String) -> IndexPath? {
         if let r = pinned.firstIndex(of: id) {
@@ -92,15 +110,19 @@ struct ChatListRenderState: Equatable {
         if let r = unpinned.firstIndex(of: id) {
             return IndexPath(row: r, section: ChatListSection.unpinned.rawValue)
         }
+        if let r = people.firstIndex(of: id) {
+            return IndexPath(row: r, section: ChatListSection.people.rawValue)
+        }
         return nil
     }
 
-    /// Which sections currently carry a heading. Used to decide whether a header has to be reloaded
-    /// when the pinned set empties or fills.
+    /// Which sections currently carry a heading. Used to decide whether the headers have to be
+    /// re-synced when the pinned set empties or fills.
     func titledSections() -> Set<Int> {
         var out: Set<Int> = []
         for s in ChatListSection.allCases where s.title(pinnedCount: pinned.count,
-                                                        unpinnedCount: unpinned.count) != nil {
+                                                        unpinnedCount: unpinned.count,
+                                                        peopleCount: people.count) != nil {
             out.insert(s.rawValue)
         }
         return out
@@ -126,8 +148,8 @@ struct ChatListRowChanges {
     /// first, then inserts, then moves, all against that split — so nothing here may be renumbered.
     static func between(_ old: ChatListRenderState, _ new: ChatListRenderState) -> ChatListRowChanges {
         var out = ChatListRowChanges()
-        let oldIds = Set(old.pinned + old.unpinned)
-        let newIds = Set(new.pinned + new.unpinned)
+        let oldIds = Set(old.pinned + old.unpinned + old.people)
+        let newIds = Set(new.pinned + new.unpinned + new.people)
 
         for id in oldIds.subtracting(newIds) {
             if let p = old.indexPath(of: id) { out.deletes.append(p) }
@@ -185,11 +207,42 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// which chats are here or in what order, only how the change from the last set is animated.
     var pinned: [Conversation]
     var unpinned: [Conversation]
+    /// Strangers the search turned up. Empty whenever the search field is, which is what makes the
+    /// third section disappear without anybody deciding it should.
+    var people: [UserProfile]
     var me: String
     var dark: Bool
     var onOpen: (Conversation) -> Void
+    var onOpenPerson: (UserProfile) -> Void
+    /// The stranger row itself, still built by the screen. It is one `AnyView` per visible search
+    /// result and no more — this section is only ever a handful of rows and only while typing — and
+    /// it keeps `newPersonRow` as the single place that row is described, privacy rules included.
+    var personRow: (UserProfile) -> AnyView
     var onStoryTap: (Conversation) -> Void
     var storySeen: (Conversation) -> [Bool]
+
+    /// ⛔ THE ROW'S LOCAL CONTEXT, AND IT IS NOT OPTIONAL DECORATION. `ChatRow` takes four values
+    /// that live nowhere near the conversation document — a call running right now, an unsent text
+    /// draft, a parked voice recording, and whether the newest incoming note has been heard. The
+    /// screen reads them from four different singletons per row.
+    ///
+    /// ⚠️ THE FIRST VERSION OF THIS FILE BUILT `ChatRow` WITHOUT THEM, which would have shipped a
+    /// list with no "Draft:" line, no green "Active call" row and no accent mic — three things he
+    /// asked for by name — while looking, in a screenshot of a quiet list, completely correct.
+    var onCall: (Conversation) -> Bool
+    var draft: (Conversation) -> String
+    var voiceDraftSecs: (Conversation) -> Double
+    var voiceUnplayed: (Conversation) -> Bool
+
+    /// Select mode. `selecting` drives the table's own editing state; `selection` is the same set
+    /// the SwiftUI toolbar reads, so the two cannot disagree about what is ticked.
+    ///
+    /// ⚠️ THE CIRCLES ARE UIKit'S OWN. `allowsMultipleSelectionDuringEditing` plus `setEditing` is
+    /// what the SwiftUI `List(selection:)` was asking the same UIKit for underneath — the difference
+    /// is that the indent and the circle slide in on UIKit's clock now instead of on a SwiftUI
+    /// animation wrapped around a state flag.
+    var selecting: Bool
+    @Binding var selection: Set<String>
 
     /// ⛔ THEIR SWIPE SET, IN THEIR ORDER — `ThreadContextualActionProvider`, read from source:
     /// leading is read-state then pin-state, trailing is archive, delete, mute. Ours had pin alone
@@ -203,7 +256,10 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// The long-press menu's rows, as the SwiftUI screen already builds them, plus the peek it shows
     /// above them. Handed over as makers rather than as views so the table can build a real
     /// `UIContextMenuConfiguration` — which is what gives the peek its lift and its own dismissal.
-    var menuActions: (Conversation) -> [UIAction]
+    /// ⚠️ `UIMenuElement`, NOT `UIAction`. The mute entry is a SUBMENU — his five timed choices —
+    /// and a `UIMenu` is not a `UIAction`, so an array of actions cannot express the menu the screen
+    /// already has. Typing it as the element protocol is what lets the nested one through.
+    var menuActions: (Conversation) -> [UIMenuElement]
     var peek: (Conversation) -> UIViewController
 
     func makeUIViewController(context: Context) -> ChatListTableController {
@@ -214,8 +270,24 @@ struct ChatListTable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: ChatListTableController, context: Context) {
         context.coordinator.parent = self
-        vc.apply(state: ChatListRenderState(pinned: pinned.map(\.id), unpinned: unpinned.map(\.id)),
+        // ⚠️ SELECT MODE IS SET BEFORE THE ROWS, and the order is not arbitrary. Entering Select
+        // changes every row's indent; doing that in the same pass as an insert or a delete, but
+        // after it, means UIKit animates the indent from a layout that the row change has already
+        // invalidated. The editing state settles first, then the diff runs against it.
+        vc.setTint(UIColor(Theme.defaultBubble(dark)))
+        vc.setSelecting(selecting)
+        vc.apply(state: ChatListRenderState(pinned: pinned.map(\.id),
+                                            unpinned: unpinned.map(\.id),
+                                            people: people.map(\.id)),
                  animated: true)
+        // ⛔ THE TICKS ARE PUT BACK **AFTER** THE DIFF, AND THE ORDER IS A BUG FIX. A same-section
+        // move is a delete plus an insert (their rule — see `ChatListRowChanges.between`), and a
+        // table does NOT carry a row's selection through one: the row that comes back is a new row
+        // at a new index path with no tick. So a chat you had ticked in Select mode lost its tick
+        // the moment a message arrived and re-sorted the list, while `selection` still counted it —
+        // the toolbar would say "2 Selected" over one visible tick. Syncing after the transaction
+        // restores it from the id, which is the only thing that survives a re-sort.
+        vc.syncTicks(selected: selection)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -228,6 +300,16 @@ struct ChatListTable: UIViewControllerRepresentable {
         /// arrays for every visible row on every pass.
         func conversation(_ id: String) -> Conversation? {
             parent.pinned.first { $0.id == id } ?? parent.unpinned.first { $0.id == id }
+        }
+
+        func person(_ id: String) -> UserProfile? {
+            parent.people.first { $0.id == id }
+        }
+
+        /// The one writer of the SwiftUI-side selection set. The table reports a tick, this puts it
+        /// where the toolbar can count it.
+        func setSelected(_ id: String, _ on: Bool) {
+            if on { parent.selection.insert(id) } else { parent.selection.remove(id) }
         }
     }
 }
@@ -257,6 +339,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private lazy var headerViews: [ChatListSection: ChatListSectionHeader] = [
         .pinned: ChatListSectionHeader(),
         .unpinned: ChatListSectionHeader(),
+        .people: ChatListSectionHeader(),
     ]
 
     /// Their table, their style. See the file header for why `.grouped` rather than `.plain`.
@@ -266,11 +349,74 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         t.backgroundColor = .clear
         t.rowHeight = UITableView.automaticDimension
         t.estimatedRowHeight = 80          // our row: 56pt avatar + 12 above and below
+        // ⛔ THE GREY UNDER EVERY ROW IS THE GROUPED STYLE'S, AND IT HAS TO BE TURNED OFF HERE TOO —
+        // owner, 2026-09-02: "why is the chat list Chats card using grey, remove that". The SwiftUI
+        // list needed `listRowBackground(.clear)` on every row for the same reason; a grouped table
+        // paints each cell on `secondarySystemGroupedBackground` because that is the raised-card look
+        // the style exists for. Cleared on the cell in `cellForRowAt`, and the table's own fill is
+        // cleared here so the screen's background shows through both.
+        t.backgroundView = nil
+        // ⛔ 28pt OF CLEARANCE AT THE BOTTOM, HIS NUMBER, CARRIED OVER FROM THE LIST. Without it the
+        // last rows sit UNDER the floating tab bar: its margins are transparent, so the row shows
+        // through and the tap goes to the row rather than the pill.
+        t.contentInset.bottom = 28
+        t.verticalScrollIndicatorInsets.bottom = 28
+        // ⛔ THE TICK IS THE CHAT COLOUR, NOT THE APP TINT — the same note the calls list carries.
+        // The app's `.primary` tint draws a white check on a white disc, which is a tick you cannot
+        // see. Set from `dark` in `updateUIViewController`, because the theme can change under it.
+        // Select mode. UIKit draws the circles and the indent; see `setSelecting`.
+        t.allowsMultipleSelectionDuringEditing = true
+        t.allowsSelectionDuringEditing = true
         t.dataSource = self
         t.delegate = self
         t.register(ChatListCell.self, forCellReuseIdentifier: ChatListCell.reuseId)
+        t.register(ChatListCell.self, forCellReuseIdentifier: ChatListCell.personReuseId)
         return t
     }()
+
+    /// Enter or leave Select mode, and put the ticks where the SwiftUI side says they are.
+    ///
+    /// ⚠️ ANIMATED ONLY WHEN THE MODE ACTUALLY CHANGES. `updateUIViewController` runs on every
+    /// SwiftUI pass — a keystroke in the search field, a new message on another chat — and calling
+    /// `setEditing(_:animated: true)` with the value it already has restarts the indent animation
+    /// from the start each time, which reads as the whole list twitching while you type.
+    ///
+    /// ⚠️ AND THE TICKS ARE PUSHED, NOT ONLY READ. A row that was selected before the list re-sorted
+    /// keeps its tick because the selection set is by id; the table's own `indexPathsForSelectedRows`
+    /// is by position and means nothing after a move.
+    /// The Select-mode tick colour. Cheap to call on every pass — assigning the same `UIColor` is a
+    /// comparison, and a changed one has to reach the table anyway when the theme flips.
+    func setTint(_ color: UIColor) {
+        guard tableView.tintColor != color else { return }
+        tableView.tintColor = color
+    }
+
+    func setSelecting(_ on: Bool) {
+        guard tableView.isEditing != on else { return }
+        tableView.setEditing(on, animated: true)
+    }
+
+    /// Put the ticks where the SwiftUI side says they are.
+    ///
+    /// ⚠️ BY ID, NEVER BY POSITION. `indexPathsForSelectedRows` is a set of positions, and a
+    /// position means nothing across a re-sort; the selection set is the truth and this is the one
+    /// place it is written onto the table. Called after every diff — see `updateUIViewController`.
+    func syncTicks(selected: Set<String>) {
+        guard tableView.isEditing else { return }
+        for section in ChatListSection.allCases {
+            for (row, id) in state.ids(in: section).enumerated() {
+                let ip = IndexPath(row: row, section: section.rawValue)
+                let isSelected = selected.contains(id)
+                let isMarked = tableView.indexPathsForSelectedRows?.contains(ip) ?? false
+                guard isSelected != isMarked else { continue }
+                if isSelected {
+                    tableView.selectRow(at: ip, animated: false, scrollPosition: .none)
+                } else {
+                    tableView.deselectRow(at: ip, animated: false)
+                }
+            }
+        }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -377,25 +523,46 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: ChatListCell.reuseId, for: indexPath)
-        guard let c = cell as? ChatListCell,
-              let s = ChatListSection(rawValue: indexPath.section),
+        let s = ChatListSection(rawValue: indexPath.section)
+        let reuseId = s == .people ? ChatListCell.personReuseId : ChatListCell.reuseId
+        let cell = tableView.dequeueReusableCell(withIdentifier: reuseId, for: indexPath)
+        guard let c = cell as? ChatListCell, let s,
               let id = state.ids(in: s)[safe: indexPath.row],
-              let host, let conv = host.conversation(id)
+              let host
         else { return cell }
 
         let p = host.parent
+        c.backgroundColor = .clear
+
+        // ⛔ A STRANGER FROM THE SEARCH, NOT A CHAT. Its own reuse identifier, because a cell that
+        // has held a `ChatRow` hosting configuration and is then handed a person's is a different
+        // view tree in the same cell — which is exactly the case their own comment warns about when
+        // it refuses to `reconfigureRows` across a section whose cell type may have changed.
+        if s == .people {
+            guard let u = host.person(id) else { return cell }
+            c.contentConfiguration = UIHostingConfiguration { p.personRow(u) }.margins(.all, 0)
+            // He set `selectionDisabled(true)` on this row in SwiftUI: a stranger is not something
+            // you can tick and then archive.
+            c.selectionStyle = .default
+            return c
+        }
+
+        guard let conv = host.conversation(id) else { return cell }
         // ⚠️ `UIHostingConfiguration`, so the ROW ITSELF is still the SwiftUI `ChatRow` we already
         // have. Nothing about how a row looks moves to UIKit here — only how rows are arranged and
         // animated. Rewriting the row's drawing as well would be two rewrites at once, and the
         // second one has no reason to happen.
         c.contentConfiguration = UIHostingConfiguration {
             ChatRow(conv: conv, me: p.me, dark: p.dark,
+                    onCall: p.onCall(conv),
                     storySeen: p.storySeen(conv),
-                    onStoryTap: { p.onStoryTap(conv) })
+                    onStoryTap: { p.onStoryTap(conv) },
+                    draft: p.draft(conv),
+                    voiceDraftSecs: p.voiceDraftSecs(conv),
+                    voiceUnplayed: p.voiceUnplayed(conv))
+                .equatable()   // the row's own skip-rebuild test, kept — see `ChatRow.==`
         }
         .margins(.all, 0)
-        c.backgroundColor = .clear
         c.selectionStyle = .default
         return c
     }
@@ -411,7 +578,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// list looks reversed on screen: the first element is the one nearest the edge you dragged
     /// from. Writing them in their order and letting UIKit place them is what keeps the two apps'
     /// muscle memory the same.
-    func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool { true }
+    /// ⚠️ FALSE FOR A STRANGER, AND IT BUYS TWO THINGS AT ONCE. `canEditRowAt` gates the swipe
+    /// platter AND the Select-mode circle, which is exactly the pair the SwiftUI row expressed as
+    /// "no `swipeActions`" plus `.selectionDisabled(true)`. There is nothing to archive, mute or
+    /// delete about somebody you have never spoken to.
+    func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
+        ChatListSection(rawValue: indexPath.section) != .people
+    }
 
     func tableView(_ tableView: UITableView,
                    leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
@@ -491,7 +664,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         guard let s = ChatListSection(rawValue: section), let header = headerViews[s] else {
             return UIView()
         }
-        header.title = s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count)
+        header.title = s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count,
+                               peopleCount: state.people.count)
         return header
     }
 
@@ -505,7 +679,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private func syncHeaderTitles() {
         for s in ChatListSection.allCases {
             headerViews[s]?.title = s.title(pinnedCount: state.pinned.count,
-                                            unpinnedCount: state.unpinned.count)
+                                            unpinnedCount: state.unpinned.count,
+                                            peopleCount: state.people.count)
         }
     }
 
@@ -514,7 +689,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// height." — their comment, and their rule, applied to both headers and footers.
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
         guard let s = ChatListSection(rawValue: section),
-              s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count) != nil
+              s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count,
+                      peopleCount: state.people.count) != nil
         else { return .leastNormalMagnitude }
         return UITableView.automaticDimension
     }
@@ -528,9 +704,38 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     // MARK: - Selection
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        // ⛔ IN SELECT MODE A TAP IS A TICK, AND THE ROW STAYS SELECTED. Calling `deselectRow` here
+        // unconditionally — which is what the open-a-chat path below wants — would untick the row
+        // the finger just ticked, on the same frame, and the list would look like it refuses to
+        // select anything. The whole row is the target, which is his rule and theirs: a tick that
+        // can only be hit on the circle is a smaller target for no reason.
+        if tableView.isEditing {
+            guard let id = rowId(at: indexPath) else { return }
+            host?.setSelected(id, true)
+            return
+        }
+
         tableView.deselectRow(at: indexPath, animated: true)
+        // A stranger from the search opens — and creates — the chat with them.
+        if ChatListSection(rawValue: indexPath.section) == .people {
+            guard let id = rowId(at: indexPath), let u = host?.person(id) else { return }
+            host?.parent.onOpenPerson(u)
+            return
+        }
         guard let c = conversation(at: indexPath) else { return }
         host?.parent.onOpen(c)
+    }
+
+    func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
+        guard tableView.isEditing, let id = rowId(at: indexPath) else { return }
+        host?.setSelected(id, false)
+    }
+
+    /// The id at a position, whichever section it is in. Bounds-checked for the same reason
+    /// `conversation(at:)` is.
+    private func rowId(at indexPath: IndexPath) -> String? {
+        guard let s = ChatListSection(rawValue: indexPath.section) else { return nil }
+        return state.ids(in: s)[safe: indexPath.row]
     }
 
     /// One lookup for every delegate method above. Bounds-checked because a swipe or a menu can
@@ -546,6 +751,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 /// A cell that is nothing but a host for the SwiftUI row.
 private final class ChatListCell: UITableViewCell {
     static let reuseId = "ChatListCell"
+    /// A stranger's row is a different view tree in the same cell class, so it gets its own queue.
+    /// Mixing them under one identifier is how a recycled cell ends up holding the wrong hosting
+    /// configuration for a frame.
+    static let personReuseId = "ChatListPersonCell"
 }
 
 /// The "Pinned" / "Chats" heading.
