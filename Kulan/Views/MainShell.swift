@@ -2176,7 +2176,11 @@ struct ChatsView: View {
             // none of that.
             // ⛔ "chats, users, new users" — his word, so the prompt says so. It used to promise
             // only chats, which was accurate before and would be a lie now.
-            .searchable(text: $chatSearch, prompt: "Search chats and people")
+            // ⛔ ONE WORD — owner, 2026-09-05, with the placeholder ringed: "make it search only, no
+            // more text". It said "Search chats and people", which was describing the feature rather
+            // than labelling the field. What it searches has not changed: chats, and people you have
+            // never chatted with, who still arrive under "Other people".
+            .searchable(text: $chatSearch, prompt: "Search")
             // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.
