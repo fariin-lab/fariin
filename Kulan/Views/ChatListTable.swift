@@ -22,22 +22,51 @@ import UIKit
 ///   • Changes are applied inside `beginUpdates()` / `endUpdates()`; sections are inserted and
 ///     deleted as sections, and a row that changes section is a `moveRow`, explicitly NOT a
 ///     delete-plus-insert, because that "results in a weird animation".
+///   • `rowHeight = .automaticDimension`, `estimatedRowHeight = 60` (ours is 80 — our row is taller).
+///   • They set no `estimatedSectionHeaderHeight` and no `sectionHeaderTopPadding`. Do not add
+///     either "to make the header size properly"; a grouped table self-sizes a header from its own
+///     constraints, and an estimate here changes the spacing they do not have.
 ///
-/// ⚠️ BUILT BESIDE THE SwiftUI LIST, NOT IN PLACE OF IT YET. This file is the table and its data
-/// source and nothing else; the swipe actions, the context menu, multi-select and the story-ring tap
-/// all still live on the SwiftUI rows and have to be carried over one at a time, each verified on
-/// his phone. Swapping the whole screen in one commit is how this file's own history says the chat
-/// list gets broken.
+/// ⛔ THE PIN ANIMATION IS NOT AN ANIMATION ANYBODY WROTE — owner's question, 2026-09-05, asking for
+/// their pin/unpin movement to the frame. Read out of `applyRowChanges`: there is no spring, no
+/// duration, no curve, no `UIView.animate`, no `CATransaction`. They pass
+/// `UITableView.RowAnimation.automatic` and let UIKit run its stock row animation. What makes it
+/// feel like theirs is three decisions, all of them in `apply(state:animated:)` and
+/// `ChatListRowChanges.between`, and all three were wrong here before that date:
+///   1. cross-section move = `moveRow`; same-section move = delete + insert.
+///   2. the transaction is opened only when something needs it.
+///   3. nothing runs after the transaction. The `reloadSections` that used to follow it fired on
+///      every pin and cut the flight in half.
+/// Do not "improve" this with a custom animator. The reference's answer is that there isn't one.
+///
+/// ⚠️ BUILT BESIDE THE SwiftUI LIST, NOT IN PLACE OF IT YET. This file is the table, its data
+/// source, the swipe set, the context menu and the headings; multi-select, the search section, the
+/// empty and skeleton states and the story-ring tap still live on the SwiftUI screen and have to be
+/// carried over one at a time, each verified on his phone. Swapping the whole screen in one commit
+/// is how this file's own history says the chat list gets broken.
 enum ChatListSection: Int, CaseIterable {
     case pinned, unpinned
 
     /// Nil means the header draws nothing and collapses — their rule for a section with no title,
     /// which is what a list with nothing pinned needs.
+    ///
+    /// ⛔ THEIR RULE, READ FROM `CLVRenderState.makeSection`, AND IT IS NOT SYMMETRICAL. One test
+    /// turns the headings on for the whole list — `hasSectionTitles` is `!pinnedThreadUniqueIds
+    /// .isEmpty`, nothing else — and each section then has to be non-empty on its own account:
+    ///
+    ///     pinned title    = hasSectionTitles && !pinned.isEmpty     → pinned.isEmpty == false
+    ///     unpinned title  = hasSectionTitles && !unpinned.isEmpty   → both non-empty
+    ///
+    /// ⚠️ OURS REQUIRED BOTH HALVES FILLED FOR BOTH HEADINGS, which is the same answer everywhere
+    /// except one case: a list where EVERY chat is pinned. Theirs says "Pinned" over it; ours said
+    /// nothing, so the act of pinning the last unpinned chat silently removed a heading that had
+    /// just appeared. Pinning is what turns the headings on, and it does not turn them back off.
     func title(pinnedCount: Int, unpinnedCount: Int) -> String? {
-        // Both headings appear only when both sections exist. A lone "Chats" over every chat in the
-        // app is a label with nothing to contrast against — the same rule the SwiftUI list follows.
-        guard pinnedCount > 0, unpinnedCount > 0 else { return nil }
-        return self == .pinned ? "Pinned" : "Chats"
+        guard pinnedCount > 0 else { return nil }
+        switch self {
+        case .pinned:   return "Pinned"
+        case .unpinned: return unpinnedCount > 0 ? "Chats" : nil
+        }
     }
 }
 
@@ -109,9 +138,37 @@ struct ChatListRowChanges {
         // Survivors: a move is reported only when the row actually lands somewhere else. Reporting
         // a move to the same place is legal and wasteful, and on a list that re-sorts on every
         // message it would be most of the list every time.
+        //
+        // ⛔ AND THEN THE SPLIT THIS FILE GOT WRONG. Their own words, from `applyRowChanges`:
+        //
+        //     if we're moving within the same section, we perform moves using a "delete" and
+        //     "insert" rather than a "move". This ensures that moved items are also reloaded. This
+        //     is how UICollectionView performs reloads internally. We can't do this when changing
+        //     sections, because it results in a weird animation. This should generally be safe,
+        //     because you'll only move between sections when pinning / unpinning which doesn't
+        //     require the moved item to be reloaded.
+        //
+        // So the two kinds of movement this list produces are not one operation:
+        //
+        //   • ACROSS sections — pin and unpin, and nothing else. `moveRow`, because a delete plus an
+        //     insert across a section boundary is the "weird animation" their comment names, and
+        //     the flight between the two lists is the whole reason this file exists.
+        //   • WITHIN a section — a new message re-sorting the inbox. Delete plus insert, because
+        //     that REDRAWS the row as it travels. A `moveRow` carries the cell it already has, so
+        //     the row that just moved to the top because of a new message would arrive still
+        //     showing the old preview, the old timestamp and the old unread count, and would only
+        //     correct itself on the next unrelated reload.
+        //
+        // Ours emitted `moveRow` for both, which is why the pin flight was right and every ordinary
+        // re-sort landed stale.
         for id in oldIds.intersection(newIds) {
             guard let from = old.indexPath(of: id), let to = new.indexPath(of: id), from != to else { continue }
-            out.moves.append((from: from, to: to))
+            if from.section != to.section {
+                out.moves.append((from: from, to: to))
+            } else {
+                out.deletes.append(from)
+                out.inserts.append(to)
+            }
         }
         return out
     }
@@ -181,6 +238,27 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     var host: ChatListTable.Coordinator?
     private(set) var state = ChatListRenderState()
 
+    /// Their `hasEverAppeared`. The first apply has nothing to animate from; every apply after it
+    /// animates, including one that finds the list empty. See `apply(state:animated:)`.
+    private var hasEverApplied = false
+
+    /// ⛔ ONE HEADER VIEW PER SECTION, KEPT, NOT REBUILT. Two reasons, and the second is the one that
+    /// matters for the pin animation.
+    ///
+    /// A `viewForHeaderInSection` that returns a freshly allocated `UIView` allocates two labels and
+    /// a container every time the table asks — which is on every update pass, not only on scroll.
+    /// That is the cheap reason.
+    ///
+    /// The real reason is that a heading which appears when you pin your first chat has to change
+    /// WITHOUT `reloadSections`, because a section reload lands on top of the row's flight and kills
+    /// it. Holding the view means the text can simply be set on it inside the same transaction,
+    /// which is the header's version of their `updateCellContent`: change what is on screen in
+    /// place, never ask the table to rebuild the thing that is currently animating.
+    private lazy var headerViews: [ChatListSection: ChatListSectionHeader] = [
+        .pinned: ChatListSectionHeader(),
+        .unpinned: ChatListSectionHeader(),
+    ]
+
     /// Their table, their style. See the file header for why `.grouped` rather than `.plain`.
     private lazy var tableView: UITableView = {
         let t = UITableView(frame: .zero, style: .grouped)
@@ -209,38 +287,83 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// ⛔ THEIR TRANSACTION, AND THE REASON THIS FILE EXISTS. One `beginUpdates`/`endUpdates` block
     /// holding deletes, inserts and — the whole point — `moveRow` for a row that changed section.
     ///
-    /// ⚠️ THE FIRST APPLY IS NOT ANIMATED. There is nothing to animate from: every row would fly in
-    /// from nowhere, which is the "everything slides on launch" that a diffing list gets wrong once
-    /// and is then rewritten to avoid.
+    /// ⛔ THERE IS NO CUSTOM ANIMATION HERE AND THERE MUST NOT BE ONE. This was the owner's question
+    /// on 2026-09-05 — make the pin movement feel exactly like the reference app's — and the answer
+    /// read out of their source is that they do not animate it themselves at all. No spring, no
+    /// duration, no curve, no `UIView.animate` wrapper, no `CATransaction`. `applyRowChanges` picks
+    /// `UITableView.RowAnimation.automatic` and lets UIKit run its own row animation inside one
+    /// begin/end block. Everything that makes their pin FEEL right is a decision about which
+    /// operations are issued and what is refused around them:
+    ///
+    ///   1. cross-section move stays a `moveRow`, same-section move becomes delete+insert
+    ///      (see `ChatListRowChanges.between`);
+    ///   2. the block is opened only if something actually needs it — their comment: "only perform a
+    ///      beginUpdates/endUpdates block if really necessary, otherwise strange scroll animations
+    ///      may occur";
+    ///   3. NOTHING follows the block. No `reloadSections`, no second pass.
+    ///
+    /// ⚠️ POINT 3 IS THE ONE THAT WAS BREAKING IT. This function used to reload BOTH sections
+    /// immediately after `endUpdates()` whenever a heading appeared or disappeared — which is
+    /// exactly when a chat is pinned or unpinned, so it fired on every single pin. `reloadSections`
+    /// starts a second animation over the top of the first one, and the row that was mid-flight
+    /// between the two lists is destroyed and rebuilt in place. Wrapping it in
+    /// `performWithoutAnimation` did not save it; that only meant the interruption was instant.
+    /// The heading is updated IN PLACE on the header view instead (`syncHeaderTitles`), the way
+    /// their `updateCellContent` updates a cell in place rather than reloading its row.
+    ///
+    /// ⚠️ THE FIRST APPLY IS NOT ANIMATED, and after it every apply is. `hasEverApplied` is their
+    /// `hasEverAppeared`: an explicit flag, not `old.isEmpty`, because a list that legitimately
+    /// empties and refills — switching to the Unread filter and back — is not a first load and must
+    /// not throw its cells away.
     func apply(state new: ChatListRenderState, animated: Bool) {
         let old = state
         state = new
 
-        guard animated, !old.isEmpty else {
+        guard hasEverApplied else {
+            hasEverApplied = true
             tableView.reloadData()
+            syncHeaderTitles()
             return
         }
 
         let changes = ChatListRowChanges.between(old, new)
-        // A heading appears or disappears when the pinned section fills or empties, and that is a
-        // header change rather than a row change — the table has to be told separately.
+        // A heading appears or disappears when the pinned section fills or empties. It is not a row
+        // change, and it is not a section reload either — see `syncHeaderTitles`.
         let headerChanged = old.titledSections() != new.titledSections()
 
         guard !changes.isEmpty || headerChanged else { return }
 
-        tableView.beginUpdates()
-        if !changes.deletes.isEmpty { tableView.deleteRows(at: changes.deletes, with: .automatic) }
-        if !changes.inserts.isEmpty { tableView.insertRows(at: changes.inserts, with: .automatic) }
-        for m in changes.moves { tableView.moveRow(at: m.from, to: m.to) }
-        tableView.endUpdates()
+        // ⛔ `.automatic` WHEN ANIMATING, `.none` WHEN NOT — `defaultRowAnimation` in their source is
+        // literally `animated ? .automatic : .none`. The old code passed `.automatic` unconditionally
+        // and simply never reached here on a non-animated apply, so the constant was never wrong;
+        // it is spelled out now because the non-animated path below does reach here.
+        let rowAnimation: UITableView.RowAnimation = animated ? .automatic : .none
 
-        // ⚠️ AFTER the transaction, never inside it. Reloading a section inside the same block that
-        // moves rows out of it is UIKit's own definition of an inconsistent update.
-        if headerChanged {
-            UIView.performWithoutAnimation {
-                tableView.reloadSections(IndexSet(ChatListSection.allCases.map(\.rawValue)),
-                                         with: .none)
-            }
+        let work = {
+            self.tableView.beginUpdates()
+            // The heading rides INSIDE the transaction so its appearance is part of the same
+            // animation as the row that caused it, and so the header's new height is measured in the
+            // same pass. `heightForHeaderInSection` already reads the new state — it was assigned at
+            // the top of this function, before any of this — so UIKit re-measures both sections here
+            // without being told to reload either of them.
+            if headerChanged { self.syncHeaderTitles() }
+            if !changes.deletes.isEmpty { self.tableView.deleteRows(at: changes.deletes, with: rowAnimation) }
+            if !changes.inserts.isEmpty { self.tableView.insertRows(at: changes.inserts, with: rowAnimation) }
+            // ⚠️ NO ANIMATION CONSTANT ON A MOVE, because `moveRow` does not take one. Its timing is
+            // the block's, which is the other half of why the pin flight and the rows closing behind
+            // it are one movement rather than two that happen to overlap.
+            for m in changes.moves { self.tableView.moveRow(at: m.from, to: m.to) }
+            self.tableView.endUpdates()
+        }
+
+        // Their suppression, and it is not a branch around the work — it is the same work inside a
+        // zero-length animation. `reloadData()` here would be the easy version and it is wrong: it
+        // drops every cell, which costs a full rebuild and loses the swipe or the menu the user may
+        // have open on one of them.
+        if animated {
+            work()
+        } else {
+            UIView.animate(withDuration: 0) { work() }
         }
     }
 
@@ -365,29 +488,25 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// layout margins of 14 above, 16 leading, 8 below and 16 trailing, holding a headline label in
     /// the label colour.
     func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        guard let s = ChatListSection(rawValue: section),
-              let title = s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count)
-        else { return UIView() }
+        guard let s = ChatListSection(rawValue: section), let header = headerViews[s] else {
+            return UIView()
+        }
+        header.title = s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count)
+        return header
+    }
 
-        let container = UIView()
-        container.backgroundColor = .clear
-        container.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 14, leading: 16,
-                                                                     bottom: 8, trailing: 16)
-        let label = UILabel()
-        label.font = .preferredFont(forTextStyle: .headline)
-        label.adjustsFontForContentSizeCategory = true
-        label.textColor = .label
-        label.text = title
-        label.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(label)
-        let g = container.layoutMarginsGuide
-        NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: g.topAnchor),
-            label.leadingAnchor.constraint(equalTo: g.leadingAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: g.trailingAnchor),
-            label.bottomAnchor.constraint(equalTo: g.bottomAnchor),
-        ])
-        return container
+    /// Push the current state's headings onto the two header views without touching the table.
+    ///
+    /// ⛔ THIS IS WHAT REPLACED `reloadSections`. Called from inside the update transaction, so the
+    /// heading that appears because a chat was just pinned appears as part of that chat's flight
+    /// rather than as a second animation that interrupts it. The header's HEIGHT still comes from
+    /// `heightForHeaderInSection` — UIKit re-asks for it during the block, and the state it reads
+    /// was assigned before the block opened — so the section grows and shrinks in the same pass.
+    private func syncHeaderTitles() {
+        for s in ChatListSection.allCases {
+            headerViews[s]?.title = s.title(pinnedCount: state.pinned.count,
+                                            unpinnedCount: state.unpinned.count)
+        }
     }
 
     /// "Without returning a header with a non-zero height, a grouped table view will use a default
@@ -427,4 +546,51 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 /// A cell that is nothing but a host for the SwiftUI row.
 private final class ChatListCell: UITableViewCell {
     static let reuseId = "ChatListCell"
+}
+
+/// The "Pinned" / "Chats" heading.
+///
+/// Their numbers, read from `CLVTableDataSource.viewForHeaderInSection`: a plain container with
+/// layout margins of 14 above, 16 leading, 8 below and 16 trailing, holding a headline label in the
+/// label colour. Nothing here is a background or a separator — a grouped table's own header
+/// furniture is exactly what the list is avoiding, which is why the container is clear.
+final class ChatListSectionHeader: UIView {
+    /// Nil collapses the heading. Setting it is the whole update path: no reload, no reconfigure,
+    /// and it is a no-op when the text has not actually changed, so it is safe to call on every
+    /// pass. See `ChatListTableController.syncHeaderTitles`.
+    var title: String? {
+        didSet {
+            guard title != oldValue else { return }
+            label.text = title
+            // ⚠️ HIDDEN RATHER THAN REMOVED. The height is decided by the delegate, which returns
+            // `leastNormalMagnitude` for a titleless section; this only stops the label drawing in
+            // the sliver that remains, and keeps the view itself — and therefore its constraints —
+            // alive across the change.
+            label.isHidden = title == nil
+        }
+    }
+
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 14, leading: 16, bottom: 8, trailing: 16)
+
+        label.font = .preferredFont(forTextStyle: .headline)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = .label
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        let g = layoutMarginsGuide
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: g.topAnchor),
+            label.leadingAnchor.constraint(equalTo: g.leadingAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: g.trailingAnchor),
+            label.bottomAnchor.constraint(equalTo: g.bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
