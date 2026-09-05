@@ -49,22 +49,47 @@ import StoryUI
     /// size his reference draws, which needs a 20pt margin, and he had earlier asked for the strip
     /// and the grid to share an edge. Both hold only if this moves too, so it does.
     ///
-    /// ⚠️ IT CHANGES `cardW`, WHICH IS DERIVED FROM IT — four cards and three gaps in the width
-    /// less two margins, so each strip tile loses four points. That is the arithmetic below doing
-    /// its job rather than a second decision.
+    /// ⚠️ IT CHANGES `cardW`, WHICH IS DERIVED FROM IT. That was "four cards and three gaps in the
+    /// width less two margins"; since 2026-09-05 it is three and a half cards past ONE margin, so
+    /// this number now moves the tile width and the card height by different amounts — the height
+    /// still reads it twice, the width once. Both are spelled out below.
     static let hPad: CGFloat = 20
     static let vPad: CGFloat = 10
     static let labelGap: CGFloat = 6
     static let radius: CGFloat = 24
     static let labelFont = UIFont.systemFont(ofSize: 12)
 
-    /// Four cards across the screen with three gaps between them and a margin at each end — the
-    /// SwiftUI expression, unchanged. Still measured against `UIScreen.main.bounds` rather than the
-    /// row's own width, so the answer cannot depend on when it is asked (the row is laid out inside a
-    /// list whose width arrives late) and cannot disagree with the width the SwiftUI row reported to
-    /// MainShell before it.
-    static var cardW: CGFloat { (UIScreen.main.bounds.width - hPad * 2 - spacing * 3) / 4 }
-    static var cardH: CGFloat { cardW * 1.46 }
+    /// ⛔ THREE CARDS AND A HALF — owner, 2026-09-05, with a screenshot of the strip he wants: three
+    /// whole cards and the fourth cut down the middle.
+    ///
+    /// ⚠️ THE DIVISOR IS THE WHOLE CHANGE, AND THE RIGHT MARGIN GOES WITH IT. Four cards, three gaps
+    /// and a margin at EACH end used to fill the screen exactly, so the fourth card landed flush
+    /// against the right margin and nothing was ever cut. Showing half of a fourth means the screen
+    /// edge falls in the middle of that card, so there is no right margin in this arithmetic at all:
+    ///
+    ///     screen = hPad + 3.5 × cardW + 3 × spacing
+    ///
+    /// The half card is also the only thing on the page that says the strip scrolls, which is what a
+    /// row of exactly four cards could never say.
+    ///
+    /// Still measured against `UIScreen.main.bounds` rather than the row's own width, so the answer
+    /// cannot depend on when it is asked (the row is laid out inside a list whose width arrives late)
+    /// and cannot disagree with the width the SwiftUI row reported to MainShell before it.
+    static var cardW: CGFloat { (UIScreen.main.bounds.width - hPad - spacing * 3) / 3.5 }
+
+    /// ⛔ THE HEIGHT DID NOT FOLLOW THE WIDTH, AND THAT IS HIS ANSWER RATHER THAN AN OVERSIGHT.
+    ///
+    /// The card was 1.46 times as tall as it was wide. Widening it to show three and a half would
+    /// have taken the height from 131.4 to 158.5 on his phone and pushed the Glowing heading and its
+    /// whole grid down the page. Asked which he wanted, he chose to keep the height — so the card is
+    /// flatter now, about 1.21 rather than 1.46, and `rowH` below is unchanged, which is precisely
+    /// why nothing underneath the strip moved.
+    ///
+    /// ⚠️ THIS IS THE OLD FOUR-CARD EXPRESSION, KEPT WHOLE RATHER THAN FROZEN AS A LITERAL. It reads
+    /// as arithmetic nobody can trace without this note, and that is the trade: a hardcoded 131.4
+    /// would be exactly right on his phone and wrong on every other screen size. It no longer has
+    /// anything to do with how wide a card is — it is only the height that width used to imply.
+    static var cardH: CGFloat { (UIScreen.main.bounds.width - hPad * 2 - spacing * 3) / 4 * 1.46 }
     static var labelH: CGFloat { ceil(labelFont.lineHeight) }
     /// What `sizeThatFits` reports and MainShell turns into the chat list's top content margin.
     static var rowH: CGFloat { vPad * 2 + cardH + labelGap + labelH }
