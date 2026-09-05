@@ -505,6 +505,15 @@ service cloud.firestore {
     // The same class of decision that closed the user directory on 2026-08-10: public counts must
     // not become a walkable graph.
     //
+    // ⛔ createdAt IS THE SERVER CLOCK, NOT THE PHONE'S (audit fix, 2026-09-05). `createdAt ==
+    // request.time` holds only for a server timestamp written in this same request; a value the
+    // phone typed itself, or backdated, is refused. Without it a glow could claim any age it liked
+    // and everything that reads the field would believe it. Same idiom as `windowStart ==
+    // request.time` in the story budget above. `from is string` sits beside `to is string` for the
+    // same reason: the id is built from `from + '_' + to`, so both halves must provably be strings
+    // before that concatenation is trusted — the uid equality already implies it, the check makes
+    // the shape explicit rather than a side effect.
+    //
     // The public counts live on the user document as glowerCount / glowingCount, written only by
     // the onGlowWrite function — both names are in serverOnlyUserFields() above.
     match /glows/{edgeId} {
@@ -518,7 +527,9 @@ service cloud.firestore {
         && edgeId == request.resource.data.from + '_' + request.resource.data.to
         && request.resource.data.keys().hasOnly(['from', 'to', 'createdAt'])
         && request.resource.data.keys().hasAll(['from', 'to', 'createdAt'])
+        && request.resource.data.from is string
         && request.resource.data.to is string && request.resource.data.to.size() > 0
+        && request.resource.data.createdAt == request.time
         && !isBanned();
       // No update: a glow has nothing to edit. Give again after a remove is a fresh create.
       allow update: if false;

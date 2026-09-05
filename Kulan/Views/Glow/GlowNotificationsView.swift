@@ -37,9 +37,27 @@ struct GlowNotificationsView: View {
 
     @State private var chip: Chip = .all
     @State private var events = GlowEventsLoader()
+    /// The last answer the loader gave, kept so a reload redraws OVER the rows instead of wiping them
+    /// for a spinner. The loader goes back to `.loading` on every `load()`, which is right for a
+    /// first open and wrong for a pull-to-refresh, and this is the page's side of that difference.
+    @State private var lastRows: [GlowEvent]?
+    /// True once the list has actually been on screen. `markSeen` clears the Stories tab's badge,
+    /// and a badge must not clear for a visit that only ever showed a spinner or a failure.
+    @State private var sawRows = false
+    @State private var noticeText = ""
+    @State private var noticeShown = false
     @Environment(\.colorScheme) private var scheme
     private var glow = GlowService.shared
     private var dark: Bool { scheme == .dark }
+
+    /// What the `.task` is keyed on. Both live sets, whole, because the feed is DERIVED from the
+    /// relationship (see the header): a glower removed on the Glowers list must take his row with
+    /// him, and that only happens if the feed reloads when the sets change. A count would miss a
+    /// swap of one person for another; two sets this small compare in no time at all.
+    private struct RelationshipKey: Equatable {
+        let glowers: Set<String>
+        let glowing: Set<String>
+    }
 
     var body: some View {
         VStack(spacing: 0) {

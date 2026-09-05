@@ -116,6 +116,11 @@ struct ContactInfoView: View {
     /// The glow relationship, for the Glow button and its menu entry. `@Observable`, so a plain
     /// property observes it — see the note on `GlowService`.
     private var glow = GlowService.shared
+    /// Whether `glow.isGlowing` can be believed yet. On a cold launch both sets are empty until the
+    /// listeners deliver, and "empty" read as "not glowing" draws the give button over a glow that
+    /// already exists and lets a tap write it again (audit). A load that failed is unknown in the
+    /// same way and is treated the same. Both Glow doors wait on this — see `glowActionButton`.
+    private var glowRelationshipKnown: Bool { glow.hasLoaded && !glow.hasFailed }
     /// The explainer that stands in front of GIVING a glow — see `glowActionButton`.
     @State private var showGlowIntro = false
     @State private var muted = false
@@ -542,8 +547,10 @@ struct ContactInfoView: View {
     // dangerCard at the bottom of the page (the reference app pattern, user decision).
     @ViewBuilder private var moreMenuItems: some View {
         // Glow first: it is the one entry here about the PERSON rather than about the chat, and it
-        // is the second of his two doors to the same action — see `glowActionButton`.
-        if !isSelf { glowMenuItem; Divider() }
+        // is the second of his two doors to the same action — see `glowActionButton`. It carries
+        // the same gate as that door: a person you have blocked is offered a glow from neither of
+        // them, where before the menu offered what the button hid (audit).
+        if !isSelf && !blocked { glowMenuItem; Divider() }
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
         // Wallpaper pops back to the CHAT and posts to its ThreadView — from a story-opened profile
@@ -1691,7 +1698,9 @@ struct ContactInfoView: View {
                 // reach on somebody's profile.
                 //
                 // ⚠️ TWO DOORS TO ONE ACTION, HIS ASK: this button AND "Glow Story" in the ••• menu
-                // below. They call the same thing — a second door is only a second door.
+                // below. They call the same thing — a second door is only a second door — and both
+                // stand behind the same `!isSelf && !blocked` gate, so neither can offer what the
+                // other refuses (audit).
                 glowActionButton
                 Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                       video: true, fromProfile: true) } label: {
@@ -1724,14 +1733,29 @@ struct ContactInfoView: View {
     /// audience they are currently in. His words: "when he click Glowing show context menu remove
     /// glowing" — so the second state is a MENU, not a toggle that fires on touch.
     @ViewBuilder private var glowActionButton: some View {
-        if glow.isGlowing(otherUid) {
+        if !glowRelationshipKnown {
+            // ⚠️ NOT LOADED IS NOT "NOT GLOWING". Until the listeners have spoken, the give branch
+            // below would draw over a glow that already exists and re-write it on a tap (audit). So
+            // the button keeps its slot and its outline mark, dimmed and inert the way the group
+            // page dims its camera while an upload is in flight, and turns into one of the two real
+            // states the moment the answer lands. Nothing here answers a finger on purpose: a plain
+            // icon has no tap to refuse, and `.disabled` is the wrong tool on these circles (see
+            // `glassActions`). A failed load is the same unknown and gets the same treatment: the
+            // intro sheet is the explainer in front of a first give, and with the relationship
+            // unknown we could not honestly say it is one.
+            PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader).opacity(0.35)
+        } else if glow.isGlowing(otherUid) {
             Menu {
                 Button("Remove Glowing", systemImage: "xmark", role: .destructive) {
                     glow.remove(to: otherUid)
                 }
             } label: {
-                // The ticked mark, which is what his mockup shows on an already-glowing profile.
-                PosterActionIcon(icon: "checkmark.seal.fill", onPhoto: hasPhotoHeader)
+                // Glow's OWN filled mark, not the verified tick. `checkmark.seal.fill` is the badge
+                // this app pins on a verified account, so an already-glowing profile was wearing a
+                // glyph that means something else (audit). Filled means "the relationship exists",
+                // the rule `GlowStyle.mark` states, and `PosterActionIcon` sizes an "ic_*" asset the
+                // way it sizes every other circle in this row, so the swap is the name and no more.
+                PosterActionIcon(icon: GlowStyle.iconFill, onPhoto: hasPhotoHeader)
             }
             .tint(.primary)
         } else {
@@ -1748,9 +1772,18 @@ struct ContactInfoView: View {
         }
     }
 
-    /// The ••• menu's Glow entry — the second of his two doors. Same two states as the button.
+    /// The ••• menu's Glow entry — the second of his two doors. Same states as the button, the
+    /// unknown one included.
     @ViewBuilder private var glowMenuItem: some View {
-        if glow.isGlowing(otherUid) {
+        if !glowRelationshipKnown {
+            // The same unknown as the button, greyed the way a menu greys anything it cannot offer
+            // yet. Here `.disabled` IS the right tool: a menu row is not one of the glass circles,
+            // and a dimmed row that does nothing is exactly what a menu means by "not now".
+            Button { } label: {
+                Label { Text("Glow Story") } icon: { GlowStyle.mark(20) }
+            }
+            .disabled(true)
+        } else if glow.isGlowing(otherUid) {
             Button("Remove Glowing", systemImage: "xmark", role: .destructive) {
                 glow.remove(to: otherUid)
             }

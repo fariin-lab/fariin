@@ -33,10 +33,47 @@ enum GlowLoad<T: Equatable>: Equatable {
     var isFailed: Bool { if case .failed = self { return true }; return false }
 }
 
+/// Runs `work` over `items`, at most `width` at a time, and hands the answers back in input order.
+///
+/// The loaders below used to walk their uids one `await` at a time, so forty glowers cost forty
+/// round trips end to end. A task group asks side by side instead. The cap is there so a long list
+/// does not open every request at once, and the index that travels with each answer is what puts
+/// them back in the order the caller asked for, which is the order the rows are drawn in.
+/// `work` never throws: a miss is whatever nil the caller's own closure returns.
+private func glowGather<T: Sendable, R: Sendable>(_ items: [T], width: Int = 6,
+                                                 _ work: @escaping @Sendable (T) async -> R) async -> [R] {
+    guard !items.isEmpty else { return [] }
+    var answers: [(Int, R)] = []
+    answers.reserveCapacity(items.count)
+    await withTaskGroup(of: (Int, R).self) { group in
+        var next = 0
+        // Prime the group with the first `width` requests; every finished one lets the next in.
+        while next < items.count && next < width {
+            let i = next
+            group.addTask { (i, await work(items[i])) }
+            next += 1
+        }
+        for await answer in group {
+            answers.append(answer)
+            if next < items.count {
+                let i = next
+                group.addTask { (i, await work(items[i])) }
+                next += 1
+            }
+        }
+    }
+    return answers.sorted { $0.0 < $1.0 }.map(\.1)
+}
+
 /// One of this author's still-live stories, as the profile card and the Posted Stories page draw it.
 struct PostedStory: Identifiable, Equatable {
     let id: String
     var thumbUrl: String
+    /// The picture or clip itself, as uploaded. The card draws `thumbUrl`; this is what the viewer
+    /// plays when the card is opened, and for a video the two are different files — the thumbnail
+    /// is a poster frame and cannot be played. Empty only for a demo row, whose picture is drawn on
+    /// the phone; see `GlowStoryOpen` for the one place the thumbnail stands in for it.
+    var mediaUrl: String
     var blurThumb: String
     var createdAt: Date
     var expiresAt: Date

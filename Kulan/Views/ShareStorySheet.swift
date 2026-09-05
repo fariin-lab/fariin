@@ -262,6 +262,29 @@ struct ShareStorySheet: View {
     /// value — which is a pure struct and refuses to reach for a main-actor singleton itself. See
     /// the note on `StoryAudience.recipients`; this sheet is the one place that knows both sets.
     private var glowIds: Set<String> { GlowService.shared.glowRelationship }
+    /// ⛔ THE SAME PEOPLE WITH THE DEMO STRIPPED, for every guard that stands in front of a WRITE.
+    /// The rows read `glowIds`, because a demo person should be counted on a screen; the post reads
+    /// `realGlowRelationship`, because a demo uid must never reach `recipientUids`. The empty-audience
+    /// guards below used to read the screen's set: with the demo on they saw people, let the tap
+    /// through, and the payload underneath them was empty, which the service then read as "everyone
+    /// you chat with". A guard has to look at the set that is actually about to be posted.
+    private var postableGlowIds: Set<String> { GlowService.shared.realGlowRelationship }
+
+    /// THE GLOWERS PAYLOAD, built in one place so `post()` and `updateAudience()` cannot drift apart.
+    /// It follows `StoryAudience.rawRecipients` mode for mode: `.all` is every glower, `.except` is
+    /// every glower but these, `.only` is these if they glow. So the count the subtitle showed and the
+    /// set the story is addressed to are the same people. Before this, `updateAudience` had no Glowers
+    /// branch at all and handed the service an empty set, and `post()` handed it the whole set with
+    /// the except list ignored. The service knows this set is Glowers from the tag it is posted with
+    /// (`StoryAudienceTag.isGlowers`), and resolves it against the live glow set rather than the chats.
+    private func glowersIncluded(_ a: StoryAudience) -> Set<String> {
+        let real = postableGlowIds
+        switch a.mode {
+        case .all:    return real
+        case .except: return real.subtracting(Set(a.members))
+        case .only:   return Set(a.members).intersection(real)
+        }
+    }
 
     /// The audience the sheet currently has ticked, and the one door that writes it. See
     /// `editSelection` for why editing does not touch the store.
@@ -682,7 +705,9 @@ struct ShareStorySheet: View {
         if oneTimeActive { postOneTime(); return }
         if !multiCustom.isEmpty { postToLists(); return }
         let a = chosen
-        let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds)
+        // `postableGlowIds`, not `glowIds`: this guard decides whether a write goes out, so it has to
+        // count the same people the payload below is built from. See the note on `postableGlowIds`.
+        let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: postableGlowIds)
         // Block ONLY when you HAVE chats but this audience narrows down to literally no one. With no
         // chats at all, posting is still fine: it is YOUR OWN story and always visible to you, it
         // just has no other recipients yet. Without that carve-out a brand-new user could never post
@@ -708,15 +733,17 @@ struct ShareStorySheet: View {
         let included: Set<String> = {
             if a.kind == .custom { return Set(a.members) }
             if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
-            // ⛔ GLOWERS TRAVELS AS AN EXPLICIT `included` SET, resolved HERE, not as a fourth flag
+            // ⛔ GLOWERS TRAVELS AS AN EXPLICIT `included` SET, built HERE, not as a fourth flag
             // through four post entry points. The three-value seam this comment block describes is
-            // deliberately narrow and worth keeping narrow.
+            // deliberately narrow and worth keeping narrow; the `.glowers` tag below is what tells
+            // the service which list to resolve this set against.
             //
-            // ⚠️ `resolveAudience` re-checks these against the live chat list at upload time, and
-            // it carries a matching exception so glow-only people survive that intersection —
-            // without it this resolves to nobody for exactly the people Glow exists for. The two
-            // halves have to stay together; the note there says so too.
-            if a.kind == .glowers { return GlowService.shared.realGlowRelationship }
+            // ⚠️ `resolveAudience` re-checks these against the LIVE glow set at upload time, never
+            // the chat list: Glow exists for people you have never chatted with, so an intersection
+            // with the chats would drop exactly the people the audience was built for. And an empty
+            // set is REFUSED there rather than widened to every chat. The two halves have to stay
+            // together; the note there says so too.
+            if a.kind == .glowers { return glowersIncluded(a) }
             return []
         }()
         let replies = a.allowReplies
@@ -790,11 +817,13 @@ struct ShareStorySheet: View {
         let lists = store.all.filter { $0.kind == .custom && multiCustom.contains($0.id) }
         let multi = lists.count > 1
         let a = chosen
+        // `postableGlowIds`, not `glowIds`: the guard has to count the people the write is addressed
+        // to, and a demo person is not one of them. See the note on `postableGlowIds`.
         let recipients = multi
             ? lists.reduce(into: Set<String>()) {
-                $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds))
+                $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: postableGlowIds))
               }
-            : a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds)
+            : a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: postableGlowIds)
         // Block ONLY when there are chats and this audience narrows to nobody — the post path's rule.
         // With no chats at all it is still my own story and still visible to me.
         if recipients.isEmpty && !contactIds.isEmpty {
@@ -816,6 +845,11 @@ struct ShareStorySheet: View {
             if multi { return lists.reduce(into: Set<String>()) { $0.formUnion(Set($1.members)) } }
             if a.kind == .custom { return Set(a.members) }
             if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
+            // ⛔ THE SAME BRANCH `post()` HAS, and it was missing. Without it an edit to Glowers
+            // handed the service an empty set under the `.glowers` tag, which the service now refuses
+            // and used to read as "everyone you chat with": the one audience Glowers was chosen to
+            // avoid, written into `recipientUids` where nothing can take it back.
+            if a.kind == .glowers { return glowersIncluded(a) }
             return []
         }()
         // The strictest list wins when several are combined, the same direction every other privacy
@@ -900,8 +934,9 @@ struct ShareStorySheet: View {
             emptyAudienceAlert = true
             return
         }
+        // A write's guard reads the postable set, like the other two. See `postableGlowIds`.
         let recipients = lists.reduce(into: Set<String>()) {
-            $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds))
+            $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: postableGlowIds))
         }
         if recipients.isEmpty && !contactIds.isEmpty {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)

@@ -24,20 +24,51 @@ struct GlowPeopleListView: View {
     }
 
     var side: Side = .glowers
-    /// The name in the title bar — whose lists these are. His reference puts the person's own
-    /// username there rather than a generic heading.
-    var title: String = ""
 
     /// Explicit, for the private-stored-property rule — see the note in `GlowProfileView`.
-    init(side: Side = .glowers, title: String = "") {
+    ///
+    /// The tab starts on the side the caller asked for, and it is seeded HERE rather than in an
+    /// `onAppear` (audit 45c). An `onAppear` runs again every time the page comes back into view, so
+    /// a tab the person had switched to snapped back to `side` whenever a sheet closed over it.
+    init(side: Side = .glowers) {
         self.side = side
-        self.title = title
+        _tab = State(initialValue: side)
     }
 
-    @State private var tab: Side = .glowers
+    /// The old shape, kept so the existing call sites compile unchanged. The title is NOT read
+    /// (audit 45e): these are only ever my own lists — the rules refuse to list anybody else's — so
+    /// the name over them is mine, and it comes from my own profile in `title` below rather than from
+    /// whatever text a caller hands in. Free text over rows that are always mine could have put
+    /// somebody else's name on my list.
+    init(side: Side, title: String) {
+        self.init(side: side)
+    }
+
+    @State private var tab: Side
     @State private var query = ""
-    @State private var loader = GlowPeopleLoader()
+    /// One loader PER SIDE, not one for the page (audit 24). With a single loader, the rows of the
+    /// side just left stayed on screen relabelled for the new side until the fetch landed — so a
+    /// Glower briefly wore an active "Glowing" button. Each side owning its rows means a switch shows
+    /// that side's own state at once: its rows if it has loaded before, a spinner if it never has.
+    /// Pull-to-refresh keeps working unchanged, because the gesture invalidates and reloads the one
+    /// loader under the finger — see `refresh`.
+    @State private var glowersLoader = GlowPeopleLoader()
+    @State private var glowingLoader = GlowPeopleLoader()
+    /// The rows a side had when its reload began, shown until the new ones land (audit 45a). The
+    /// loader goes `.loading` at the start of every fetch, which tore the list down under a
+    /// pull-to-refresh and cut the gesture short; a spinner in place of the list is for a cold load.
+    @State private var heldRows: [Side: [GlowPerson]] = [:]
     private var glow = GlowService.shared
+
+    /// The name in the title bar — whose lists these are. His reference puts the person's own
+    /// username there rather than a generic heading, and on this screen that person is always me:
+    /// see the note at the top, the rules only let this page list my own glows. So the name is read
+    /// from my own profile, never taken as a parameter — see the forwarding `init` above.
+    private var title: String {
+        let me = ProfileStore.shared.me
+        let handle = me?.handle ?? ""
+        return handle.isEmpty ? (me?.name ?? "") : handle
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,8 +80,9 @@ struct GlowPeopleListView: View {
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
-        .onAppear { tab = side }
-        .task(id: uids) { await reload() }
+        // Keyed on the SIDE as well as the ids. Two sides with the same people — both empty, most
+        // often — would otherwise share one key, and the second side's loader would never be asked.
+        .task(id: loadKey) { await reload(tab) }
     }
 
     // MARK: - Chrome

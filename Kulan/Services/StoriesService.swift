@@ -72,6 +72,12 @@ struct StoryAudienceTag {
     var label: String        // "everyone" | "friends" | "glowers" | "custom" | "oneTime"
     var name: String = ""    // custom lists only, device-local
     var oneTime: Bool { label == "oneTime" }
+    /// The one audience built on the glow relationship rather than the chat list. `resolveAudience`
+    /// reads this to take its Glowers path, and it reads it off the TAG rather than off a flag of its
+    /// own because the tag already travels through every post entry point and through the outbox
+    /// ticket: a post resumed after a relaunch keeps its label, and a separate flag anywhere else
+    /// would have been lost on the way.
+    var isGlowers: Bool { label == "glowers" }
     static let friends = StoryAudienceTag(label: "friends")
     static let everyone = StoryAudienceTag(label: "everyone")
     /// ⚠️ ITS OWN LABEL, NOT "friends". This is the word the author's own header shows and the key
@@ -758,6 +764,13 @@ final class StoriesService {
 
     enum PostRefusal: LocalizedError {
         case audienceUnavailable
+        /// The glow listeners had not delivered by the deadline, so the Glowers set could not be
+        /// trusted. The same refusal as `audienceUnavailable`, for the other list a story can be built
+        /// on: an empty set that means "not loaded yet" must never be read as "no people".
+        case glowersUnavailable
+        /// A Glowers story whose live audience has nobody in it. Refused rather than posted, because
+        /// the chat pool is NOT the fallback for this audience: see `AudienceReach`.
+        case noGlowers
         /// The edit would take a story people are currently watching down to no audience at all.
         case audienceEmpty
         /// Somebody else's story, or nobody's — the session went away mid-sheet.
@@ -774,6 +787,10 @@ final class StoriesService {
             switch self {
             case .audienceUnavailable:
                 "Couldn't load your chats, so this story would reach nobody. Check your connection and try again."
+            case .glowersUnavailable:
+                "Couldn't load your glows, so this story would reach nobody. Check your connection and try again."
+            case .noGlowers:
+                "Nobody is left in your Glowers audience, so this story would reach nobody. Pick another audience."
             case .audienceEmpty:
                 "Nobody in that list can see this story any more. Pick another audience."
             case .notMine:

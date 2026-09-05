@@ -60,8 +60,12 @@ struct PostedStoriesView: View {
     /// screen can be reached with nothing but a uid.
     @State private var person: UserProfile?
     @State private var filter: Filter = .all
-    @State private var showFilters = false
-    @Environment(\.dismiss) private var dismiss
+    /// The story a long-press asked to delete, held while the confirmation is up. Nil is "nothing
+    /// pending", which is also what drives the dialog's presented state.
+    @State private var pendingDelete: PostedStory?
+    /// A delete the server refused. The service is explicit that a delete which cannot be done has
+    /// to say so, and the reload that follows puts the tile back, so this is the only sign he gets.
+    @State private var deleteFailed = false
 
     /// ⛔ 6pt GUTTERS AND ROUNDED TILES — his third reference, 2026-09-02. My first pass was a
     /// flush 3pt mosaic, which is the ATTACH SHEET's language (edge to edge, square, no gaps) and

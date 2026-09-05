@@ -4,14 +4,22 @@
 // giver with the id matching the payload; either END may delete; nobody updates; reads are for
 // participants only. glowerCount/glowingCount on the user doc are the function's alone.
 //
-// Run BOTH ways, per the README's control rule — every FIX row must DENY on the live rules and
-// ALLOW on the new file; every GUARD row must DENY on both:
+// Run BOTH ways, per the README's control rule. FIX rows are the 2026-09-02 feature (DENY on the
+// rules from before the block existed, ALLOW since). HOLE rows are the 2026-09-05 audit fixes:
+// they must ALLOW on the pre-fix rules and DENY on the new file — that inversion is the proof the
+// fix is aimed at the hole. GUARD and OK rows must hold the same on both:
 //
-//   git show HEAD:firestore.rules > rules-tests/old.rules
+//   git show <pre-fix-sha>:firestore.rules > rules-tests/old.rules
 //   node glow.test.js old.rules
 //   node glow.test.js
 //
 // resource.data is PLAIN JSON, never Firestore typed values — README trap 1.
+//
+// ⚠️ ONE `request.time` FOR THE WHOLE RUN, AS AN ISO STRING, AND createdAt IS THAT SAME STRING.
+// The rule is `createdAt == request.time`. This REST harness has no serverTimestamp(); the
+// equivalent is handing the engine the same instant in both places (story-hardening does this for
+// windowStart). A fresh `new Date()` per request would land a few ms later and read as a DENY the
+// rule never made.
 const fs = require('fs');
 const { token } = require('./auth');
 
@@ -21,8 +29,10 @@ const A = 'uidAAA';   // the giver
 const B = 'uidBBB';   // the receiver
 const C = 'uidCCC';   // a complete stranger
 
-const NOW = new Date().toISOString();
-const edge = { from: A, to: B, createdAt: NOW };
+const REQ_TIME = new Date().toISOString();
+const now = Date.parse(REQ_TIME);
+const iso = (ms) => new Date(ms).toISOString();
+const edge = { from: A, to: B, createdAt: REQ_TIME };
 
 /// isBanned() reads users/{caller}. An unmocked read makes the whole rule evaluate to nothing and
 /// the test reports a confident, meaningless answer — README trap 2.
@@ -54,7 +64,7 @@ const cases = [
   { name: 'GUARD id and payload disagree', expect: 'DENY', uid: A, method: 'create',
     path: `${D}/glows/${A}_${C}`, after: edge, mocks: mocksFor(A) },
   { name: 'GUARD A glows themselves', expect: 'DENY', uid: A, method: 'create',
-    path: `${D}/glows/${A}_${A}`, after: { from: A, to: A, createdAt: NOW }, mocks: mocksFor(A) },
+    path: `${D}/glows/${A}_${A}`, after: { from: A, to: A, createdAt: REQ_TIME }, mocks: mocksFor(A) },
   { name: 'GUARD an extra field rides the edge', expect: 'DENY', uid: A, method: 'create',
     path: `${D}/glows/${A}_${B}`, after: { ...edge, note: 'hi' }, mocks: mocksFor(A) },
   { name: 'GUARD createdAt missing', expect: 'DENY', uid: A, method: 'create',
@@ -68,14 +78,36 @@ const cases = [
   { name: 'GUARD an edge is edited in place', expect: 'DENY', uid: A, method: 'update',
     path: `${D}/glows/${A}_${B}`, after: { ...edge, to: C }, before: edge },
 
+  // ── THE CLOCK (ALLOW on the pre-fix rules, DENY on new: createdAt must be request.time) ──
+  { name: 'HOLE  A backdates createdAt by an hour', expect: 'DENY', uid: A, method: 'create',
+    path: `${D}/glows/${A}_${B}`, after: { from: A, to: B, createdAt: iso(now - 3600e3) },
+    mocks: mocksFor(A) },
+
+  // ── THE LISTS (his ruling: the name lists are yours alone). A `list` is tested against a
+  // DOCUMENT path, with `resource` standing for a document the query would return — this harness
+  // has no query object, so "pinned to me" is a returned document with me on that end, and "no
+  // pinned end" is a list with no resource at all (user-directory.test.js records the path trap). ──
+  { name: 'OK    A lists glows pinned from == A', expect: 'ALLOW', uid: A, method: 'list',
+    path: `${D}/glows/${A}_${B}`, before: edge },
+  { name: 'OK    A lists glows pinned to == A', expect: 'ALLOW', uid: A, method: 'list',
+    path: `${D}/glows/${B}_${A}`, before: { from: B, to: A, createdAt: REQ_TIME } },
+  { name: 'GUARD A lists glows pinned from == C', expect: 'DENY', uid: A, method: 'list',
+    path: `${D}/glows/${C}_${B}`, before: { from: C, to: B, createdAt: REQ_TIME } },
+  { name: 'GUARD A lists glows pinned to == C', expect: 'DENY', uid: A, method: 'list',
+    path: `${D}/glows/${B}_${C}`, before: { from: B, to: C, createdAt: REQ_TIME } },
+  { name: 'GUARD A lists with no pinned end', expect: 'DENY', uid: A, method: 'list',
+    path: `${D}/glows/${A}_${B}` },
+
   // ── THE COUNTERS (the user-doc halves; the ALLOW row must hold on BOTH files) ──
+  // The caller's own update rule fails on the counter, so the OR falls through to adminCan() and
+  // reads admins/{A}. Mocked, or the DENY is an unmocked-call error, not a verdict — README trap 2.
   { name: 'GUARD A inflates their own glowerCount', expect: 'DENY', uid: A, method: 'update',
     path: `${D}/users/${A}`, after: { name: 'A', glowerCount: 9999 },
-    before: { name: 'A', glowerCount: 3 } },
+    before: { name: 'A', glowerCount: 3 }, mocks: mocksFor(A) },
   { name: 'OK    an ordinary profile edit beside untouched counters', expect: 'ALLOW', uid: A,
     method: 'update', path: `${D}/users/${A}`,
     after: { name: 'A renamed', glowerCount: 3, glowingCount: 1 },
-    before: { name: 'A', glowerCount: 3, glowingCount: 1 } },
+    before: { name: 'A', glowerCount: 3, glowingCount: 1 }, mocks: mocksFor(A) },
 ];
 
 (async () => {
@@ -89,7 +121,7 @@ const cases = [
       auth: { uid: c.uid, token: { firebase: { sign_in_provider: 'password' } } },
       path: c.path,
       method: c.method,
-      time: new Date().toISOString(),
+      time: REQ_TIME,
     };
     if (c.after) request.resource = { data: c.after };
     const testCase = { expectation: c.expect, request };
