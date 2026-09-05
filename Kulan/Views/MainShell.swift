@@ -1696,7 +1696,12 @@ struct ChatsView: View {
                     Task { await ChatService.setMute(conv.id, until: 0) }
                 })
             }
-            for (label, hours) in [("Mute for 1 hour", 1), ("Mute for 8 hours", 8), ("Mute for 1 week", 168)] {
+            // ⚠️ `Double`, SPELLED OUT. `muteUntil` takes `Double?`, and as separate literal calls
+            // the integers inferred to Double on their own. Collected into an array they infer the
+            // array's element type FIRST — `(String, Int)` — and the call then has nothing to widen.
+            let timed: [(String, Double)] = [("Mute for 1 hour", 1), ("Mute for 8 hours", 8),
+                                             ("Mute for 1 week", 168)]
+            for (label, hours) in timed {
                 mutes.append(UIAction(title: label) { _ in
                     Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(hours)) }
                 })
