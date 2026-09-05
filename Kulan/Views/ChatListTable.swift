@@ -93,6 +93,31 @@ struct ChatListRenderState: Equatable {
     /// leaving the results animates like any other row instead of the section blinking.
     var people: [String] = []
 
+    /// ⛔ THE ONLY WAY THIS VALUE SHOULD BE BUILT, BECAUSE A REPEATED ID IS A GUARANTEED CRASH.
+    ///
+    /// `indexPath(of:)` returns the FIRST place it finds an id, and the diff collapses ids through a
+    /// `Set` — but `numberOfRowsInSection` counts the raw array. So one id appearing twice makes the
+    /// diff issue one operation for a row the data source counts twice, and `endUpdates` traps with
+    /// "the number of rows contained in an existing section after the update must be equal to the
+    /// number of rows contained in that section before the update, plus or minus the number
+    /// inserted or deleted".
+    ///
+    /// ⚠️ IT IS NOT A THEORETICAL INPUT. Two reach it: the search can merge people out of a prefix
+    /// query and a handle lookup and hand the same uid twice, and the screen classifies a chat as
+    /// pinned or unpinned from a document that can say both across two snapshots. The old comment
+    /// here reasoned that "a uid and a conversation id can never collide", which is true and is not
+    /// the case that bites — the collision is an id with ITSELF.
+    ///
+    /// Deduping in the order the sections are searched keeps the first occurrence, which is the one
+    /// `indexPath(of:)` would have returned anyway.
+    static func make(pinned: [String], unpinned: [String], people: [String]) -> ChatListRenderState {
+        var seen = Set<String>()
+        func unique(_ ids: [String]) -> [String] { ids.filter { seen.insert($0).inserted } }
+        return ChatListRenderState(pinned: unique(pinned),
+                                   unpinned: unique(unpinned),
+                                   people: unique(people))
+    }
+
     func ids(in section: ChatListSection) -> [String] {
         switch section {
         case .pinned:   return pinned
@@ -196,6 +221,37 @@ struct ChatListRowChanges {
     }
 }
 
+/// Everything one chat row draws from, as a single comparable value.
+///
+/// ⛔ THIS EXISTS BECAUSE THE TABLE HAD NO `.update` PATH AT ALL, and that was the largest defect in
+/// the port. `ChatListRowChanges` can only see ORDER: it compares id sets and index paths, so a
+/// conversation whose CONTENT changed while its POSITION did not produced an empty diff and `apply`
+/// returned without issuing a single UIKit call. The cell's `UIHostingConfiguration` holds a
+/// `ChatRow` VALUE captured at `cellForRowAt` time and nothing observes it, so the row simply froze.
+///
+/// ⚠️ WHAT THAT ACTUALLY BROKE, none of which involves moving a row:
+///   • a new message in the chat that is ALREADY at the top of its section — old preview, old time,
+///     old unread count, because a row at index 0 never travels;
+///   • "typing…" never appearing, and worse, never clearing once shown;
+///   • the unread badge not clearing when you read a chat and came back (reading does not re-sort);
+///   • "Draft: …" never appearing;
+///   • the delivery tick never going from one to two.
+/// The row only ever repaired itself by being scrolled off and back, or by some unrelated re-sort.
+///
+/// Theirs solves this with a fourth row-change kind whose handler is `updateCellContent(at:for:)`:
+/// take the LIVE cell and re-configure it in place, deliberately not `reloadRows`, "to avoid what
+/// can be a disruptive re-layout of the chat list". `refreshVisibleContent` is that, and this value
+/// is how it knows which rows actually changed — the same fields `ChatRow.==` compares, so the test
+/// here and the row's own skip-rebuild test can never disagree.
+struct ChatRowContent: Equatable {
+    var conv: Conversation
+    var onCall: Bool
+    var storySeen: [Bool]
+    var draft: String
+    var voiceDraftSecs: Double
+    var voiceUnplayed: Bool
+}
+
 /// The table itself.
 ///
 /// ⚠️ `UIViewControllerRepresentable`, not `UIViewRepresentable`. A bare view has nowhere to put the
@@ -276,9 +332,9 @@ struct ChatListTable: UIViewControllerRepresentable {
         // invalidated. The editing state settles first, then the diff runs against it.
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
         vc.setSelecting(selecting)
-        vc.apply(state: ChatListRenderState(pinned: pinned.map(\.id),
-                                            unpinned: unpinned.map(\.id),
-                                            people: people.map(\.id)),
+        vc.apply(state: .make(pinned: pinned.map(\.id),
+                              unpinned: unpinned.map(\.id),
+                              people: people.map(\.id)),
                  animated: true)
         // ⛔ THE TICKS ARE PUT BACK **AFTER** THE DIFF, AND THE ORDER IS A BUG FIX. A same-section
         // move is a delete plus an insert (their rule — see `ChatListRowChanges.between`), and a
@@ -288,6 +344,10 @@ struct ChatListTable: UIViewControllerRepresentable {
         // the toolbar would say "2 Selected" over one visible tick. Syncing after the transaction
         // restores it from the id, which is the only thing that survives a re-sort.
         vc.syncTicks(selected: selection)
+        // ⛔ THEIR `.update` CASE, AND WITHOUT IT THE LIST FREEZES. A row whose content changed but
+        // whose position did not produces an empty diff, so nothing above this line touches it. See
+        // `ChatRowContent` for the five things that were silently broken.
+        vc.refreshVisibleContent()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -304,6 +364,17 @@ struct ChatListTable: UIViewControllerRepresentable {
 
         func person(_ id: String) -> UserProfile? {
             parent.people.first { $0.id == id }
+        }
+
+        /// Everything the row draws from, read fresh off the screen's stores. The four closures are
+        /// the only way this table can see a draft, a live call, an unheard note or a story ring.
+        func content(for conv: Conversation) -> ChatRowContent {
+            ChatRowContent(conv: conv,
+                           onCall: parent.onCall(conv),
+                           storySeen: parent.storySeen(conv),
+                           draft: parent.draft(conv),
+                           voiceDraftSecs: parent.voiceDraftSecs(conv),
+                           voiceUnplayed: parent.voiceUnplayed(conv))
         }
 
         /// The one writer of the SwiftUI-side selection set. The table reports a tick, this puts it
@@ -323,6 +394,23 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// Their `hasEverAppeared`. The first apply has nothing to animate from; every apply after it
     /// animates, including one that finds the list empty. See `apply(state:animated:)`.
     private var hasEverApplied = false
+
+    /// ⛔ RE-ENTRANCY GUARD. `apply` assigns `state` and then opens a transaction; entering it again
+    /// from inside that transaction would advance the state twice and nest `beginUpdates`, whose
+    /// inner index paths would be read against the OUTER transaction's pre-state — an inconsistent
+    /// update, which is a crash. Nothing reaches it synchronously today: the only inward path is
+    /// `cellForRowAt`, which reads four closures on the screen, and SwiftUI coalesces any
+    /// invalidation those cause to the next runloop. This costs one Bool and removes the whole
+    /// class, including the day somebody puts a publisher that fires on read behind one of them.
+    private var isApplying = false
+
+    /// What each row's cell was last configured with, by id. The input to the in-place refresh —
+    /// see `refreshVisibleContent`. Pruned to the live id set on every apply so it cannot grow with
+    /// every chat that has ever been on screen.
+    private var configured: [String: ChatRowContent] = [:]
+    /// The theme the visible cells were built in. Not part of a row's content, and it changes all of
+    /// them at once.
+    private var configuredDark: Bool?
 
     /// ⛔ ONE HEADER VIEW PER SECTION, KEPT, NOT REBUILT. Two reasons, and the second is the one that
     /// matters for the pin animation.
@@ -428,6 +516,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+
+        // The heading's height is computed from the headline font, so a change to the phone's text
+        // size changes it. Nothing else asks the table to re-measure a header, and this is rare
+        // enough that a full reload is the honest answer rather than an optimisation.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (vc: ChatListTableController, _) in
+            vc.tableView.reloadData()
+        }
     }
 
     /// ⛔ THEIR TRANSACTION, AND THE REASON THIS FILE EXISTS. One `beginUpdates`/`endUpdates` block
@@ -462,8 +557,20 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// empties and refills — switching to the Unread filter and back — is not a first load and must
     /// not throw its cells away.
     func apply(state new: ChatListRenderState, animated: Bool) {
+        // See `isApplying`. A nested call would advance the state twice and nest the transaction.
+        guard !isApplying else { return }
+        isApplying = true
+        defer { isApplying = false }
+
         let old = state
         state = new
+        // The content cache is keyed by id and would otherwise keep every chat that has ever been on
+        // screen. Pruned here rather than in the refresh, because this is the one place that knows
+        // which ids still exist.
+        if configured.count > new.pinned.count + new.unpinned.count {
+            let live = Set(new.pinned + new.unpinned)
+            configured = configured.filter { live.contains($0.key) }
+        }
 
         guard hasEverApplied else {
             hasEverApplied = true
@@ -487,6 +594,15 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
         let work = {
             self.tableView.beginUpdates()
+            // ⛔ THEIRS, VERBATIM IN INTENT: "animate all UI changes within the same transaction",
+            // and the change is dropping OUT of editing state when the list rearranges under an open
+            // swipe. Their condition is `tableView.isEditing && !multiSelectState.isActive` — a
+            // revealed swipe platter puts the table in editing state, and leaving it revealed over a
+            // row that is being deleted or moved is how a platter ends up stranded on the wrong
+            // chat. Select mode is the exception, because there editing IS the mode.
+            if self.tableView.isEditing, !(self.host?.parent.selecting ?? false) {
+                self.tableView.setEditing(false, animated: true)
+            }
             // The heading rides INSIDE the transaction so its appearance is part of the same
             // animation as the row that caused it, and so the header's new height is measured in the
             // same pass. `heightForHeaderInSection` already reads the new state — it was assigned at
@@ -506,6 +622,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // zero-length animation. `reloadData()` here would be the easy version and it is wrong: it
         // drops every cell, which costs a full rebuild and loses the swipe or the menu the user may
         // have open on one of them.
+        //
+        // ⚠️ THE WRAPPER IS NOT IN `applyRowChanges`, IT IS IN THEIR CALLER, and a reviewer looking
+        // only at `applyRowChanges` will correctly report it as an addition of ours. It is theirs:
+        // `ChatListViewController+Loading.swift`, the load path — `shouldAnimate = !suppressAnimations
+        // && hasEverAppeared`, and when that is false the same `applyLoadResult` is called inside
+        // `UIView.animate(withDuration: 0)`.
         if animated {
             work()
         } else {
@@ -548,23 +670,80 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         }
 
         guard let conv = host.conversation(id) else { return cell }
-        // ⚠️ `UIHostingConfiguration`, so the ROW ITSELF is still the SwiftUI `ChatRow` we already
-        // have. Nothing about how a row looks moves to UIKit here — only how rows are arranged and
-        // animated. Rewriting the row's drawing as well would be two rewrites at once, and the
-        // second one has no reason to happen.
-        c.contentConfiguration = UIHostingConfiguration {
-            ChatRow(conv: conv, me: p.me, dark: p.dark,
-                    onCall: p.onCall(conv),
-                    storySeen: p.storySeen(conv),
-                    onStoryTap: { p.onStoryTap(conv) },
-                    draft: p.draft(conv),
-                    voiceDraftSecs: p.voiceDraftSecs(conv),
-                    voiceUnplayed: p.voiceUnplayed(conv))
+        configureChatCell(c, id: id, content: host.content(for: conv))
+        return c
+    }
+
+    /// The ONE place a chat cell's content is built, so `cellForRowAt` and the in-place refresh
+    /// cannot drift apart.
+    ///
+    /// ⚠️ `UIHostingConfiguration`, so the ROW ITSELF is still the SwiftUI `ChatRow` we already have.
+    /// Nothing about how a row looks moved to UIKit here — only how rows are arranged and animated.
+    ///
+    /// ⚠️ THE HOSTING CONFIGURATION'S TYPE IS THE SAME ON EVERY CALL, which is what makes the
+    /// in-place refresh work rather than merely not crash: UIKit hands the new configuration to the
+    /// EXISTING content view, so SwiftUI updates the row in place and the row's own `@State` — the
+    /// typing self-expire and the clock tick that ages "14:03" into "Yesterday" — survives. A
+    /// different generic type there would rebuild the view and reset both, which is the other reason
+    /// a stranger's row has its own reuse identifier.
+    private func configureChatCell(_ cell: ChatListCell, id: String, content: ChatRowContent) {
+        configured[id] = content
+        let me = host?.parent.me ?? ""
+        let dark = host?.parent.dark ?? false
+        // ⛔ THE TAP READS THE COORDINATOR, NOT THE CAPTURED STRUCT. `host` is a reference and its
+        // `parent` is replaced on every SwiftUI pass; the struct is a value frozen at build time. A
+        // closure that captured the struct kept whatever `selecting` was true when the cell was
+        // built, so a row built BEFORE Edit was tapped opened the person's story instead of ticking
+        // the row — the SwiftUI list guarded that twice and neither guard survived the port.
+        let coordinator = host
+        let conv = content.conv
+        cell.contentConfiguration = UIHostingConfiguration {
+            ChatRow(conv: conv, me: me, dark: dark,
+                    onCall: content.onCall,
+                    storySeen: content.storySeen,
+                    onStoryTap: { coordinator?.parent.onStoryTap(conv) },
+                    draft: content.draft,
+                    voiceDraftSecs: content.voiceDraftSecs,
+                    voiceUnplayed: content.voiceUnplayed)
                 .equatable()   // the row's own skip-rebuild test, kept — see `ChatRow.==`
         }
         .margins(.all, 0)
-        c.selectionStyle = .default
-        return c
+        cell.selectionStyle = .default
+    }
+
+    /// ⛔ THEIR `updateCellContent`, AND THE PORT WAS BROKEN WITHOUT IT. See `ChatRowContent` for the
+    /// five things that silently stopped working.
+    ///
+    /// Walks only the rows that are actually on screen, compares each one's content with what its
+    /// cell was last given, and re-configures the ones that differ — straight onto the live cell,
+    /// never through `reloadRows` or `reconfigureRows`. That is their choice and their stated reason
+    /// ("to avoid what can be a disruptive re-layout of the chat list"), and here it is also what
+    /// makes this safe to run immediately after a pin: assigning a cell's configuration is not a
+    /// table operation, so it cannot interrupt the transaction's animation the way `reloadSections`
+    /// did.
+    ///
+    /// ⚠️ SAFE ONLY BECAUSE THE ROW'S HEIGHT CANNOT CHANGE. Every row reserves exactly two preview
+    /// lines whatever its preview is (the hidden two-line label in `ChatRow`), so new content can
+    /// never want a different height, and the table is never told about a size it does not know. If
+    /// that reserve is ever removed, this has to become `reconfigureRows` and the pin animation has
+    /// to be re-checked.
+    func refreshVisibleContent() {
+        guard let host else { return }
+        let p = host.parent
+        // A theme flip changes every row and is not part of any row's content value.
+        let themeChanged = configuredDark != p.dark
+        configuredDark = p.dark
+
+        for ip in tableView.indexPathsForVisibleRows ?? [] {
+            guard let s = ChatListSection(rawValue: ip.section), s != .people,
+                  let id = state.ids(in: s)[safe: ip.row],
+                  let conv = host.conversation(id),
+                  let cell = tableView.cellForRow(at: ip) as? ChatListCell
+            else { continue }
+            let fresh = host.content(for: conv)
+            guard themeChanged || configured[id] != fresh else { continue }
+            configureChatCell(cell, id: id, content: fresh)
+        }
     }
 
     // MARK: - Swipes
@@ -599,7 +778,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         let pin = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, done in
             p.onTogglePin(c); done(true)
         }
-        pin.image = UIImage(systemName: pinned ? "pin.slash.fill" : "pin.fill")
+        // ⛔ OUR OWN DRAWING FOR PIN, NOT `pin.fill` — it is the mark he sent for this swipe, and the
+        // SwiftUI list used it here (`MenuIcon("ic_pin_menu")`). The port had quietly substituted the
+        // SF Symbol, which is the same idea drawn by somebody else. `.alwaysTemplate` so the platter
+        // tints it white the way it tints a symbol; an asset defaults to its own colours and would
+        // have come out as a dark pin on orange.
+        pin.image = pinned ? UIImage(systemName: "pin.slash.fill")
+                           : UIImage(named: "ic_pin_menu")?.withRenderingMode(.alwaysTemplate)
         pin.backgroundColor = .systemOrange
 
         return UISwipeActionsConfiguration(actions: [read, pin])
@@ -611,7 +796,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         let archive = UIContextualAction(style: .normal, title: "Archive") { _, _, done in
             p.onArchive(c); done(true)
         }
-        archive.image = UIImage(systemName: "archivebox.fill")
+        // ⛔ THE SOLID DRAWING, `ic_archive_fill` — the SwiftUI swipe used it and its note says it is
+        // "the one he sent for the swipe specifically". `ic_archive` (the outline) is the MENU's, and
+        // the two are not interchangeable.
+        archive.image = UIImage(named: "ic_archive_fill")?.withRenderingMode(.alwaysTemplate)
         archive.backgroundColor = .systemGray
 
         // ⚠️ `.destructive` ON DELETE, AND IT IS NOT ONLY THE COLOUR. A destructive contextual
@@ -692,7 +880,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
               s.title(pinnedCount: state.pinned.count, unpinnedCount: state.unpinned.count,
                       peopleCount: state.people.count) != nil
         else { return .leastNormalMagnitude }
-        return UITableView.automaticDimension
+        // ⛔ AN EXPLICIT HEIGHT, NOT `automaticDimension` — see `ChatListSectionHeader.height`. The
+        // automatic answer is a CACHED measurement of the header view, and setting the label's text
+        // does not invalidate that cache; the heading would then appear late, at whatever moment
+        // something unrelated forced a re-measure.
+        return ChatListSectionHeader.height(for: traitCollection)
     }
 
     func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? { UIView() }
@@ -710,6 +902,16 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // select anything. The whole row is the target, which is his rule and theirs: a tick that
         // can only be hit on the circle is a smaller target for no reason.
         if tableView.isEditing {
+            // ⛔ A STRANGER MUST NEVER ENTER THE SELECTION SET. `canEditRowAt` being false takes the
+            // CIRCLE away but not the selection: with `allowsSelectionDuringEditing` a tap still
+            // lands here, and this used to put the person's UID into `selection`. The toolbar then
+            // counted it, and Archive or Delete handed that uid to `ChatService` as if it were a
+            // conversation id. The SwiftUI row said this with `selectionDisabled(true)` and the
+            // meaning has to be restored explicitly, not inferred from the missing circle.
+            guard ChatListSection(rawValue: indexPath.section) != .people else {
+                tableView.deselectRow(at: indexPath, animated: false)
+                return
+            }
             guard let id = rowId(at: indexPath) else { return }
             host?.setSelected(id, true)
             return
@@ -764,6 +966,29 @@ private final class ChatListCell: UITableViewCell {
 /// label colour. Nothing here is a background or a separator — a grouped table's own header
 /// furniture is exactly what the list is avoiding, which is why the container is clear.
 final class ChatListSectionHeader: UIView {
+    /// Their margins, and the two numbers the height is made of. Named because the height below has
+    /// to use the SAME values the layout does — two copies of 14 that can drift apart is how a
+    /// heading ends up half a point clipped.
+    static let topMargin: CGFloat = 14
+    static let bottomMargin: CGFloat = 8
+
+    /// ⛔ THE HEIGHT IS ARITHMETIC, NOT A MEASUREMENT, AND THAT IS THE POINT.
+    ///
+    /// `heightForHeaderInSection` used to return `UITableView.automaticDimension`, which reads a
+    /// CACHED `systemLayoutSizeFitting` of the header view. Setting `label.text` invalidates the
+    /// LABEL; it does not invalidate the table's cached section-header size, and there is no public
+    /// API that does short of `reloadSections` — the one call this whole design exists to avoid. The
+    /// failure that buys is the nastiest kind: the heading appears LATE, whenever some unrelated
+    /// relayout happens to re-measure it, so it looks fine in the one test you run.
+    ///
+    /// This header is a single line of a known style between two known margins, so its height can be
+    /// computed outright. Deterministic, no cache to go stale, and it still grows with the phone's
+    /// text size because the font does.
+    static func height(for traits: UITraitCollection) -> CGFloat {
+        let font = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traits)
+        return ceil(font.lineHeight) + topMargin + bottomMargin
+    }
+
     /// Nil collapses the heading. Setting it is the whole update path: no reload, no reconfigure,
     /// and it is a no-op when the text has not actually changed, so it is safe to call on every
     /// pass. See `ChatListTableController.syncHeaderTitles`.
@@ -784,7 +1009,8 @@ final class ChatListSectionHeader: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 14, leading: 16, bottom: 8, trailing: 16)
+        directionalLayoutMargins = NSDirectionalEdgeInsets(top: Self.topMargin, leading: 16,
+                                                           bottom: Self.bottomMargin, trailing: 16)
 
         label.font = .preferredFont(forTextStyle: .headline)
         label.adjustsFontForContentSizeCategory = true
@@ -793,11 +1019,19 @@ final class ChatListSectionHeader: UIView {
         addSubview(label)
 
         let g = layoutMarginsGuide
+        // ⚠️ THE BOTTOM ONE IS 999, NOT REQUIRED. A titleless section is collapsed to
+        // `leastNormalMagnitude`, and UIKit enforces that with its own required
+        // `UIView-Encapsulated-Layout-Height`. A required bottom constraint fights it and logs a
+        // constraint conflict on every pin — noise in the console for a view that is deliberately
+        // being squashed to nothing. One point below required loses that fight silently and changes
+        // nothing when the header is actually visible.
+        let bottom = label.bottomAnchor.constraint(equalTo: g.bottomAnchor)
+        bottom.priority = .defaultHigh + 1
         NSLayoutConstraint.activate([
             label.topAnchor.constraint(equalTo: g.topAnchor),
             label.leadingAnchor.constraint(equalTo: g.leadingAnchor),
             label.trailingAnchor.constraint(lessThanOrEqualTo: g.trailingAnchor),
-            label.bottomAnchor.constraint(equalTo: g.bottomAnchor),
+            bottom,
         ])
     }
 
