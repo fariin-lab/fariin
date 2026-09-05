@@ -318,7 +318,41 @@ struct StoriesTabView: View {
     /// the page knows which of the two shapes it is — and the cards then simply fill into a grid
     /// that was always going to be there. This is the same rule the chat list follows about its
     /// own skeleton: decide the layout on what you know, fill it with what arrives.
-    private var hasGlowGrid: Bool { !glow.glowRelationship.isEmpty }
+    ///
+    /// ⛔ AND THE ANSWER IT ARRIVES AT COUNTS — owner, 2026-09-05, with two grey boxes on his screen:
+    /// "when user doesn't have glowing story it's showing skeleton screen… when it's empty it's
+    /// empty, friends story make full".
+    ///
+    /// ⚠️ THE SKELETON WAS THE *LOADING* STATE AND NOTHING EVER TOOK IT DOWN. `glowSection` drew it
+    /// on `cards.isEmpty`, and `cards` is `state.value ?? []` — which is empty both while the fetch
+    /// is in flight AND when the fetch has come back with nothing. Those are not the same fact.
+    /// Somebody with a Glow whose glows have simply not posted anything sat under two grey
+    /// rectangles for ever, because there was no story coming to replace them.
+    ///
+    /// `GlowLoad` has always been able to tell the difference; this just asks it. The distinction
+    /// also keeps the flicker fix above intact rather than trading one report for the other:
+    ///
+    ///   • no relationship            → false from the first frame, as before. No flip.
+    ///   • relationship, loading      → TRUE, so the strip and the skeletons hold the space. This is
+    ///                                  the case his 2026-09-02 report was about, and it still
+    ///                                  behaves the way that fix made it behave.
+    ///   • relationship, loaded, full → TRUE, and it was already TRUE a moment ago. No flip.
+    ///   • relationship, loaded, EMPTY → false. The section goes, and Friends takes the whole page.
+    ///   • failed                     → false. Two grey boxes are a worse answer to a failed fetch
+    ///                                  than simply not claiming there is a section.
+    ///
+    /// The last two are the only shape change, it happens once when the load settles, and it is the
+    /// one he asked for. There is no way to have it without a change of shape short of holding the
+    /// whole page back until the glow fetch returns, which would delay Friends for everybody to
+    /// spare this case.
+    private var hasGlowGrid: Bool {
+        guard !glow.glowRelationship.isEmpty else { return false }
+        switch glowStories.state {
+        case .loading:          return true
+        case .loaded(let c):    return !c.isEmpty
+        case .failed:           return false
+        }
+    }
 
     /// FRIENDS AS A GRID — the layout when nothing sits under it. Same card as Glowing.
     ///
@@ -401,6 +435,15 @@ struct StoriesTabView: View {
                         // Two empty cards while the pictures are fetched. They hold exactly the
                         // space the real ones will take, so nothing under them moves when they
                         // land — a placeholder that is a different size is just a slower jump.
+                        //
+                        // ⚠️ THIS BRANCH IS NOW ONLY REACHABLE WHILE THE LOAD IS IN FLIGHT, and that
+                        // is the whole of his 2026-09-05 fix. `cards` is `state.value ?? []`, which
+                        // is also empty when the fetch has RETURNED with nothing — and this used to
+                        // draw the same two grey boxes for that, for ever, because no story was
+                        // coming to replace them. `hasGlowGrid` now collapses the section on a
+                        // loaded-empty or failed result, so by the time control reaches here the
+                        // only reason `cards` can be empty is that the answer has not arrived yet.
+                        // Do not "simplify" this by reading `cards.isEmpty` on its own again.
                         ForEach(0..<2, id: \.self) { _ in
                             Color.primary.opacity(0.08)
                                 .aspectRatio(GlowStoryCardView.aspect, contentMode: .fit)
