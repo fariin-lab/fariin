@@ -37,9 +37,27 @@ platform :ios do
       configuration: "Release",
       export_method: "app-store",
       xcargs: "CURRENT_PROJECT_VERSION=#{ENV['BUILD_NUMBER']} -skipPackagePluginValidation -skipMacroValidation",
+      # ⛔ THE EXPORT IS THE STEP THAT HANGS, NOT THE BUILD — run 34391087503, 2026-09-09.
+      # "Archive Succeeded" at 19:02:15, `-exportArchive` started at 19:02:16, and the log has NOT
+      # ONE LINE after it until the job's own 60 minute limit killed it at 19:47. The app had
+      # compiled and linked in sixteen minutes, which is normal for this project.
+      #
+      # ⚠️ THAT RUN'S NETWORK TO APPLE WAS ALREADY SICK. Swift package resolution failed on attempts
+      # one and two of the same job ("Could not resolve package dependencies") and only landed on
+      # the third. So the export almost certainly stalled on a network call of its own rather than
+      # on anything in our code, and a plain re-run may simply work.
+      #
+      # These two options remove the export's reasons to talk to anybody:
+      #   • `uploadSymbols: false` — the archive step already made the dSYM, and letting export ship
+      #     symbols to Apple is a large upload inside a step that gives no progress output. The
+      #     symbols still go up with the build itself.
+      #   • `compileBitcode: false` — bitcode has been dead since Xcode 14 and asking for it can
+      #     still send export down a slower path.
       export_options: {
         signingStyle: "manual",
-        provisioningProfiles: { BUNDLE_ID => PROFILE_NAME }
+        provisioningProfiles: { BUNDLE_ID => PROFILE_NAME },
+        uploadSymbols: false,
+        compileBitcode: false
       }
     )
 
