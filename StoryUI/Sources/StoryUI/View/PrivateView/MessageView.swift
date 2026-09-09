@@ -80,10 +80,64 @@ private extension MessageView {
         }
     }
     
+    /// ⛔ SHARE STORY · COPY STORY LINK · REPOST STORY — owner, 2026-09-09, with a screenshot of the
+    /// reference app's story footer: a forward arrow and a heart beside the reply field.
+    ///
+    /// ⚠️ THE SAME MENU CONTROL THE "…" ALREADY USES, not a new one. `StoryMoreMenu` is a
+    /// transparent `UIButton` with `showsMenuAsPrimaryAction` laid over whatever SwiftUI drew, and it
+    /// already pauses the story while the dropdown is up and resumes it after — the four-round
+    /// history of that is written on the type itself. A second menu mechanism in the same screen
+    /// would be a second chance to get all of that wrong.
+    ///
+    /// ⚠️ AND THE BUTTON IS DRAWN LIKE THE HEART BESIDE IT, deliberately: the same `.title2`, the
+    /// same white, the same soft shadow, the same 44pt target. Nothing here is a new look — it is
+    /// the existing footer control with a different glyph.
+    ///
+    /// ⚠️ `arrowshape.turn.up.right` IS THE FORWARD ARROW, WHICH IS THE MARK IN HIS SCREENSHOT. The
+    /// three things behind it are share, link and repost, so a share arrow is the honest label for
+    /// the set; the repost glyph lives on its own row inside the menu.
+    private var shareButton: some View {
+        Image(systemName: "arrowshape.turn.up.right")
+            .font(.title2)
+            .foregroundColor(.white)
+            .shadow(color: .black.opacity(0.35), radius: 4, y: 1)   // reads on any photo, like the heart
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .overlay(StoryMoreMenu(items: shareItems).frame(width: 44, height: 44))
+    }
+
+    /// The three entries, in the order he listed them. Each posts a notification and the host runs
+    /// it — the same arrangement every other story menu entry uses, and the host re-checks the
+    /// permission on live state before acting on any of them.
+    private var shareItems: [StoryMoreMenu.Item] {
+        [
+            .init(title: "Share Story", systemImage: "square.and.arrow.up") {
+                NotificationCenter.default.post(name: .init("storyActionShareStory"), object: nil)
+            },
+            // `doc.on.doc` is the glyph this app's other "Copy Link" already wears (the group invite
+            // menu), so copying a link looks like copying a link wherever it is offered.
+            .init(title: "Copy Story Link", systemImage: "doc.on.doc") {
+                NotificationCenter.default.post(name: .init("storyActionCopyStoryLink"), object: nil)
+            },
+            // The two-arrow loop is the mark every app that has this feature uses for it; no SF
+            // Symbol is named "repost" and none of the forward arrows says "publish this again".
+            .init(title: "Repost Story", systemImage: "arrow.2.squarepath") {
+                NotificationCenter.default.post(name: .init("storyActionRepostStory"), object: nil)
+            },
+        ]
+    }
+
     @ViewBuilder
     func buttonViewBuilder(_ config: StoryInteractionConfig?) -> some View {
         if let config {
             HStack(spacing: 16) {
+                // ⛔ ONLY WHEN THE HOST SAYS SO, AND THE HOST'S ANSWER IS ALREADY "posted to Everyone
+                // AND the author has not blocked me" — see `Story.canShareStory` and
+                // `StoryShareGate`. Absent rather than disabled: his word was "do not show any of
+                // these options".
+                if story.canShareStory {
+                    shareButton
+                }
                 if config.showLikeButton {
                     likeButton
                 }

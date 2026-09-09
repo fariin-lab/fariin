@@ -1126,6 +1126,12 @@ struct StoryViewer: View {
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
+    /// "Share Story" → the system sheet with the story's LINK in it, not its picture — owner,
+    /// 2026-09-09. See `shareOrCopyStoryLink` for why a link and not the image.
+    @State private var shareLink: StoryLinkPayload?
+    /// "Repost Story" → the app's own audience sheet, holding the original's picture. See
+    /// `startRepost`, and `StoriesService.pendingRepost` for how the attribution reaches the post.
+    @State private var repostDraft: StoryRepostDraft?
     /// The story whose viewers are being changed — "…" → Edit viewers. It is the story itself
     /// rather than a flag because the sheet edits THAT story: same id, same posting time, same
     /// media. See `ShareStorySheet.editing`.
@@ -1497,7 +1503,13 @@ struct StoryViewer: View {
     // VIEWERS sheet is handled separately via `viewersProgress` (below) so the story is frozen the
     // instant the sheet starts to rise, even mid-drag — otherwise it kept playing and, on reaching
     // the last item, auto-dismissed the whole viewer (taking the sheet with it).
-    private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil }
+    // ⚠️ EVERY SHEET HAS TO BE NAMED HERE OR THE STORY KEEPS RUNNING UNDER IT — and on reaching its
+    // last item it auto-dismisses the whole viewer, taking the sheet with it. `shareLink` and
+    // `repostDraft` (owner, 2026-09-09) are sheets like the rest and belong on this list.
+    private var sheetUp: Bool {
+        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil
+            || editViewers != nil || shareLink != nil || repostDraft != nil
+    }
 
     init(group: StoryGroup, ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
@@ -1619,6 +1631,21 @@ struct StoryViewer: View {
                         // own story — see `Story.isPublicStory`. A one-time story is never public
                         // whatever its label says, so it is excluded here rather than in the menu.
                         isPublicStory: s.audienceLabel == "everyone" && !s.oneTime,
+                        // ⛔ SHARE STORY · COPY STORY LINK · REPOST STORY — owner, 2026-09-09: "If a
+                        // user selects Everyone as the story audience, add these options to the
+                        // story… However, if the story owner has blocked the current user, do not
+                        // show any of these options."
+                        //
+                        // Both halves are `StoryShareGate.allows`, which is also what each of the
+                        // three handlers re-asks on live state and what `firestore.rules` asks again
+                        // on the server. One rule, three layers — his "enforced consistently in both
+                        // the UI and the underlying story permissions".
+                        //
+                        // ⚠️ NOT ON MY OWN STORY. The footer this flag draws into is the reply bar,
+                        // which my own story does not have — it wears the owner bar instead — and
+                        // reposting your own story is not a thing. The author's own doors are the
+                        // "…" menu's Share and Copy Story Link, which read `isPublicStory` above.
+                        canShareStory: !g.isMine && StoryShareGate.allows(s),
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an
@@ -1692,6 +1719,27 @@ struct StoryViewer: View {
         v
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
         .sheet(item: $forwardImg) { p in StoryForwardSheet(image: p.image, onSent: { flashSentToast() }) }
+        // "Share Story": the LINK goes into the system sheet, never the picture. See
+        // `shareOrCopyStoryLink`.
+        .sheet(item: $shareLink) { p in ActivityView(items: [p.link]) }
+        // ⛔ "Repost Story" USES THE APP'S OWN AUDIENCE SHEET, UNCHANGED, and that is the whole of
+        // why this works the way it does — owner, 2026-09-09.
+        //
+        // ⚠️ THE SHEET IS THE ONLY PLACE THAT KNOWS HOW TO TURN A CHOSEN AUDIENCE INTO A POST, and
+        // one of those audiences carries an exception that must not be written out a second time
+        // (the Glowers audience is deliberately NOT intersected with the chat list; a copy of that
+        // derivation that missed it would post to nobody, silently and unrepairably). So the repost
+        // hands the sheet a picture and nothing else, and the attribution reaches the post through
+        // `StoriesService.pendingRepost` instead of through an argument.
+        //
+        // ⚠️ AND THE STAMP IS TAKEN BACK IF HE CLOSES THE SHEET WITHOUT POSTING, or the next
+        // ordinary story he posts would go out wearing somebody else's name.
+        .sheet(item: $repostDraft, onDismiss: { StoriesService.shared.disarmRepost() }) { d in
+            ShareStorySheet(image: d.image, onPosted: {
+                repostDraft = nil
+                flashSentToast("Reposted")
+            })
+        }
         // EDIT VIEWERS. The audience sheet exactly as it is drawn for a post — his condition — with
         // Update in place of Post Story and no way to make a new audience from here. It dismisses
         // itself once the write lands; this only says so.
@@ -1787,6 +1835,19 @@ struct StoryViewer: View {
             guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { shareImg = StoryImagePayload(image: img) } }
+        }
+        // ⛔ THE THREE OPTIONS AN "EVERYONE" STORY CARRIES — owner, 2026-09-09. Every one of them
+        // re-asks the permission on LIVE state before it does anything, exactly as Save, Share and
+        // Edit viewers above already do, and for the same stated reason: the menu is the part a
+        // modified client replaces, and a block can land while a menu is open.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShareStory"))) { _ in
+            shareOrCopyStoryLink(copyOnly: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionCopyStoryLink"))) { _ in
+            shareOrCopyStoryLink(copyOnly: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionRepostStory"))) { _ in
+            startRepost()
         }
         // "…" → Edit viewers: the SAME audience sheet the posting flow uses, in edit mode. It
         // writes to the story that is already up — no upload, no second story, no new id. The same
@@ -2791,6 +2852,26 @@ struct StoryViewer: View {
     /// icon"). The audience row in the share sheet does wear it, and that is a different question:
     /// there it is a picture of who you are posting AS, here it is a statement of who can see it.
     private func audienceBadge(for s: Story, isMine: Bool) -> StoryAudienceBadge? {
+        // ⛔ A REPOST NAMES THE PERSON WHO WROTE IT, TO EVERYBODY, AND THAT BEATS THE AUDIENCE LINE
+        // — owner, 2026-09-09. A repost is somebody else's picture published under my name; the one
+        // thing that makes it honest instead of theft is that their name is on it, so this is the
+        // one fact on this line that is NOT the author's private business and is shown to every
+        // viewer rather than to the author alone.
+        //
+        // ⚠️ IT TAKES THE AUDIENCE PILL'S SLOT RATHER THAN ADDING A SECOND LINE, on purpose. The
+        // header has one place for a line under the name and it already draws exactly this shape —
+        // a small glyph and a short string. A second line would be a new piece of design on a screen
+        // whose header shape he has already settled twice. What the author loses on their own repost
+        // is the audience word, which they can still read under "Edit viewers" in the "…" menu.
+        //
+        // ⚠️ NOT TAPPABLE. The link back is stored on the story (`StoryRepostRef.link`) but nothing
+        // opens a story from a link yet — `KulanApp.route(from:)` knows people and groups only, and
+        // it is not a story file. See `StoriesService.storyLink`.
+        if let r = s.repost {
+            // The two-arrow loop, the same mark the menu entry that made this wears.
+            return StoryAudienceBadge(systemImage: "arrow.2.squarepath",
+                                      text: "Reposted from \(r.authorName)")
+        }
         // NOBODY BUT THE AUTHOR SEES THIS LINE AT ALL (owner, 2026-08-07: "only owner story can see
         // that label… when I want to see other people story don't show that label, show only name
         // and time like before"). It used to tell everybody else the TYPE — "My Friends", "Everyone"
@@ -4256,6 +4337,108 @@ struct StoryViewer: View {
         return await DiskImageCache.shared.image(for: url)
     }
 
+    // MARK: - Share Story · Copy Story Link · Repost Story (owner, 2026-09-09)
+
+    /// ⛔ THE UI'S HALF OF THE PERMISSION, ASKED AGAIN AT THE MOMENT OF THE TAP.
+    ///
+    /// The footer button and the "…" entry are both built from `StoryShareGate`, and this asks it a
+    /// second time on the story that is actually on screen now. Not belt and braces for its own sake:
+    /// the story can advance under an open menu, and the block that decides this can land while the
+    /// menu is up. The service then asks the SERVER the same question before it hands anything over
+    /// (`StoriesService.shareableLink`), which is the third and last layer.
+    ///
+    /// ⚠️ MY OWN STORY TAKES THE `isEveryone` HALF ONLY. There is nobody who could have blocked me
+    /// on my own story, and asking would mean reading a conversation with myself.
+    private func storySharingAllowedNow(_ s: Story) -> Bool {
+        currentIsMine ? StoryShareGate.isEveryone(s) : StoryShareGate.allows(s)
+    }
+
+    /// "Share Story" and "Copy Story Link" — one function, because they differ only in where the
+    /// string goes.
+    ///
+    /// ⛔ IT IS THE LINK THAT TRAVELS, NOT THE PICTURE, and that is the difference between this and
+    /// the "…" menu's Share on my own story. Handing somebody else's photograph out of the app is
+    /// the exact move the menu above refuses to offer on another person's story — a story is a
+    /// promise that it is gone in 24 hours, and a file in another app is not. A link is not: it
+    /// points back here, it expires with the story, and it works for a video, which the image
+    /// pipeline never has.
+    private func shareOrCopyStoryLink(copyOnly: Bool) {
+        guard let s = currentStory, storySharingAllowedNow(s) else { return }
+        let mine = currentIsMine
+        Task {
+            guard let link = await StoriesService.shared.shareableLink(for: s) else {
+                // ⚠️ TWO REASONS REACH HERE AND ONLY ONE OF THEM IS SAYABLE. Either the author has
+                // no username — a real, ordinary state, and the reference app has the same limit for
+                // the same reason: linking a story needs a public name to build the link out of — or
+                // the server says this person blocked me, which must never be said out loud. The
+                // wording covers the first and does not deny the second.
+                await MainActor.run {
+                    flashSentToast(mine ? "Pick a username in Settings to link your stories"
+                                        : "There's no link to this story")
+                }
+                return
+            }
+            await MainActor.run {
+                if copyOnly {
+                    UIPasteboard.general.string = link
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    flashSentToast("Link copied")
+                } else {
+                    shareLink = StoryLinkPayload(link: link)
+                }
+            }
+        }
+    }
+
+    /// ⛔ REPOST STORY — publish somebody else's Everyone story as one of mine, with their name
+    /// still on it. Owner, 2026-09-09, who asked for the reference app's behaviour.
+    ///
+    /// THEIRS, from their own documentation rather than from a guess: only a story visible to
+    /// everyone can be reposted; the copy keeps a header naming the original poster and the story it
+    /// came from; and a "no forwards" flag on the original refuses it outright. All three are in
+    /// `StoriesService.repostRef`, which is the gate this calls before anything is loaded or shown.
+    ///
+    /// What could NOT be determined about theirs, so the conservative side was taken in each case:
+    /// whether the original author is notified (we send nothing), whether a repost may itself be
+    /// reposted (ours re-attributes to the ORIGINAL author rather than to the person who passed it
+    /// on), and whether it is offered on your own story (it is not).
+    ///
+    /// ⚠️ THE AUDIENCE IS HIS, CHOSEN IN THE APP'S OWN SHEET. This function loads a picture and opens
+    /// that sheet; it decides nothing about who the repost reaches. See the `.sheet` for why that
+    /// separation is not negotiable.
+    private func startRepost() {
+        guard let s = currentStory, !currentIsMine, StoryShareGate.allows(s) else { return }
+        let name = groups.first { $0.authorUid == s.authorUid }?.name ?? ""
+        Task {
+            let ref: StoryRepostRef
+            do {
+                ref = try await StoriesService.shared.repostRef(for: s, authorName: name)
+            } catch {
+                await MainActor.run {
+                    flashSentToast((error as? LocalizedError)?.errorDescription ?? "Couldn't repost this story")
+                }
+                return
+            }
+            // The picture the repost is made of. `loadCurrentImage` is the same door Save and Share
+            // already use, so a story that is on screen is already in hand and this costs nothing.
+            guard let img = await loadCurrentImage(s.mediaUrl),
+                  // 0.9 rather than lossless: the post path re-encodes anyway
+                  // (`StoryPhoto.ensureWithinBudget`), and PNG of a photograph would be megabytes
+                  // of nothing.
+                  let data = img.jpegData(compressionQuality: 0.9) else {
+                await MainActor.run { flashSentToast("Couldn't load this story") }
+                return
+            }
+            await MainActor.run {
+                // ⚠️ ARMED BEFORE THE SHEET IS SHOWN AND DISARMED WHEN IT CLOSES — see
+                // `StoriesService.pendingRepost`. The sheet posts through the ordinary path; this is
+                // the only thing that tells that path whose story it is copying.
+                StoriesService.shared.armRepost(ref)
+                repostDraft = StoryRepostDraft(image: data, ref: ref)
+            }
+        }
+    }
+
     private func saveCurrentImage(_ captured: String? = nil) {
         Task {
             guard let img = await loadCurrentImage(captured) else { return }
@@ -5385,6 +5568,26 @@ struct MyStoriesCarousel: View {
 struct StoryImagePayload: Identifiable {
     let id = UUID()
     let image: UIImage
+}
+
+/// "Share Story" — owner, 2026-09-09. The one thing the system sheet is handed.
+struct StoryLinkPayload: Identifiable {
+    let id = UUID()
+    let link: String
+}
+
+/// "Repost Story" — owner, 2026-09-09. Everything the audience sheet needs to publish somebody
+/// else's Everyone story as one of mine, with their name still on it.
+///
+/// ⚠️ THE PICTURE IS `Data`, NOT A `UIImage`, because that is what the post path takes — the same
+/// bytes the composer hands it. Re-encoded once from the original on the way in (see `startRepost`),
+/// which is a second lossy pass and the honest cost of a repost; the reference app re-encodes too.
+struct StoryRepostDraft: Identifiable {
+    let id = UUID()
+    let image: Data
+    /// Who wrote it and where it came from. Armed on the service the instant the sheet opens and
+    /// consumed by the post — see `StoriesService.pendingRepost`.
+    let ref: StoryRepostRef
 }
 
 // Forward a story image to one or more chats. sendImage re-encrypts per chat (and auto-fetches

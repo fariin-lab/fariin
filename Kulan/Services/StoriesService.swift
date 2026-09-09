@@ -82,6 +82,31 @@ struct StoryAudienceTag {
     static let glowers = StoryAudienceTag(label: "glowers")
 }
 
+/// ⛔ WHERE A REPOST CAME FROM — owner, 2026-09-09: "Repost Story… however, if the story owner has
+/// blocked the current user, do not show any of these options."
+///
+/// A repost re-publishes somebody else's story to YOUR OWN audience, and the one thing that makes
+/// that honest rather than theft is that the original author travels with it. So all three facts are
+/// written onto the new story document and none of them is optional: who wrote it, which story it
+/// was, and a link that leads back to it.
+///
+/// ⚠️ THE NAME IS A SNAPSHOT AND THAT IS DELIBERATE. It is the author's display name at the moment
+/// of the repost, copied in, not a pointer that is resolved later. A repost outlives the reader's
+/// knowledge of the person — it may be watched by somebody who has never met them and cannot read
+/// their profile — so an attribution that needed a second lookup would be blank exactly where it
+/// matters most. `repostAuthorUid` is there for anything that wants the live person.
+struct StoryRepostRef: Hashable, Codable {
+    /// The story this is a copy of.
+    let storyId: String
+    /// Who posted the original.
+    let authorUid: String
+    /// Their display name AT THE TIME OF THE REPOST. See above.
+    let authorName: String
+    /// The link back to the original, built by `StoriesService.storyLink`. Empty when the original
+    /// author has no username — see that function for why that is a real state and not a failure.
+    let link: String
+}
+
 struct Story: Identifiable, Hashable, Codable {
     let id: String
     let authorUid: String
@@ -120,6 +145,10 @@ struct Story: Identifiable, Hashable, Codable {
     /// MY OWN STORIES ONLY. Nobody else may read that field (it is the author's audience list), so
     /// for everybody else's stories this stays at -1, which means "not known" and never "nobody".
     var recipientsLeft: Int = -1
+    /// ⛔ SET WHEN THIS STORY IS A REPOST OF SOMEBODY ELSE'S — owner, 2026-09-09. Nil for every
+    /// ordinary story, which is nearly all of them. See `StoryRepostRef`, and `StoryShareGate` for
+    /// the rule that decides whether one may be made at all.
+    var repost: StoryRepostRef? = nil
 
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
@@ -131,6 +160,73 @@ struct Story: Identifiable, Hashable, Codable {
     // still had no picture at the end — his 2026-08-09 spinner-over-black screenshot. An empty url
     // draws a placeholder immediately, which is honest and free.
     var previewUrl: String { isVideo ? thumbUrl : mediaUrl }
+}
+
+// MARK: - Who may share, link or repost a story
+
+/// ⛔ THE ONE PLACE THAT DECIDES WHETHER SHARE STORY / COPY STORY LINK / REPOST STORY EXIST ON A
+/// STORY — owner, 2026-09-09, in his own words:
+///
+///   "If a user selects Everyone as the story audience, add these options to the story: Share Story,
+///    Copy Story Link, Repost Story. However, if the story owner has blocked the current user, do not
+///    show any of these options… Make sure this logic is enforced consistently in both the UI and the
+///    underlying story permissions."
+///
+/// ⚠️ IT IS ONE FUNCTION BECAUSE HE ASKED FOR ONE ANSWER. The footer draws its button from `allows`,
+/// every one of the three handlers re-asks `allows` on live state before it does anything, and the
+/// server asks the same two questions again in `firestore.rules`. Three layers, one rule, written
+/// once — the alternative is the shape this feature has already failed in twice elsewhere (a menu
+/// offering something the write then refuses, or worse, a menu hiding something the write allows).
+///
+/// ⚠️ AND HIDDEN, NOT DISABLED. His word was "do not show any of these options". A greyed-out
+/// "Repost Story" on the story of somebody who has blocked you TELLS you they blocked you, which is
+/// the one thing a silent block exists not to do — the same reasoning the chat list already follows
+/// when it freezes a blocked chat's preview instead of marking it.
+enum StoryShareGate {
+
+    /// Was this story posted to Everyone, and is it still the kind of story that can be?
+    ///
+    /// ⚠️ `oneTime` IS TESTED HERE FOR THE SAME REASON THE HEADER TESTS IT FIRST. A view-once story
+    /// carries the audience it was posted to AND its own rule, and the rule is the narrower of the
+    /// two: its audience is spent as it is watched. Sharing, linking or reposting it would hand out
+    /// a second look at something already burned. This is exactly the test `Story.isPublicStory` in
+    /// the viewer already makes, kept in one place so the two cannot drift.
+    static func isEveryone(_ s: Story) -> Bool {
+        s.audienceLabel == "everyone" && !s.oneTime
+    }
+
+    /// HAS THIS PERSON BLOCKED ME, answered off the chat list already in memory.
+    ///
+    /// ⚠️ `blockedBy` IS KEYED BY WHOEVER DID THE BLOCKING, which is the half that is easy to read
+    /// backwards. `blockedBy[me]` is a chat *I* blocked; `blockedBy[them]` is the one this asks
+    /// about. `Conversation.isBlockedByMe(_:)` takes the blocker as its argument, so passing the
+    /// OTHER person's uid to it is how "did they block me" is spelled — the same spelling
+    /// `StoryContact.all()` and `resolveAudience` already use.
+    ///
+    /// ⚠️ NO CONVERSATION AT ALL MEANS NO BLOCK, and that is the honest answer rather than a
+    /// convenient one: a block is recorded on the shared conversation document, so two people with
+    /// no chat between them have nothing to have blocked each other with. A story reached from a
+    /// stranger's profile takes the async door below, which reads the document instead of the list.
+    /// ⚠️ NOT `@MainActor`, AND THAT MATCHES `StoryContact.isFriend` RATHER THAN BEING AN OVERSIGHT.
+    /// Both read the same repository, both are asked from the same place — the expression that builds
+    /// the library's story models — and that expression already calls the other one. Isolating only
+    /// this one would make the two answers reachable from different places.
+    static func authorHasBlockedMe(_ authorUid: String) -> Bool {
+        let me = AuthService.shared.uid ?? ""
+        guard !authorUid.isEmpty, authorUid != me else { return false }
+        return ConversationsRepository.shared.conversations.contains { c in
+            !c.isGroup && c.otherUid(me) == authorUid && c.isBlockedByMe(authorUid)
+        }
+    }
+
+    /// THE DRAWING RULE. True → the three options are built; false → they do not exist on this story.
+    ///
+    /// Read on live state at the moment the footer is drawn and again inside every handler, because
+    /// the menu is the part a modified client replaces — the same reasoning the "…" menu's own three
+    /// handlers already carry.
+    static func allows(_ s: Story) -> Bool {
+        isEveryone(s) && !authorHasBlockedMe(s.authorUid)
+    }
 }
 
 extension StoriesService {
@@ -561,6 +657,13 @@ final class StoriesService {
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
     @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false) {
+        // ⛔ THE REPOST STAMP IS TAKEN HERE, FIRST, AND EXACTLY ONCE — owner, 2026-09-09. See
+        // `pendingRepost` for why the attribution arrives this way instead of as an argument from
+        // the audience sheet. This line is the consumption point the ordering guarantee rests on: it
+        // runs synchronously on the main actor before anything is enqueued, so no post that was
+        // already in the queue can take it and no later post can find it still there.
+        let repost = pendingRepost
+        pendingRepost = nil
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -601,7 +704,15 @@ final class StoriesService {
             // A DURABLE RECORD. The queue below is a `Task` and an array, both of which die with
             // the process — swipe the app away mid-upload and the post was simply gone, with
             // nothing to retry. The ticket is torn up the moment the story lands or is cancelled.
-            let ticket = StoryOutbox.remember(image: image, caption: caption, stickers: stickers,
+            // ⛔ A REPOST IS NOT RESUMABLE, ON PURPOSE. The ticket cannot carry the attribution —
+            // `StoryOutbox.Ticket` has no field for it and adding one is a change to a file this
+            // work does not own — so a repost resumed after the app was killed would come back as a
+            // bare copy of somebody else's photograph with nobody's name against it. That is the one
+            // outcome the attribution exists to prevent, so the repost simply does not survive the
+            // process, which is the conservative half of the trade. An empty ticket id is already
+            // the "nothing to forget" case (`StoryOutbox.forget` guards on it).
+            let ticket = repost != nil ? "" :
+                StoryOutbox.remember(image: image, caption: caption, stickers: stickers,
                                               excluded: excluded, included: included, everyone: everyone,
                                               allowsReplies: allowsReplies, tag: tag,
                                               captureProtected: captureProtected,
@@ -635,7 +746,7 @@ final class StoriesService {
             var failure: String?
             var cancelled = false
             do {
-                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected)
+                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repost: repost)
                 StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
             }
             catch is CancellationError {
@@ -1069,7 +1180,7 @@ final class StoriesService {
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                    excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
-                   captureProtected: Bool = false) async throws {
+                   captureProtected: Bool = false, repost: StoryRepostRef? = nil) async throws {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -1147,8 +1258,7 @@ final class StoriesService {
         // always see it) — just with no other viewers yet (e.g. a brand-new account with no contacts).
         // The audience sheet already warns when you HAVE contacts but narrowed the audience to none, so
         // reaching here with empty recipients means "own story only", which is valid — don't block it.
-        do {
-            try await docRef.setData([
+        var payload: [String: Any] = [
                 "authorUid": me,
                 "createdAt": FieldValue.serverTimestamp(),
                 "expiresAt": Timestamp(date: expiresAt),
@@ -1177,7 +1287,24 @@ final class StoriesService {
             // `array-contains` query, the read rule and the Cloud Function all key on it, and a
             // rename would have to land in three places at the same instant.
             "recipientUids": StoryAudienceToken.tokens(recipients),
-            ])
+        ]
+        // ⛔ THE ORIGINAL AUTHOR TRAVELS WITH A REPOST — owner, 2026-09-09. Four fields, written AT
+        // CREATE so they are inside the same document the picture is, and never afterwards: the
+        // update rule freezes content once `mediaUrl` is filled, and an attribution that could be
+        // added or removed later is not an attribution.
+        //
+        // Added to the payload rather than written as a second `updateData`, because a repost that
+        // existed for even a moment with no author on it is a copy of somebody else's photograph with
+        // nobody's name against it — and every recipient's tray query can see a story the instant its
+        // document lands.
+        if let repost {
+            payload["repostOfStoryId"] = repost.storyId
+            payload["repostAuthorUid"] = repost.authorUid
+            payload["repostAuthorName"] = repost.authorName
+            payload["repostLink"] = repost.link
+        }
+        do {
+            try await docRef.setData(payload)
             StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
             // Both halves were in flight together; wait for the photo to land before asking for its
@@ -1997,6 +2124,176 @@ final class StoriesService {
             try? await d.reference.delete()
         }
     }
+
+    // MARK: - Share Story · Copy Story Link · Repost Story (owner, 2026-09-09)
+
+    /// WHY A REPOST WAS REFUSED, in words that can be shown. Every one of these is a state the UI
+    /// already hides, so reaching one means the story changed under the open menu or the menu was
+    /// replaced — which is exactly why the check is here as well as there.
+    enum RepostRefusal: LocalizedError {
+        /// Not posted to Everyone (or a view-once story, whose single view is spent as it is
+        /// watched). The reference app has the same restriction and states it as a privacy rule:
+        /// only a story visible to everyone can be reposted.
+        case notPublic
+        /// The author blocked me. Never said out loud — see `errorDescription`.
+        case blocked
+        /// The author switched "Block screenshots" on for this story. Their answer to "may this
+        /// leave the app" was already no.
+        case captureProtected
+        /// See `repostRef`: the repost pipeline is the photo pipeline.
+        case videoNotSupported
+        case signedOut
+
+        var errorDescription: String? {
+            switch self {
+            case .notPublic:
+                "Only a story posted to Everyone can be reposted."
+            // ⛔ SAYS NOTHING ABOUT THE BLOCK, DELIBERATELY. His rule was that the options do not
+            // appear at all, and this string exists only for the path where the story changed under
+            // an open menu. Naming the block here would announce it, which is the one thing a silent
+            // block must not do — so it borrows the wording of the case above, which is also true:
+            // a person who blocked you is not somebody whose story is visible to you.
+            case .blocked:
+                "Only a story posted to Everyone can be reposted."
+            case .captureProtected:
+                "This story can't be reposted — the person who posted it turned that off."
+            case .videoNotSupported:
+                "Reposting a video story isn't available yet."
+            case .signedOut:
+                "You're signed out."
+            }
+        }
+    }
+
+    /// THE LINK TO A STORY, built here beside the story rather than beside the other links.
+    ///
+    /// ⚠️ IT IS THE AUTHOR'S PROFILE LINK WITH THE STORY HUNG OFF IT, and that shape is chosen so
+    /// that it cannot be a dead link today. `KulanApp.route(from:)` reads `/u/<handle>` and ignores
+    /// whatever follows, so this already opens the app on the person who posted it. When a story
+    /// route is added to that parser the very same link lands on the story itself — nothing anybody
+    /// has already copied or sent goes stale.
+    ///
+    /// ⛔ NOT WIRED TO A STORY ROUTE YET, AND THAT IS OUTSIDE THIS CHANGE. `KulanApp.swift` owns
+    /// every link shape this app understands and it is not a story file; the tail below is inert
+    /// until a `case "s"` is added there. Said plainly rather than left to be discovered.
+    ///
+    /// ⚠️ A HANDLE IS NOT GUARANTEED. An account that has never claimed a username has nothing to
+    /// build a link out of — there is no uid-addressed web page — so the honest answer is no link at
+    /// all. The reference app has the same limit for the same reason: linking a story needs a public
+    /// username. Callers show that as a refusal, never as an empty clipboard.
+    static func storyLink(handle: String, storyId: String) -> String {
+        let h = handle.trimmingCharacters(in: .whitespaces)
+        guard !h.isEmpty, !storyId.isEmpty else { return "" }
+        let id = storyId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? storyId
+        return "\(KulanApp.userLink(handle: h))/s/\(id)"
+    }
+
+    /// The author's @handle, or "" for an account that never claimed one. One document read, made
+    /// only when somebody actually asks for a link.
+    func authorHandle(_ authorUid: String) async -> String {
+        guard !authorUid.isEmpty,
+              let d = try? await db.collection("users").document(authorUid).getDocument(),
+              let h = d.data()?["handle"] as? String else { return "" }
+        return h
+    }
+
+    /// ⛔ THE AUTHORITATIVE "DID THIS PERSON BLOCK ME" — the same read `publicStoryGroup` already
+    /// makes before it will draw a stranger's ring, and for the same reason: the block lives on the
+    /// conversation document both clients can read, and the chat list in memory is not always the
+    /// place to find it.
+    ///
+    /// ⚠️ THE IN-MEMORY ANSWER IS NOT ENOUGH ON ITS OWN, WHICH IS WHY THERE ARE TWO. A story reached
+    /// from a PROFILE belongs to somebody there may be no chat with in this device's list at all —
+    /// the list holds accepted chats, and a block can be recorded on a conversation that never
+    /// became one. `StoryShareGate.authorHasBlockedMe` is the instant answer the drawing needs;
+    /// this is the one an action is allowed to rely on. They agree wherever both can answer.
+    ///
+    /// ⚠️ A FAILED READ IS NOT "NOT BLOCKED". Offline, this returns true — the conservative
+    /// direction. Refusing a repost that should have been allowed costs a retry; allowing one that
+    /// should have been refused publishes somebody's picture to an audience they shut you out of,
+    /// and `recipientUids` is pinned immutable, so there is no taking it back.
+    func confirmAuthorHasBlockedMe(_ authorUid: String) async -> Bool {
+        let me = uid
+        guard !me.isEmpty, !authorUid.isEmpty, authorUid != me else { return false }
+        let cid = ChatService.convId(me, authorUid)
+        guard let snap = try? await db.collection("conversations").document(cid).getDocument() else {
+            return true   // could not ask → treat as blocked. See above.
+        }
+        // No conversation at all means nothing to have blocked with — see `StoryShareGate`.
+        guard snap.exists else { return false }
+        return ((snap.data()?["blockedBy"] as? [String: Any])?[authorUid] as? Bool) == true
+    }
+
+    /// ⛔ THE PERMISSION LAYER FOR SHARE AND COPY LINK, asked before either one does anything.
+    ///
+    /// Returns the link when this story may be handed out, and nil when it may not. The UI has
+    /// already made the same decision with `StoryShareGate.allows`; this asks again on the server's
+    /// own record of the block, because the menu is the part a modified client replaces and because
+    /// a block can land while the menu is open.
+    func shareableLink(for s: Story) async -> String? {
+        guard StoryShareGate.isEveryone(s) else { return nil }
+        guard !(await confirmAuthorHasBlockedMe(s.authorUid)) else { return nil }
+        let handle = await authorHandle(s.authorUid)
+        let link = Self.storyLink(handle: handle, storyId: s.id)
+        return link.isEmpty ? nil : link
+    }
+
+    /// ⛔ MAY I REPOST THIS, AND IF SO WHAT DOES THE COPY HAVE TO CARRY. The one gate every repost
+    /// goes through — owner, 2026-09-09.
+    ///
+    /// The reference app's rule, read from its own documentation rather than guessed: a story can be
+    /// reposted only when it is visible to everyone, the repost keeps a header naming the original
+    /// poster and the story it came from, and a "no forwards" flag on the original refuses it
+    /// outright. All three are here. What could NOT be determined from their documentation is
+    /// whether they notify the original author, whether a repost can itself be reposted, and whether
+    /// reposting is offered on your own story — so this takes the conservative side of each: no
+    /// notification is sent, and the two remaining questions are left to the caller, which offers
+    /// the option on somebody else's story only.
+    ///
+    /// ⚠️ PHOTOS ONLY, and it is said out loud rather than silently doing nothing. The whole repost
+    /// path is the photo post path; a video story would need the video pipeline and its trim, mute
+    /// and poster arguments, which is a bigger change than this one. The story menu's Save and Share
+    /// entries already answer a video the same honest way.
+    func repostRef(for s: Story, authorName: String) async throws -> StoryRepostRef {
+        guard !uid.isEmpty else { throw RepostRefusal.signedOut }
+        guard StoryShareGate.isEveryone(s) else { throw RepostRefusal.notPublic }
+        guard !s.isVideo else { throw RepostRefusal.videoNotSupported }
+        // The author already answered "may this leave the app" for this story, and the answer was no.
+        guard !s.captureProtected else { throw RepostRefusal.captureProtected }
+        guard !(await confirmAuthorHasBlockedMe(s.authorUid)) else { throw RepostRefusal.blocked }
+        // ⚠️ A REPOST OF A REPOST NAMES THE PERSON WHO WROTE IT, NOT THE ONE WHO PASSED IT ON.
+        // Chaining the attribution would let a name be laundered out of a picture in two hops, which
+        // is the one thing this field exists to stop. `s.repost` is the original's own record of
+        // where it came from, and it wins.
+        if let original = s.repost { return original }
+        let handle = await authorHandle(s.authorUid)
+        return StoryRepostRef(storyId: s.id, authorUid: s.authorUid,
+                              // Never empty: an unnamed attribution is the same as none, and `parse`
+                              // reads a partial record as "not a repost".
+                              authorName: authorName.isEmpty ? "Someone" : authorName,
+                              link: Self.storyLink(handle: handle, storyId: s.id))
+    }
+
+    /// ⛔ THE ATTRIBUTION WAITING FOR THE NEXT POST, AND IT IS A ONE-SHOT.
+    ///
+    /// Reposting reuses the app's own audience sheet — `ShareStorySheet` — because that sheet is the
+    /// only place that turns a chosen audience into the `excluded` / `included` / `everyone` triple
+    /// the post path speaks in, and one of those audiences (Glowers) carries an exception that must
+    /// not be written out a second time. Deriving it again here is the shape this feature has already
+    /// failed in. So the sheet posts exactly as it always does, and the attribution is left here for
+    /// the post to pick up.
+    ///
+    /// ⚠️ CONSUMED AT THE TOP OF `postStoryBackground`, WHICH IS WHAT MAKES THE ORDER SAFE. That
+    /// function is `@MainActor` and every caller reaches it synchronously, so a post that was already
+    /// enqueued before this was armed has passed the consumption point already and cannot take the
+    /// stamp. The sheet's own multi-item loop calls it once per item; a repost has one item.
+    ///
+    /// ⚠️ AND IT IS DISARMED WHEN THE SHEET GOES AWAY WITHOUT POSTING, or the next ordinary story
+    /// this person posts would wear somebody else's name.
+    private(set) var pendingRepost: StoryRepostRef?
+
+    @MainActor func armRepost(_ ref: StoryRepostRef) { pendingRepost = ref }
+    @MainActor func disarmRepost() { pendingRepost = nil }
 }
 
 // Cold-start warm cache for the stories ROW (the chat-list trick): the last BUILT row is
@@ -2226,6 +2523,27 @@ final class StoriesRepository {
                 return nil
             }
             let created = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            // ⛔ THE REPOST ATTRIBUTION — owner, 2026-09-09. Absent on every story posted before
+            // reposting existed, which reads as "not a repost".
+            //
+            // ⚠️ ALL THREE IDENTITY FIELDS OR NONE. A repost whose author fields did not survive
+            // the write is a picture of somebody else's story wearing nobody's name, which is the
+            // exact thing the attribution exists to prevent — so a partial record is read as no
+            // record and the story is drawn as an ordinary one rather than as a repost of an unnamed
+            // person. The link alone is allowed to be empty (see `storyLink`); the identity is not.
+            //
+            // ⚠️ WORKED OUT BEFORE THE INITIALISER RATHER THAN INSIDE IT, and that is not style.
+            // `Story` takes eighteen arguments here, several of them ternaries and casts; this file
+            // has already cost a CI round trip to "unable to type-check in reasonable time", and a
+            // closure nested in that argument list is exactly the shape that causes it.
+            let repostRef: StoryRepostRef? = {
+                let sid = data["repostOfStoryId"] as? String ?? ""
+                let auid = data["repostAuthorUid"] as? String ?? ""
+                let aname = data["repostAuthorName"] as? String ?? ""
+                guard !sid.isEmpty, !auid.isEmpty, !aname.isEmpty else { return nil }
+                return StoryRepostRef(storyId: sid, authorUid: auid, authorName: aname,
+                                      link: data["repostLink"] as? String ?? "")
+            }()
             return Story(id: d.documentID, authorUid: author, createdAt: created,
                          expiresAt: exp, mediaUrl: url,
                          allowsReplies: data["allowsReplies"] as? Bool ?? true,
@@ -2252,7 +2570,9 @@ final class StoriesRepository {
                          // Only my own story hands this over — see the property.
                          recipientsLeft: author == me
                             ? ((data["recipientUids"] as? [String])?.count ?? -1)
-                            : -1)
+                            : -1,
+                         // See `repostRef` just above.
+                         repost: repostRef)
         }
     }
 

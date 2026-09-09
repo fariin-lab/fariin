@@ -1177,6 +1177,76 @@ service cloud.firestore {
       function storyData() {
         return get(/databases/$(database)/documents/stories/$(storyId)).data;
       }
+
+      // ⛔ REPOST STORY — THE SERVER'S HALF OF THE OWNER'S 2026-09-09 RULE.
+      //
+      // His words: "If a user selects Everyone as the story audience, add these options to the
+      // story: Share Story, Copy Story Link, Repost Story. However, if the story owner has blocked
+      // the current user, do not show any of these options… Make sure this logic is enforced
+      // consistently in both the UI and the underlying story permissions."
+      //
+      // The app hides the three options (`StoryShareGate`) and refuses the action a second time on
+      // the server's own record of the block (`StoriesService.confirmAuthorHasBlockedMe`). This is
+      // the layer that makes the last sentence true: without it, "may I repost this" would be a
+      // question only the app was asking, and a repost is a WRITE that copies somebody else's
+      // picture into a document with their name on it. Nothing about that can be left to the client.
+      //
+      // Four things are checked, and each one is a different way the feature could be abused:
+      //   • the original must exist and be PUBLIC — otherwise a private story could be laundered
+      //     into a public one by anybody who was sent it. This is the reference app's own rule too,
+      //     stated by them as a privacy protection.
+      //   • it must not be a ONE-TIME story — its single view is spent as it is watched, and a copy
+      //     of it hands out a second look at something already burned.
+      //   • it must not be capture-protected — that flag IS the author's answer to "may this leave
+      //     the app", and it was no.
+      //   • the original author must not have blocked the person copying it.
+      //
+      // And the claimed author must be the real one: `repostAuthorUid` is checked against the
+      // original document rather than believed, or a repost could name an innocent third party as
+      // the source of something they never posted.
+      function repostOrigin() {
+        return get(/databases/$(database)/documents/stories/$(request.resource.data.repostOfStoryId)).data;
+      }
+      /// The 1:1 conversation id for the caller and the original author — the two uids sorted and
+      /// joined with an underscore, which is how this project names them (`ChatService.convId`).
+      function repostConvId() {
+        return request.auth.uid < request.resource.data.repostAuthorUid
+          ? request.auth.uid + '_' + request.resource.data.repostAuthorUid
+          : request.resource.data.repostAuthorUid + '_' + request.auth.uid;
+      }
+      /// ⚠️ NO CONVERSATION READS AS NOT BLOCKED, the same way the public-mirror read rule above
+      /// treats it: a block is recorded on the shared conversation document, so two people who have
+      /// never spoken have no such document and nothing to have blocked each other with.
+      function repostAuthorAllowsMe() {
+        return !exists(/databases/$(database)/documents/conversations/$(repostConvId()))
+          || get(/databases/$(database)/documents/conversations/$(repostConvId()))
+               .data.get('blockedBy', {}).get(request.resource.data.repostAuthorUid, false) != true;
+      }
+      /// ⚠️ ALL THREE IDENTITY FIELDS OR NONE, and that is not tidiness. `parse` on the app side
+      /// reads a partial record as "not a repost", so a document carrying only `repostOfStoryId`
+      /// would be somebody else's photograph with the attribution silently dropped — which is the
+      /// exact outcome the attribution exists to prevent. `repostLink` is allowed to be empty on its
+      /// own: an author with no username has no link, which is an ordinary state.
+      ///
+      /// ⚠️ THE FIRST CLAUSE IS WHAT KEEPS THIS FREE FOR EVERY ORDINARY STORY. `||` short-circuits,
+      /// so a post with no repost keys never reaches the two document reads below it, and the
+      /// overwhelming majority of stories are exactly that.
+      function honestRepost() {
+        return !request.resource.data.keys().hasAny(
+                 ['repostOfStoryId', 'repostAuthorUid', 'repostAuthorName', 'repostLink'])
+          || ( request.resource.data.get('repostOfStoryId', '') != ''
+            && request.resource.data.get('repostAuthorUid', '') != ''
+            && request.resource.data.get('repostAuthorName', '') != ''
+            && exists(/databases/$(database)/documents/stories/$(request.resource.data.repostOfStoryId))
+            && repostOrigin().get('public', false) == true
+            && repostOrigin().get('oneTime', false) == false
+            && repostOrigin().get('captureProtected', false) == false
+            // `.get(…, '')` rather than a bare field read: a rule that errors denies the whole
+            // write, and the comparison below is the check that is meant to decide this, not an
+            // accident of a document that happens to predate a field.
+            && repostOrigin().get('authorUid', '') == request.resource.data.get('repostAuthorUid', '')
+            && repostAuthorAllowsMe() );
+      }
       // Only the author or someone in the audience can read a story — PLUS "Everyone" (public)
       // stories, which any signed-in user may read (they surface from the author's profile to
       // anyone who finds them). The profile query filters on `public == true`; the DIRECT
@@ -1404,7 +1474,11 @@ service cloud.firestore {
         && ((request.resource.data.type == 'video'
              && request.resource.data.mediaPath == 'stories/' + storyId + '/video.mp4')
             || (request.resource.data.type != 'video'
-             && request.resource.data.mediaPath == 'stories/' + storyId + '/photo.jpg'));
+             && request.resource.data.mediaPath == 'stories/' + storyId + '/photo.jpg'))
+        // ⛔ AND IF IT CLAIMS TO BE A REPOST, IT HAS TO BE AN HONEST ONE — see `honestRepost`.
+        // Costs nothing for an ordinary story: the first clause of that function short-circuits
+        // before either document read.
+        && honestRepost();
       // Author-only, and the identity + lifetime fields are IMMUTABLE. The old rule pinned
       // nothing, so an author could rewrite authorUid to impersonate a victim (every recipient
       // then renders the victim's name/photo on the attacker's image) or push expiresAt out to
@@ -1477,7 +1551,22 @@ service cloud.firestore {
                 && request.resource.data.get('public', false) == resource.data.get('public', false)))
         && (resource.data.get('mediaUrl', '') == ''
             || (request.resource.data.get('mediaUrl', '') == resource.data.get('mediaUrl', '')
-                && request.resource.data.get('caption', '') == resource.data.get('caption', '')));
+                && request.resource.data.get('caption', '') == resource.data.get('caption', '')))
+        // ⛔ THE REPOST ATTRIBUTION IS FROZEN FROM THE MOMENT THE STORY EXISTS — owner, 2026-09-09.
+        //
+        // Unlike the picture and the caption, which are only frozen once `mediaUrl` is filled, these
+        // are pinned outright and from create. The reason is the shape of the abuse: an attribution
+        // that could be REMOVED later is not an attribution at all — post a repost, let people watch
+        // it name its real author, then quietly strip the name off and keep the picture. And one
+        // that could be ADDED later would let an ordinary story be relabelled as somebody else's
+        // work, or somebody else's name be attached to a picture they never posted.
+        //
+        // `get(…, '')` on both sides because every story written before this existed has none of
+        // these fields, and an update to one of those must go on working.
+        && request.resource.data.get('repostOfStoryId', '') == resource.data.get('repostOfStoryId', '')
+        && request.resource.data.get('repostAuthorUid', '') == resource.data.get('repostAuthorUid', '')
+        && request.resource.data.get('repostAuthorName', '') == resource.data.get('repostAuthorName', '')
+        && request.resource.data.get('repostLink', '') == resource.data.get('repostLink', '');
       // The author, or a moderator acting on a report. This is the ONE surface in Fariin where a
       // stranger's content is visible to anybody who finds it (an "Everyone" story is public), which
       // makes it the one place Apple could be shown somebody else's illegal post. Being able to take

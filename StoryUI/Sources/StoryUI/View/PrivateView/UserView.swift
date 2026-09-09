@@ -91,6 +91,15 @@ struct UserView: View {
                 out.append(.init(title: "Share", systemImage: "square.and.arrow.up") {
                     NotificationCenter.default.post(name: .init("storyActionShare"), object: nil)
                 })
+                // ⛔ AND THE LINK TO IT — owner, 2026-09-09: an Everyone story gets Share Story, Copy
+                // Story Link and Repost Story. Two of those three mean something on your own story
+                // and one does not: you cannot repost yourself, and there is nobody who could have
+                // blocked you here, so the block half of his rule cannot apply on this side of the
+                // menu. Same glyph as the group invite's Copy Link, same wording as the footer entry
+                // a viewer gets — see `MessageView.shareItems`.
+                out.append(.init(title: "Copy Story Link", systemImage: "doc.on.doc") {
+                    NotificationCenter.default.post(name: .init("storyActionCopyStoryLink"), object: nil)
+                })
             }
         } else {
             out.append(.init(title: "Hide Stories", systemImage: "eye.slash") {

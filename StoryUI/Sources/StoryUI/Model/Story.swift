@@ -116,6 +116,25 @@ public struct Story: Identifiable, Hashable {
     /// move that undoes that choice for good.
     public var isPublicStory: Bool = false
 
+    /// ⛔ MAY THIS STORY BE SHARED, LINKED OR REPOSTED — the host's answer, never the library's, and
+    /// the only thing that decides whether the footer's share button exists at all.
+    ///
+    /// Owner, 2026-09-09: a story posted to Everyone gets Share Story, Copy Story Link and Repost
+    /// Story — and if the person who posted it has blocked whoever is watching, none of the three
+    /// appears. Both halves of that live in the host (`StoryShareGate`), because only the host knows
+    /// what a block is; this is the single boolean that comes out of it.
+    ///
+    /// ⚠️ NOT THE SAME QUESTION AS `isPublicStory`, WHICH IS WHY IT IS A SECOND FLAG. That one asks
+    /// what the AUTHOR chose and drives the "…" menu's Share on the author's own story. This asks
+    /// what the person WATCHING may do, which is the author's choice minus the block — and the block
+    /// is invisible from the author's side. Collapsing them would either leak the block or lose it.
+    ///
+    /// ⚠️ FALSE ON MY OWN STORY. The footer this draws into is the reply bar, which my own story does
+    /// not have (it wears the owner bar instead), so there is nowhere for it to go and nothing it
+    /// would mean: reposting your own story is not a thing, and the "…" menu already carries Share
+    /// and Copy Story Link for the author.
+    public var canShareStory: Bool = false
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
@@ -131,6 +150,7 @@ public struct Story: Identifiable, Hashable {
                 isCaptureProtected: Bool = false,
                 canEditAudience: Bool = false,
                 isPublicStory: Bool = false,
+                canShareStory: Bool = false,
                 config: StoryConfiguration) {
 
         self.id = id
@@ -149,6 +169,7 @@ public struct Story: Identifiable, Hashable {
         self.isCaptureProtected = isCaptureProtected
         self.canEditAudience = canEditAudience
         self.isPublicStory = isPublicStory
+        self.canShareStory = canShareStory
         // (Removed `Constant.storySecond = duration` — mutating a global per-instance leaked the
         //  last story's duration into the default for any story built without an explicit one.)
     }
