@@ -74,29 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE VIDEO NO LONGER BLINKS BLACK WHEN YOU TAP ACROSS TO IT. THIS IS THE ONE TO TEST. The story card is painted black underneath and the video layer is see through until it has actually drawn a frame, so any moment the loading cover comes down early is a flash of that black. It was coming down early in two places: when the player says it is playing, and when the decoder finishes warming up. Neither of those means a picture exists yet. It now waits for the real thing, which is the same signal Telegram waits for.
+            PIN AND UNPIN IS THE ONE TO TEST. A pin used to move one row and quietly delete and re-insert every row underneath it, so half the list flickered while the pinned chat flew. It now moves exactly one row, the way the reference app does. The pin icon should also arrive with the row instead of fading in after it lands.
 
-            AND THERE WAS A SECOND HOLE IN THAT, WHICH I FOUND WHILE PUTTING IT BACK. The cover goes up the instant you tap, but the new clip is not handed to the player until the cache answers, which is later. In between, the player is still holding the PREVIOUS clip, and that one does have a frame, so the check could be answered by the wrong video and drop the cover anyway. It now checks which clip it is looking at, not just whether some clip is ready.
+            SCROLL DOWN TO CLOSE A STORY. This returned to the right card from the friends strip and did nothing at all on the pushed pages. The all friends page is a proven fix. The two Glowing screens have a safeguard rather than a proven fix, so if the close is still dead there, say so.
 
-            The player also looks for the cover picture in the app's own cache now, not only its own, so a story you just posted has something to show while the video loads.
+            SEARCH IS ITS OWN PAGE NOW. Tapping the field no longer leaves the chat list underneath. Empty, it shows what you have opened from search before. Typed, it shows chats, then groups, then people. A username still has to be typed in full, on purpose.
 
-            THE CAPTION AND ITS SHADOW WHEN YOU SCROLL UP. You told me to go and read Telegram and I did. Their caption's transparency is multiplied by the same number that shrinks the card, in the same pass, so it cannot disagree with the card. Ours was three separate messages and any one of them arriving late left the caption on screen. It now reads the shrink itself. NOTE: if the text you saw sits in the corner of a TikTok clip, that is burned into the video and no setting can remove it. To tell: post a story with no caption at all and scroll up. If text still shows, it belongs to the video.
+            YOUR PROFILE. A joined date under the bio, room for the Glowers line so it stops truncating, and one corner radius across both cards. Posted stories now show real view counts, with the spacing and shape from the concept.
 
-            A STORY FROM THE CHAT ROW OPENS LIKE ANY OTHER NOW. It grew out of the circle as a circle; it grows as a card. It still becomes a circle on the way back, which is what you asked for and what Snapchat and WhatsApp do. That circle also lands about three times sooner: the number that controls it looked like 15 per cent of the drag but was really 24 per cent of the distance your finger travels, which is the lateness you described.
+            ALSO: the long press preview keeps its corners, recent emoji sit four across, tab icons are always filled, and a blocked person's page offers Delete Chat.
 
-            SEND AND PREVIEW NOW APPEAR INSIDE AN ALBUM. The bar was built into the first screen, and an album opens on top of it, so it was left behind. Your selection was never lost, which is why the numbers were right and only the buttons were missing.
-
-            THE VIEWERS SHEET SHOWS ONE LIST UNLESS THE STORY WENT TO EVERYONE. You are right. All Viewers and Friends only says something when the audience could contain both. Posted to My Friends, to a custom list, or as View Once, everyone in the list is already that, so the split says nothing. The tabs are gone for those and the search moves up into their place.
-
-            SCROLLING DOWN OUT OF AN UPLOADING STORY NO LONGER SHOWS BLACK AT THE TOP AND BOTTOM. Every other door hands the story straight to the viewer. The uploading one put a full-screen black sheet behind it, to stop the picture blinking when the upload finishes and the real story takes over, and nothing could clear that sheet while the card shrank away from it. It still holds still at rest, and now steps aside for the moment the card is in the air.
-
-            THE PICTURE ON THE SETTINGS PAGE IS BIGGER. 120 instead of 96.
-
-            WHAT TO CHECK FIRST: open your own story and tap left and right onto a video, several times, including the first time after opening the app. That is the whole point of this build.
-
-            NOT IN THIS BUILD, SO DO NOT SPEND TIME ON THEM. The sideways swipe to the next person is still broken, and holding a story still waits a quarter second before it pauses. Both had fixes that were taken back out this evening. Say the word and they go in the next one.
-
-            STILL OPEN: edited videos still export with black bars instead of the gradient.
-
-            PREVIOUS BUILD, STILL WORTH CHECKING: the blur behind a story was replaced with Telegram's gradient, and photos that do not fill the frame are now posted as a full frame. Square photos and square videos are the test.
+            NOTE: there is a small black debug band at the top of the Stories tab, deliberately. If the long press on a Glowing card still does nothing, hold one and send a photo of those three lines. It comes out next build.
         run: fastlane beta
