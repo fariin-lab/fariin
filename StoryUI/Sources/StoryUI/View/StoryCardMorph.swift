@@ -505,6 +505,29 @@ public final class StoryCardMorph {
         // would let the next flight skip a rebuild it needs. See `lastCutKey`.
         lastCutKey = nil
         lastWallAlpha = -1
+        // ⛔ AND THE FLIGHT'S OWN FRACTION GOES WITH IT — 2026-09-11 audit. `flightFraction`'s doc
+        // has said "Reset by `resetFlight`" since it was written and this method never did it; only
+        // `reset()` did, which is the SHEET's teardown and runs on a different path.
+        //
+        // ⚠️ A CLOSE LANDS AT 1 AND LEAVES IT THERE. `StoryDetailView` reads
+        // `max(StoryCardMorph.shared.flightFraction, flightProgress)` to fade the caption, so the
+        // singleton's stale 1 beats every later value the notification can send: the next story's
+        // caption and its shadow are invisible from the first frame, with no gesture able to bring
+        // them back. That is the exact failure the note on `reset()` below warns about, one method
+        // over.
+        //
+        // Normally `detach` → `reset()` cleaned it up a beat later and hid this. It stops cleaning
+        // up in precisely the case that matters — re-opening a story while the last one is still
+        // going away: SwiftUI builds the replacement representable BEFORE dismantling the old one
+        // (see `detach`), so the dead viewer's `detach` fails its identity check, `reset()` never
+        // runs, and the 1 survives into the new viewer.
+        //
+        // BEFORE the guard, for the reason the two lines under it are: the number must never
+        // outlive its flight, even one whose card has already gone.
+        if flightFraction != 0 {
+            flightFraction = 0
+            NotificationCenter.default.post(name: .init("storyFlightProgress"), object: NSNumber(value: 0.0))
+        }
         // The card's own clip comes back in the same main-thread turn the mask leaves in, so both
         // land in one render commit and there is no bare-cornered frame between them. (And even if
         // SwiftUI ever slipped a frame, at rest the two curves are the same 12pt — see the
@@ -816,7 +839,6 @@ public final class StoryCardMorph {
         // `transform`, so it can be read fresh every frame and is always the truth even if a layout
         // pass lands mid-drag. A cached copy of a number you can just ask for is how this file's
         // predecessors went wrong.
-        let targetLocal = superview.convert(targetCenter, from: nil)
         let restCenter = CGPoint(x: card.center.x + offset.x, y: card.center.y + offset.y)
         // Where the card's centre has to be this frame...
         let wantX: CGFloat, wantY: CGFloat
@@ -824,6 +846,17 @@ public final class StoryCardMorph {
             let p = superview.convert(centerOverride, from: nil)
             wantX = p.x; wantY = p.y
         } else {
+            // ⚠️ RESOLVED INSIDE THE BRANCH THAT READS IT — 2026-09-11 audit. This line used to sit
+            // above the `if`, so it ran on every frame of every call that carries a
+            // `centerOverride` — which is EVERY frame of the preview row's `place` and of any
+            // flight the host drives by absolute centre — and the answer was then thrown away
+            // unread. `convert(_:from:)` is not arithmetic: it walks this view's ancestors up to
+            // the window and back down, per frame, per drag.
+            //
+            // Nothing else moves. It is a pure function of `targetCenter` and the superview, both
+            // unchanged between there and here, so computing it later cannot change the number —
+            // only how often it is computed. The lerp below is untouched.
+            let targetLocal = superview.convert(targetCenter, from: nil)
             wantX = restCenter.x + (targetLocal.x - restCenter.x) * f
             wantY = restCenter.y + (targetLocal.y - restCenter.y) * f
         }

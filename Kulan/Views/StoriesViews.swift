@@ -2446,7 +2446,24 @@ struct StoryViewer: View {
                     // and skipped pause/freeze on the NEXT swipe-up).
                     showViewers = false
                     NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
-                    NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+                    // ⚠️ NOT OVER THE STILL-UPLOADING PLACEHOLDER. `pauseStory`/`resumeStory` are one
+                    // shared boolean, not a counter, so a blind resume here does not merely undo THIS
+                    // gesture's pause: it cancels whatever else is holding the story still. The one
+                    // other holder that can be standing at this moment is `isUploadingItem`, whose
+                    // pause is posted once on the onChange that made the placeholder current and is
+                    // never re-asserted (see `lifecycleGlue`).
+                    //
+                    // Without this guard: post a story, open the viewer on the "Uploading…" item, and
+                    // swipe up on it (the natural reflex, it is my own story and swipe-up is how the
+                    // viewers sheet opens). `onSwipeUpChanged` refuses the gesture because the
+                    // placeholder has no viewers to show, so nothing ever rose and we land here, and
+                    // this post starts the placeholder's 5s timer. Its bar then ticks away and
+                    // auto-advances, or auto-closes the viewer, in the middle of the upload. The
+                    // pause on that item is the owner's ask, written up above the `isUploadingItem`
+                    // onChange: it can never tick away mid-upload.
+                    if !isUploadingItem {
+                        NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+                    }
                     return
                 }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
@@ -4529,6 +4546,16 @@ struct StoryViewer: View {
         // An empty footer for a moment is honest; somebody else's numbers are not.
         guard currentIsMine, !currentStoryId.isEmpty else {
             if barViewers != nil { barViewers = nil }
+            // ⚠️ AND THE LATCH GOES WITH IT. `lastBarViewersStoryId` says "the footer on screen was
+            // already seeded for this story", which is exactly what this branch has just stopped
+            // being true. Leaving it standing is the paged viewer's version of the same late-count
+            // report the cache was added for (2026-08-14): watch my own story A, swipe on to a
+            // friend (the footer is cleared here, the latch stays on A), swipe back to A, and the
+            // seed below is skipped because the id has not changed. `barViewers` therefore stays
+            // nil and the footer sits empty for a whole Firestore round trip, with the cached
+            // number that was meant to fill it sitting unread in `viewersByStory`/`StoryCountCache`.
+            // Clearing it costs one re-seed from the cache, which is what the seed is for.
+            lastBarViewersStoryId = ""
             return
         }
         let id = currentStoryId
