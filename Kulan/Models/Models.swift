@@ -70,6 +70,8 @@ struct UserProfile: Identifiable, Equatable {
     /// for anyone whose account document was written before the field existed. A profile page must
     /// not invent a date; a wrong joining date is worse than no line at all.
     var joinedAt: Date?
+    /// ⛔ THE PROFILE'S LINKS — see `ProfileLink`. Up to two, in the order the owner put them.
+    var links: [ProfileLink] = []
     /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
     /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
     var deletionScheduledFor: Date?
@@ -102,6 +104,77 @@ struct UserProfile: Identifiable, Equatable {
         // `createdAt` is the account document's own creation stamp. Nil for accounts written before
         // anything recorded it — see `joinedAt`.
         self.joinedAt = (data["createdAt"] as? Timestamp)?.dateValue()
+        self.links = ProfileLink.list(from: data["links"])
+    }
+}
+
+/// ⛔ A LINK SOMEBODY PUTS ON THEIR PROFILE — owner, 2026-09-11: an "Add link" card under the bio in
+/// Edit Profile, opening a page like the username one, where each account may keep up to two. They
+/// appear on the profile as small pills under the bio, on other people's and on your own.
+///
+/// ⚠️ A TITLE AND A URL, AND THE TITLE IS WHAT PEOPLE READ. The pill shows the title alone, so a
+/// link with no title would be a blank pill — the editor requires both, and the parser below drops
+/// anything missing either rather than drawing a hole.
+///
+/// ⚠️ NO `UUID` FOR THE IDENTITY. These round-trip through Firestore as plain maps, so a generated
+/// id would be a different value every time the document is read and every list animation would
+/// treat an unchanged link as a new one. The pair itself is the identity.
+struct ProfileLink: Identifiable, Equatable, Hashable {
+    var title: String
+    var url: String
+
+    var id: String { "\(url)\u{1}\(title)" }
+
+    /// How many an account may keep. His number.
+    static let maxPerUser = 2
+    static let maxTitleChars = 30
+    static let maxUrlChars = 250
+
+    /// What the pill and the list row show under the title: the address without its scheme or its
+    /// "www.", because "https://" is four fifths of a short link and says nothing.
+    var displayUrl: String {
+        var s = url
+        for prefix in ["https://", "http://"] where s.hasPrefix(prefix) {
+            s = String(s.dropFirst(prefix.count))
+        }
+        if s.hasPrefix("www.") { s = String(s.dropFirst(4)) }
+        if s.hasSuffix("/") { s = String(s.dropLast()) }
+        return s
+    }
+
+    /// ⚠️ THE SCHEME IS ADDED BACK FOR OPENING, because somebody typing a link types
+    /// "instagram.com/name" and `URL(string:)` will happily build a relative URL out of that which
+    /// opens nothing. `https` rather than `http`: this is 2026, and the worst case is one redirect.
+    var openURL: URL? {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let absolute = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let u = URL(string: absolute), let host = u.host, host.contains(".") else { return nil }
+        // ⛔ ONLY THE WEB. A profile field that could carry any scheme is a profile field that can
+        // carry `javascript:` or a deep link into another app's private surface, and this value
+        // comes from a stranger. Two schemes, both harmless, both what anybody actually means.
+        guard let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
+        return u
+    }
+
+    /// What goes into the user document: plain maps, in order, capped.
+    static func encode(_ links: [ProfileLink]) -> [[String: String]] {
+        links.prefix(maxPerUser).map { ["title": $0.title, "url": $0.url] }
+    }
+
+    static func list(from raw: Any?) -> [ProfileLink] {
+        guard let items = raw as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            let title = (item["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item["url"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, !url.isEmpty else { return nil }
+            return ProfileLink(title: String(title.prefix(maxTitleChars)),
+                               url: String(url.prefix(maxUrlChars)))
+        }
+        // Trimmed on the way IN as well as on the way out: an older build, or a hand-edited
+        // document, can hold more than the ceiling and the profile must not grow a third pill.
+        .prefix(maxPerUser)
+        .map { $0 }
     }
 }
 

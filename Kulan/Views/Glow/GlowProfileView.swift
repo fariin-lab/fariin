@@ -331,6 +331,10 @@ struct GlowProfileView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 2)
             }
+            // ⛔ THE PROFILE'S LINKS — owner, 2026-09-11: "if I use a link and then enter my
+            // profile, it must be appearing also in my profile". Same capsules as the contact page,
+            // same shared view, directly under the bio and above the Joined pill.
+            ProfileLinkChips(links: profile?.links ?? [])
             // ⛔ "Joined May 2026" — his concept, 2026-09-09, a small pill under the bio and above
             // the stats card.
             //

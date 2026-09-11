@@ -247,6 +247,24 @@ final class ProfileStore {
         me = await fetch(uid)
     }
 
+    /// ⛔ THE PROFILE'S LINKS, WRITTEN ON THEIR OWN — owner, 2026-09-11. Separate from
+    /// `updateProfile` deliberately: that one is the Save button on the Edit Profile sheet and it
+    /// also fans the name out across every conversation, which is a batch over the whole chat list.
+    /// Adding a link must not pay for that, and the links page saves as you leave it rather than
+    /// behind a Save of its own.
+    ///
+    /// ⚠️ CAPPED HERE TOO, not only in the editor. The ceiling is a rule of the account, not a rule
+    /// of one screen, and the rules file enforces the same number so a modified client gains
+    /// nothing.
+    func updateLinks(_ links: [ProfileLink]) async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        try await db.collection("users").document(uid).setData([
+            "links": ProfileLink.encode(links),
+        ], merge: true)
+        // Read back rather than assuming, so the page draws what the server actually kept.
+        me = await fetch(uid)
+    }
+
     /// How long a deleted account can still be brought back.
     static let gracePeriodDays = 30
 

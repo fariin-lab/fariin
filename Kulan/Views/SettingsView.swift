@@ -1538,6 +1538,13 @@ struct EditProfileView: View {
     /// visible area, so the only way to buy a gap is to make the visible area end higher — which is
     /// what the matching `safeAreaInset` on the Form does, and only while the bio is being edited.
     private static let bioKeyboardGap: CGFloat = 14
+    /// What the Links row says on its trailing edge: "Add" when there are none, otherwise how many.
+    /// Read straight from the store rather than mirrored into `@State`, because the links page
+    /// writes as you go and this row has to be right the moment you come back from it.
+    private var linkCountLabel: String {
+        let n = profile.me?.links.count ?? 0
+        return n == 0 ? "Add" : "\(n)"
+    }
     /// Same rule as the username counter: show it only once this many characters remain.
     private static let bioCounterAppearsAt = 20
     private var bioRemaining: Int { max(0, Limits.bioChars - about.count) }
@@ -1809,6 +1816,32 @@ struct EditProfileView: View {
                     Text("Bio")
                 }
                 .animation(.smooth(duration: 0.22), value: bioRemaining <= Self.bioCounterAppearsAt)
+
+                // ⛔ LINKS, UNDER THE BIO — owner, 2026-09-11, with the empty space below the bio
+                // card ringed in red: "add new card section called add link, users can add link
+                // profile under bio; when I click add link, open new page like username".
+                //
+                // ⚠️ A PUSH, NOT A SHEET, AND THAT IS NOT AN OVERSIGHT — the Username row above is a
+                // sheet for a reason written on it (a push carries the keyboard in from the right,
+                // because the field takes focus as the page arrives). This page opens with no field
+                // focused at all: it is a LIST, and the keyboard only appears a level deeper. So the
+                // reason that made Username a sheet does not apply, and his screenshot shows a back
+                // chevron rather than a Done.
+                //
+                // ⚠️ IT SAVES ITSELF. Nothing here is part of this sheet's Save — see
+                // `ProfileLinksView` — so closing Edit Profile with X does not undo a link, and the
+                // unsaved-changes prompt below deliberately does not count them.
+                Section {
+                    NavigationLink {
+                        ProfileLinksView()
+                    } label: {
+                        HStack {
+                            Text("Links").foregroundStyle(.primary)
+                            Spacer()
+                            Text(linkCountLabel).foregroundStyle(.secondary)
+                        }
+                    }
+                }
 
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }

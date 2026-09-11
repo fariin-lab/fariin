@@ -200,11 +200,27 @@ service cloud.firestore {
                 'glowerCount', 'glowingCount'];
       }
 
+      // ⛔ THE PROFILE'S LINKS ARE CAPPED HERE, NOT ONLY IN THE APP — owner's Links feature,
+      // 2026-09-11. Two per account is a rule of the ACCOUNT, and a rule only the client enforces
+      // is a rule anybody with a modified client does not have. The profile draws whatever this
+      // field holds, so an uncapped list is a profile page somebody else decides the height of.
+      //
+      // ⚠️ THE COUNT IS ALL THIS CAN CHECK. Rules have no loop, so the shape of each entry (a title
+      // and a url, both short) cannot be validated here — the parser on the way IN drops anything
+      // missing either and trims both, which is where that half lives.
+      function linksOk() {
+        return !('links' in request.resource.data)
+            || (request.resource.data.links is list
+                && request.resource.data.links.size() <= 2);
+      }
+
       allow create: if signedIn() && request.auth.uid == uid
-        && !request.resource.data.keys().hasAny(serverOnlyUserFields());
+        && !request.resource.data.keys().hasAny(serverOnlyUserFields())
+        && linksOk();
       allow update: if signedIn() && request.auth.uid == uid
         && !request.resource.data.diff(resource.data).affectedKeys()
-              .hasAny(serverOnlyUserFields());
+              .hasAny(serverOnlyUserFields())
+        && linksOk();
 
       // A moderator may set the ban flag on ANY account, and may touch nothing else on it. The
       // hasOnly list is what keeps this from being a general "edit any profile" power: a moderator

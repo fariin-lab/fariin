@@ -112,6 +112,10 @@ struct ContactInfoView: View {
 
     @State private var handle = ""
     @State private var about = ""
+    /// ⛔ THEIR PROFILE LINKS — owner, 2026-09-11. Held beside `about` and filled by the same three
+    /// paths (my own record, the local cache, the server fetch), because they are drawn on the same
+    /// line of the hero and arriving a moment later would shove the action circles down.
+    @State private var links: [ProfileLink] = []
     @State private var targetPrivacy: [String: String] = [:]   // their audience map (users doc)
     /// The glow relationship, for the Glow button and its menu entry. `@Observable`, so a plain
     /// property observes it — see the note on `GlowService`.
@@ -1675,6 +1679,10 @@ struct ContactInfoView: View {
                     // first-ever open this makes it ease in rather than snap.
                     .transition(.opacity)
             }
+            // ⛔ THEIR LINKS, DIRECTLY UNDER THE BIO — owner, 2026-09-11, his third screenshot: two
+            // small capsules between the bio and the row of action circles. Drawn by one shared
+            // view so this header and the poster one below cannot drift apart.
+            ProfileLinkChips(links: links)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 20)
@@ -1765,6 +1773,7 @@ struct ContactInfoView: View {
                     .padding(.top, 2)
                     .transition(.opacity)
             }
+            ProfileLinkChips(links: links)
         }
         .frame(maxWidth: .infinity)
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
@@ -2114,7 +2123,9 @@ struct ContactInfoView: View {
         // conversation doc — the peer fetch below returned nil, so your @handle and bio never
         // loaded (audit). Read them from the profile store's own record instead.
         if isSelf {
-            if let mine = ProfileStore.shared.me { handle = mine.handle; about = mine.about }
+            if let mine = ProfileStore.shared.me {
+                handle = mine.handle; about = mine.about; links = mine.links
+            }
             loaded = true
             return
         }
@@ -2122,10 +2133,10 @@ struct ContactInfoView: View {
         // @handle and bio are there on the first frame, so the page doesn't shift when the server
         // fetch lands. The fetch below still runs and corrects anything stale.
         if handle.isEmpty, about.isEmpty, let c = await ProfileStore.shared.cachedPeer(otherUid) {
-            handle = c.handle; about = c.about; targetPrivacy = c.privacy
+            handle = c.handle; about = c.about; targetPrivacy = c.privacy; links = c.links
         }
         if let p = await ProfileStore.shared.fetch(otherUid) {
-            handle = p.handle; about = p.about; targetPrivacy = p.privacy
+            handle = p.handle; about = p.about; targetPrivacy = p.privacy; links = p.links
         }
         // ⛔ AN EMPTY `cid` IS NOT A DOCUMENT, AND FIRESTORE ANSWERS THAT WITH AN OBJC EXCEPTION.
         //
