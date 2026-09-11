@@ -30,9 +30,12 @@
 //  one path entered twice. That is why theirs feel identical, and it is why `navigate` below does
 //  exactly the same thing rather than calling a separate animator.
 //
-//  THE NUMBERS ARE THEIRS: commit at |fraction| >= 0.3 or |velocity| >= 100pt/s; settle over 0.4s on
-//  a spring of mass 3, stiffness 1000, damping 500 (ours is 900 on his order — see
-//  `springStiffness`); rubber-band only at the ends, coefficient 0.4
+//  THE NUMBERS ARE THEIRS, ALL OF THEM, AND NONE OF THEM ARE JUDGED BY EYE ANY MORE — owner,
+//  2026-09-11: "everything [theirs], deep read then use". Commit at |fraction| >= 0.3 or
+//  |velocity| >= 100pt/s; settle over 0.4s FLAT, whatever the distance and whatever the throw
+//  (velocity gates the direction and is fed into nothing); the easing is their `.spring` curve,
+//  which is a sampled spring whose own published single-curve equivalent is the cubic bezier
+//  (0.23, 1.0, 0.32, 1.0) — see `unitBezier`; rubber-band only at the ends, coefficient 0.4
 //  over a range of 600; at most three peers alive; hit testing restricted to the focused peer; the
 //  face tint a black axial gradient 1.0 -> 0.8 -> 0.5 at |fraction| x 1.3.
 //
@@ -359,40 +362,9 @@ final class StoryCubePagerVC: UIViewController {
     private var settleStart: CFTimeInterval = 0
     private var settleDone: (() -> Void)?
     /// This turn's own duration, chosen from how far it has to travel — see `span(forDistance:)`.
-    private var settleSpan: CFTimeInterval = StoryCubePagerVC.settleDuration
+    private var settleSpan: CFTimeInterval = StoryCubePagerVC.releaseDuration
 
-    /// ⚠️ 0.165s IS HIS, NOT THEIRS. Theirs is 0.4.
-    ///
-    /// Four revisions, all his, all after watching it on a real phone: about a tenth on 2026-08-11,
-    /// then 0.12 exactly, then 0.24, then **0.165** — which sits between the last two, so he has
-    /// bracketed it rather than changed his mind. It is his call and it is genuinely one number:
-    /// while the turn belonged to `UIPageViewController` the only lever was `layer.speed = 3.0` on a
-    /// private scroll view, which also silently accelerated the dismiss spring and kept the page
-    /// hierarchy alive for a second after every turn. Owning the settle is what made this a constant.
-    ///
-    /// The spring is unaffected — `springProgress` is normalised over its own duration, so the same
-    /// sampled curve simply plays at a different rate and still lands exactly on 1.
-    ///
-    /// ⛔ AND IT IS 0.165 FOR EVERY DISTANCE AGAIN, TAP INCLUDED. Scaling a tap up to their 0.4 was
-    /// tried on 2026-08-20 and he rejected it on sight: "now too small… use the speed you used
-    /// before, just make it smooth and more fps". He is right, and the slow version was treating the
-    /// symptom — a turn that drops frames does not stop dropping them because it lasts longer, it
-    /// just drops them for longer. The frames themselves are fixed in `applyFold` instead.
-    private static let settleDuration: CFTimeInterval = 0.165
 
-    /// ⛔ 0.28, AND IT IS IN USE AGAIN — how long a WHOLE face takes, which in practice means a tap.
-    ///
-    /// ⚠️ NOT THEIR 0.4, AND THAT DISTINCTION IS THE WHOLE REASON THIS IS A SEPARATE NUMBER. Their
-    /// duration was tried on 2026-08-20 and he rejected it on sight ("use the speed you used
-    /// before, just make it smooth and more fps"), so 0.4 is known to be too slow for him and is not
-    /// what came back. 0.28 sits between his 0.165 and their 0.4: two thirds again as long as the
-    /// turn he liked the speed of, which buys the tail its fourteen frames without the turn reading
-    /// as slow.
-    ///
-    /// ⛔ THIS IS THE ONE NUMBER TO TURN if the turn now feels sluggish — down towards 0.22, where
-    /// the last tenth still gets eleven frames. Up towards 0.34 if the settle is still not visible.
-    /// `settleDuration` is the floor and belongs to swipes; leave it alone.
-    private static let fullFaceDuration: CFTimeInterval = 0.28
 
     /// ⛔ HOW LONG A TURN TAKES DEPENDS ON HOW FAR IT HAS TO GO, and until now it did not.
     ///
@@ -429,10 +401,35 @@ final class StoryCubePagerVC: UIViewController {
     /// disabled. `settleDuration` stays exactly as it is and becomes the FLOOR, so every swipe tail
     /// is untouched to the frame; a full face gets `fullFaceDuration`, and its last tenth is now
     /// about 0.12s, fourteen frames, which is a deceleration the eye can follow.
-    private static func span(forDistance distance: CGFloat) -> CFTimeInterval {
-        let faces = min(1, abs(CGFloat(distance)))
-        return max(Self.settleDuration, Self.fullFaceDuration * CFTimeInterval(faces))
-    }
+    /// ⛔ ONE DURATION, 0.4s, FOR EVERY TURN — owner, 2026-09-11: "make everything exactly like
+    /// [the reference app], also speed and numbers, all [theirs]… also 0.4 if [theirs] — like that,
+    /// use like that. Everything [theirs]: deep read then use."
+    ///
+    /// ⚠️ THIS OVERTURNS TWO NUMBERS THAT WERE HIS, AND THAT IS THE INSTRUCTION. `settleDuration`
+    /// 0.165 was his on 2026-08-20 ("use the speed you used before, just make it smooth") and
+    /// `fullFaceDuration` 0.28 was mine, derived from it. He has now asked for theirs instead, and
+    /// theirs is read from their source rather than judged by eye:
+    ///
+    ///     ComponentTransition(animation: .curve(duration: 0.4, curve: .spring))
+    ///     — StoryContainerScreen.swift, commitHorizontalPan
+    ///
+    /// ⚠️ AND IT DOES NOT VARY. Ours scaled the time with the distance, so a short correction was
+    /// quicker than a full face. Theirs is a flat 0.4 whatever the travel and whatever the throw:
+    /// release velocity gates the DIRECTION (see `commit`) and is fed into nothing. So a long turn
+    /// and a short one take the same time, which is the thing that makes every turn feel identical —
+    /// and that sameness is most of what "exactly like theirs" means here.
+    ///
+    /// ⚠️ IT IS 2.4× HIS OLD NUMBER and he will see that immediately. 0.165 → 0.4 is the single
+    /// biggest change in this file's history and it is deliberate. If it now reads as slow, the
+    /// honest answer is that this IS their speed, and the number to move is this one.
+    ///
+    /// ⚠️ `settleDuration` AND `fullFaceDuration` ARE DELETED, not left sitting unused. Nothing else
+    /// in this package read either of them, and a constant that still carries a long argument for a
+    /// number no code consults is how the next person reasons from a decision that was reversed.
+    private static func span(forDistance distance: CGFloat) -> CFTimeInterval { releaseDuration }
+
+    /// Their release duration, in seconds. `StoryContainerScreen.swift:882`.
+    private static let releaseDuration: CFTimeInterval = 0.4
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
         stopSettle(finishing: false)
@@ -506,91 +503,66 @@ final class StoryCubePagerVC: UIViewController {
         if finishing { done?() }
     }
 
-    /// THEIR SPRING, SAMPLED — `CASpringAnimation(mass: 3, stiffness: 1000, damping: 500)`,
-    /// with the stiffness softened to 900 on the owner's 2026-08-21 order. See `springStiffness`.
+    /// The turn's progress at normalised time `u` — see `unitBezier` for whose curve this is.
     ///
-    /// ⚠️ THE SPRING IS IN THE VALUES, NOT IN THE TIMING. They sample it into a keyframe track and
-    /// replay that track LINEARLY; applying a spring timing function to sprung values double-applies
-    /// it. This function is that sampling in closed form.
-    ///
-    /// The damping ratio is about 4.56, so it is heavily OVERDAMPED — there is no overshoot to
-    /// reproduce and the solution is two decaying exponentials. Normalised so it starts at exactly 0
-    /// with zero slope and ends at exactly 1, because a settle that ends at 0.63 of the way is not a
-    /// settle.
+    /// ⚠️ THE EASING IS IN THE VALUES, NOT IN THE TIMING, which is the one thing about their
+    /// approach that must not be lost: they bake the curve into a keyframe track and replay that
+    /// track LINEARLY. Our display link does the same by asking this function for each frame's
+    /// value. Putting a timing function on top of already-eased values double-applies it.
     static func springProgress(_ u: CGFloat) -> CGFloat {
-        let t = max(0, min(1, u)) * springDuration
-        return (1 - (r2 * exp(r1 * t) - r1 * exp(r2 * t)) / (r2 - r1)) / springFinal
+        unitBezier(max(0, min(1, u)))
     }
 
-    /// HOW MUCH OF THE SPRING IS SAMPLED, in spring-seconds, before the curve is normalised and
-    /// replayed over `settleDuration`.
+    /// ⛔ THEIR CURVE, AND IT IS A BEZIER RATHER THAN OUR SPRING — owner, 2026-09-11: "everything
+    /// [theirs], deep read then use". Read from their source rather than reconstructed:
     ///
-    /// ⛔ 2.0, UP FROM 0.5 — owner, 2026-09-11, comparing the turn with the reference app's: "the
-    /// image suddenly jumps/snaps into place at the end. [Theirs] has a small, slow, smooth settling
-    /// animation as the image finishes moving into position. The speed gradually slows down instead
-    /// of suddenly stopping at the same speed it started with."
+    ///   • the release is `.curve(duration: 0.4, curve: .spring)`;
+    ///   • `.spring` resolves to `listViewAnimationCurveSystem`, which samples
+    ///     `makeSpringAnimation("", duration: 0.5)` over normalised t — ListViewAnimation.swift;
+    ///   • and the same file states its own single-curve equivalent, used on every OS that cannot
+    ///     sample that spring: `bezierPoint(0.23, 1.0, 0.32, 1.0, t)`.
     ///
-    /// ⚠️ THE SNAP WAS ARITHMETIC, NOT A MISSING EASE, and this is the part worth keeping. The slow
-    /// root of this spring is -1.8199, so its time constant is 0.55s and it needs about three of
-    /// those to be visually finished. The window was 0.5s — barely ONE — so the sampled curve was
-    /// the spring's opening rush and none of its approach, and `springFinal` then rescaled that 59%
-    /// of the travel up to a full face. Normalising does not remove the velocity, it multiplies it:
-    /// the fraction was still moving at
+    /// ⚠️ THE BEZIER IS THE HONEST CHOICE HERE AND NOT A SHORTCUT. The spring it stands in for is
+    /// built by an Objective-C function whose mass, stiffness and damping are not in any file that
+    /// can be read — so a "spring" version of this would be three numbers I picked that happen to
+    /// look right, which is exactly what this file has already been through twice. Their own
+    /// fallback is a published, exact answer to "what curve is that spring", and it is theirs.
     ///
-    ///     D · y'(D) / y(D) / settleDuration
-    ///     = 0.5 · 0.740690 / 0.592956 / 0.165 ≈ 3.79 faces per second
+    /// ⚠️ WHAT IT REPLACES. A closed-form overdamped spring (mass 3, stiffness 900, damping 500)
+    /// sampled over 2.0 spring-seconds. That whole construction was reasoned backwards from his
+    /// report that the turn snapped at the end, and it worked — but it was ours, and this is his
+    /// instruction to stop reconstructing and copy. The old constants are gone with it.
     ///
-    /// at the instant the display link stopped and wrote the final value. A turn that ends with
-    /// three quarters of its starting speed still on it does not settle, it stops — which is his
-    /// "suddenly stopping at the same speed it started with", stated exactly.
-    ///
-    /// At 2.0 the same expression gives 2.0 · 0.048318 / 0.973448 / 0.165 ≈ 0.60, so the card
-    /// arrives six times slower than it used to, and the tail that was being cut off is now what the
-    /// eye sees at the end. Where the time goes, measured on the curve rather than guessed:
-    ///
-    ///     last 10% of the rotation    old 14.9% of the turn    new 42.3%
-    ///
-    /// So nine tenths of the travel still happens in the first 57% of his 0.165s — the 3D turn keeps
-    /// the snap he likes at the start — and the remaining 9 degrees are spread over about eight
-    /// frames at 120Hz instead of three.
-    ///
-    /// ⚠️ HIS 0.165s IS NOT TOUCHED AND IS NOT THE KNOB. This redistributes the same time inside the
-    /// turn; a longer turn is what he rejected on 2026-08-20 ("use the speed you used before, just
-    /// make it smooth"). If the landing now reads as floaty, come DOWN towards 1.5 (last 10% ≈ 32%
-    /// of the turn); if it still snaps, up towards 2.5. `springFinal` is derived from this line, so
-    /// it is genuinely one number — unlike `springStiffness`, whose roots must be re-solved with it.
-    private static let springDuration: CGFloat = 2.0
+    /// Standard unit-bezier solve: Newton from a good first guess, bisection when Newton wanders
+    /// out of the interval, which is the same shape WebKit's solver has had for twenty years.
+    private static func unitBezier(_ x: CGFloat) -> CGFloat {
+        let x1: CGFloat = 0.23, y1: CGFloat = 1.0, x2: CGFloat = 0.32, y2: CGFloat = 1.0
+        let cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx
+        let cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by
+        func sampleX(_ t: CGFloat) -> CGFloat { ((ax * t + bx) * t + cx) * t }
+        func sampleY(_ t: CGFloat) -> CGFloat { ((ay * t + by) * t + cy) * t }
+        func dX(_ t: CGFloat) -> CGFloat { (3 * ax * t + 2 * bx) * t + cx }
 
-    /// ⛔ STIFFNESS 1000 → 900 (owner, 2026-08-21), AND IT IS THE SAME KNOB, TURNED THE SAME WAY,
-    /// AS THE STORY OPEN'S 530 → 480. He asked for it in exactly those words.
-    ///
-    /// Mass and damping are untouched, which is the point. Spring time goes as 1/√k, so ten percent
-    /// off the stiffness is only about five percent longer overall — but a spring does not spend that
-    /// extra time evenly. It spends it at the END, in the approach, because that is where it is
-    /// moving slowest, and lowering k while holding c also pushes the damping ratio further into
-    /// overdamped, which lengthens the slow exponential specifically. Sampled against the old curve:
-    ///
-    ///     u     old     new
-    ///     0.50  0.6165  0.6045
-    ///     0.90  0.9380  0.9346
-    ///     0.95  0.9698  0.9680
-    ///     1.00  1.0000  1.0000
-    ///
-    /// Behind at every point and equal at the end, so more of the turn is left for the last stretch.
-    /// That is his "the last 10% settles more smoothly" and it is why stiffness is the right lever
-    /// rather than the duration — his 0.165s is untouched and is not up for changing.
-    ///
-    /// ONE NUMBER TO TURN, the same as its counterpart: too floaty, back up towards 1000; still too
-    /// abrupt, down to 850. The roots below are solved FROM it (3s² + 500s + k = 0) and must be
-    /// recomputed together — they are not independent numbers to nudge.
-    private static let springStiffness: CGFloat = 900
-
-    /// Roots of the characteristic equation for mass 3, stiffness 900, damping 500.
-    private static let r1: CGFloat = -1.819872
-    private static let r2: CGFloat = -164.846795
-    /// What the un-normalised curve has reached at `springDuration`.
-    private static let springFinal: CGFloat =
-        1 - (r2 * exp(r1 * springDuration) - r1 * exp(r2 * springDuration)) / (r2 - r1)
+        var t = x
+        for _ in 0..<8 {
+            let e = sampleX(t) - x
+            if abs(e) < 1e-6 { return sampleY(t) }
+            let d = dX(t)
+            if abs(d) < 1e-6 { break }
+            t -= e / d
+        }
+        var lo: CGFloat = 0, hi: CGFloat = 1
+        t = x
+        while lo < hi {
+            let e = sampleX(t)
+            if abs(e - x) < 1e-6 { return sampleY(t) }
+            if x > e { lo = t } else { hi = t }
+            let next = (hi - lo) * 0.5 + lo
+            if abs(next - t) < 1e-7 { break }
+            t = next
+        }
+        return sampleY(t)
+    }
 
     // MARK: - The fold
 
