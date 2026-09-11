@@ -56,13 +56,33 @@ struct PostedStory: Identifiable, Equatable {
 /// and the profile fetch is the normal path rather than the fallback.
 @MainActor @Observable final class GlowPeopleLoader {
     private(set) var state: GlowLoad<[GlowPerson]> = .loading
-    private var loadedKey = ""
+    /// ⛔ OPTIONAL, AND THE EMPTY STRING IS WHY — 2026-09-11, his screenshot of the Glowers picker
+    /// spinning for ever.
+    ///
+    /// This was `= ""`, and the guard below is `key != loadedKey`. An empty key is a REAL key here:
+    /// it is what every caller computes when the list it is keyed on is empty, which is the state of
+    /// the glow relationship on every cold open, before the two listeners have landed. So `"" != ""`
+    /// is false, the guard returns, and `state` never leaves the `.loading` it was born in. Nothing
+    /// re-runs it either — `.task(id:)` only fires again when the id MOVES, and the id is that same
+    /// empty string. A permanent spinner, and one that only appears when an account genuinely has
+    /// nobody yet or the listeners are slow, which is why it survived this long.
+    ///
+    /// `nil` cannot collide with anything a caller can compute, so "never loaded" and "loaded the
+    /// empty set" stop being the same value.
+    private var loadedKey: String?
 
     /// `uids` is ordered; the rows come back in that order. Re-running for the same set is a no-op,
     /// so a view that re-renders does not re-fetch.
     func load(_ uids: [String], dates: [String: Date] = [:], key: String) async {
         guard key != loadedKey else { return }
         loadedKey = key
+        // ⚠️ AND THE STAMP NEVER OUTLIVES A SPINNER. Every path below ends by setting `state`, so
+        // this is a belt rather than a fix — but the one thing that must never happen here is a key
+        // recorded as loaded while the view is still showing `.loading`, because the guard above
+        // then refuses every retry and the spinner is permanent. If we ever leave without reaching
+        // a terminal state, the stamp goes with us. This is the second stranding route the
+        // 2026-09-05 audit recorded and the first one it did not reach.
+        defer { if case .loading = state { loadedKey = nil } }
         // Demo: his account only, see GlowDemo. Resolving fake uids against the server would
         // fetch nothing, so the rows are handed over whole.
         if GlowDemo.isOn, uids.allSatisfy(GlowDemo.isDemoPerson) {
@@ -89,7 +109,7 @@ struct PostedStory: Identifiable, Equatable {
     }
 
     /// Drop the memo so the next `load` really reloads — the pull-to-refresh and error-retry door.
-    func invalidate() { loadedKey = "" }
+    func invalidate() { loadedKey = nil }
 }
 
 /// The still-live stories of ONE author, for the profile card and the Posted Stories page.
@@ -101,11 +121,31 @@ struct PostedStory: Identifiable, Equatable {
 /// what the author made public, which is the honest thing for it to show.
 @MainActor @Observable final class PostedStoriesLoader {
     private(set) var state: GlowLoad<[PostedStory]> = .loading
-    private var loadedUid = ""
+    /// ⛔ OPTIONAL, AND THE EMPTY STRING IS WHY — 2026-09-11, his screenshot of the Glowers picker
+    /// spinning for ever.
+    ///
+    /// This was `= ""`, and the guard below is `uid != loadedUid`. An empty key is a REAL key here:
+    /// it is what every caller computes when the list it is keyed on is empty, which is the state of
+    /// the glow relationship on every cold open, before the two listeners have landed. So `"" != ""`
+    /// is false, the guard returns, and `state` never leaves the `.loading` it was born in. Nothing
+    /// re-runs it either — `.task(id:)` only fires again when the id MOVES, and the id is that same
+    /// empty string. A permanent spinner, and one that only appears when an account genuinely has
+    /// nobody yet or the listeners are slow, which is why it survived this long.
+    ///
+    /// `nil` cannot collide with anything a caller can compute, so "never loaded" and "loaded the
+    /// empty set" stop being the same value.
+    private var loadedUid: String?
 
     func load(uid: String, force: Bool = false) async {
         guard force || uid != loadedUid else { return }
         loadedUid = uid
+        // ⚠️ AND THE STAMP NEVER OUTLIVES A SPINNER. Every path below ends by setting `state`, so
+        // this is a belt rather than a fix — but the one thing that must never happen here is a key
+        // recorded as loaded while the view is still showing `.loading`, because the guard above
+        // then refuses every retry and the spinner is permanent. If we ever leave without reaching
+        // a terminal state, the stamp goes with us. This is the second stranding route the
+        // 2026-09-05 audit recorded and the first one it did not reach.
+        defer { if case .loading = state { loadedUid = nil } }
         if GlowDemo.isOn, GlowDemo.isDemoPerson(uid) {
             state = .loaded(GlowDemo.stories(for: uid))
             return
@@ -203,7 +243,7 @@ struct PostedStory: Identifiable, Equatable {
         state = .loaded(updated)
     }
 
-    func invalidate() { loadedUid = "" }
+    func invalidate() { loadedUid = nil }
 }
 
 /// One card in the Stories tab's "Glowing" grid: somebody you have a glow with, and the newest
@@ -226,11 +266,31 @@ struct GlowStoryCard: Identifiable, Equatable {
 /// this account is in; it never leaks the audience itself.
 @MainActor @Observable final class GlowStoriesLoader {
     private(set) var state: GlowLoad<[GlowStoryCard]> = .loading
-    private var loadedKey = ""
+    /// ⛔ OPTIONAL, AND THE EMPTY STRING IS WHY — 2026-09-11, his screenshot of the Glowers picker
+    /// spinning for ever.
+    ///
+    /// This was `= ""`, and the guard below is `key != loadedKey`. An empty key is a REAL key here:
+    /// it is what every caller computes when the list it is keyed on is empty, which is the state of
+    /// the glow relationship on every cold open, before the two listeners have landed. So `"" != ""`
+    /// is false, the guard returns, and `state` never leaves the `.loading` it was born in. Nothing
+    /// re-runs it either — `.task(id:)` only fires again when the id MOVES, and the id is that same
+    /// empty string. A permanent spinner, and one that only appears when an account genuinely has
+    /// nobody yet or the listeners are slow, which is why it survived this long.
+    ///
+    /// `nil` cannot collide with anything a caller can compute, so "never loaded" and "loaded the
+    /// empty set" stop being the same value.
+    private var loadedKey: String?
 
     func load(_ uids: [String], key: String) async {
         guard key != loadedKey else { return }
         loadedKey = key
+        // ⚠️ AND THE STAMP NEVER OUTLIVES A SPINNER. Every path below ends by setting `state`, so
+        // this is a belt rather than a fix — but the one thing that must never happen here is a key
+        // recorded as loaded while the view is still showing `.loading`, because the guard above
+        // then refuses every retry and the spinner is permanent. If we ever leave without reaching
+        // a terminal state, the stamp goes with us. This is the second stranding route the
+        // 2026-09-05 audit recorded and the first one it did not reach.
+        defer { if case .loading = state { loadedKey = nil } }
         if GlowDemo.isOn {
             state = .loaded(GlowDemo.storyCards)
             return
@@ -251,7 +311,7 @@ struct GlowStoryCard: Identifiable, Equatable {
         state = .loaded(cards)
     }
 
-    func invalidate() { loadedKey = "" }
+    func invalidate() { loadedKey = nil }
 }
 
 /// One line on the Glow notifications page. Three kinds share one row shape, which is what his
