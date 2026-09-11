@@ -87,6 +87,18 @@ struct ChatPinDigitsBox: View {
     }
 }
 
+/// The wrong-code shake: three swings either side of centre, the idiom the lock screen answers a
+/// wrong passcode with. Driven by a COUNTER rather than a flag, so a second refusal is a second
+/// animation and not a no-op — and because whole numbers land on `sin(nπ)`, every run starts and
+/// ends exactly where the box sits.
+private struct ShakeEffect: GeometryEffect {
+    var animatableData: CGFloat
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(translationX: 8 * sin(animatableData * .pi * 6), y: 0))
+    }
+}
+
 /// The full-width capsule at the bottom of both sheets: black on white (white on black at night)
 /// when there is something to submit, grey with white text until then — his third screenshot.
 private struct ChatPinSubmitButton: View {
@@ -141,6 +153,15 @@ struct ChatPinEntrySheet: View {
     @State private var busy = false
     @State private var failure = ""
     @State private var handleText = ""
+    /// ⛔ THE REASON A WRONG PIN SAID NOTHING (owner, 2026-09-11: "when i inter wrong pin didn't
+    /// tell me"). The refusal below sets `failure` and then empties `pin` so the next attempt can be
+    /// typed — and emptying `pin` is a change to `pin`, so the `onChange` that clears the message
+    /// when the user starts typing ran on the same pass and wiped the sentence before it was ever
+    /// drawn. The message was always correct; it just lived for less than one frame.
+    ///
+    /// This says which of the two emptied it. Only a digit the USER pressed clears the sentence.
+    @State private var clearedByRefusal = false
+    @State private var shake: CGFloat = 0
 
     var body: some View {
         ScrollView {
@@ -171,6 +192,7 @@ struct ChatPinEntrySheet: View {
                     .padding(.horizontal, 24)
 
                 ChatPinDigitsBox(pin: pin)
+                    .modifier(ShakeEffect(animatableData: shake))
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
 
@@ -201,7 +223,9 @@ struct ChatPinEntrySheet: View {
         .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.fraction(0.84), .large])
         .presentationDragIndicator(.visible)
-        .onChange(of: pin) { _, _ in failure = "" }
+        .onChange(of: pin) { _, _ in
+            if clearedByRefusal { clearedByRefusal = false } else { failure = "" }
+        }
         .task {
             if let handle, !handle.isEmpty { handleText = handle; return }
             if let p = await ProfileStore.shared.fetch(uid), !p.handle.isEmpty { handleText = "@" + p.handle }
@@ -219,8 +243,14 @@ struct ChatPinEntrySheet: View {
                 onSuccess(cid)
             } catch {
                 busy = false
-                failure = error.localizedDescription
+                // Order matters only for readability; the flag is what protects the sentence.
+                clearedByRefusal = true
                 pin = ""
+                failure = error.localizedDescription
+                // A refused pin is worth feeling as well as reading — the same shake and the same
+                // knock the lock screen answers a wrong passcode with.
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                withAnimation(.linear(duration: 0.4)) { shake += 1 }
             }
         }
     }
