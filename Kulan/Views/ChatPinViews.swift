@@ -3,8 +3,8 @@ import SwiftUI
 // CHAT PIN, THE SCREENS — owner's spec, 2026-09-11, drawn from his four reference screenshots.
 //
 // Three views and two parts:
-//   ChatPinEntrySheet   somebody ELSE's pin — the sheet with the face, "Enter Chat Key", the six
-//                       slots, the keypad and the Enter button (his third screenshot).
+//   ChatPinEntrySheet   somebody ELSE's pin — "Enter Chat Key", the slots, the keypad and the
+//                       Enter button (his third screenshot).
 //   ChatPinPage         MY pin — behind "Chat Key" in the Chats title menu (his first screenshot,
 //                       where the reference app keeps "Number") and behind Privacy › Messages.
 //   ChatPinSetSheet     choosing a pin, from that page.
@@ -154,8 +154,11 @@ private struct ChatPinSubmitButton: View {
 /// is already accepted by the time `onSuccess` runs, so the caller only has to open it.
 struct ChatPinEntrySheet: View {
     let uid: String
+    /// Only the SENTENCE uses this now, as the stand-in until the handle arrives. There is no face
+    /// and no name plate on the sheet any more — owner, 2026-09-11: he is already inside the chat
+    /// with that person, so the sheet repeating who they are is a second answer to a question he
+    /// did not ask. ⛔ Do not put the avatar back.
     let name: String
-    let photoUrl: String?
     /// "@handle" when the caller already has it. Fetched here when it does not.
     var handle: String? = nil
     let onSuccess: (String) -> Void
@@ -163,11 +166,10 @@ struct ChatPinEntrySheet: View {
     /// ⚠️ SPELLED OUT. The `@State private` properties below make the synthesised memberwise init
     /// private too, and `private` does not reach the views that present this sheet — the same trap
     /// `MessageRequestsView` carries its own init for, which has cost a CI round trip before.
-    init(uid: String, name: String, photoUrl: String?, handle: String? = nil,
+    init(uid: String, name: String, handle: String? = nil,
          onSuccess: @escaping (String) -> Void) {
         self.uid = uid
         self.name = name
-        self.photoUrl = photoUrl
         self.handle = handle
         self.onSuccess = onSuccess
     }
@@ -196,19 +198,12 @@ struct ChatPinEntrySheet: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                VStack(spacing: 8) {
-                    AvatarView(name: name, photoUrl: photoUrl, size: 56)
-                    Text(name)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(.secondarySystemFill), in: Capsule())
-                }
-                .padding(.top, 20)
-
+                // 26 puts the title's middle on the X's middle (the X is 48 tall at a 12 inset, so
+                // its centre is 36), which makes the two read as one header row rather than a
+                // title that happens to have a button beside it.
                 Text("Enter Chat Key")
                     .font(.headline)
-                    .padding(.top, 18)
+                    .padding(.top, 26)
                 Divider()
                     .padding(.top, 12)
                     .padding(.horizontal, 20)
@@ -261,7 +256,7 @@ struct ChatPinEntrySheet: View {
                 .padding(.top, 12)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .presentationDetents([.fraction(0.84), .large])
+        .presentationDetents([.height(Self.sheetHeight), .large])
         .presentationDragIndicator(.visible)
         .onChange(of: pin) { _, _ in
             if clearedByRefusal { clearedByRefusal = false } else { failure = "" }
@@ -284,6 +279,21 @@ struct ChatPinEntrySheet: View {
             failure = ""
         }
     }
+
+    /// ⛔ THE SHEET IS AS TALL AS WHAT IS IN IT — owner, 2026-09-11: "space between number and Enter
+    /// button looks big plz make small". The old `.fraction(0.84)` asked for a share of the SCREEN,
+    /// so on a tall phone the content ended halfway up and the anchored button sat alone at the
+    /// bottom with a band of nothing above it — and the band grew with the phone, which is why it
+    /// looked worse on his than in any preview. A height detent cannot do that: the only gap left is
+    /// the button's own 12.
+    ///
+    /// The sum, top to bottom, so the next change to this sheet can correct it instead of guessing:
+    /// title 26 + 21 · divider 12 + 1 · sentence 14 + 20 · plate 14 + 84 · message 6 + 20 ·
+    /// keypad 4 + (4 × 60) = 462, then the anchored button's 12 + 54 + 8.
+    ///
+    /// ⚠️ A sentence that wraps to two lines, or big Dynamic Type, simply scrolls — the content is
+    /// in a `ScrollView` and `.large` is still in the list, so nothing is ever cut off.
+    private static var sheetHeight: CGFloat { 462 + 74 + WallpaperPickerSheet.bottomInset }
 
     /// Read through `now` so the view re-evaluates as the countdown ticks.
     private var isLocked: Bool {

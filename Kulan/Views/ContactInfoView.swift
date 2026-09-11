@@ -1126,7 +1126,7 @@ struct ContactInfoView: View {
             .sheet(isPresented: $showPinEntry) {
                 // The sheet already hands its success to the next runloop turn (audit U3), so the
                 // push begins after the dismissal rather than fighting it.
-                ChatPinEntrySheet(uid: otherUid, name: shownName, photoUrl: photoUrl,
+                ChatPinEntrySheet(uid: otherUid, name: shownName,
                                   handle: handle.isEmpty ? nil : "@" + handle) { _ in openChat = true }
             }
             .darkAlert("Block \(shownName)?",

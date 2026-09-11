@@ -1217,7 +1217,7 @@ struct ThreadView: View {
             // The banner is the acknowledgement, and it is deliberately not an optimistic unlock:
             // the composer's gate is the conversation's own `accepted`, and faking that locally
             // would let somebody type into a chat the rules have not opened yet.
-            ChatPinEntrySheet(uid: otherUid, name: title, photoUrl: photoUrl) { _ in
+            ChatPinEntrySheet(uid: otherUid, name: title) { _ in
                 keyAccepted = true
                 Task {
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
