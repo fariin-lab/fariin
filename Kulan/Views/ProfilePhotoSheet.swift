@@ -6,8 +6,9 @@ import UIKit
 // redesign it, show a full page like image 2, exactly like that".
 //
 // His reference: ✕ / "Edit Photo" / ✓ across the top, the picture large in the middle wearing a
-// remove badge, one "Add a Photo" button under it, then Recents and Emoji. The button read
-// "Choose a Photo" until 2026-09-05, when he renamed it; nothing about what it does changed.
+// remove badge, one "Add a Photo" button under it, then Recents. The button read "Choose a Photo"
+// until 2026-09-05, when he renamed it; nothing about what it does changed. An Emoji section stood
+// under Recents until 2026-09-11, when he asked for it to go — see the note where it was.
 //
 // ⛔ THE SHEET DECIDES, IT DOES NOT DO. Unchanged from the small version and the one rule on this
 // screen that must not be relaxed: every action is recorded here and run by the presenter in
@@ -29,6 +30,11 @@ enum ProfilePhotoAction {
     case image(UIImage)
     /// An emoji drawn onto a coloured disc. Already square and already centred, so it skips the
     /// cropper: there is nothing to frame and asking would be a step that can only make it worse.
+    ///
+    /// ⚠️ NOTHING ON THIS PAGE PRODUCES IT ANY MORE — owner, 2026-09-11, took the emoji section off
+    /// the sheet (the note where it stood explains). The case itself stays: SettingsView still
+    /// handles it in the `onDismiss` switch, so deleting it here would only push the edit into
+    /// another file to buy nothing.
     case emoji(UIImage)
 }
 
@@ -49,6 +55,12 @@ struct ProfilePhotoSheet: View {
     @State private var recents: [UIImage] = []
 
     private let circle: CGFloat = 190
+
+    /// One Recents suggestion. 76 is the size those circles have always been drawn at and it is not
+    /// changing; it is named here rather than typed into the strip because the strip now puts it on
+    /// the BOX the picture is poured into instead of on the picture, and a size that means "the
+    /// tile" deserves to be said once.
+    private let recentThumb: CGFloat = 76
 
     /// The page's ground. His rule, stated twice in one message: the photo's colour when there is a
     /// photo, the ordinary background when there is not.
@@ -72,7 +84,6 @@ struct ProfilePhotoSheet: View {
                     choosePhotoButton
                         .padding(.top, 24)
                     recentsSection
-                    emojiSection
                     Color.clear.frame(height: 28)
                 }
             }
@@ -161,8 +172,9 @@ struct ProfilePhotoSheet: View {
                 .foregroundStyle(ink)
                 // ⛔ 44, HIS NUMBER — 2026-09-02, with the button ringed. It was 52, which is a
                 // primary-action height, and this is not the page's primary action: the picture
-                // above it is, and Recents and Emoji under it are two more ways to change it. 44 is
-                // also Apple's touch floor, so it gives nothing up.
+                // above it is, and Recents under it is another way to change it. (It read "Recents
+                // and Emoji" until the emoji section was removed on 2026-09-11; 44 is his number
+                // either way.) 44 is also Apple's touch floor, so it gives nothing up.
                 .frame(height: 44)
                 .padding(.horizontal, 30)
                 .liquidGlass(Capsule(), interactive: true)
@@ -182,8 +194,28 @@ struct ProfilePhotoSheet: View {
                 HStack(spacing: 14) {
                     ForEach(Array(recents.enumerated()), id: \.offset) { _, img in
                         Button { choose(.image(img)) } label: {
-                            Image(uiImage: img).resizable().scaledToFill()
-                                .frame(width: 76, height: 76)
+                            // ⛔ THE SQUARE IS THE BOX AND THE PICTURE POURS INTO IT — owner,
+                            // 2026-09-11, off a screenshot of this strip beside his reference: ours
+                            // are squashed, with white showing inside the circles, while every
+                            // suggestion in his reference fills its circle edge to edge.
+                            //
+                            // What stood here put the 76pt frame on the IMAGE —
+                            // `Image(…).scaledToFill().frame(width: 76, height: 76)` — so the
+                            // picture's own shape drove the geometry and the circle was cut out of
+                            // whatever that produced. It looks right for the big avatar above
+                            // because that photograph has already been through the cropper and is
+                            // square; a raw screenshot out of the library is 9:19.5 and is not.
+                            // `Color.clear` takes the square FIRST, the picture is laid over it and
+                            // can therefore only overflow it, and `clipShape` cuts the same centred
+                            // circle out of every one of them. It is the pattern
+                            // AttachRecentsStrip and the wallpaper tiles already use, for this.
+                            //
+                            // Everything he asked to keep is kept: same 76pt circles, same spacing,
+                            // same horizontal strip, same count, and the tap target is still the
+                            // square 76pt label frame rather than the circle drawn on it.
+                            Color.clear
+                                .frame(width: recentThumb, height: recentThumb)
+                                .overlay { Image(uiImage: img).resizable().scaledToFill() }
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
@@ -195,95 +227,36 @@ struct ProfilePhotoSheet: View {
         }
     }
 
-    // MARK: - Emoji
+    // MARK: - Emoji — GONE, AND NOT TO BE PUT BACK
+    //
+    // ⛔ NO EMOJI ON THIS PAGE — owner, 2026-09-11: "plz Remove emojis". An emoji section stood
+    // here from 2026-09-05: the "Emoji" heading, a four-wide grid of the faces he had actually
+    // reacted with, the `recentEmoji` reader over `ReactionRecents`, the `disc(for:)` rule that
+    // coloured each one out of `AvatarPalette`, and the 512pt `render` that drew a face onto that
+    // disc so it could be saved as a profile picture. All five are deleted, and the page is now the
+    // picture, the button and Recents.
+    //
+    // It has now been asked for once and asked away once, so this note is the record: do not add it
+    // back on a hunch or off a concept screenshot. `ReactionRecents` itself is untouched — it
+    // belongs to the reaction bar, ThreadView writes it, and this page was only ever a reader of it.
+    // `ProfilePhotoAction.emoji` is also untouched, for the reason given at the enum.
 
-    /// ⛔ HIS OWN EMOJI, NOT ONES THE APP PICKED — his instruction, 2026-09-05, with the old block
-    /// ringed: no generated suggestions. What stood here was a stated grid of twelve faces read off
-    /// a reference screenshot, which is the app choosing his content for him. This row shows the
-    /// emoji HE has reached for, newest first, capped at ten, and nothing else.
+    /// The heading over Recents — and since the emoji block went on 2026-09-11, its only caller.
     ///
-    /// ⚠️ SILENT WHEN THERE IS NOTHING TO SHOW, the same rule Recents follows above: a heading over
-    /// a blank strip reads as broken rather than empty. Somebody who has never used an emoji in the
-    /// app therefore sees no emoji section at all, and the page is the picture, the button and
-    /// Recents. That is the honest empty state, not a gap to be filled with a default set.
-    @ViewBuilder private var emojiSection: some View {
-        if !recentEmoji.isEmpty {
-            sectionTitle("Emoji")
-            // ⛔ FOUR ACROSS, WRAPPING, AT THE CONCEPT'S SIZE — his report, 2026-09-09: "make it
-            // recent emojis up to like 10, exactly same size like this concept". His picture is a
-            // grid four wide with circles noticeably larger than ours, not a strip that scrolls
-            // sideways. Ten recents fill three rows there and one long row here, which is what made
-            // ours look like a different screen.
-            //
-            // ⚠️ THE SIZE IS NOT TYPED, IT IS WHAT FOUR COLUMNS LEAVE. On his phone that lands near
-            // 87, which is the circle he measured; typing 87 would be right on one screen width and
-            // wrong on every other.
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 4),
-                      spacing: 14) {
-                ForEach(recentEmoji, id: \.self) { e in
-                    Button { choose(.emoji(Self.render(e, on: Self.disc(for: e)))) } label: {
-                        ZStack {
-                            Circle().fill(Color(Self.disc(for: e)))
-                            Text(e).font(.system(size: 38))
-                        }
-                        .aspectRatio(1, contentMode: .fit)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-        }
-    }
-
-    /// The emoji this person has actually used, newest first.
-    ///
-    /// ⚠️ ONE STORE, SHARED WITH REACTIONS. `ReactionRecents` is the only record the app keeps of
-    /// which emoji somebody reaches for — it is written every time a reaction is set, in ThreadView's
-    /// `react` — and it already trims itself to ten. Reading it here rather than starting a second
-    /// list means this page and the reaction bar can never disagree about what "recent" means. If
-    /// the app ever gains a second place emoji are chosen, it should write to this same store.
-    private var recentEmoji: [String] { Array(ReactionRecents.get().prefix(10)) }
-
-    /// The disc an emoji is drawn on.
-    ///
-    /// ⚠️ THE APP'S EXISTING COLOUR RULE, NOT A NEW ONE. The old grid carried a stated colour per
-    /// face, which was only possible because those twelve faces were known in advance; a recents
-    /// list is not. `AvatarPalette` already answers "what colour is this string" for every letter
-    /// avatar in the app, so an emoji is coloured the same way a name is: stable for a given emoji,
-    /// and taken from eight deep tones, none of them pale enough to swallow the glyph on top.
-    private static func disc(for emoji: String) -> UIColor {
-        UIColor(AvatarPalette.gradient(for: emoji)[0])
-    }
-
+    /// ⛔ SMALLER AND LIGHTER THAN THE PAGE TITLE — owner, 2026-09-11, holding this page against his
+    /// reference: our heading shouts. It was 20pt bold, which is BIGGER than "Edit Photo" at the top
+    /// of the same screen (`.headline` — 17pt semibold), so a label for one strip outweighed the
+    /// name of the page it sits on, and that is what made the strip read as a screen of its own.
+    /// 15pt medium is under the title on both counts, size and weight, which is the order his
+    /// reference draws the two in. The numbers are not free-floating: 15 and medium are chosen
+    /// against that 17pt semibold title and only mean anything next to it.
     private func sectionTitle(_ t: String) -> some View {
         HStack {
-            Text(t).font(.system(size: 20, weight: .bold)).foregroundStyle(ink)
+            Text(t).font(.system(size: 15, weight: .medium)).foregroundStyle(ink)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
         .padding(.top, 26)
-    }
-
-    /// Draw an emoji onto a filled disc at avatar resolution.
-    ///
-    /// ⚠️ 512, NOT THE 76 IT IS SHOWN AT. This image becomes the profile picture, so it is rendered
-    /// once at the size every other avatar in the app is stored at rather than at the size of the
-    /// button that was tapped — a 76pt disc blown up to a poster header is exactly the kind of soft
-    /// picture this screen exists to avoid.
-    private static func render(_ emoji: String, on colour: UIColor, size: CGFloat = 512) -> UIImage {
-        let rect = CGRect(x: 0, y: 0, width: size, height: size)
-        return UIGraphicsImageRenderer(size: rect.size).image { ctx in
-            colour.setFill()
-            ctx.cgContext.fillEllipse(in: rect)
-            let font = UIFont.systemFont(ofSize: size * 0.52)
-            let attrs: [NSAttributedString.Key: Any] = [.font: font]
-            let s = NSString(string: emoji)
-            let bounds = s.size(withAttributes: attrs)
-            s.draw(at: CGPoint(x: (size - bounds.width) / 2,
-                               y: (size - bounds.height) / 2),
-                   withAttributes: attrs)
-        }
     }
 
     // MARK: - Loading
@@ -303,7 +276,9 @@ struct ProfilePhotoSheet: View {
     ///
     /// ⚠️ READ-ONLY AND SILENT. It never ASKS for photo access — the picker does that, at the moment
     /// somebody actually reaches for the library. Prompting on the way into this page would put a
-    /// system alert in front of a screen most people open to press one emoji.
+    /// system alert in front of a screen somebody may well have opened only to look at their picture.
+    /// (This line used to say "to press one emoji"; the emoji section went on 2026-09-11, the reason
+    /// for not prompting did not.)
     private static func recentImages(_ count: Int = 8) async -> [UIImage] {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return [] }
@@ -319,6 +294,15 @@ struct ProfilePhotoSheet: View {
         opts.deliveryMode = .highQualityFormat
         opts.isNetworkAccessAllowed = true
         opts.isSynchronous = false
+        // ⛔ THE SQUARE IS CUT HERE, NOT LEFT TO THE VIEW — owner, 2026-09-11, the second half of the
+        // same report the strip above carries. The resize mode was never set, so it was `.none`, and
+        // with `.none` Photos is free to ignore both the 300×300 asked for below and the `.aspectFill`
+        // beside it and hand back the frame it already had: a 9:19.5 screenshot arrived a 9:19.5
+        // screenshot, and every bit of the squaring was left to SwiftUI. `.exact` makes Photos do the
+        // centre crop itself, at the size actually requested. The view still pours and clips — that
+        // is the belt — but a thumbnail that is square on arrival cannot be letterboxed on the way in,
+        // and cropping 300×300 out of a full frame is cheaper than carrying the full frame around.
+        opts.resizeMode = .exact
 
         var out: [UIImage] = []
         for i in 0..<result.count {

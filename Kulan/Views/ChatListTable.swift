@@ -501,7 +501,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     /// Their table, their style. See the file header for why `.grouped` rather than `.plain`.
     private lazy var tableView: UITableView = {
-        let t = UITableView(frame: .zero, style: .grouped)
+        let t = SteadyTableView(frame: .zero, style: .grouped)
         t.separatorStyle = .none
         t.backgroundColor = .clear
         // ⚠️ THESE TWO NOW SPEAK ONLY FOR THE STRANGER ROWS. A chat row's height is answered
@@ -1354,6 +1354,47 @@ enum ChatListIcon {
 }
 
 /// A cell that is nothing but a host for the SwiftUI row.
+/// ⛔ THE LIST STOPS JUMPING WHEN THE SEARCH FIELD COMES AND GOES — owner, 2026-09-11: "when I click
+/// the search bar and then click ✕ to close it, the first time the chat list jumps down and after I
+/// click ✕ again it jumps up, and meanwhile I see a big empty space because the chat list jumped
+/// down."
+///
+/// ⚠️ THE CAUSE IS A UIKit CONTRACT, NOT A BUG IN THIS FILE. `.searchable` puts its field in the
+/// navigation bar, so focusing and dismissing search GROWS AND SHRINKS THE SAFE AREA above this
+/// table — about a field's worth. A scroll view answers that by changing `adjustedContentInset`, and
+/// it deliberately leaves `contentOffset` alone: the offset is measured from the CONTENT's origin,
+/// not from what the eye can see, so an inset that moves by 52 while the offset stays put moves
+/// every row on screen by 52. That is his jump, once in each direction, and the "big empty space" is
+/// the same 52 seen from the top of the list.
+///
+/// ⚠️ IT IS NOT VISIBLE IN A PLAIN `List`, which is why nothing here ever had to think about it:
+/// SwiftUI compensates for its own scroll views. A `UITableView` handed over through a
+/// representable is ours to compensate.
+///
+/// The fix is the one line UIKit leaves to the caller — when the adjusted inset moves, move the
+/// offset by the same amount, so whatever the eye was looking at stays where it was. At the very top
+/// of the list this resolves to exactly "still at the top" (offset `-inset` before, `-inset` after),
+/// so it corrects the jump without ever introducing one of its own.
+///
+/// ⚠️ NEVER MID-GESTURE. While a finger is dragging or the list is coasting, the offset belongs to
+/// the scroll, and writing to it there fights the touch. An inset does not change during a drag for
+/// any reason this screen has, so skipping those cases costs nothing.
+private final class SteadyTableView: UITableView {
+    /// The previous value, because `adjustedContentInset` has ALREADY changed by the time UIKit
+    /// calls us — there is no "old value" parameter to read.
+    private var lastAdjustedTop: CGFloat?
+
+    override func adjustedContentInsetDidChange() {
+        super.adjustedContentInsetDidChange()
+        let now = adjustedContentInset.top
+        defer { lastAdjustedTop = now }
+        // The first call establishes the baseline; there is nothing to compensate against yet.
+        guard let was = lastAdjustedTop, was != now else { return }
+        guard !isDragging, !isDecelerating else { return }
+        contentOffset.y -= (now - was)
+    }
+}
+
 private final class ChatListCell: UITableViewCell {
     static let reuseId = "ChatListCell"
     /// A stranger's row is a different view tree in the same cell class, so it gets its own queue.

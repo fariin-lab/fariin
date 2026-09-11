@@ -63,6 +63,36 @@ struct GlowProfileView: View {
     /// of the number is how those three drift apart.
     private static var photoHeight: CGFloat { UIScreen.main.bounds.width }
 
+    /// ⛔ THE HERO IS ONLY BIG WHEN THERE IS A PHOTOGRAPH TO BE BIG — owner, 2026-09-11, with the
+    /// page screenshotted: "my profile, when I am not using a profile photo it is showing big size,
+    /// the size a user with a profile picture gets. Make it not a circle, no profile colour, use
+    /// light and dark mode. But when I have a profile picture, that time use the big size and the
+    /// profile colour."
+    ///
+    /// ⚠️ WHAT IT WAS DOING. `photoHeight` is the screen's WIDTH — a full-bleed square — and the
+    /// no-photo branch filled that whole square with the palette's card colour and set the initial
+    /// at `w * 0.34`, which is about 130pt. On an account with no picture the page opened on a
+    /// screen-wide slab of colour carrying one enormous letter, and the name it belongs to was
+    /// below the fold. The big square is right for a PHOTOGRAPH — it is the page's subject — and
+    /// there is nothing to be the subject of here.
+    ///
+    /// ⚠️ IT IS NOT "THE PHOTO HEIGHT, SMALLER". It is a different thing: no palette colour, the
+    /// plain system background so it answers to light and dark the way he asked, and a letter sized
+    /// to this slot rather than to the screen. `photoHeight` is untouched and still the number the
+    /// photograph uses.
+    private static var letterHeroHeight: CGFloat { 132 }
+
+    /// Is there a picture to draw at all? Read by everything that measures the header, so the three
+    /// call sites cannot disagree about which hero is on screen — the same reason `photoHeight`
+    /// has a name.
+    private var hasHeroPhoto: Bool {
+        let url = profile?.photoUrl ?? initialPhoto
+        return !(url ?? "").isEmpty
+    }
+
+    /// The header's real height, whichever of the two it is.
+    private var heroHeight: CGFloat { hasHeroPhoto ? Self.photoHeight : Self.letterHeroHeight }
+
     /// ⚠️ THE BAR'S SCHEME IS PINNED, AND ON iOS 26 IT IS `.light` — the same switch, and the same
     /// reasoning, as `ContactInfoView.barScheme`, which was settled with him on 2026-08-19. The
     /// page's own `\.colorScheme` never reaches the bar (the back item belongs to the navigation
@@ -115,7 +145,10 @@ struct GlowProfileView: View {
             .onScrollGeometryChange(for: CGFloat.self) { g in
                 g.contentOffset.y + g.contentInsets.top
             } action: { _, scrolled in
-                photoUnderBar = Self.photoHeight - scrolled > Self.barBottom
+                // ⚠️ FALSE OUTRIGHT WITH NO PHOTOGRAPH. This flag exists to hide the bar's material
+                // while a picture is passing behind it; a letter hero IS the page background, so
+                // hiding the bar there would leave the back and Edit items floating on nothing.
+                photoUnderBar = hasHeroPhoto && (heroHeight - scrolled > Self.barBottom)
             }
         }
         // ⛔ NO TAB BAR ON THIS PAGE — owner, same report: "when I enter, hide the nav bottom bar".
@@ -194,27 +227,37 @@ struct GlowProfileView: View {
                     if let url = profile?.photoUrl ?? initialPhoto, !url.isEmpty {
                         StoryImage(url: url)
                     } else {
-                        // No photograph: the letter, on the palette's own card colour, so an account
-                        // with no picture still gets a page rather than a hole.
-                        cardColor.overlay {
+                        // No photograph: the letter on the plain system background, which is what
+                        // "use light and dark mode" means — see `letterHeroHeight`. The palette's
+                        // card colour is deliberately NOT used: a palette with no photograph to
+                        // read has nothing to be derived from, so it was painting a screen-wide
+                        // slab of a colour that means nothing.
+                        Color(.systemBackground).overlay {
                             Text(String((profile?.name ?? initialName).prefix(1)).uppercased())
-                                .font(.system(size: w * 0.34, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.85))
+                                // Sized to THIS slot, not to the screen. `w * 0.34` was about 130pt.
+                                .font(.system(size: Self.letterHeroHeight * 0.46, weight: .semibold))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .frame(width: w, height: w + stretch)
+                .frame(width: w, height: heroHeight + stretch)
                 .clipped()
                 .offset(y: -stretch)
                 // The photograph melts into the page rather than ending on a line — the seam
                 // `ProfilePalette` exists to kill. See its note on `page`.
+                //
+                // ⚠️ ONLY UNDER A PHOTOGRAPH. The letter hero is already the page's own background,
+                // so there is no seam to hide and a fade over it would draw a band of `pageColor`
+                // across a background that is not `pageColor`.
                 .overlay(alignment: .bottom) {
-                    LinearGradient(colors: [pageColor.opacity(0), pageColor],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: w * 0.42)
+                    if hasHeroPhoto {
+                        LinearGradient(colors: [pageColor.opacity(0), pageColor],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: w * 0.42)
+                    }
                 }
             }
-            .frame(height: Self.photoHeight)
+            .frame(height: heroHeight)
         }
     }
 
@@ -307,7 +350,9 @@ struct GlowProfileView: View {
             }
             if !isMe { glowButton.padding(.top, 12) }
         }
-        .padding(.top, -Self.photoHeight * 0.10)
+        // The name tucks up into the photograph's fade. With no photograph there is no fade and
+        // nothing to tuck into, so the pull-up is proportional to whichever hero is actually there.
+        .padding(.top, -heroHeight * 0.10)
     }
 
     /// GIVE OR TAKE BACK A GLOW — the one action this page has, and the only place in the app where
