@@ -652,7 +652,7 @@ struct GlowProfileView: View {
                                              count: PostedCard.tiles),
                               spacing: PostedCard.gap) {
                         ForEach(rows.prefix(PostedCard.tiles)) { s in
-                            PostedStoryTile(story: s) { openPosted() }
+                            PostedStoryTile(story: s, rectKey: Self.tileKey(s.id)) { openPosted(s) }
                         }
                     }
                     .padding(.horizontal, PostedCard.pad)
@@ -782,18 +782,30 @@ struct GlowProfileView: View {
     ///
     /// ⚠️ TWO DOORS BECAUSE THERE ARE TWO SITUATIONS. My own stories are already in memory as a
     /// group; somebody else's have to be fetched and mapped, which is what `GlowStoryOpen` does.
-    private func openPosted() {
+    /// ⛔ THE TILE THAT WAS TAPPED IS THE ONE IT FLIES OUT OF — owner, 2026-09-11, and the same
+    /// omission the See All page had: this took no argument, so every tile on the card handed the
+    /// flight `mine.id`, the chat row card's key, and the movement was wrong whichever one he
+    /// pressed. The full reasoning is on `PostedStoriesView.open`.
+    ///
+    /// ⚠️ ITS OWN NAMESPACE, SEPARATE FROM THE PAGE'S. This card and the page behind See All draw
+    /// the SAME stories, so one id filed by both would make the flight land on whichever registered
+    /// last — see `Self.tileKey`.
+    private func openPosted(_ story: PostedStory) {
         if isMe {
             guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
-            StoryDoor.open(mine, among: [mine], from: mine.id, pinned: true, deliveredToMe: true)
+            StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
+                           pinned: true, deliveredToMe: true)
         } else {
             let p = GlowPerson(id: uid,
                                name: profile?.name ?? initialName,
                                handle: profile?.handle ?? "",
                                photoUrl: profile?.photoUrl ?? initialPhoto)
-            Task { await GlowStoryOpen.open(p) }
+            Task { await GlowStoryOpen.open(p, from: Self.tileKey(story.id)) }
         }
     }
+
+    /// This card's own key namespace for a tile's rectangle — see `openPosted`.
+    private static func tileKey(_ storyId: String) -> String { "postedcard-\(storyId)" }
 
     private func loadStories() async {
         await stories.load(uid: uid)
@@ -815,6 +827,18 @@ enum PostedTile {
 
 struct PostedStoryTile: View {
     let story: PostedStory
+    /// ⛔ THE ANCHOR THE STORY FLIES OUT OF AND HOME TO — owner, 2026-09-11: "when I click the image
+    /// the story is not opening from that position, and scrolling down to go back does not return
+    /// to that position".
+    ///
+    /// ⚠️ THERE WAS NO ANCHOR AT ALL. The flight resolves its source by looking up a `.storyRow`
+    /// key in `MediaOpenRects`, and this tile registered none — so the open had nothing to grow out
+    /// of and the close had nothing to land on, and both fell back to the plain presentation. That
+    /// is the same gap the 2026-09-05 audit recorded against the friends grid, on a second screen.
+    ///
+    /// Nil keeps the tile unregistered, which is right for any caller that only displays them: a
+    /// key filed by a tile nobody can tap is a rectangle the flight could land on by mistake.
+    var rectKey: String? = nil
     /// ⛔ THE TILE OPENS THE STORY — owner, 2026-09-02: "when I click a story it is not opening,
     /// fix". It never could: this was a plain `ZStack` inside a `ForEach`, with no button and no
     /// gesture anywhere on it. Nothing was broken; the tap had simply never been wired.
@@ -822,8 +846,9 @@ struct PostedStoryTile: View {
     /// Nil leaves the tile inert, which is what a screen that only displays them wants.
     var onTap: (() -> Void)? = nil
 
-    init(story: PostedStory, onTap: (() -> Void)? = nil) {
+    init(story: PostedStory, rectKey: String? = nil, onTap: (() -> Void)? = nil) {
         self.story = story
+        self.rectKey = rectKey
         self.onTap = onTap
     }
 
@@ -831,6 +856,12 @@ struct PostedStoryTile: View {
         Button { onTap?() } label: { tile }
             .buttonStyle(.plain)
             .disabled(onTap == nil)
+            // ⚠️ ON THE BUTTON, OUTSIDE THE CLIP, so the rectangle filed is the tile as it is laid
+            // out rather than the picture inside its rounded mask. The corner travels with it, so
+            // the flight interpolates from this tile's own shape instead of a hardcoded guess —
+            // the trap `MediaOpenRects.cornerRadius` is written up against.
+            .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow,
+                                        cornerRadius: PostedTile.corner))
     }
 
     /// ⛔ NO FIXED WIDTH ANY MORE — his concept, 2026-09-09. The tile was 104 by 150 because it

@@ -127,18 +127,37 @@ struct PostedStoriesView: View {
 
     /// Open this person's story set. The same two doors the profile's rail uses, and for the same
     /// reason — see `GlowProfileView.openPosted`.
-    private func open() {
+    /// ⛔ THE TILE THAT WAS TAPPED IS THE ONE IT FLIES OUT OF — owner, 2026-09-11: "when I click the
+    /// image the story is not opening from that position, and scroll down to go back does not
+    /// return to that position".
+    ///
+    /// ⚠️ THIS TOOK NO ARGUMENT AT ALL. Every tile on the page called the same `open()` and handed
+    /// the flight `mine.id` — the key of the chat row's card, on a screen that is not even visible.
+    /// So the source rectangle resolved to something off-screen or to nothing, and both the open and
+    /// the close fell back to the plain presentation, whichever tile was pressed. The story that
+    /// played was right; the movement was always wrong.
+    ///
+    /// The key is this page's own namespace over the story's id, which is what the tile files
+    /// itself under below — see `Self.tileKey`.
+    private func open(_ story: PostedStory) {
         if isMe {
             guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
-            StoryDoor.open(mine, among: [mine], from: mine.id, pinned: true, deliveredToMe: true)
+            StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
+                           pinned: true, deliveredToMe: true)
         } else {
             let p = GlowPerson(id: uid,
                                name: person?.name ?? title,
                                handle: person?.handle ?? "",
                                photoUrl: person?.photoUrl)
-            Task { await GlowStoryOpen.open(p) }
+            Task { await GlowStoryOpen.open(p, from: Self.tileKey(story.id)) }
         }
     }
+
+    /// This page's own key namespace for a tile's rectangle. Its own, and not the bare story id,
+    /// because the profile card behind See All draws the SAME stories a few points away — two
+    /// screens filing one id would make the flight land on whichever of them registered last. The
+    /// friends page and the Glowing page each carry their own prefix for exactly this reason.
+    private static func tileKey(_ storyId: String) -> String { "postedpage-\(storyId)" }
 
     @ViewBuilder private var content: some View {
         switch loader.state {
@@ -198,7 +217,7 @@ struct PostedStoriesView: View {
                         // as the same tile at different sizes, and one tile cannot drift from
                         // itself. It brings its own Button, so the wrapper here goes with it.
                         ForEach(rows) { s in
-                            PostedStoryTile(story: s) { open() }
+                            PostedStoryTile(story: s, rectKey: Self.tileKey(s.id)) { open(s) }
                         }
                     }
                     // The tiles run close to the screen's edges in his image, so the margin matches
