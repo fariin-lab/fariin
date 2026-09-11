@@ -341,7 +341,16 @@ struct ChatPinEntrySheet: View {
 struct ChatPinPage: View {
     @State private var isSet = ChatPin.isSet
     @State private var mine = ChatPin.mine
-    @State private var checking = true
+    /// ⛔ THE SPINNER ONLY ON A GENUINELY FIRST VISIT — owner, 2026-09-11: "fix this loading",
+    /// with the row photographed spinning.
+    ///
+    /// ⚠️ IT USED TO SPIN ON EVERY VISIT, whatever this phone already knew. `isSet` is cached in
+    /// UserDefaults and `isSet` above seeds the page from it, so on all but the very first open
+    /// there was a correct answer on hand and the row hid it behind a spinner anyway, for as long as
+    /// the round trip took. Now the cached answer is drawn at once and the server quietly corrects
+    /// it; the spinner is left for the one case with nothing to draw, and `refreshStatus` gives that
+    /// case a deadline so it cannot last for ever.
+    @State private var checking = !ChatPin.hasCachedStatus
     @State private var setting = false
     @State private var confirmRemove = false
     @State private var removing = false

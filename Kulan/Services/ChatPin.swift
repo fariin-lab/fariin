@@ -64,6 +64,10 @@ enum ChatPin {
     /// Whether the server holds a pin for me, as last learned — from a set, a remove, or
     /// `refreshStatus`. A phone that has never asked reads false until it does.
     static var isSet: Bool { UserDefaults.standard.bool(forKey: statusKey) }
+    /// Has this phone ever had an answer about this account's key? `isSet` cannot say: a missing
+    /// value and a real `false` both read as `false`. The page uses this to decide whether it has
+    /// anything to draw while the server is being asked — see the spinner it replaced.
+    static var hasCachedStatus: Bool { UserDefaults.standard.object(forKey: statusKey) != nil }
 
     struct Failure: LocalizedError {
         let message: String
@@ -127,8 +131,37 @@ enum ChatPin {
     /// Ask the server whether I have one. Returns nil when it could not be asked, and in that case
     /// changes nothing — the page keeps showing what it last knew rather than guessing.
     @discardableResult
+    /// ⛔ IT HAS A DEADLINE NOW — owner, 2026-09-11, with the Settings row photographed spinning:
+    /// "fix this loading".
+    ///
+    /// ⚠️ A CALLABLE CAN SIMPLY NOT COME BACK, and this one had nothing to say when it did not. A
+    /// `httpsCallable` await has no timeout of its own short enough to matter here: on a phone that
+    /// cannot reach the function — no network, a region that will not resolve, a function not
+    /// deployed in this project — it sits, so `refresh()` never returned and the row kept spinning
+    /// for ever with no error, no retry and no way to set a key.
+    ///
+    /// Eight seconds, and then the honest answer: nil, which is what every OTHER failure of this
+    /// call already returns, and which the page already knows how to draw. The spinner is a question
+    /// about a round trip, and a round trip that has taken eight seconds is not going to be answered
+    /// by waiting longer.
+    ///
+    /// ⚠️ NOTHING IS CACHED FROM A TIMEOUT. The `set` flag in UserDefaults is only written when the
+    /// server actually answered — a phone that timed out must not conclude the key was removed.
+    static let statusTimeout: Duration = .seconds(8)
+
     static func refreshStatus() async -> Bool? {
-        guard let r = try? await call("chatPinStatus", [:]), let set = r["set"] as? Bool else { return nil }
+        let answer: [String: Any]? = await withTaskGroup(of: [String: Any]?.self) { group in
+            group.addTask { try? await call("chatPinStatus", [:]) }
+            group.addTask {
+                try? await Task.sleep(for: statusTimeout)
+                return nil
+            }
+            // Whichever finishes first. The loser is cancelled on the way out of the group.
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let r = answer, let set = r["set"] as? Bool else { return nil }
         let was = UserDefaults.standard.bool(forKey: statusKey)
         UserDefaults.standard.set(set, forKey: statusKey)
         // Removed from another device: the copy here would be a pin that opens nothing.
