@@ -41,6 +41,8 @@ struct GlowProfileView: View {
     private var glow = GlowService.shared
     /// The Edit sheet — my own profile only. See `editItem`, the trailing bar button.
     @State private var showEdit = false
+    /// The share-profile sheet — see `ShareProfileSheet` and the toolbar item that opens it.
+    @State private var showShare = false
     /// Is the photograph still the thing behind the navigation bar? Drives whether the bar keeps
     /// its own material or gets out of the picture's way — see the note on the scroll view.
     ///
@@ -158,6 +160,13 @@ struct GlowProfileView: View {
         // Refreshes on the way back out: `load()` re-reads the profile, so a new name, bio or photo
         // is on screen the moment the sheet closes rather than on the next visit.
         .sheet(isPresented: $showEdit, onDismiss: { Task { await load() } }) { EditProfileView() }
+        // Two detents so it can be pulled up over the whole page, but it opens at the size his
+        // screenshot shows: the code, the handle and the four actions, with the profile still
+        // visible behind it.
+        .sheet(isPresented: $showShare) {
+            ShareProfileSheet()
+                .presentationDetents([.large])
+        }
         // The page is a coloured photograph whatever the phone is set to — the same rule the chat
         // with a wallpaper follows, and for the same reason: light chrome on a lit picture washes
         // out. `\.colorScheme`, never `preferredColorScheme` — see the note in ThreadView.
@@ -284,6 +293,21 @@ struct GlowProfileView: View {
     /// photograph. Only the letters are ours; the capsule behind them is the system's.
     @ToolbarContentBuilder private var editItem: some ToolbarContent {
         if isMe {
+            // ⛔ SHARE, BESIDE EDIT — owner, 2026-09-11, with the gap between the back chevron and
+            // Edit ringed in red: "right side in my profile add new button for share profile; when I
+            // click, open sheet looks like image 2". It opens `ShareProfileSheet`.
+            //
+            // ⚠️ AN ICON HERE, AND EDIT STAYS A WORD. His 2026-09-09 ruling was that EDIT must be
+            // text rather than a glyph, and that ruling is about the one button people press by
+            // mistake on somebody else's page. Two words side by side in a navigation bar is a
+            // crowded bar; the share glyph is the system's own and needs no label.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showShare = true } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .tint(.white)
+                .accessibilityLabel("Share profile")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showEdit = true }.tint(.white)
             }

@@ -535,3 +535,208 @@ struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
+
+// MARK: - Share profile
+
+/// ⛔ THE SHARE SHEET ON MY OWN PROFILE — owner, 2026-09-11, with the spot ringed in red on his
+/// profile header and the sheet he wants photographed beside it: a code, the handle under it, two
+/// big square buttons (Download and Scan), then a card holding Copy link and Share.
+///
+/// ⚠️ NOT A SECOND `MyQRView`. That screen is the in-person one — a full page with the photo, the
+/// name and a Scan button, reached from Settings and from New Chat, and its layout is one he settled
+/// after throwing an alternative away. This is the same LINK in a different shape: a sheet pulled up
+/// from your own profile to hand the address to somebody who is not in the room. They share
+/// `qrImage` and `fariinLink` and nothing else, so the code can never differ between them.
+struct ShareProfileSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var showScanner = false
+    @State private var toast: String?
+    @State private var saving = false
+
+    private var me: UserProfile? { ProfileStore.shared.me }
+    private var handle: String { me?.handle ?? "" }
+    private var name: String { me?.name ?? "" }
+    private var link: String { fariinLink(handle) }
+    private var shareLine: String { "Chat with \(name.isEmpty ? handle : name) on Fariin" }
+
+    var body: some View {
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            VStack(spacing: 0) {
+                Spacer(minLength: 12)
+                code
+                // The handle, and it is the only writing on the top half — his picture has no name
+                // and no explaining sentence there, because the code above it is the explanation.
+                Text(handle.isEmpty ? " " : handle)
+                    .font(.title2.weight(.bold))
+                    .padding(.top, 10)
+                Spacer(minLength: 16)
+                HStack(spacing: 12) {
+                    bigButton("Download", icon: "arrow.down", busy: saving) { saveCode() }
+                    bigButton("Scan", icon: "qrcode.viewfinder", busy: false) { showScanner = true }
+                }
+                listCard.padding(.top, 12)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+
+            if let toast {
+                Text(toast)
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $showScanner) {
+            // The same two steps the code screen takes when a scan resolves: route to the
+            // conversation id and open it behind, in case these two have never spoken. Routing alone
+            // opens a chat whose document does not exist yet. See `MyQRView` for the full note.
+            ScanQRView(onMyCode: { showScanner = false }) { user in
+                AppRouter.shared.pendingChatId = ChatService.convId(AuthService.shared.uid ?? "", user.id)
+                AppRouter.shared.pendingChatName = user.name.isEmpty ? user.handle : user.name
+                AppRouter.shared.pendingChatPhoto = user.photoUrl
+                Task { try? await ChatService.openConversation(other: user) }
+                dismiss()
+            }
+        }
+    }
+
+    /// ⚠️ THE WHITE PLATE STAYS EVEN THOUGH HIS PICTURE HAS NONE, and the reason is the note on
+    /// `qrBlock` above: a QR code is read as dark-on-light, and this sheet's own ground is nearly
+    /// black at night. In daylight, white on the grouped grey is all but invisible, which is what
+    /// his screenshot shows; after dark it is the difference between a code that scans and a black
+    /// square on a black page.
+    @ViewBuilder private var code: some View {
+        if !handle.isEmpty, let img = qrImage(from: link) {
+            qrArt(img)
+                .frame(width: 260, height: 260)
+                .padding(16)
+                .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+                .frame(width: 292, height: 292)
+                .overlay { ProgressView() }
+        }
+    }
+
+    /// The code and the mark together. Shared by the view and by Download, so the picture that lands
+    /// in Photos is the one he was looking at rather than a bare code with no mark on it.
+    private func qrArt(_ img: UIImage) -> some View {
+        Image(uiImage: img)
+            .interpolation(.none).resizable().scaledToFit()
+            .overlay {
+                OfficialAvatar(size: 52)
+                    .padding(6)
+                    .background(.white, in: Circle())
+            }
+    }
+
+    private func bigButton(_ title: String, icon: String, busy: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                if busy {
+                    ProgressView().frame(height: 30)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 26, weight: .medium))
+                        .frame(height: 30)
+                }
+                Text(title).font(.system(size: 17, weight: .semibold))
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 22)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(busy || handle.isEmpty)
+    }
+
+    private var listCard: some View {
+        VStack(spacing: 0) {
+            Button { copyLink() } label: { listRow("Copy link", icon: "link") }
+                .buttonStyle(.plain)
+            Divider().padding(.leading, 16)
+            // ⚠️ A REAL `URL`, NOT THE STRING. An item that is only text gives Messages and the rest
+            // nothing to build a preview card from — the same correction `MyQRView`'s toolbar
+            // carries, and the reason the row is inert rather than dead while the handle loads.
+            if !handle.isEmpty, let url = URL(string: link) {
+                ShareLink(item: url, subject: Text(shareLine), message: Text(shareLine)) {
+                    listRow("Share", icon: "paperplane")
+                }
+                .buttonStyle(.plain)
+            } else {
+                listRow("Share", icon: "paperplane").opacity(0.4)
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func listRow(_ title: String, icon: String) -> some View {
+        HStack {
+            Text(title).font(.system(size: 17, weight: .semibold))
+            Spacer()
+            Image(systemName: icon).font(.system(size: 19, weight: .medium))
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 16)
+        .frame(height: 58)
+        .contentShape(Rectangle())
+    }
+
+    private func copyLink() {
+        guard !handle.isEmpty else { return }
+        UIPasteboard.general.string = link
+        flash("Link copied")
+    }
+
+    /// ⚠️ THE PICTURE IS RENDERED, NOT THE RAW CODE. `ImageRenderer` draws the same art the sheet
+    /// shows — code, mark and white ground — at three times the point size, so what lands in Photos
+    /// is sharp enough to be printed or held up on another screen. Saving `qrImage` directly would
+    /// put a small, markless code in his library.
+    private func saveCode() {
+        guard !handle.isEmpty, let img = qrImage(from: link) else { return }
+        saving = true
+        let art = qrArt(img)
+            .frame(width: 260, height: 260)
+            .padding(28)
+            .background(Color.white)
+        let renderer = ImageRenderer(content: art)
+        renderer.scale = 3
+        guard let ui = renderer.uiImage else {
+            saving = false
+            flash("Could not save")
+            return
+        }
+        Task {
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                await MainActor.run { saving = false; flash("Photos access is off") }
+                return
+            }
+            var ok = true
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: ui)
+                }
+            } catch { ok = false }
+            await MainActor.run {
+                saving = false
+                flash(ok ? "Saved to Photos" : "Could not save")
+            }
+        }
+    }
+
+    private func flash(_ text: String) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.easeOut(duration: 0.25)) { toast = nil }
+        }
+    }
+}
