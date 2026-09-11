@@ -42,10 +42,16 @@ struct GlowNotificationsView: View {
     private var dark: Bool { scheme == .dark }
 
     var body: some View {
-        VStack(spacing: 0) {
-            chips
-            content
-        }
+        // ⛔ NO `VStack` WRAPPER ANY MORE — the chips moved inside the list (see `content`), and the
+        // wrapper is what was keeping the navigation bar from tracking anything. `content` is the
+        // page's whole body now, so SwiftUI can hand its `List` to the bar and the bar does what it
+        // does on every other list screen: clear at the top, the system's blur as rows go under it.
+        //
+        // ⚠️ THE OTHER BRANCHES OF `content` ARE NOT LISTS — loading, failed and empty are a spinner
+        // and two `ContentUnavailableView`s. None of them scrolls, so none of them needs the bar to
+        // track it, and the bar sits at its clear edge appearance over all three. That is correct
+        // rather than a gap: there is nothing to pass underneath it.
+        content
         // ⛔ "Notifications", NOT "Glow notifications" — owner, 2026-09-02: "this page is not only
         // glow notifications, it's the person's notifications: when you upload a story and friends
         // react you see it here, when you get new glowers you see it here. Don't say glow
@@ -128,6 +134,32 @@ struct GlowNotificationsView: View {
                 // before the face with a gap, so any inset that put the DOT on 16 put the FACE at
                 // 22 or 34. It hangs in the margin instead — see `GlowEventRow`.
                 List {
+                    // ⛔ THE CHIPS ARE THE LIST'S FIRST ROW NOW — owner, 2026-09-11: "notification
+                    // page, fix tabs: when I scroll up they must follow the page. And also top
+                    // header, no border, use Apple iOS 26 blur."
+                    //
+                    // ⚠️ THOSE ARE ONE FAULT, NOT TWO. The chips were a sibling ABOVE this list in a
+                    // `VStack`, which cost both things he is naming:
+                    //
+                    //   * they could not scroll, because nothing was scrolling them — the list
+                    //     underneath them was, and they were not in it;
+                    //   * and the navigation bar had no scroll view to watch. A bar decides between
+                    //     its clear edge appearance and the iOS 26 blur by tracking the page's
+                    //     scroll content, and SwiftUI hands it a `List` only when the list IS the
+                    //     page's content. Wrapped in a `VStack` with a sibling, the bar tracked
+                    //     nothing, stayed at its edge appearance for ever, and what shows at the
+                    //     edge with rows passing under it is the hairline he photographed.
+                    //
+                    // Putting them in the list gives the bar its scroll view back AND makes them
+                    // scroll, which is why this is one change rather than a fix each.
+                    //
+                    // ⚠️ THE INSETS ARE THE CHIPS' OWN, not a row's. `chips` already carries
+                    // `.padding(.horizontal, 16)` — the page's column, his 2026-09-02 ruling — so
+                    // the row must add none of its own or the strip would be indented twice.
+                    chips
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     ForEach(rows) { e in
                         GlowEventRow(event: e, unread: e.at > glow.seenUpTo, dark: dark)
                             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
