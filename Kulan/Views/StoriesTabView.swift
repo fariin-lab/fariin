@@ -220,6 +220,8 @@ struct StoriesTabView: View {
             // that keeps its shape while its contents shrink reads as broken anyway. One list of
             // matches, labelled by which section each came from.
             searchResults
+        } else if showsFirstRunSkeleton {
+            firstRunSkeleton
         } else {
             ScrollView {
                 VStack(spacing: 0) {
@@ -394,6 +396,64 @@ struct StoriesTabView: View {
     /// one he asked for. There is no way to have it without a change of shape short of holding the
     /// whole page back until the glow fetch returns, which would delay Friends for everybody to
     /// spare this case.
+    /// ⛔ THE SKELETON IS FOR THE FIRST OPEN AND NOTHING ELSE — owner's spec, 2026-09-11: "use this
+    /// skeleton only the first time the user opens the Stories page… Important: do NOT show this
+    /// skeleton every time. The skeleton should not appear on every Stories refresh or every time
+    /// the user returns to the page."
+    ///
+    /// ⚠️ "FIRST TIME" IS A FACT ABOUT THE DEVICE, NOT ABOUT THIS VIEW. A `@State` flag would be
+    /// true again every time SwiftUI rebuilt the page — switching tabs is enough — which is exactly
+    /// the "every time you return" he is ruling out. `GlowStoriesCache.hasEverLoaded` is written to
+    /// disk the first time a load finishes, so the second open of the app is already not the first.
+    ///
+    /// ⚠️ AND IT ONLY STANDS WHILE THE SHAPE IS GENUINELY UNKNOWN. Both questions the page asks —
+    /// are there Glowing people, are there Friends stories — have a "not answered yet" state of
+    /// their own (`GlowService.hasLoaded`, `StoriesRepository.didLoad`). The skeleton is up while
+    /// either is unanswered and comes down the moment both are, which is what stops it outliving
+    /// the data on a slow connection.
+    private var showsFirstRunSkeleton: Bool {
+        guard !GlowStoriesCache.hasEverLoaded else { return false }
+        // Nothing to draw AND nothing known yet. Either answer arriving empty is still an answer.
+        return !glow.hasLoaded || !StoriesRepository.shared.didLoad || glowStories.state.isLoading
+    }
+
+    /// The grey cards he photographed: the Friends heading, then two columns of plain rounded
+    /// rectangles at the card's own aspect.
+    ///
+    /// ⚠️ NO SHIMMER AND NO PULSE, DELIBERATELY — "make sure the cache and loading logic do not
+    /// cause unnecessary skeleton animations, flickering, or rebuilding of the Stories layout". A
+    /// moving skeleton that is up for a third of a second reads as a flash, and this one should be
+    /// up for about that long. Flat grey is also exactly what his screenshot shows.
+    private var firstRunSkeleton: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                HStack(spacing: 4) {
+                    Text("Friends").font(Self.sectionTitle).foregroundStyle(.primary)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, GlowStoryCardView.margin)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
+                // The real grid's own geometry, so the cards do not move when they arrive — which
+                // is the "rebuilding of the Stories layout" half of his note.
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
+                                    GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
+                          spacing: GlowStoryCardView.gutter) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: GlowStoryCardView.corner, style: .continuous)
+                            .fill(Color(.systemGray6))
+                            .aspectRatio(GlowStoryCardView.aspect, contentMode: .fit)
+                    }
+                }
+                .padding(.horizontal, GlowStoryCardView.margin)
+            }
+        }
+        // It is a placeholder, not content: nothing here answers to a tap or a drag.
+        .allowsHitTesting(false)
+    }
+
     private var hasGlowGrid: Bool {
         guard !glow.glowRelationship.isEmpty else { return false }
         switch glowStories.state {

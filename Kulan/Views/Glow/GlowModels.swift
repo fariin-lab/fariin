@@ -11,7 +11,7 @@ import FirebaseFirestore
 
 /// One person, resolved for a list row. Deliberately not a `UserProfile`: a row needs four fields
 /// and re-resolving a whole profile per row is what makes a list of forty people slow.
-struct GlowPerson: Identifiable, Equatable, Hashable {
+struct GlowPerson: Identifiable, Equatable, Hashable, Codable {
     let id: String          // uid
     var name: String
     var handle: String
@@ -34,7 +34,7 @@ enum GlowLoad<T: Equatable>: Equatable {
 }
 
 /// One of this author's still-live stories, as the profile card and the Posted Stories page draw it.
-struct PostedStory: Identifiable, Equatable {
+struct PostedStory: Identifiable, Equatable, Codable {
     let id: String
     var thumbUrl: String
     var blurThumb: String
@@ -339,7 +339,9 @@ struct PostedStory: Identifiable, Equatable {
 
 /// One card in the Stories tab's "Glowing" grid: somebody you have a glow with, and the newest
 /// live story they have posted.
-struct GlowStoryCard: Identifiable, Equatable {
+/// ⚠️ `Codable` SO THE PAGE CAN OPEN ON WHAT IT SAW LAST — see `GlowStoriesCache`. Every member of
+/// this and of the two types it holds is a plain value, so all three synthesise it for nothing.
+struct GlowStoryCard: Identifiable, Equatable, Codable {
     var id: String { person.id }
     let person: GlowPerson
     let story: PostedStory
@@ -355,6 +357,80 @@ struct GlowStoryCard: Identifiable, Equatable {
 /// ⚠️ READS THE PUBLIC MIRROR, like every other Glow surface — see `PostedStoriesLoader`. That
 /// means the grid shows a glow person's story only when they posted it publicly or to an audience
 /// this account is in; it never leaks the audience itself.
+/// ⛔ WHAT THE GLOWING GRID SAW LAST TIME — owner's spec, 2026-09-11: "please add proper cache
+/// support for Glowing Stories. After the first successful load, cache the data. When the user
+/// refreshes the app or returns to Stories, load the cached Glowing Stories immediately, fetch in
+/// the background, and only update the UI when new data is available. Do not show the full skeleton
+/// again just because the app was refreshed."
+///
+/// ⚠️ WHY THE PAGE WAS SLOW, AND IT IS NOT THE NETWORK BEING SLOW. Building this grid costs TWO
+/// round trips PER PERSON — a profile fetch and a posted-stories load — run one after another in a
+/// loop. With eight glow people that is sixteen sequential requests before the first card can be
+/// drawn, every single time the page was opened, with nothing on screen in the meantime. The cache
+/// does not make those requests faster; it takes them off the path between opening the tab and
+/// seeing something.
+///
+/// ⚠️ EXPIRED CARDS ARE DROPPED ON READ, NOT ON WRITE. A story dies twenty-four hours after it was
+/// posted, so a cache written last night is a page full of stories that no longer exist — and the
+/// one thing worse than a slow grid is a fast grid showing things that are gone. Filtering on the
+/// way out means the same file is correct at any age, and an entirely stale file reads as no cache
+/// at all, which is exactly what it is.
+///
+/// ⚠️ KEYED PER ACCOUNT. Two people signing into one phone must not see each other's glow grid, even
+/// for the frame before the fetch lands.
+enum GlowStoriesCache {
+    private static var uid: String { AuthService.shared.uid ?? "" }
+    private static var fileURL: URL? {
+        guard !uid.isEmpty else { return nil }
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        guard let dir else { return nil }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("glow-stories-\(uid).json")
+    }
+
+    /// Has this account ever finished a Glowing load on this device? The skeleton is shown on the
+    /// first open and never again — see `StoriesTabView.showsFirstRunSkeleton`.
+    static var hasEverLoaded: Bool {
+        get { UserDefaults.standard.bool(forKey: "glowStories.everLoaded.\(uid)") }
+        set { UserDefaults.standard.set(newValue, forKey: "glowStories.everLoaded.\(uid)") }
+    }
+
+    static func read() -> [GlowStoryCard]? {
+        guard let fileURL, let data = try? Data(contentsOf: fileURL),
+              let cards = try? JSONDecoder().decode([GlowStoryCard].self, from: data) else { return nil }
+        let live = cards.filter { $0.story.expiresAt > Date() }
+        return live.isEmpty ? nil : live
+    }
+
+    static func write(_ cards: [GlowStoryCard]) {
+        guard let fileURL else { return }
+        hasEverLoaded = true
+        guard let data = try? JSONEncoder().encode(cards) else { return }
+        try? data.write(to: fileURL, options: .atomic)
+    }
+
+    /// Signing out takes the grid with it — see `read`'s note on keying per account.
+    ///
+    /// ⚠️ EVERY ACCOUNT'S FILE, NOT THIS ONE'S, AND THAT IS NOT OVER-REACH. `SessionWipe` runs AFTER
+    /// `Auth.signOut()` on one of its two paths, so by the time this is called `uid` is very often
+    /// already nil — a version of this keyed on the current account would quietly delete nothing on
+    /// exactly the path that matters. Sweeping the prefix is also the honest rule: no signed-out
+    /// account's grid has any reason to stay on the device.
+    static func clear() {
+        let fm = FileManager.default
+        if let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+           let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for f in files where f.lastPathComponent.hasPrefix("glow-stories-") {
+                try? fm.removeItem(at: f)
+            }
+        }
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("glowStories.everLoaded.") {
+            d.removeObject(forKey: k)
+        }
+    }
+}
+
 @MainActor @Observable final class GlowStoriesLoader {
     private(set) var state: GlowLoad<[GlowStoryCard]> = .loading
     /// ⛔ OPTIONAL, AND THE EMPTY STRING IS WHY — 2026-09-11, his screenshot of the Glowers picker
@@ -386,8 +462,28 @@ struct GlowStoryCard: Identifiable, Equatable {
             state = .loaded(GlowDemo.storyCards)
             return
         }
-        guard !uids.isEmpty else { state = .loaded([]); return }
-        state = .loading
+        guard !uids.isEmpty else {
+            state = .loaded([])
+            GlowStoriesCache.write([])
+            return
+        }
+        // ⛔ THE LAST GRID GOES UP FIRST, AND THE FETCH RUNS BEHIND IT — his spec, 2026-09-11: "when
+        // the user refreshes the app or returns to Stories, load the cached Glowing Stories
+        // immediately, fetch in the background, and only update the UI when new data is available."
+        //
+        // ⚠️ `state = .loading` USED TO BE UNCONDITIONAL HERE, and that one line is most of what he
+        // is describing. It threw away a perfectly good grid on every entry and put the page back to
+        // its empty shape for as long as two round trips PER PERSON take — which is also why
+        // `hasGlowGrid` flips, so the section collapsed and reopened and everything under it jumped.
+        // Painting the cache means the shape never changes: there is a grid before the fetch and the
+        // same grid after it.
+        if let cached = GlowStoriesCache.read(), !cached.isEmpty {
+            state = .loaded(cached)
+        } else if state.value == nil {
+            // Nothing remembered and nothing on screen — this is the genuine first run, and it is
+            // the one case the page's skeleton is for.
+            state = .loading
+        }
         var cards: [GlowStoryCard] = []
         for uid in uids {
             guard let p = await ProfileStore.shared.fetch(uid) else { continue }
@@ -399,7 +495,12 @@ struct GlowStoryCard: Identifiable, Equatable {
                 person: GlowPerson(id: uid, name: p.name, handle: p.handle, photoUrl: p.photoUrl),
                 story: newest))
         }
-        state = .loaded(cards)
+        // ⚠️ ONLY WHEN IT ACTUALLY CHANGED — "only update the UI when new data is available". These
+        // are `Equatable` all the way down, so an unchanged answer is one comparison rather than a
+        // republish, and the grid does not rebuild its cards for a fetch that found nothing new.
+        // The cache is written either way: the fetch is what proves the file is still current.
+        if state.value != cards { state = .loaded(cards) }
+        GlowStoriesCache.write(cards)
     }
 
     func invalidate() { loadedKey = nil }
