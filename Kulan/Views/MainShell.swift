@@ -212,7 +212,6 @@ struct MainShell: View {
         // describes `ic_stories_fill`, which this line used to draw; it is kept because that asset
         // is still live on the Add Story menu items and the reasoning is still true of it.
         Label { Text("Stories") } icon: { MenuIcon("ic_stories_stack_fill", size: 25) }
-            .foregroundStyle(tab == 0 ? Color.primary : Color.secondary)
     }
 
     /// ⛔ THE ICON ACTUALLY SWAPS NOW, AND THE OLD CODE ONLY LOOKED LIKE IT DID.
@@ -241,7 +240,6 @@ struct MainShell: View {
             // is used, and it stays because the colour below depends on the same re-evaluation.
             MenuIcon("ic_chat", size: 25)
         }
-        .foregroundStyle(tab == 2 ? Color.primary : Color.secondary)
     }
 
     @ViewBuilder private var callsTabLabel: some View {
@@ -285,7 +283,6 @@ struct MainShell: View {
             // the thing it sits next to.
             Image(systemName: "phone.fill")
         }
-        .foregroundStyle(tab == 1 ? Color.primary : Color.secondary)
     }
 
     @ViewBuilder private var settingsTabLabel: some View {
@@ -331,6 +328,26 @@ struct MainShell: View {
                 legacyTabView
             }
         }
+        // ⛔ THE SELECTED TAB IS BLUE — owner, 2026-09-11: "the active one always make blue, like
+        // Apple. Now the active one is Chats; if I go to Calls, make Calls and the text Calls
+        // blue." Icon AND label, which is what a tint does and what a per-item colour was not.
+        //
+        // ⚠️ THIS REVERSES HIS 2026-09-02 "follow my app color is black and white" FOR THIS ONE
+        // CONTROL, deliberately and on his newer word. That rule still holds everywhere else — it
+        // is why the Glowers switch, the audience badges and the Post Story capsule all carry no
+        // colour. A tab bar is the one place he has asked for the system's blue, because a tab bar
+        // is the one control people read as the platform's rather than as the app's.
+        //
+        // ⚠️ A TINT, NOT THREE MORE `foregroundStyle`s, AND THE OLD ONES HAD TO GO FIRST. Each
+        // label painted itself `Color.primary` when selected, and a style set ON the label wins
+        // over the bar's tint — so tinting alone would have changed nothing while they stood. With
+        // them gone the system colours the selected item and greys the rest, which is the whole of
+        // "like Apple" and keeps working if he ever changes this again.
+        //
+        // ⚠️ SETTINGS IS THE EXCEPTION AND STAYS ONE. Its icon is his profile photograph, drawn
+        // `.renderingMode(.original)` so it keeps its own colours; a tint has nothing to say about
+        // a photo. Its LABEL still follows the tint, which is the right half to follow.
+        .tint(.blue)
         .onChange(of: StoriesService.shared.uploading) { _, uploading in
             let wasUploading = sawStoryUpload
             sawStoryUpload = uploading
