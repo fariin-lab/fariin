@@ -1479,6 +1479,36 @@ struct StoryViewer: View {
         guard StoriesService.isPending(currentStoryId), uploadSvc.uploading else { return false }
         return uploadSvc.uploadingStories.contains { $0.id == currentStoryId }
     }
+
+    /// ⛔ THE ONE DOOR OUT OF A PAUSE — 2026-09-11 audit, and the cure for a whole class rather than
+    /// for the one instance of it that was reported.
+    ///
+    /// ⚠️ PAUSE IS A BOOLEAN, NOT A COUNT. `pauseStory` / `resumeStory` are bare notifications and
+    /// the detail view keeps one `hostPause.paused` flag, so ANY resume cancels EVERY reason the
+    /// story was stopped — there is no record of how many holders there were. That is fine while
+    /// only one thing pauses at a time and wrong the moment two overlap.
+    ///
+    /// The overlap that bites is the uploading placeholder. Its pause is asserted ONCE, when the
+    /// item becomes the uploading one (`onChange(of: isUploadingItem)`), and never re-asserted — so
+    /// every unrelated resume that fires while it is still in flight silently starts the 5-second
+    /// bar running on a story that has not finished sending. It then auto-advances or auto-closes
+    /// mid-upload. Six sites posted a bare resume: an abandoned swipe up, the reply bar closing, a
+    /// sheet closing, the ••• menu closing, a cancelled hero drag, and the viewers sheet's own
+    /// completion. Each was guarded by something local, and none of them knew about the upload.
+    ///
+    /// So the rule lives here instead of at six call sites: while the item on screen is still
+    /// uploading, nothing resumes it. The only thing that may lift that pause is the upload
+    /// finishing, which is the `onChange` that asserted it — it reads the NEW value and so is not
+    /// gated by the old one.
+    ///
+    /// ⚠️ A REAL PAUSE COUNTER WOULD BE THE FULLER ANSWER and is deliberately not what this is. It
+    /// would mean finding and pairing every pause with its resume across this file and the library,
+    /// and an unpaired one leaves a story frozen with no way back — a worse failure than the one
+    /// being fixed, and not something to attempt without being able to run the app.
+    private func resumeStoryIfAllowed() {
+        guard !isUploadingItem else { return }
+        NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+    }
     // Home-indicator inset (the story ignoresSafeArea, so overlays must add it back themselves).
     private var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
@@ -2029,6 +2059,13 @@ struct StoryViewer: View {
         .onDisappear {
             sheetAnimator.cancel()
             StoryCardMorph.shared.reset()   // never hand a transformed card to the next viewer
+            // ⛔ THE ONE RESUME THAT IS DELIBERATELY NOT GATED, and it must stay that way. Every
+            // other one in this file goes through `resumeStoryIfAllowed` so an upload in flight is
+            // never overridden — but this is the TEARDOWN, and the flag it would consult belongs to
+            // a viewer that is going away. Gating it would let a viewer closed while its own story
+            // was still uploading leave the pause standing, and the NEXT viewer would open frozen
+            // with nothing left to start it. A stuck pause is worse than an early resume, and there
+            // is no story left on screen here for an early resume to disturb.
             NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
             // Same reason the chrome is restored here: a viewer torn down with the sheet still up
@@ -2059,12 +2096,17 @@ struct StoryViewer: View {
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
-            NotificationCenter.default.post(name: up ? .init("pauseStory") : .init("resumeStory"), object: nil)
+            // The resume half goes through the gate — an upload in flight outranks a sheet closing.
+            // See `resumeStoryIfAllowed`.
+            if up { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
+            else { resumeStoryIfAllowed() }
         }
         // Viewers sheet: pause the moment it starts opening (progress > 0), resume only once fully
         // closed. This keeps the story frozen the entire time the sheet is up (fixes the auto-close).
         .onChange(of: viewersProgress > 0.01) { _, open in
-            NotificationCenter.default.post(name: open ? .init("pauseStory") : .init("resumeStory"), object: nil)
+            // Same gate as the sheet above — see `resumeStoryIfAllowed`.
+            if open { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
+            else { resumeStoryIfAllowed() }
         }
         // Chrome visibility MIRRORS the morph card: hidden while the card covers the story
         // (p ≥ 0.07-ish), visible the moment the story is exposed again. Completion-only
@@ -2461,9 +2503,9 @@ struct StoryViewer: View {
                     // auto-advances, or auto-closes the viewer, in the middle of the upload. The
                     // pause on that item is the owner's ask, written up above the `isUploadingItem`
                     // onChange: it can never tick away mid-upload.
-                    if !isUploadingItem {
-                        NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
-                    }
+                    // Through the shared gate now, rather than repeating its test here — the
+                    // rule belongs in one place. See `resumeStoryIfAllowed`.
+                    resumeStoryIfAllowed()
                     return
                 }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
@@ -2523,7 +2565,14 @@ struct StoryViewer: View {
             // opened is playing" is unconditionally true, so asserting it on mount is safe no matter
             // which one it was — the same reasoning as the bulletproof pause the sheet already does,
             // pointed the other way.
-            NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+            //
+            // ⚠️ GATED, THOUGH, AND THAT IS THE ONE EXCEPTION TO "a viewer that has just been
+            // opened is playing". Opening the viewer ON your own still-uploading story is a real
+            // path, and this backstop and the uploading flag's own `onChange` both fire on mount
+            // with no order between them — so ungated this could start the bar on a story that has
+            // not finished sending, which is the very thing that flag exists to prevent. If it IS
+            // uploading, that `onChange` owns the resume and will post it when the upload lands.
+            resumeStoryIfAllowed()
         }
         // REPLIES ARE OFF: SAY SO, rather than showing nothing.
         //
@@ -3702,7 +3751,8 @@ struct StoryViewer: View {
     }
 
     private func cancelHero(velocity vy: CGFloat) {
-        NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+        // Gated: a drag released short must not start a story that is still uploading.
+        resumeStoryIfAllowed()
         // The surround comes back the way it left — on the fraction, as the card springs home. It
         // used to be told to return on the first frame of the spring-back, which put the reply bar
         // on screen while the story was still small and travelling.
@@ -4254,7 +4304,9 @@ struct StoryViewer: View {
             // healed here crossed nothing, and the story stayed paused with no repauser to blame.
             // A fully closed sheet over an open viewer is a moment the story is definitely meant
             // to be running — the same unconditional truth every other resume post leans on.
-            NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+            // Gated for the reason every other resume here now is: an upload still in flight
+            // outranks it. See `resumeStoryIfAllowed`.
+            resumeStoryIfAllowed()
         }
     }
 

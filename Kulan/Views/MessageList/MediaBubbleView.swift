@@ -122,9 +122,18 @@ final class MediaBubbleView: UIView {
         //
         // Alpha, never `isHidden`: a hidden view stops reporting its frame, and its frame is the
         // very rect the copy is flying towards.
-        visibilityToken = MediaSourceVisibility.shared.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.applyVisibility() }
+        // ⛔ THE ONE FIELD, DE-DUPLICATED — 2026-09-11 performance pass. This was
+        // `objectWillChange`, which wakes for `hidesLabel` too (nothing here reads it) and fires on
+        // the WILL-set, so the value is not settled yet — which is the only reason the main-queue
+        // hop was needed. Taking `hiddenId` directly gives the settled value, drops the hop, and
+        // `removeDuplicates` means a write that does not move the id costs nothing at all.
+        //
+        // ⚠️ THE SWIPE IS WHY. Every change of person in the story viewer writes this singleton
+        // once, so every live bubble woke and rewrote its alphas mid-transition. The SwiftUI half
+        // of the same problem is written up on `MediaSourceVisibility.hiddenIdPublisher`.
+        visibilityToken = MediaSourceVisibility.shared.hiddenIdPublisher
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.applyVisibility() }
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -272,9 +281,18 @@ final class AlbumBubbleView: UIView {
         addSubview(captionLabel)
         // See `MediaBubbleView`: the tile the dismissing copy is flying home to steps aside so the
         // same picture is not on screen twice for the length of the drag.
-        visibilityToken = MediaSourceVisibility.shared.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.applyVisibility() }
+        // ⛔ THE ONE FIELD, DE-DUPLICATED — 2026-09-11 performance pass. This was
+        // `objectWillChange`, which wakes for `hidesLabel` too (nothing here reads it) and fires on
+        // the WILL-set, so the value is not settled yet — which is the only reason the main-queue
+        // hop was needed. Taking `hiddenId` directly gives the settled value, drops the hop, and
+        // `removeDuplicates` means a write that does not move the id costs nothing at all.
+        //
+        // ⚠️ THE SWIPE IS WHY. Every change of person in the story viewer writes this singleton
+        // once, so every live bubble woke and rewrote its alphas mid-transition. The SwiftUI half
+        // of the same problem is written up on `MediaSourceVisibility.hiddenIdPublisher`.
+        visibilityToken = MediaSourceVisibility.shared.hiddenIdPublisher
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.applyVisibility() }
     }
     required init?(coder: NSCoder) { fatalError() }
 

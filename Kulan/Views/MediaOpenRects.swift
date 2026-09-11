@@ -1,5 +1,8 @@
 import SwiftUI
 import UIKit
+// Named explicitly rather than leaned on through SwiftUI: this file now uses `AnyPublisher` and
+// `eraseToAnyPublisher` by name, not only the `@Published` wrapper that has always been here.
+import Combine
 
 // EXPERIMENTAL reference-style media open/close (Settings > Privacy > "the reference app Media Open").
 // the reference app never uses a system transition for its gallery: the tapped image itself is animated from
@@ -203,6 +206,26 @@ import UIKit
     /// The long-press lift is the opposite case: its copy carries the name too (`labelView`), so
     /// there the original must step aside or the name is on screen twice.
     @Published private(set) var hidesLabel = false
+    /// ⛔ ONE KEY'S ANSWER, PUBLISHED ON ITS OWN — 2026-09-11, his "the 3D story swipe feels laggy".
+    ///
+    /// ⚠️ THIS OBJECT IS OBSERVED BY EVERY PIECE OF MEDIA ON SCREEN. `MediaRectReporter` is applied
+    /// to chat bubbles, gallery tiles, story cards, posted-story tiles and profile strips, and most
+    /// of those call sites sit inside a `ForEach` — so the live instance count is "every media item
+    /// currently rendered", which is dozens. Each one held an `@ObservedObject` on THIS singleton.
+    ///
+    /// One `@Published` write therefore invalidated all of them at once, and every swipe to the next
+    /// person in the story viewer makes exactly one: `StoryDoor.retarget` hides the new card's key.
+    /// So a swipe re-ran dozens of view bodies, each rebuilding a `UIViewRepresentable` and a
+    /// `GeometryReader` — landing on precisely the frames the cube is mid-turn. The cube's own
+    /// renderer is already frugal (actions disabled, geometry and paint order written only on
+    /// change); this was the work arriving from outside it.
+    ///
+    /// A reporter subscribes to this instead and keeps its own `@State`, so a change now costs every
+    /// reporter ONE STRING COMPARE and re-renders only the one whose answer actually moved.
+    /// `Published.Publisher` replays the current value on subscription, so a reporter appearing
+    /// mid-hide still starts correct.
+    var hiddenIdPublisher: AnyPublisher<String?, Never> { $hiddenId.eraseToAnyPublisher() }
+
     func hide(_ id: String?, withLabel: Bool = false) {
         if hiddenId != id { hiddenId = id }
         if hidesLabel != withLabel { hidesLabel = withLabel }
@@ -306,13 +329,24 @@ struct MediaRectReporter: ViewModifier {
     let id: String
     var scope: MediaOpenRects.Scope = .chat
     var cornerRadius: CGFloat = 14
-    @ObservedObject private var visibility = MediaSourceVisibility.shared
+    /// ⛔ THIS KEY'S OWN ANSWER, NOT AN `@ObservedObject` ON THE WHOLE SINGLETON — see
+    /// `MediaSourceVisibility.hiddenIdPublisher` for what that cost and why it showed up as a laggy
+    /// story swipe. Local `@State`, written only when the answer for THIS key changes, so a hide
+    /// somewhere else in the app is a string compare here and nothing more.
+    @State private var isHidden = false
     private var key: String { MediaOpenRects.key(scope, id) }
     func body(content: Content) -> some View {
         content
             // Hiding is keyed the same scoped way, so hiding the gallery tile can never blank the
             // chat bubble behind it (they share an id but not a key).
-            .opacity(visibility.hiddenId == key ? 0 : 1)
+            .opacity(isHidden ? 0 : 1)
+            // ⚠️ THE GUARD IS NOT DECORATION. Without it every reporter writes `@State` on every
+            // publish, and a write is an invalidation whether or not the value moved — which is the
+            // whole cost this change exists to remove, moved one layer down.
+            .onReceive(MediaSourceVisibility.shared.hiddenIdPublisher) { current in
+                let now = (current == key)
+                if isHidden != now { isHidden = now }
+            }
             // An empty id identifies nothing — the same guard the rect reporter below applies.
             .background { if !id.isEmpty { MediaViewAnchor(key: key) } }
             .background(
