@@ -130,7 +130,6 @@ enum ChatPin {
 
     /// Ask the server whether I have one. Returns nil when it could not be asked, and in that case
     /// changes nothing — the page keeps showing what it last knew rather than guessing.
-    @discardableResult
     /// ⛔ IT HAS A DEADLINE NOW — owner, 2026-09-11, with the Settings row photographed spinning:
     /// "fix this loading".
     ///
@@ -149,6 +148,7 @@ enum ChatPin {
     /// server actually answered — a phone that timed out must not conclude the key was removed.
     static let statusTimeout: Duration = .seconds(8)
 
+    @discardableResult
     static func refreshStatus() async -> Bool? {
         let answer: [String: Any]? = await withTaskGroup(of: [String: Any]?.self) { group in
             group.addTask { try? await call("chatPinStatus", [:]) }

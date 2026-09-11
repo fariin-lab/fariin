@@ -186,7 +186,11 @@ struct Story: Identifiable, Hashable, Codable {
 /// ⚠️ `modified` SAYS THE PICTURE WAS CHANGED. The reposter may draw, crop, add text or stickers, and
 /// a viewer deserves to know whether what they are looking at is what was posted. True whenever the
 /// composer altered the media, false for a clean pass-through.
-struct StoryRepost: Equatable, Hashable {
+/// ⚠️ `Codable` BECAUSE `Story` IS. Story conforms, and a stored property that does not drops the
+/// whole synthesised conformance several hundred lines away with an error that names Story rather
+/// than this — which is exactly how the first build of this feature failed. The two string fields
+/// and the flag synthesise it for free.
+struct StoryRepost: Equatable, Hashable, Codable {
     var authorUid: String
     var authorName: String
     var storyId: String
