@@ -531,12 +531,25 @@ enum StoryTileGrid {
     /// is big" bought) and the PAGE to have an edge. At 8 the outer columns read as cropped against
     /// the screen, which is exactly what he photographed.
     ///
-    /// 20 is not a fresh guess. It is `GlowStoryCardView.margin`, which is `StoryRowMetrics.hPad`,
-    /// which is the single left edge he asked every Stories surface to share on 2026-09-02. This
-    /// page is one of those surfaces, so it takes that edge rather than a number of its own; the
-    /// day he moves the Stories edge again, this moves with it instead of being found later.
-    static let gap: CGFloat = 4
-    static let margin: CGFloat = 20
+    /// 20 was not a fresh guess. It was `GlowStoryCardView.margin`, which is `StoryRowMetrics.hPad`,
+    /// the single left edge he asked every Stories surface to share on 2026-09-02.
+    ///
+    /// ⛔ 12 AND 6, HIS OWN NUMBERS — owner, 2026-09-11, after asking what the two were and being
+    /// told 20 and 4: "make screen angel and card space between like 12pt, and also space between
+    /// cards make 6pt".
+    ///
+    /// ⚠️ SO THIS PAGE NO LONGER SHARES THE STORIES EDGE, deliberately, and that is the part worth
+    /// knowing. The note above argued for 20 on the grounds that one left edge should run down every
+    /// Stories surface; he has now measured this page on its own and chosen 12. A three-column grid
+    /// of tiles is not the same object as a two-column grid of person-cards, and he is the one
+    /// looking at both. `GlowStoryCardView.margin` stays at 20 for the pages that draw those cards —
+    /// do not "restore consistency" by dragging either number back to the other.
+    ///
+    /// ⚠️ THE MARGIN IS STILL WIDER THAN THE GAP (12 against 6), which is the one rule that has held
+    /// through every revision of these two: the page's edge needs more air than two tiles need from
+    /// each other, or the outer column reads as cropped.
+    static let gap: CGFloat = 6
+    static let margin: CGFloat = 12
     /// Smaller than the story cards' own 34, because a tile is about a third of the width and a
     /// 34pt arc on something this narrow eats the picture. 16 is his concept's corner measured the
     /// same way as the gap above.
