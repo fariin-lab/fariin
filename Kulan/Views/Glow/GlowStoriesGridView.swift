@@ -17,6 +17,10 @@ struct GlowStoriesGridView: View {
     /// The face tapped on a card — pushes that person's profile. `GlowPerson` is Identifiable, so
     /// this doubles as the presentation trigger.
     @State private var profileTarget: GlowPerson?
+    /// The long press's Send Message, pushed the same way the face is. The tab's own grids append to
+    /// a `NavigationPath` they own; this page has no path of its own, so it follows the pattern it
+    /// already uses for profiles rather than reaching for the tab's.
+    @State private var chatTarget: ChatTarget?
     private var glow = GlowService.shared
 
     private var key: String { Array(glow.glowRelationship).sorted().joined(separator: ",") }
@@ -30,10 +34,48 @@ struct GlowStoriesGridView: View {
             // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
             // profile is my own page and nobody else's.
             .navigationDestination(item: $profileTarget) { p in
-                ContactInfoView(cid: [AuthService.shared.uid ?? "", p.id].sorted().joined(separator: "_"),
-                                name: p.name, photoUrl: p.photoUrl, source: .story)
+                ContactInfoView(cid: cid(p.id), name: p.name, photoUrl: p.photoUrl, source: .story)
+            }
+            .navigationDestination(item: $chatTarget) { t in
+                ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
             }
             .task(id: key) { await loader.load(Array(glow.glowRelationship).sorted(), key: key) }
+    }
+
+    private func cid(_ uid: String) -> String {
+        [AuthService.shared.uid ?? "", uid].sorted().joined(separator: "_")
+    }
+
+    /// ⛔ THIS PAGE HAD NO LONG PRESS AT ALL — his 2026-09-11 report, "long-pressing any story does
+    /// not show the context menu" on the Glowing page.
+    ///
+    /// It was not broken, it was never mounted. The Stories tab carries `glowCardLongPress` on its
+    /// Glowing SECTION and on the pushed Friends page, and this page — the third grid of the same
+    /// cards — was missed when the other two were wired on 2026-09-05. Nothing here is new
+    /// machinery: same mount, same helper, same two actions the tab's Glowing cards answer with, so
+    /// one hold means one thing wherever the app draws a glower's story.
+    ///
+    /// ⚠️ THE KEY IS THIS PAGE'S OWN NAMESPACE, `glowpage-<uid>`, the same string the cards register
+    /// as their `rectKey` below. The tab's Glowing section files the same person under `glow-<uid>`;
+    /// a press that looked under the wrong one would photograph the card on the screen underneath.
+    private func pressTarget(at p: CGPoint) -> StoryMenuTarget? {
+        for c in (loader.state.value ?? []) {
+            if let t = GlowCardPress.target(Self.pageKey(c.person.id), at: p,
+                                            actions: actions(c.person)) { return t }
+        }
+        return nil
+    }
+
+    private static func pageKey(_ id: String) -> String { "glowpage-\(id)" }
+
+    /// The tab's `glowActions`, word for word and in its order. No "Hide Stories" for the reason
+    /// written there: nothing filters a Glowing grid, so the entry would appear to do nothing here
+    /// while quietly hiding the same person from Friends.
+    private func actions(_ p: GlowPerson) -> [CMAction] {
+        [CMAction(title: "Send Message", icon: "message") {
+            chatTarget = ChatTarget(id: cid(p.id), name: p.name, photo: p.photoUrl)
+         },
+         CMAction(title: "Open Profile", icon: "person.crop.circle") { profileTarget = p }]
     }
 
     @ViewBuilder private var content: some View {
@@ -76,7 +118,7 @@ struct GlowStoriesGridView: View {
                         // Its own key prefix: this page and the Stories tab's Glowing section draw
                         // the same person, and the one that is on screen must be the one the
                         // story flies out of.
-                        let key = "glowpage-\(c.person.id)"
+                        let key = Self.pageKey(c.person.id)
                         Button {
                             Task { await GlowStoryOpen.open(c.person, from: key) }
                         } label: {
@@ -87,6 +129,8 @@ struct GlowStoriesGridView: View {
                 }
                 .padding(.horizontal, GlowStoryCardView.margin)
                 .padding(.top, 8)
+                // The hold, on this page's own scroller — see `pressTarget`.
+                .glowCardLongPress { pressTarget(at: $0) }
             }
         }
     }

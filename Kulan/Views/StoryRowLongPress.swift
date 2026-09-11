@@ -114,7 +114,10 @@ enum StoryRowPress {
     ///   "NO CARD at x,y"            installed, but no registered card under the finger
     ///
     /// ⚠️ BACK TO false IN THE VERY NEXT BUILD. It is a debug band drawn over his real page.
-    static let on = true
+    /// ⛔ OFF AGAIN — his 2026-09-11 "remove any unintended or unnecessary UI/debug elements…
+    /// Anchor, ScrollView, HostingScrollView, GatePress". Those three lines are this readout, and
+    /// they rode one build too many. The machinery stays dormant exactly as the note above says.
+    static let on = false
 
     @Published var anchor = "anchor  —"
     @Published var gate   = "gate    —"
@@ -412,6 +415,26 @@ final class StoryPressGesture: UILongPressGestureRecognizer {
         super.touchesCancelled(touches, with: event)
         onTouchUp?()
     }
+
+    /// ⛔ THE ONE CALLBACK EVERY ENDING SHARES — his 2026-09-11 "when I release my finger, the story
+    /// remains zoomed out and does not animate back".
+    ///
+    /// The two overrides above cover a press that runs its course, and they are what this shipped
+    /// with. They do not cover a press that FAILS, and a long press has two ordinary ways to fail:
+    /// the delegate refusing to begin (`gestureRecognizerShouldBegin`, which `requiresCard` makes a
+    /// real possibility on every grid) and the finger drifting past `allowableMovement`. UIKit stops
+    /// delivering touch callbacks to a failed recogniser, so neither `touchesEnded` nor
+    /// `touchesCancelled` ever arrives — the card was shrunk on touch-down by `onTouchDown` and
+    /// nothing was left to unshrink it. It stayed at 0.92 for the life of the screen.
+    ///
+    /// `reset()` is UIKit's own "this gesture is over, whatever happened" hook: it runs for ended,
+    /// cancelled and failed alike. `onTouchUp` is idempotent (it returns immediately with no ramp
+    /// held), so keeping the other two costs nothing and keeps the release on the earliest callback
+    /// that can carry it.
+    override func reset() {
+        super.reset()
+        onTouchUp?()
+    }
 }
 
 struct StoryRowLongPress: UIViewRepresentable {
@@ -511,6 +534,22 @@ struct StoryRowLongPress: UIViewRepresentable {
         /// delayed ramp firing after the finger has gone, and what tells `onTouchUp` whether there
         /// is anything to undo.
         private var rampKey: String?
+        /// ⛔ THE WHOLE ANSWER FROM TOUCH-DOWN, NOT JUST ITS KEY — his 2026-09-11 "the card zooms but
+        /// the menu never opens" on the two pushed story grids.
+        ///
+        /// `target(_:)` resolves a card by asking `MediaOpenRects` which rectangle contains the
+        /// point, and that rectangle is the card AS DRAWN — which is the whole point of `drawnRect`,
+        /// and also the trap. By the time the press is 0.32s old the dip has finished and the card is
+        /// drawn at 0.92, so the rectangle has shrunk by 8% about its own centre. A finger resting in
+        /// that outer band was inside the card when it landed and is outside it when the recogniser
+        /// asks again — so `requiresCard` refuses to begin, and `.began`'s own lookup finds nothing
+        /// to lift. The press dies of the animation it started.
+        ///
+        /// The touch that started the ramp has ALREADY proved it was on one of our cards, which is
+        /// the only question either of those two checks is asking. So the answer is kept and reused.
+        /// A press that found no card at touch-down holds nil and every check behaves exactly as it
+        /// did — the strip's press on the Stories tab is still protected.
+        private var rampTarget: StoryMenuTarget?
         /// Whether a recogniser is live — the Anchor's retry loop stops asking once it is.
         var isInstalled: Bool { press != nil }
         /// See `StoryRowLongPress.requiresCard`. Defaulted, so the two UIKit callers that build a
@@ -597,13 +636,19 @@ struct StoryRowLongPress: UIViewRepresentable {
             g.onTouchDown = { [weak self] p in
                 guard let self, let t = self.target(p) else { return }
                 self.rampKey = t.key
+                self.rampTarget = t
                 // Straight in, no delayed stage. The chat row's dip starts on touch-down, and the
                 // 0.12s dead beat that used to be scheduled here belonged to the reference's ramp,
                 // which this no longer follows — see `StoryPressVisual.fingerDown`.
                 StoryPressVisual.shared.fingerDown(t.key)
             }
             g.onTouchUp = { [weak self] in
-                guard let self, self.rampKey != nil else { return }
+                guard let self else { return }
+                // Dropped FIRST and unconditionally: the ramp may already have been handed to the
+                // menu (which clears `rampKey` on its own), and a target left behind would outlive
+                // its press — see `rampTarget`.
+                self.rampTarget = nil
+                guard self.rampKey != nil else { return }
                 self.rampKey = nil
                 StoryPressVisual.shared.fingerUp()
             }
@@ -621,6 +666,23 @@ struct StoryRowLongPress: UIViewRepresentable {
             anchor.addGestureRecognizer(g)
             host = anchor
             press = g
+        }
+
+        /// The touch-down answer, with its RECTANGLE BROUGHT UP TO DATE.
+        ///
+        /// The card is the right one — that was settled when the finger landed — but its rectangle
+        /// is not: the dip has run since, and the lift is cropped out of the window, so it has to be
+        /// cut where the card is drawn NOW or the photograph is of a bigger area than the card.
+        /// `drawnRect` is the presentation tree, which is the same question `GlowCardPress.target`
+        /// asks and the same one the crop needs. A card that has gone entirely (scrolled off, screen
+        /// swapped) keeps the touch-down rectangle rather than losing the press, which is the
+        /// behaviour this had before the rectangle could move at all.
+        private func heldTarget() -> StoryMenuTarget? {
+            guard let t = rampTarget else { return nil }
+            guard let r = MediaOpenRects.drawnRect(t.key) ?? MediaOpenRects.liveRect(t.key) else { return t }
+            return StoryMenuTarget(key: t.key, rect: r, actions: t.actions,
+                                   labelRect: t.labelRect, labelView: t.labelView,
+                                   cornerRadius: t.cornerRadius)
         }
 
         /// The last view below the window on `v`'s way up — a presented screen's own container. Two
@@ -643,7 +705,10 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // The opt-in half of the gate — see `StoryRowLongPress.requiresCard`. A page that
                 // shares its scroll view with another press has to prove the finger is on one of
                 // its own cards before it may cancel anything.
-                if requiresCard, target(g.location(in: nil)) == nil {
+                //
+                // ⚠️ THE TOUCH-DOWN ANSWER COUNTS AS THAT PROOF. Asking again here means asking
+                // about a card the dip has already shrunk — see `rampTarget`.
+                if requiresCard, rampTarget == nil, target(g.location(in: nil)) == nil {
                     StoryPressDebug.shared.noteGate("scroll anchor, but no card of ours here")
                     return false
                 }
@@ -777,7 +842,10 @@ struct StoryRowLongPress: UIViewRepresentable {
                     StoryPressDebug.shared.noteBegan("no window on \(g.view.map { "\(type(of: $0))" } ?? "nil")")
                     return
                 }
-                guard let t = target(p) else {
+                // ⚠️ THE TOUCH-DOWN ANSWER IS THE FALLBACK, with its rectangle refreshed — see
+                // `rampTarget` and `heldTarget`. Without it a finger near a card's edge is outside
+                // the shrunk rectangle by the time this runs and nothing is lifted.
+                guard let t = target(p) ?? heldTarget() else {
                     StoryPressDebug.shared.noteBegan("began, but no card at \(Int(p.x)),\(Int(p.y))")
                     return
                 }
@@ -901,6 +969,9 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // overlay, so the ramp's own scale and dim are dropped without animating. Cleared
                 // before the hide, or the card would brighten in the one frame between the two.
                 rampKey = nil
+                // With it, always: a held target that outlived its press would let the NEXT press
+                // through the `requiresCard` gate on a card it never landed on — see `rampTarget`.
+                rampTarget = nil
                 StoryPressVisual.shared.menuTookOver()
                 // ⚠️ ONLY HIDE THE NAME IF A COPY OF IT WAS ACTUALLY LIFTED. This was an
                 // unconditional `true`, which is right for the chat-list row (it always hands over a
@@ -920,6 +991,13 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // failed by the arbitration without its touches ever reaching us — a scroll taking
                 // the press away is the normal case — and a squeeze left standing then would never
                 // come back up.
+                //
+                // ⚠️ THIS BELT NEVER FIRED FOR A REFUSED BEGIN, which is why the card stayed shrunk.
+                // UIKit sends the action for `.began`/`.changed`/`.ended`/`.cancelled`; a recogniser
+                // that goes straight to `.failed` from `gestureRecognizerShouldBegin` sends nothing
+                // at all, so this case was never entered. `StoryPressGesture.reset()` is the hook
+                // that covers it; this stays as the earlier of the two.
+                rampTarget = nil
                 if rampKey != nil { rampKey = nil; StoryPressVisual.shared.fingerUp() }
                 StoryRowPress.ended()
                 overlay?.fingerEnded(at: p)
