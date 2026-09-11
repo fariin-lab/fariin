@@ -68,13 +68,20 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                // ⛔ ONE CARD, AND THE FIRST CARD — his ask, 2026-09-05, item 16. Before this, his
-                // own identity was split in two: this header (photo, name, badge, handle) sat here
-                // on its own, transparent, while a second "My Profile" row — added 2026-09-02 —
-                // lived a whole section down, sandwiched between Account and Devices. Same person,
-                // two places. Both now live in one Section, still first on the screen, and it takes
-                // the plain grouped-card look every other section on this screen already uses
-                // (native `List`/`Section`, no bespoke background) rather than inventing a new one.
+                // ⛔ THE HEADER IS BACK OUT OF THE CARD — his ask, 2026-09-11, with a screenshot of
+                // the card he does not want: "remove the gray rounded background from the profile
+                // avatar, name, and username area… do not combine the profile information and My
+                // Profile into one section."
+                //
+                // ⚠️ THIS REVERSES HIS OWN 2026-09-05 item 16, which put them in one card. That ask
+                // was about his identity being in two DISTANT places — the header up here and a
+                // "My Profile" row a whole section down between Account and Devices. What he wanted
+                // was them together, and they still are: header first, My Profile immediately under
+                // it. Only the grey card around the header is gone. Do not merge them again.
+                //
+                // A Section with a clear row background rather than no Section at all: the spacing
+                // above and below a grouped section is what keeps the header off the card under it,
+                // and a bare row in the first section would take that card's background.
                 Section {
                     // THE CIRCLE, restored on the owner's word after seeing the poster here.
                     //
@@ -91,12 +98,16 @@ struct SettingsView: View {
                     // and the Edit button is always there. No photo = nothing to view, so the
                     // circle falls back to Edit, which is where a photo gets added.
                     profileHeader
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
 
-                    // MY PROFILE, moved up from between Account and Devices to sit inside his own
-                    // card instead of a section below it (item 16, above). Destination is unchanged:
-                    // `GlowProfileView` on his OWN uid, the page that already exists for photo, name,
-                    // handle, bio, the Glow stats card and Posted stories. A second "my profile"
-                    // screen would be a second place for those to drift.
+                Section {
+                    // MY PROFILE, its own card directly under the header (2026-09-11, above).
+                    // Destination is unchanged: `GlowProfileView` on his OWN uid, the page that
+                    // already exists for photo, name, handle, bio, the Glow stats card and Posted
+                    // stories. A second "my profile" screen would be a second place for those to
+                    // drift.
                     NavigationLink {
                         GlowProfileView(uid: AuthService.shared.uid ?? "",
                                         initialName: profile.me?.name ?? "",
@@ -1372,6 +1383,9 @@ struct StorySettingsView: View {
     @State private var creating = false
     /// The Glowers picker — see the row that raises it.
     @State private var editingGlowers = false
+    /// The Everyone picker. A sheet since 2026-09-11 for the same reason Glowers is one — it is now
+    /// the same screen, and that screen carries a ✕ and a Save.
+    @State private var editingEveryone = false
 
     var body: some View {
         List {
@@ -1387,9 +1401,14 @@ struct StorySettingsView: View {
                                 // edited" was his own rule and stands — but the page behind it edits
                                 // the SEPARATE hidden list, which is not a property of any audience
                                 // and applies to all of them. See `EveryonePrivacyView`.
-                                NavigationLink { EveryonePrivacyView() } label: {
+                                //
+                                // ⛔ A SHEET, NOT A PUSH, since 2026-09-11: it is the same screen as
+                                // Glowers now, and that screen carries its own ✕ and Save. Pushing
+                                // it would put a back button beside a close button.
+                                Button { editingEveryone = true } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
+                                .buttonStyle(.plain)
                             } else if a.kind == .myFriends {
                                 NavigationLink { MyFriendsPrivacyView() } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
@@ -1444,10 +1463,13 @@ struct StorySettingsView: View {
             CreateCustomStoryFlow(onCreated: { _ in creating = false },
                                   onCancel: { creating = false })
         }
-        // The Glowers picker — its own stack, because `MembersEditor` carries a title and a
-        // Cancel/Done pair and is no longer inside this screen's navigation.
+        // The two hide pickers — each in its own stack, because `StoryPeoplePicker` carries a title
+        // and a ✕/Save pair and is no longer inside this screen's navigation.
         .sheet(isPresented: $editingGlowers) {
             NavigationStack { GlowersPrivacyView() }
+        }
+        .sheet(isPresented: $editingEveryone) {
+            NavigationStack { EveryonePrivacyView() }
         }
     }
 }

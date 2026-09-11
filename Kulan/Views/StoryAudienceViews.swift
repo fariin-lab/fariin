@@ -183,6 +183,127 @@ struct StoryTick: View {
     }
 }
 
+// MARK: - The one privacy picker
+
+/// ⛔ ONE SCREEN FOR EVERY STORY PRIVACY CHOICE — owner, 2026-09-11, with a screenshot: "make all
+/// these pages visually consistent so users do not get confused… Everyone, Glowers, My Friends →
+/// Only Share With, and All Except should all feel like the exact same screen/component."
+///
+/// So there is now exactly one of them, and the four callers differ ONLY in what they hand it and
+/// what they do with the answer. Anything drawn here is drawn identically on all four; anything a
+/// single page used to draw for itself (Everyone's explanatory paragraph, Glowers' Hide/Unhide
+/// words) is gone, because a difference you can see is the confusion he is reporting.
+///
+/// The shape, from his screenshot: ✕ and Save in the bar, the search field pinned under it, the
+/// people you have chosen in their own card at the top under their own heading, everybody else in
+/// the card below. Tapping a row moves it between the two cards, and that movement IS the feedback —
+/// there is no Hide/Unhide word to read and no tick whose meaning you have to guess.
+///
+/// ⚠️ A DRAFT, COMMITTED ON SAVE. Every caller now works this way, including Glowers, which used to
+/// write on the tap. A screen with a Save button that has already saved is a lie, and one of the two
+/// callers behind it (`setHidden`) also revokes stories that are already up — so a half-made
+/// selection reaching the store would take a live story down and put it back. ✕ discards.
+struct StoryPeoplePicker: View {
+    let title: String
+    /// The heading over the people who are ticked — "Hidden Users" on the two hide pages,
+    /// "Selected" / "Excluded" on My Friends' two.
+    let selectedHeader: String
+    /// The heading over everybody else.
+    let unselectedHeader: String
+    let people: [StoryContact]
+    @Binding var selected: Set<String>
+    /// Drawn only while there is nothing to draw yet — the Glow pages fetch their names.
+    var isLoading: Bool = false
+    /// Save is dead until somebody is picked. True only where an empty list would mean the mode does
+    /// nothing at all — see `MyFriendsPrivacyView`.
+    var requireAtLeastOne: Bool = false
+    let onSave: () -> Void
+    let onClose: () -> Void
+
+    @State private var search = ""
+
+    /// ⚠️ HIS "the spacing between the avatar and the surrounding content is too large". A grouped
+    /// list gives a 40pt avatar about 11pt above and below, which is a 62pt row; this is 52. The
+    /// number lives here, once, so the four pages cannot drift apart the way the settings list and
+    /// the share sheet did — the same reason `StoryAudienceRow.insets` exists.
+    private static let rowInsets = EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+    /// Avatar + its gap, so the grey line starts under the name instead of under the picture.
+    private static let separatorInset: CGFloat = 52
+
+    private var visible: [StoryContact] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        let pool = q.isEmpty ? people : people.filter { $0.name.localizedCaseInsensitiveContains(q) }
+        return pool.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    private var chosen: [StoryContact] { visible.filter { selected.contains($0.id) } }
+    private var rest: [StoryContact] { visible.filter { !selected.contains($0.id) } }
+
+    var body: some View {
+        List {
+            // An empty group is not drawn at all rather than drawn with a line of apology text: the
+            // heading is the whole label, and a heading with nothing under it says it twice. (No
+            // empty-state art or copy — his standing rule.)
+            if !chosen.isEmpty {
+                Section { ForEach(chosen) { row($0) } } header: { header(selectedHeader) }
+            }
+            if !rest.isEmpty {
+                Section { ForEach(rest) { row($0) } } header: { header(unselectedHeader) }
+            }
+            if visible.isEmpty && isLoading {
+                Section { ProgressView() }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Name or username")
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                // ✕ rather than the word Cancel, his point 1. The label is still there for
+                // VoiceOver, which cannot read a glyph.
+                Button { onClose() } label: { Image(systemName: "xmark") }
+                    .accessibilityLabel("Close")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") { onSave() }
+                    .fontWeight(.semibold)
+                    .disabled(requireAtLeastOne && selected.isEmpty)
+            }
+        }
+    }
+
+    /// ⚠️ `.textCase(nil)` AND `.primary`: a grouped list's own heading is small grey capitals, and
+    /// his screenshot is plain dark sentence case. It is the heading that tells you what a tick on
+    /// that card means, so it is worth being readable.
+    private func header(_ t: String) -> some View {
+        Text(t).font(.headline).foregroundStyle(.primary).textCase(nil)
+    }
+
+    /// One person. Its own function, not inline in the `ForEach`: a `List` body carrying several
+    /// closures over a binding is what the Swift type-checker gives up on ("unable to type-check in
+    /// reasonable time"), and every one of those costs a CI round trip.
+    @ViewBuilder private func row(_ c: StoryContact) -> some View {
+        Button {
+            // Animated because the row LEAVES — it is the card it sits in that answers "am I
+            // hidden", so the move between cards has to be visible to be the answer.
+            withAnimation(.snappy) {
+                if selected.contains(c.id) { selected.remove(c.id) } else { selected.insert(c.id) }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                AvatarView(name: c.name, photoUrl: c.photo, size: 40)
+                Text(c.name).foregroundStyle(.primary).lineLimit(1)
+                Spacer(minLength: 8)
+                StoryTick(on: selected.contains(c.id))
+            }
+            .contentShape(Rectangle())
+        }
+        .listRowInsets(Self.rowInsets)
+        .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] + Self.separatorInset }
+    }
+}
+
 // MARK: - Select Viewers
 
 /// Step one of a custom story, and also "Add Viewers" on an existing one.
@@ -419,18 +540,18 @@ struct NameStoryView: View {
 //              resolves to the glow relationship and never meets `hiddenFrom` at all.
 //
 // Nothing in either path is intersected with the other, so a person can be in one, the other, both
-// or neither. That independence is the feature, and the two helpers below exist so the Everyone
-// page and the Glowers page cannot drift into writing it two different ways.
+// or neither. That independence is the feature. Since 2026-09-11 there is ONE PAGE PER LIST — the
+// Everyone page ticks the chat list, the Glowers page ticks the glow list — which is what let both
+// of them become the same screen. See `StoryPeoplePicker`.
 //
 // `fileprivate`, not an extension on the store: the store lives in another file that other work is
 // touching, and a helper declared here cannot collide with one added there.
 
-/// Is this person left out of the Glowers audience?
-fileprivate func isHiddenFromGlow(_ uid: String, _ store: StoryAudienceStore) -> Bool {
-    store.glowers.members.contains(uid)
-}
-
-/// Put this person in, or take them out of, the Glowers audience's except-list.
+/// Write the whole glow-hide list at once.
+///
+/// ⚠️ THE WHOLE LIST, not one person at a time: since 2026-09-11 the Glowers page keeps a draft and
+/// commits it on Save, the same as every other privacy page, so what arrives here is the finished
+/// answer rather than a single tap.
 ///
 /// ⚠️ THE MODE IS INFERRED FROM WHAT IS LEFT, exactly as `GlowersPrivacyView` has always inferred
 /// it: nobody excluded is `.all`, somebody excluded is `.except`. Written as a rule rather than
@@ -438,13 +559,11 @@ fileprivate func isHiddenFromGlow(_ uid: String, _ store: StoryAudienceStore) ->
 ///
 /// ⛔ THIS ONLY EVER SUBTRACTS. It is why a demo uid is safe here in a way it would never be in
 /// `recipientUids` — see the note on `realGlowRelationship`.
-fileprivate func setHiddenFromGlow(_ uid: String, _ hidden: Bool, _ store: StoryAudienceStore) {
-    guard !uid.isEmpty else { return }
+fileprivate func setHiddenFromGlow(_ hidden: Set<String>, _ store: StoryAudienceStore) {
     var n = store.glowers
-    var members = Set(n.members)
-    if hidden { members.insert(uid) } else { members.remove(uid) }
+    let members = hidden.filter { !$0.isEmpty }
     // Sorted, not `Array(set)`: a Set hands back its members in whatever order it feels like, so an
-    // unsorted copy writes a different array to Firestore on every tap even when the set of people
+    // unsorted copy writes a different array to Firestore on every save even when the set of people
     // has not changed — and this array is also what the loader's key is built from.
     n.members = members.sorted()
     n.mode = members.isEmpty ? .all : .except
@@ -457,9 +576,15 @@ fileprivate func setHiddenFromGlow(_ uid: String, _ hidden: Bool, _ store: Story
 /// "Everyone page = friends' chats + glowers, and let me hide someone from my chat, from my glow, or
 /// both, independently."
 ///
-/// So the page is one row per person drawn from the two places a story can reach — the accepted
-/// chats and the glow relationship — and each of them carries TWO switches, not one setting with
-/// three positions. Hiding somebody from chats says nothing about your glow and the other way round.
+/// ⛔ ONE TICK NOW, NOT TWO SWITCHES — owner, 2026-09-11, asked and confirmed: the tick on THIS page
+/// means hidden from your chats, the tick on the Glowers page means hidden from your glow. The two
+/// lists are still separate and a person can be on one, the other, both or neither — his 09-05
+/// "independently" survives, it is just answered on two pages instead of two switches on one. What
+/// it buys is the thing he actually asked for: this page and the Glowers page are now the same
+/// screen, so a tick means the same thing wherever he sees it. See `StoryPeoplePicker`.
+///
+/// ⚠️ WHAT THAT REPLACED: a section per person carrying "Hide from Chats" and "Hide from Glow".
+/// It was honest about the model and it was the only page in the app shaped that way.
 ///
 /// ⚠️ THE UNION IS FOR THE LIST ONLY. It decides who gets a row on this page and nothing else; the
 /// audiences themselves still resolve exactly as they did. In particular the glow side is NOT
@@ -484,10 +609,14 @@ struct EveryonePrivacyView: View {
     @State private var store = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
     @State private var glowPeople = GlowPeopleLoader()
-    @State private var search = ""
+    /// Who is ticked right now, and not yet who is hidden. Seeded from the stored list the first
+    /// time the page appears and written back only on Save — see `StoryPeoplePicker`.
+    @State private var draft: Set<String> = []
+    @State private var seeded = false
+    @Environment(\.dismiss) private var dismiss
     /// ⚠️ `glowRelationship`, THE SCREEN-FACING ONE, so demo people are listed and can be hidden
     /// while he is testing — the same choice `GlowersPrivacyView` makes and for the same reason.
-    /// Neither switch on this page can put a uid into a recipient list; both only ever subtract.
+    /// Nothing on this page can put a uid into a recipient list; the tick only ever subtracts.
     private var glow = GlowService.shared
 
     /// The people this page has to fetch names for: the glow relationship, plus anybody already on
@@ -521,77 +650,42 @@ struct EveryonePrivacyView: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    private var visible: [StoryContact] {
-        let q = search.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? everybody : everybody.filter { $0.name.localizedCaseInsensitiveContains(q) }
-    }
-
     var body: some View {
-        List {
-            // The page's one paragraph. A section with a header and a footer and no rows is how a
-            // grouped list carries an explanation that belongs to the whole page rather than to one
-            // control — SwiftUI draws both labels for an empty section.
-            Section {
-                EmptyView()
-            } header: {
-                Text("Who Can View This Story")
-            } footer: {
-                Text("Anyone on Fariin who opens your profile can watch this, and people you have chatted with also get it in their stories. Each person below can be left out of your chats, out of your glow, or out of both.")
-            }
-
-            // ⚠️ ONE SECTION PER PERSON, which is what puts two real switches under one name. A row
-            // wide enough for a name and two switches side by side does not exist in a grouped list,
-            // and a single control with three positions is the thing he ruled out.
-            ForEach(visible) { c in person(c) }
-
-            if visible.isEmpty && glowPeople.state.isLoading {
-                Section { ProgressView() }
-            }
-        }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name or username")
-        .navigationTitle("Everyone")
-        .navigationBarTitleDisplayMode(.inline)
+        StoryPeoplePicker(
+            title: "Everyone",
+            selectedHeader: "Hidden Users",
+            unselectedHeader: "Everyone",
+            people: everybody,
+            selected: $draft,
+            isLoading: glowPeople.state.isLoading,
+            onSave: { save() },
+            onClose: { dismiss() })
         // `.onAppear` rather than `.task`: coming back to this page after blocking somebody has to
         // recount the chats, and a task keyed to the view's identity would not run again.
-        .onAppear { contacts = StoryContact.all() }
+        .onAppear {
+            contacts = StoryContact.all()
+            // ONCE. `onAppear` fires again when the sheet comes back to the front, and re-seeding
+            // there would throw away a selection he had already made.
+            if !seeded { draft = store.hiddenFrom; seeded = true }
+        }
         .task(id: lookupKey) { await glowPeople.load(lookupUids, key: lookupKey) }
     }
 
-    /// One person's own section: their name, then the two switches. Its own function because the
-    /// share sheet's neighbour taught this file that a `List` body with several inline `Binding`s in
-    /// a `ForEach` is what the Swift type-checker gives up on ("unable to type-check in reasonable
-    /// time"), and every one of those costs a CI round trip.
-    @ViewBuilder private func person(_ c: StoryContact) -> some View {
-        Section {
-            // ⚠️ `setHidden` IS THE DOOR THAT ALSO REVOKES THE STORIES ALREADY UP, so it must only
-            // ever be called for a person whose side really changed. A switch only reports a value
-            // it did not already hold, so writing straight through is right here — the page this
-            // replaced had to diff two whole sets by hand for exactly this reason.
-            //
-            // ⚠️ A DEMO UID CAN REACH THIS LIST NOW, because the rows include glowers and the glow
-            // relationship carries demo people while he is testing. It is safe in the way the
-            // Glowers except-list is safe and NOT in the way `recipientUids` is dangerous: this list
-            // only ever subtracts, a fake id in it removes nobody, and the same switch writes it
-            // back out again. See the note on `realGlowRelationship`.
-            Toggle("Hide from Chats", isOn: Binding(
-                get: { store.isHidden(c.id) },
-                set: { store.setHidden(c.id, $0) }
-            )).tint(.green)
-            // ⛔ THE OTHER LIST ENTIRELY, and that is the whole of his "independently". Nothing here
-            // reads or writes the chat switch above, and neither audience is intersected with the
-            // other — see the helpers at the top of this section.
-            Toggle("Hide from Glow", isOn: Binding(
-                get: { isHiddenFromGlow(c.id, store) },
-                set: { setHiddenFromGlow(c.id, $0, store) }
-            )).tint(.green)
-        } header: {
-            HStack(spacing: 10) {
-                AvatarView(name: c.name, photoUrl: c.photo, size: 28)
-                Text(c.name).font(.body).foregroundStyle(.primary).lineLimit(1)
-            }
-            // A person's name is not a heading, so it does not take a heading's small caps.
-            .textCase(nil)
-        }
+    /// ⛔ ONLY THE PEOPLE WHOSE SIDE ACTUALLY CHANGED. `setHidden` is the door that also revokes the
+    /// stories already up (see its own note), so calling it for somebody who was already hidden
+    /// would take a live story down and put it straight back. The two-way difference is the whole
+    /// of the work, and it is why this page keeps a draft instead of writing on the tap.
+    ///
+    /// ⚠️ A DEMO UID CAN REACH THIS LIST, because the rows include glowers and the glow relationship
+    /// carries demo people while he is testing. It is safe in the way the Glowers except-list is
+    /// safe and NOT in the way `recipientUids` is dangerous: this list only ever subtracts, a fake
+    /// id in it removes nobody, and the same tick takes it back out again. See the note on
+    /// `realGlowRelationship`.
+    private func save() {
+        let was = store.hiddenFrom
+        for uid in draft.subtracting(was) { store.setHidden(uid, true) }
+        for uid in was.subtracting(draft) { store.setHidden(uid, false) }
+        dismiss()
     }
 }
 
@@ -649,15 +743,19 @@ struct MyFriendsPrivacyView: View {
         .onAppear { contacts = StoryContact.all() }
         .sheet(item: $picking) { target in
             NavigationStack {
-                MembersEditor(
+                // THE SAME SCREEN THE TWO HIDE PAGES USE — his 2026-09-11 point 6 and 7. All that
+                // changes between the four is the pair of headings and where the answer is written.
+                StoryPeoplePicker(
                     title: target == .except ? "All Except" : "Only Share With",
-                    contacts: contacts,
-                    members: $draft,
-                    // NOTHING CHOSEN IS NOT A CHOICE. Done stays dead until at least one person is
+                    selectedHeader: target == .except ? "Excluded" : "Selected",
+                    unselectedHeader: target == .except ? "Not Excluded" : "Not Selected",
+                    people: contacts,
+                    selected: $draft,
+                    // NOTHING CHOSEN IS NOT A CHOICE. Save stays dead until at least one person is
                     // picked, the same rule Select Viewers already uses for a custom story — an
                     // empty except-list and an empty only-list both mean "the mode did nothing".
                     requireAtLeastOne: true,
-                    onDone: {
+                    onSave: {
                         // COMMITTED HERE, not on the tap that opened this. An empty draft leaves the
                         // mode exactly as it was, so backing out cannot leave a tick behind.
                         if !draft.isEmpty {
@@ -668,7 +766,7 @@ struct MyFriendsPrivacyView: View {
                         }
                         picking = nil
                     },
-                    onCancel: { picking = nil })
+                    onClose: { picking = nil })
             }
         }
     }
@@ -735,19 +833,26 @@ struct MyFriendsPrivacyView: View {
 /// page a tick meant HIDDEN — the opposite of every other tick in the app, where a tick means chosen
 /// and included. Nothing on the screen said which way round it was, and the people it applied to were
 /// mixed in with the people it did not. Two labelled groups say it without a caption: the group a
-/// name is in IS its state, and the button on the row is the only thing that moves it.
+/// name is in IS its state, and tapping a row is the only thing that moves it.
 ///
-/// ⚠️ WRITTEN ON THE TAP, NOT ON A DONE. There is no half-made selection to protect here — unlike
-/// `EveryonePrivacyView`'s chat switch, hiding a glower revokes nothing that is already up, it only
-/// narrows the next post. So the row can act immediately, and the row moving to the other group is
-/// the confirmation. That leaves Done with nothing to commit, which is why it only closes the sheet.
+/// ⛔ IT IS `StoryPeoplePicker` NOW — owner, 2026-09-11. The two groups, the search and the sorting
+/// are all the shared screen's; this type is only the answer to "which list am I editing" and
+/// "where do I write it". The Hide / Unhide words on the right are gone, replaced by the same blue
+/// tick every other page uses, because the card a name sits in already says which it is.
+///
+/// ⚠️ A DRAFT COMMITTED ON SAVE, which is a change: this page used to write on the tap, on the
+/// grounds that hiding a glower revokes nothing already up and so there was nothing to protect.
+/// That is still true, but the screen now carries a Save button, and a Save button that has already
+/// saved is a lie. ✕ discards.
 struct GlowersPrivacyView: View {
     /// Explicit, for the private-stored-property rule — see the note in `GlowProfileView`.
     init() {}
 
     @State private var store = StoryAudienceStore.shared
     @State private var people = GlowPeopleLoader()
-    @State private var search = ""
+    /// Who is ticked right now, and not yet who is hidden — see `StoryPeoplePicker`.
+    @State private var draft: Set<String> = []
+    @State private var seeded = false
     @Environment(\.dismiss) private var dismiss
     private var glow = GlowService.shared
 
@@ -771,61 +876,22 @@ struct GlowersPrivacyView: View {
         (people.state.value ?? []).map { StoryContact(id: $0.id, name: $0.name, photo: $0.photoUrl) }
     }
 
-    private var visible: [StoryContact] {
-        let q = search.trimmingCharacters(in: .whitespaces)
-        let all = q.isEmpty ? contacts : contacts.filter { $0.name.localizedCaseInsensitiveContains(q) }
-        return all.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-    private var hiddenPeople: [StoryContact] { visible.filter { isHiddenFromGlow($0.id, store) } }
-    private var shownPeople: [StoryContact] { visible.filter { !isHiddenFromGlow($0.id, store) } }
-
     var body: some View {
-        List {
-            // HIDDEN FIRST. It is the shorter group and it is the one the page is opened to check.
-            // An empty group is not drawn at all rather than drawn with a line of apology text: the
-            // heading is the whole label, and a heading with nothing under it says the same thing
-            // twice. (No empty-state art or copy — his standing rule.)
-            if !hiddenPeople.isEmpty {
-                Section("Hidden") {
-                    ForEach(hiddenPeople) { c in row(c, hidden: true) }
-                }
-            }
-            if !shownPeople.isEmpty {
-                Section("Not Hidden") {
-                    ForEach(shownPeople) { c in row(c, hidden: false) }
-                }
-            }
-            if visible.isEmpty && people.state.isLoading {
-                Section { ProgressView() }
-            }
-        }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name or username")
-        .navigationTitle("Glowers")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            // A sheet needs one way out, and there is nothing left for a Cancel to undo — every tap
-            // on this page is already saved. See the note on the type.
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { dismiss() }.fontWeight(.semibold)
-            }
-        }
+        StoryPeoplePicker(
+            title: "Glowers",
+            selectedHeader: "Hidden Users",
+            unselectedHeader: "Glowers",
+            people: contacts,
+            selected: $draft,
+            isLoading: people.state.isLoading,
+            onSave: {
+                setHiddenFromGlow(draft, store)
+                dismiss()
+            },
+            onClose: { dismiss() })
+        // ONCE. The sheet coming back to the front must not throw away a selection he has made.
+        .onAppear { if !seeded { draft = Set(a.members); seeded = true } }
         .task(id: key) { await people.load(uids, key: key) }
-    }
-
-    /// One person. The whole row is the button, so the word on the right names the act rather than
-    /// being the only thing that can be hit.
-    @ViewBuilder private func row(_ c: StoryContact, hidden: Bool) -> some View {
-        Button {
-            setHiddenFromGlow(c.id, !hidden, store)
-        } label: {
-            HStack(spacing: 12) {
-                AvatarView(name: c.name, photoUrl: c.photo, size: 40)
-                Text(c.name).foregroundStyle(.primary).lineLimit(1)
-                Spacer(minLength: 8)
-                Text(hidden ? "Unhide" : "Hide").foregroundStyle(Color.accentColor)
-            }
-            .contentShape(Rectangle())
-        }
     }
 }
 
@@ -958,61 +1024,9 @@ struct CustomStoryDetailView: View {
     }
 }
 
-// MARK: - Members editor (the except / only lists)
-
-/// A plain checkbox list over the same contacts, used by My Friends for both of its narrowing modes.
-/// Separate from `SelectViewersView` because that one is a step in a flow with a Next; this one
-/// edits a live list and is done when you say it is.
-struct MembersEditor: View {
-    let title: String
-    let contacts: [StoryContact]
-    @Binding var members: Set<String>
-    /// Done is dead until somebody is picked. Used where an empty list would mean the mode does
-    /// nothing at all — see `MyFriendsPrivacyView`.
-    var requireAtLeastOne: Bool = false
-    let onDone: () -> Void
-    /// Leaves without applying anything. Without it the only way out of this sheet is a swipe,
-    /// which lands on `onDone` in some presentations and on nothing in others.
-    var onCancel: (() -> Void)? = nil
-
-    @State private var search = ""
-
-    private var visible: [StoryContact] {
-        let q = search.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? contacts : contacts.filter { $0.name.localizedCaseInsensitiveContains(q) }
-    }
-
-    var body: some View {
-        List {
-            ForEach(visible) { c in
-                Button {
-                    if members.contains(c.id) { members.remove(c.id) } else { members.insert(c.id) }
-                } label: {
-                    HStack(spacing: 12) {
-                        AvatarView(name: c.name, photoUrl: c.photo, size: 40)
-                        Text(c.name).foregroundStyle(.primary).lineLimit(1)
-                        Spacer(minLength: 8)
-                        StoryTick(on: members.contains(c.id))
-                    }
-                    .contentShape(Rectangle())
-                }
-            }
-        }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name or username")
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if let onCancel {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { onCancel() } }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { onDone() }
-                    .fontWeight(.semibold)
-                    .disabled(requireAtLeastOne && members.isEmpty)
-            }
-        }
-    }
-}
+// ⛔ `MembersEditor` IS GONE — 2026-09-11. It was the My Friends except/only list, a flat tick-list
+// with Cancel and Done. `StoryPeoplePicker` replaced it for both of its callers, and keeping a
+// second, nearly identical editor around is exactly the drift he is asking to have removed.
 
 // MARK: - The create flow, as one presentable piece
 
