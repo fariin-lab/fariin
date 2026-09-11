@@ -135,6 +135,43 @@ struct PostedStory: Identifiable, Equatable {
 /// no audience at all. That split is what lets somebody else's profile show their stories without
 /// handing over who else can see them — see `writePublicMirror`. It also means a profile shows only
 /// what the author made public, which is the honest thing for it to show.
+/// ⛔ THE LAST COUNT A STORY WAS KNOWN TO HAVE — owner, 2026-09-11: "when I enter posted stories the
+/// count views is coming late".
+///
+/// ⚠️ IT COMES LATE BECAUSE IT IS A SECOND ROUND TRIP, and no amount of making that trip faster puts
+/// a number on the first frame. The rows are fetched, drawn, and only then are the counts asked for
+/// — they were serialised once and are parallel now (2026-09-11 morning), which took the wait from
+/// five trips to one, and one trip after the picture is still a badge that appears afterwards. The
+/// tiles deliberately draw nothing while the count is nil, so what he sees is pictures, then numbers.
+///
+/// This is the project's own rule applied to this page — render from cache on the first frame, let
+/// the network correct it silently (AGENTS.md, "local-first, no spinners"). The number shown on
+/// entry is the one this phone last saw for that exact story, which is right far more often than it
+/// is wrong: views only ever go up, and the correction lands a moment later either way.
+///
+/// ⚠️ THE FIRST EVER VISIT STILL HAS NO NUMBER, and that is honest rather than fixed. A count nobody
+/// has ever fetched cannot be shown, and inventing a zero is the lie `PostedStory.views` exists to
+/// avoid. The real end of this is the counter document on the story itself, which is still on the
+/// Glow feature's owed list — when that lands, this cache becomes a nicety instead of the answer.
+///
+/// Pruned against the ids currently alive, so it cannot grow: a story lives 24 hours and its entry
+/// goes the first time a load does not mention it.
+@MainActor enum StoryViewCountCache {
+    private static let key = "storyViewCounts"
+
+    static func get(_ id: String) -> Int? {
+        (UserDefaults.standard.dictionary(forKey: key) as? [String: Int])?[id]
+    }
+
+    /// Write the fresh counts and drop every id not in `alive` — one pass, one write.
+    static func put(_ counts: [String: Int], alive: Set<String>) {
+        var d = (UserDefaults.standard.dictionary(forKey: key) as? [String: Int]) ?? [:]
+        for (id, n) in counts { d[id] = n }
+        d = d.filter { alive.contains($0.key) }
+        UserDefaults.standard.set(d, forKey: key)
+    }
+}
+
 @MainActor @Observable final class PostedStoriesLoader {
     private(set) var state: GlowLoad<[PostedStory]> = .loading
     /// ⛔ OPTIONAL, AND THE EMPTY STRING IS WHY — 2026-09-11, his screenshot of the Glowers picker
@@ -188,7 +225,9 @@ struct PostedStory: Identifiable, Equatable {
                             createdAt: s.createdAt,
                             expiresAt: s.expiresAt,
                             isVideo: s.isVideo,
-                            views: nil,
+                            // The number this phone last saw for this story, so the badge is on the
+                            // first frame — see `StoryViewCountCache`. `loadViewCounts` corrects it.
+                            views: StoryViewCountCache.get(s.id),
                             audience: s.audienceLabel)
             })
             return
@@ -214,7 +253,7 @@ struct PostedStory: Identifiable, Equatable {
                     createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
                     expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue() ?? Date(),
                     isVideo: (data["type"] as? String) == "video",
-                    views: nil,
+                    views: StoryViewCountCache.get(d.documentID),   // first-frame badge; see the cache
                     audience: data["audience"] as? String ?? "everyone")
             }
             state = .loaded(rows)
@@ -283,7 +322,15 @@ struct PostedStory: Identifiable, Equatable {
             for await (i, n) in group { counts[i] = n }
         }
         var updated = rows
-        for (i, n) in counts.enumerated() where n != nil { updated[i].views = n }
+        var fresh: [String: Int] = [:]
+        for (i, n) in counts.enumerated() {
+            guard let n else { continue }   // a failed read keeps the cached number rather than blanking it
+            updated[i].views = n
+            fresh[updated[i].id] = n
+        }
+        // Remembered for the next entry, and every id that is no longer live is dropped in the same
+        // write — see `StoryViewCountCache`.
+        StoryViewCountCache.put(fresh, alive: Set(rows.map(\.id)))
         state = .loaded(updated)
     }
 

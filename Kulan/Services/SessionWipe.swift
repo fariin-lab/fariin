@@ -117,6 +117,11 @@ enum SessionWipe {
             // holds the private names of the author's custom audiences ("Close friends", and worse),
             // which is the one piece of story state that is explicitly nobody else's business.
             "oneTimeUsed", "storyAudienceNames",
+            // ⚠️ AND THE VIEW-COUNT CACHE, which is as account-scoped as everything around it: it
+            // is how many people watched THIS account's stories, keyed by story id, and account B
+            // would inherit A's numbers on the same phone. Added with the cache itself
+            // (2026-09-11) rather than found later, which is how the two above got missed.
+            "storyViewCounts",
             // ⚠️ AND THE STAMPED FORM OF THE SAME THREE. `StoryPrefs` keeps seen / liked / burned as
             // id-to-timestamp dictionaries under a `.at` suffix so they can be pruned by AGE rather
             // than by a count that forgot live stories. They are exactly as account-scoped as the
