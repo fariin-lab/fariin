@@ -60,7 +60,6 @@ struct ProfilePhotoSheet: View {
     /// changing; it is named here rather than typed into the strip because the strip now puts it on
     /// the BOX the picture is poured into instead of on the picture, and a size that means "the
     /// tile" deserves to be said once.
-    private let recentThumb: CGFloat = 76
 
     /// The page's ground. His rule, stated twice in one message: the photo's colour when there is a
     /// photo, the ordinary background when there is not.
@@ -190,39 +189,46 @@ struct ProfilePhotoSheet: View {
     @ViewBuilder private var recentsSection: some View {
         if !recents.isEmpty {
             sectionTitle("Recents")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
-                    ForEach(Array(recents.enumerated()), id: \.offset) { _, img in
-                        Button { choose(.image(img)) } label: {
-                            // ⛔ THE SQUARE IS THE BOX AND THE PICTURE POURS INTO IT — owner,
-                            // 2026-09-11, off a screenshot of this strip beside his reference: ours
-                            // are squashed, with white showing inside the circles, while every
-                            // suggestion in his reference fills its circle edge to edge.
-                            //
-                            // What stood here put the 76pt frame on the IMAGE —
-                            // `Image(…).scaledToFill().frame(width: 76, height: 76)` — so the
-                            // picture's own shape drove the geometry and the circle was cut out of
-                            // whatever that produced. It looks right for the big avatar above
-                            // because that photograph has already been through the cropper and is
-                            // square; a raw screenshot out of the library is 9:19.5 and is not.
-                            // `Color.clear` takes the square FIRST, the picture is laid over it and
-                            // can therefore only overflow it, and `clipShape` cuts the same centred
-                            // circle out of every one of them. It is the pattern
-                            // AttachRecentsStrip and the wallpaper tiles already use, for this.
-                            //
-                            // Everything he asked to keep is kept: same 76pt circles, same spacing,
-                            // same horizontal strip, same count, and the tap target is still the
-                            // square 76pt label frame rather than the circle drawn on it.
-                            Color.clear
-                                .frame(width: recentThumb, height: recentThumb)
-                                .overlay { Image(uiImage: img).resizable().scaledToFill() }
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
+            // ⛔ A GRID, NOT A ONE-ROW STRIP — owner, 2026-09-11, with both screenshots: "recent
+            // images is one line and I see empty space at the bottom, make it like this" beside the
+            // system sheet, which lays its suggestions out four to a row down the page.
+            //
+            // The strip was a horizontal `ScrollView` of fixed 76pt circles, so it used one row and
+            // left the rest of the sheet blank while most of the pictures sat off the right edge
+            // where nothing said they were there. Four flexible columns spend the width that was
+            // being wasted and put every recent on screen at once.
+            //
+            // ⚠️ THE CIRCLE IS SIZED BY THE COLUMN NOW, NOT BY A CONSTANT. `aspectRatio(1, .fit)`
+            // on the `Color.clear` takes the column's own width and squares it, so the circles grow
+            // with the screen instead of staying 76 on every phone — which is why `recentThumb` is
+            // gone rather than reused. The picture still pours into that square and is cut by the
+            // same centred circle; that half is unchanged and its reasoning is below.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 4),
+                      spacing: 14) {
+                ForEach(Array(recents.enumerated()), id: \.offset) { _, img in
+                    Button { choose(.image(img)) } label: {
+                        // ⛔ THE SQUARE IS THE BOX AND THE PICTURE POURS INTO IT — owner,
+                        // 2026-09-11, off a screenshot of this strip beside his reference: ours
+                        // were squashed, with white showing inside the circles, while every
+                        // suggestion in his reference fills its circle edge to edge.
+                        //
+                        // What stood here put the frame on the IMAGE, so the picture's own shape
+                        // drove the geometry and the circle was cut out of whatever that produced.
+                        // It looks right for the big avatar above because that photograph has
+                        // already been through the cropper and is square; a raw screenshot out of
+                        // the library is 9:19.5 and is not. `Color.clear` takes the square FIRST,
+                        // the picture is laid over it and can therefore only overflow it, and
+                        // `clipShape` cuts the same centred circle out of every one of them. It is
+                        // the pattern AttachRecentsStrip and the wallpaper tiles already use.
+                        Color.clear
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay { Image(uiImage: img).resizable().scaledToFill() }
+                            .clipShape(Circle())
                     }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 20)
             }
+            .padding(.horizontal, 20)
             .padding(.top, 12)
         }
     }
@@ -279,7 +285,7 @@ struct ProfilePhotoSheet: View {
     /// system alert in front of a screen somebody may well have opened only to look at their picture.
     /// (This line used to say "to press one emoji"; the emoji section went on 2026-09-11, the reason
     /// for not prompting did not.)
-    private static func recentImages(_ count: Int = 8) async -> [UIImage] {
+    private static func recentImages(_ count: Int = 12) async -> [UIImage] {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return [] }
         let f = PHFetchOptions()

@@ -1190,8 +1190,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func tableView(_ tableView: UITableView,
                    willEndContextMenuInteraction configuration: UIContextMenuConfiguration,
                    animator: (any UIContextMenuInteractionAnimating)?) {
-        let clear = { [weak tableView] in
-            tableView?.visibleCells.forEach { $0.setNeedsUpdateConfiguration() }
+        // ⚠️ THE TYPE IS STATED AND THE OPTIONAL IS UNWRAPPED BY A `guard`, NOT BY CHAINING.
+        // `tableView?.visibleCells.forEach { … }` makes the closure's result `()?` — an OPTIONAL
+        // Void — so the whole thing infers as `() -> ()?` and will not convert to the `() -> Void`
+        // that `addCompletion` wants. It reads as a Void body and is not one.
+        let clear: () -> Void = { [weak tableView] in
+            guard let tableView else { return }
+            tableView.visibleCells.forEach { $0.setNeedsUpdateConfiguration() }
         }
         if let animator { animator.addCompletion(clear) } else { clear() }
     }
