@@ -817,7 +817,31 @@ struct StoryRowLongPress: UIViewRepresentable {
             // one thing that was stealing the press. A nested scroller has its own gestures to run
             // and none of them are ours to delay.
             guard otherView !== host, !(otherView is UIScrollView) else { return false }
-            return otherView.isDescendant(of: host)
+            if otherView.isDescendant(of: host) { return true }
+            // ⛔ AND SWIFTUI'S OWN RECOGNISERS ABOVE THE SCROLLER — owner, 2026-09-11, on the
+            // Glowing grid: "long press is not working; it works only while I scroll up or down".
+            //
+            // That is the archive strip's report again, in the same words, and the note above
+            // already names the mechanism: a SwiftUI `Button` begins on touch-DOWN, is exclusive
+            // with this press, and cancels it. While the page is still moving, a touch-down catches
+            // the scroll, the pan begins first, and the pan cancels the Button instead — which is
+            // why the press "works only while scrolling". At rest nothing cancels the Button, and
+            // this press dies at touch-down every time.
+            //
+            // The rule above could not reach it. `isDescendant(of: host)` looks INSIDE the scroller,
+            // and on the Stories tab SwiftUI keeps the recogniser that backs every Button in the
+            // page on the hosting view ABOVE the scroller. So the Button was never made to wait,
+            // and the fix that settled the archive did nothing here.
+            //
+            // ⚠️ ANCESTORS, BUT ONLY SWIFTUI'S. A window carries the system's recognisers — the edge
+            // swipes, the gate that arbitrates them — and this press must not make those wait for
+            // it. The module name is the narrowest honest test: a recogniser SwiftUI installed to
+            // back its own views is the one thing that competes for a card, and nothing else up
+            // there does. It costs nothing on a screen this press already worked on, because a
+            // descendant answered above; it can only ever ADD a wait for a touch that landed inside
+            // our scroller, and that wait ends the moment the finger lifts or moves.
+            guard host.isDescendant(of: otherView) else { return false }
+            return String(reflecting: type(of: other)).hasPrefix("SwiftUI.")
         }
 
         @objc private func pressed(_ g: UILongPressGestureRecognizer) {
