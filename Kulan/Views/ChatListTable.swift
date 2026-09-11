@@ -1310,6 +1310,42 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if let animator { animator.addCompletion(clear) } else { clear() }
     }
 
+    /// ⛔ A SWIPE LEAVES THE SAME STUCK GREY, AND IT IS THE THIRD REPORT OF ONE — owner, 2026-09-11:
+    /// "still sometime highlight is not hidden, is locked", photographed on a row with no swipe open
+    /// and no menu up.
+    ///
+    /// ⚠️ THE MENU WAS ONLY ONE OF THE WAYS A TOUCH CAN END WITHOUT A TOUCH-UP. `UITableView`
+    /// highlights a row the instant a finger lands and clears it when the finger lifts — but a
+    /// finger that turns into a SWIPE never lifts on the row: the pan takes the touch, the platter
+    /// opens and closes, and the cell is left holding `isHighlighted == true`. Nothing re-asked it
+    /// afterwards, and `updateConfiguration(using:)` then faithfully paints the highlight the state
+    /// still claims, which is the whole lesson written above the menu's version of this.
+    ///
+    /// `didEndEditingRowAt` is UIKit's own "the swipe is finished, however it finished" — it fires
+    /// for a completed action, a cancelled drag and a platter closed by scrolling away, which is
+    /// exactly the set of paths a one-off reset in a completion handler would have missed.
+    ///
+    /// Every visible cell rather than the one index: this list re-sorts under an open swipe whenever
+    /// a message arrives, so the row that was swiped may not be at that index by now. `indexPath` is
+    /// optional here for the same reason and is deliberately not consulted.
+    func tableView(_ tableView: UITableView, didEndEditingRowAt indexPath: IndexPath?) {
+        clearStuckHighlights(in: tableView)
+    }
+
+    /// The other way a touch dies without a lift: it becomes a scroll. Same fact-changing fix, same
+    /// reasoning as the swipe above — and free, because a drag that started from no highlight clears
+    /// nothing.
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        guard let table = scrollView as? UITableView else { return }
+        clearStuckHighlights(in: table)
+    }
+
+    private func clearStuckHighlights(in tableView: UITableView) {
+        for cell in tableView.visibleCells where cell.isHighlighted {
+            cell.setHighlighted(false, animated: false)
+        }
+    }
+
     // MARK: - Headers
 
     /// Their numbers, read from `CLVTableDataSource.viewForHeaderInSection`: a plain container with
