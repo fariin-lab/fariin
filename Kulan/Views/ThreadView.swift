@@ -928,6 +928,9 @@ struct ThreadView: View {
         !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming && requestStance != .awaitingReply
             && !cannotMessageThem
+            // ...and not while the key-accepted notice holds the slot, or the phone would draw the
+            // composer and that panel at once — the exact disagreement this property exists to stop.
+            && !keyAccepted
     }
 
     @ViewBuilder private var bottomBarContent: some View {
@@ -946,6 +949,11 @@ struct ThreadView: View {
                 blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if requestStance == .incoming {
                 requestBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if keyAccepted {
+                // The acknowledgement stands in the bar's own slot for the few seconds between the
+                // server accepting the key and the conversation's snapshot landing — audit U4. Both
+                // locked bars below would otherwise still be drawn over a chat that is now open.
+                keyAcceptedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if requestStance == .awaitingReply {
                 awaitingReplyBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if cannotMessageThem {
@@ -1201,7 +1209,21 @@ struct ThreadView: View {
         // accepted; the snapshot lands, `requestStance` reads `.open`, and the composer takes the
         // bar on its own. Nothing to do here but close.
         .sheet(isPresented: $showPinEntry) {
-            ChatPinEntrySheet(uid: otherUid, name: title, photoUrl: photoUrl) { _ in }
+            // ⛔ SUCCESS SAYS SO — audit U4. This was `{ _ in }` on the reasoning that the snapshot
+            // would arrive and unlock the composer by itself. It does, when the network is quick;
+            // on a slow or dropped connection the sheet simply closed onto the same locked bar, and
+            // a correct key that appears to do nothing is indistinguishable from a wrong one.
+            //
+            // The banner is the acknowledgement, and it is deliberately not an optimistic unlock:
+            // the composer's gate is the conversation's own `accepted`, and faking that locally
+            // would let somebody type into a chat the rules have not opened yet.
+            ChatPinEntrySheet(uid: otherUid, name: title, photoUrl: photoUrl) { _ in
+                keyAccepted = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    keyAccepted = false
+                }
+            }
         }
         // The question itself — the reference's "Not Now / Use" pair, the same shape the profile
         // asks with. Not Now closes it and the request simply waits.
@@ -1210,7 +1232,11 @@ struct ThreadView: View {
                    isPresented: $showKeyAsk,
                    actions: [
                     .cancel("Not Now"),
-                    .plain("Use Chat Key") { showPinEntry = true },
+                    // ⛔ THE NEXT RUNLOOP TURN — audit U2. `darkAlert` lowers `isPresented` and runs
+                    // the action in the same turn, and a sheet asked for while an alert is still
+                    // dismissing is silently dropped by UIKit. The tap then did nothing at all,
+                    // which on the one affordance that opens this feature reads as it being broken.
+                    .plain("Use Chat Key") { DispatchQueue.main.async { showPinEntry = true } },
                    ])
         // Call-back confirm: tapping a call-history row asks first (never dials on a stray tap).
         .alert(pendingCallBack == .video ? "Video call" : "Voice call",
@@ -2070,6 +2096,9 @@ struct ThreadView: View {
     @State private var showPinEntry = false
     /// The one-time "know their Chat Key?" question, the moment a request is sent.
     @State private var showKeyAsk = false
+    /// A correct key has just been accepted — see the sheet's success handler (audit U4). Clears
+    /// itself; the composer still waits on the conversation's own `accepted`.
+    @State private var keyAccepted = false
     @State private var cachedConv: Conversation?
     private var conversation: Conversation? { cachedConv }
     private var isGroup: Bool { conversation?.isGroup ?? false }
@@ -5727,6 +5756,20 @@ struct ThreadView: View {
 
     /// MY request, unanswered. One message is the whole allowance, so there is nothing to type into —
     /// a live composer here would only let someone write a second message and watch it fail.
+    /// "Chat Key accepted" — the few seconds between the server saying yes and the conversation's
+    /// own snapshot arriving. See the sheet's success handler (audit U4).
+    private var keyAcceptedBar: some View {
+        composerNotice {
+            VStack(spacing: 3) {
+                Label("Chat Key accepted", systemImage: "checkmark.circle.fill")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Text("Opening your chat with \(title)…")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
     private var awaitingReplyBar: some View {
         composerNotice {
             VStack(spacing: 3) {

@@ -274,6 +274,8 @@ struct MessagesPrivacyPage: View {
     @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
+    /// The key row's subscription — see `ChatPinState` (audit L1).
+    private var pinState = ChatPinState.shared
 
     var body: some View {
         List {
@@ -318,6 +320,7 @@ struct MessagesPrivacyPage: View {
                         Spacer()
                         // The digits themselves when this phone knows them — his mockup shows the
                         // key on the row; "On" only when it was set from another phone.
+                        let _ = pinState.version   // the subscription; see ChatPinState
                         Text(ChatPin.mine ?? (ChatPin.isSet ? "On" : "Off")).foregroundStyle(.secondary)
                     }
                 }

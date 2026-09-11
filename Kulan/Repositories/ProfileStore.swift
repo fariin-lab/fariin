@@ -333,6 +333,15 @@ final class ProfileStore {
         // remove it rather than leaving it on the device. (Sign-out deliberately KEEPS the key;
         // only real deletion destroys it.)
         Crypto.shared.destroyIdentity(uid: uid)
+        // ⛔ AND THE CHAT KEY'S LOCAL COPY — audit S2's client half, 2026-09-11. The digits live in
+        // this phone's Keychain under the account's uid, and nothing wiped them: an account deleted
+        // for good left its key on the device for ever, under a uid nobody will ever sign in as
+        // again. The server's copy of the hash goes with `onUserDeleted` (functions-chatpin), which
+        // this delete triggers by removing the user document above.
+        //
+        // ⚠️ SIGN-OUT DELIBERATELY KEEPS IT, exactly like the identity key on the line above: signing
+        // back in should find your own key where you left it. Only real deletion destroys it.
+        ChatPin.forgetLocalCopy(uid: uid)
         me = nil
     }
 

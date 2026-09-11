@@ -17,6 +17,10 @@ import SwiftUI
 /// The twelve keys. Appends up to `ChatPin.maxDigits`; the last key deletes.
 struct ChatPinKeypad: View {
     @Binding var pin: String
+    /// ⛔ DEAD WHILE A REQUEST IS IN FLIGHT — audit L6. Only the submit button was disabled, so the
+    /// keys stayed live: typing during a verify mutated the value being verified and wiped the
+    /// refusal the moment it arrived. A keypad that accepts presses it will not act on is lying.
+    var disabled: Bool = false
 
     private static let rows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"]]
 
@@ -46,8 +50,10 @@ struct ChatPinKeypad: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(key.isEmpty)
-                        .opacity(key.isEmpty ? 0 : 1)
+                        .disabled(key.isEmpty || disabled)
+                        // The empty slot is invisible; a disabled keypad is visibly resting rather
+                        // than gone, so the sheet does not appear to lose its keys mid-request.
+                        .opacity(key.isEmpty ? 0 : (disabled ? 0.35 : 1))
                         .accessibilityLabel(key == "⌫" ? "Delete" : key)
                     }
                 }
@@ -65,25 +71,43 @@ struct ChatPinKeypad: View {
     }
 }
 
-/// Six slots on a grey plate, "0" in the tertiary colour where nothing has been typed yet — the
-/// reference's own placeholder, which says the shape of the thing without a caption.
+/// The digits typed so far on a grey plate.
+///
+/// ⛔ IT NO LONGER DRAWS SIX ZEROES — audit U1. Six placeholder slots said the key is six digits
+/// long, which is not true: four is valid and the button enables there, so the plate and the button
+/// contradicted each other on every 4- and 5-digit key. A person filling slots believed they had two
+/// more to type.
+///
+/// What it draws now is what has been typed, with the four the key genuinely REQUIRES marked out and
+/// the two optional ones appearing only as they are used. The caption under it says the rule in
+/// words, which is the honest place for a rule.
 struct ChatPinDigitsBox: View {
     let pin: String
 
     var body: some View {
-        HStack(spacing: 12) {
-            ForEach(0..<ChatPin.maxDigits, id: \.self) { i in
-                let filled = i < pin.count
-                Text(filled ? String(pin[pin.index(pin.startIndex, offsetBy: i)]) : "0")
-                    .font(.system(size: 26, weight: .regular, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(filled ? Color(.label) : Color(.tertiaryLabel))
+        VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                // The required four are always shown, so the plate states the minimum rather than
+                // the maximum; anything beyond them appears as it is typed.
+                ForEach(0..<max(ChatPin.minDigits, pin.count), id: \.self) { i in
+                    let filled = i < pin.count
+                    Text(filled ? String(pin[pin.index(pin.startIndex, offsetBy: i)]) : "•")
+                        .font(.system(size: 26, weight: .regular, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(filled ? Color(.label) : Color(.tertiaryLabel))
+                }
             }
+            .frame(maxWidth: .infinity)
+            .frame(height: 64)
+            .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 64)
-        .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityLabel(pin.isEmpty ? "No digits entered" : "\(pin.count) digits entered")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(pin.isEmpty
+                            ? "No digits entered, \(ChatPin.minDigits) to \(ChatPin.maxDigits) required"
+                            : "\(pin.count) digits entered")
     }
 }
 
@@ -161,6 +185,12 @@ struct ChatPinEntrySheet: View {
     ///
     /// This says which of the two emptied it. Only a digit the USER pressed clears the sentence.
     @State private var clearedByRefusal = false
+    /// This phone's cooldown, latched from the server's refusal — audit U8. Enter is dead until it
+    /// passes, and the sheet says so on open rather than after another spent attempt.
+    @State private var lockedUntil: Date? = ChatPin.lockedUntil
+    /// Ticks once a second ONLY while locked, so the countdown in the sentence stays true without a
+    /// timer running on a sheet that is not waiting for anything.
+    @State private var now = Date()
     @State private var shake: CGFloat = 0
 
     var body: some View {
@@ -206,7 +236,7 @@ struct ChatPinEntrySheet: View {
                     .padding(.top, 6)
                     .opacity(failure.isEmpty ? 0 : 1)
 
-                ChatPinKeypad(pin: $pin)
+                ChatPinKeypad(pin: $pin, disabled: busy || isLocked)
                     .padding(.horizontal, 20)
                     .padding(.top, 4)
 
@@ -215,10 +245,20 @@ struct ChatPinEntrySheet: View {
         // Anchored exactly as the Choose sheet's Save is, and for the same reason — the full
         // reasoning is written there. The two are one control on two sheets and must not drift.
         .safeAreaInset(edge: .bottom) {
-            ChatPinSubmitButton(title: "Enter", enabled: ChatPin.isValid(pin), busy: busy) { submit() }
+            ChatPinSubmitButton(title: "Enter",
+                                enabled: ChatPin.isValid(pin) && !isLocked,
+                                busy: busy) { submit() }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
+        }
+        // ⛔ A WAY OUT THAT IS NOT A GUESS — audit U5. The drag indicator was the only dismissal, and
+        // a sheet whose whole subject is a secret should not make leaving it the undiscoverable
+        // action. The app's own round X, in the app's own place for it.
+        .overlay(alignment: .topLeading) {
+            CloseXButton { dismiss() }
+                .padding(.leading, 12)
+                .padding(.top, 12)
         }
         .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.fraction(0.84), .large])
@@ -230,19 +270,47 @@ struct ChatPinEntrySheet: View {
             if let handle, !handle.isEmpty { handleText = handle; return }
             if let p = await ProfileStore.shared.fetch(uid), !p.handle.isEmpty { handleText = "@" + p.handle }
         }
+        // The lock's own clock. Runs only while there IS a lock, and stops the moment it lapses.
+        .task(id: lockedUntil) {
+            guard let until = lockedUntil else { return }
+            failure = ChatPin.lockSentence(until)
+            while !Task.isCancelled, Date() < until {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                now = Date()
+                if Date() < until { failure = ChatPin.lockSentence(until) }
+            }
+            guard !Task.isCancelled else { return }
+            lockedUntil = nil
+            failure = ""
+        }
+    }
+
+    /// Read through `now` so the view re-evaluates as the countdown ticks.
+    private var isLocked: Bool {
+        guard let until = lockedUntil else { return false }
+        return until > now
     }
 
     private func submit() {
-        guard ChatPin.isValid(pin), !busy else { return }
+        guard ChatPin.isValid(pin), !busy, !isLocked else { return }
         busy = true
+        // The value being verified is frozen here rather than read inside the Task, so a keypad
+        // press that lands in the same turn cannot change what was sent (audit L6's other half).
+        let attempt = pin
         Task {
             do {
-                let cid = try await ChatPin.verify(uid: uid, pin: pin)
+                let cid = try await ChatPin.verify(uid: uid, pin: attempt)
                 busy = false
+                // ⛔ THE CALLER RUNS AFTER THE SHEET IS GONE — audit U3. `dismiss()` starts an
+                // animation; a push or a cover raised in the same turn fights it, and SwiftUI drops
+                // one of the two. The handler is handed to the next runloop turn instead, which is
+                // the same rule `MediaPresentGate` exists to enforce for the media viewer.
                 dismiss()
-                onSuccess(cid)
+                let handoff = onSuccess
+                DispatchQueue.main.async { handoff(cid) }
             } catch {
                 busy = false
+                if let f = error as? ChatPin.Failure, let until = f.lockedUntil { lockedUntil = until }
                 // Order matters only for readability; the flag is what protects the sentence.
                 clearedByRefusal = true
                 pin = ""
@@ -268,7 +336,11 @@ struct ChatPinPage: View {
     @State private var confirmRemove = false
     @State private var removing = false
     @State private var copied = false
+    @State private var copiedResetTask: Task<Void, Never>?
     @State private var failure = ""
+    /// When the server says the key was last set. Only ever shown on the branch that cannot show
+    /// the key itself — see `L8` on `ChatPin.lastSetAt`.
+    @State private var setAt: Date?
 
     /// "4827" shown as "4 8 2 7": a number to read out, not a word to read.
     private var spaced: String { (mine ?? "").map(String.init).joined(separator: " ") }
@@ -288,6 +360,15 @@ struct ChatPinPage: View {
                                 Button {
                                     UIPasteboard.general.string = mine
                                     copied = true
+                                    // ⛔ IT SAYS "Copied" AND THEN STOPS — audit L3. Nothing ever
+                                    // set this back, so the button wore a checkmark for the rest of
+                                    // the page's life and the next copy gave no feedback at all.
+                                    copiedResetTask?.cancel()
+                                    copiedResetTask = Task {
+                                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                                        guard !Task.isCancelled else { return }
+                                        copied = false
+                                    }
                                 } label: {
                                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                                         .font(.subheadline.weight(.semibold))
@@ -308,9 +389,20 @@ struct ChatPinPage: View {
                     } else {
                         // Set from another phone. The server holds only a hash, so there is nothing
                         // to show here but the fact; changing it from this phone puts it on screen.
-                        Label("Your Chat Key was set on another device.", systemImage: "iphone")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Your Chat Key was set on another device.", systemImage: "iphone")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            // ⛔ THE ONE THING THIS PHONE CAN HONESTLY SAY ABOUT IT — audit L8. The
+                            // server has always returned `updatedAt` and nothing read it, so the
+                            // branch that cannot show the key said nothing about it at all. A date
+                            // is enough to recognise a key you set yourself from one you did not.
+                            if let setAt {
+                                Text("Set \(setAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
                     }
                 } else if checking {
                     HStack { Text("Chat Key"); Spacer(); ProgressView() }
@@ -347,17 +439,17 @@ struct ChatPinPage: View {
         .navigationTitle("Chat Key")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .task {
-            // What this phone knows is shown at once; the server's answer refines it. A phone that
-            // could not ask keeps what it had rather than flipping to "not set".
-            if let set = await ChatPin.refreshStatus() { isSet = set }
-            mine = ChatPin.mine
-            checking = false
-        }
+        // ⛔ EVERY VISIT, NOT THE FIRST — audit L2. `.task` runs once per view lifetime and
+        // `@State isSet` is seeded once, so a page SwiftUI had kept alive went on showing what the
+        // server said the first time: remove the key on another phone, come back here, and this one
+        // still offered to "Change" a key that no longer existed. `onAppear` is the re-entry.
+        .task { await refresh() }
+        .onAppear { Task { await refresh() } }
         .sheet(isPresented: $setting) {
             ChatPinSetSheet {
                 isSet = true
                 mine = ChatPin.mine
+                setAt = ChatPin.lastSetAt
                 copied = false
                 failure = ""
             }
@@ -368,6 +460,15 @@ struct ChatPinPage: View {
         } message: {
             Text("Nobody will be able to use it to message you. People who already did stay in your chats.")
         }
+    }
+
+    /// What this phone knows is shown at once; the server's answer refines it. A phone that could
+    /// not ask keeps what it had rather than flipping to "not set".
+    private func refresh() async {
+        if let set = await ChatPin.refreshStatus() { isSet = set }
+        mine = ChatPin.mine
+        setAt = ChatPin.lastSetAt
+        checking = false
     }
 
     private func remove() {
@@ -397,14 +498,25 @@ struct ChatPinSetSheet: View {
     @State private var pin = ""
     @State private var busy = false
     @State private var failure = ""
+    /// ⛔ THE KEY IS TYPED TWICE — audit U6. One entry and Save meant a slip became your key
+    /// silently: the digits are not echoed anywhere while typing them, so the only way to learn you
+    /// had fat-fingered it was somebody telling you the key did not work. The second pass is the
+    /// standard for any code a person has to remember, and it costs four taps.
+    ///
+    /// ⚠️ THE FIRST ENTRY IS HELD HERE, NOT SENT. Nothing reaches the server until the two agree,
+    /// so a mismatch costs no round trip and no daily allowance.
+    @State private var firstEntry = ""
+    private var confirming: Bool { !firstEntry.isEmpty }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Text("Choose a Chat Key")
+                Text(confirming ? "Confirm your Chat Key" : "Choose a Chat Key")
                     .font(.headline)
                     .padding(.top, 26)
-                Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")
+                Text(confirming
+                     ? "Type it again so a slip cannot become your key."
+                     : "\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -423,7 +535,7 @@ struct ChatPinSetSheet: View {
                     .padding(.top, 6)
                     .opacity(failure.isEmpty ? 0 : 1)
 
-                ChatPinKeypad(pin: $pin)
+                ChatPinKeypad(pin: $pin, disabled: busy)
                     .padding(.horizontal, 20)
                     .padding(.top, 4)
             }
@@ -442,7 +554,8 @@ struct ChatPinSetSheet: View {
         // detent instead of moving with the content. That is his own distinction — the keypad is app
         // content inside the safe area, the action is edge-attached.
         .safeAreaInset(edge: .bottom) {
-            ChatPinSubmitButton(title: "Save", enabled: ChatPin.isValid(pin), busy: busy) { save() }
+            ChatPinSubmitButton(title: confirming ? "Save" : "Next",
+                                enabled: ChatPin.isValid(pin), busy: busy) { advance() }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 // ⚠️ 8, NOT THE OLD 16. A `safeAreaInset` already sits above the home indicator, so
@@ -450,23 +563,55 @@ struct ChatPinSetSheet: View {
                 // button up off the edge again — the same gap, smaller.
                 .padding(.bottom, 8)
         }
+        // The same way out as the entry sheet — see the note there (audit U5).
+        .overlay(alignment: .topLeading) {
+            CloseXButton { dismiss() }
+                .padding(.leading, 12)
+                .padding(.top, 12)
+        }
         .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.fraction(0.72), .large])
         .presentationDragIndicator(.visible)
         .onChange(of: pin) { _, _ in failure = "" }
     }
 
-    private func save() {
+    /// First pass: remember and clear. Second: compare, and only then reach the server.
+    private func advance() {
         guard ChatPin.isValid(pin), !busy else { return }
+        guard confirming else {
+            firstEntry = pin
+            pin = ""
+            failure = ""
+            return
+        }
+        guard pin == firstEntry else {
+            // Back to the start rather than to the second pass: the two entries disagree and there
+            // is no way to know which of them was the slip.
+            failure = "Those didn’t match. Try again."
+            firstEntry = ""
+            pin = ""
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return
+        }
+        save()
+    }
+
+    private func save() {
         busy = true
+        let chosen = pin
         Task {
             do {
-                try await ChatPin.set(pin)
+                try await ChatPin.set(chosen)
                 busy = false
+                // Handed to the next runloop turn for the reason the entry sheet's is — audit U3.
                 dismiss()
-                onSaved()
+                let handoff = onSaved
+                DispatchQueue.main.async { handoff() }
             } catch {
                 busy = false
+                // Back to a single entry so the next attempt is a whole, deliberate one.
+                firstEntry = ""
+                pin = ""
                 failure = error.localizedDescription
             }
         }

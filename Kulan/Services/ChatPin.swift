@@ -21,6 +21,27 @@ import FirebaseFunctions
 /// same thing for all of them; this file does not try to be more helpful than the server allows.
 /// The lockout is the one refusal that names itself, because "try again in 12 minutes" reveals
 /// nothing about the pin.
+/// ⛔ THE ROWS THAT SHOW THE KEY HAVE TO BE TOLD WHEN IT CHANGES — audit L1, 2026-09-11.
+///
+/// `ChatPin` is an enum of statics over UserDefaults and the Keychain, and Settings › Chats and
+/// Privacy › Messages both read it straight from their `body`. Neither of those is observable, so
+/// setting a key and going back left the row saying "Off" until something unrelated happened to
+/// re-render it — the value was right, nothing asked for it again.
+///
+/// One observable object holding one counter, bumped by every write. A row reads `ChatPinState
+/// .shared.version` and SwiftUI does the rest. Deliberately not a copy of the key itself: two
+/// stores of one secret is how they come to disagree, and the Keychain remains the only place the
+/// digits live.
+/// ⚠️ NOT `@MainActor`-ISOLATED, DELIBERATELY, AND `StoryDoorState` IS THE PRECEDENT. A SwiftUI
+/// `View` holds this as a plain stored property (`private var pinState = ChatPinState.shared`), and
+/// a stored property's initialiser does not run on the main actor — isolating `shared` would refuse
+/// to compile at every one of those. Mutation is hopped to the main actor by the writers instead.
+@Observable final class ChatPinState {
+    static let shared = ChatPinState()
+    private(set) var version = 0
+    func changed() { version &+= 1 }
+}
+
 enum ChatPin {
     static let minDigits = 4
     static let maxDigits = 6
@@ -46,7 +67,31 @@ enum ChatPin {
 
     struct Failure: LocalizedError {
         let message: String
+        /// When the caller's cooldown ends, for the refusals that have one. The sheet disables its
+        /// own button until then — see `lockedUntil`.
+        var lockedUntil: Date?
         var errorDescription: String? { message }
+    }
+
+    /// ⛔ THIS PHONE'S OWN COOLDOWN — audit U8. The sentence alone left the sheet with a live Enter
+    /// button that could not work: re-opening it told you nothing until you spent another attempt on
+    /// a refusal you could not have avoided. The server sends the deadline in the error's `details`;
+    /// it is a fact about the CALLER, so it reveals nothing about the key or its owner.
+    ///
+    /// Kept per account and in UserDefaults rather than in memory, because the lockout outlives the
+    /// sheet, the screen and usually the app launch that earned it.
+    static var lockedUntil: Date? {
+        get {
+            let t = UserDefaults.standard.double(forKey: "chatPin.lock.\(uid)")
+            guard t > 0 else { return nil }
+            let d = Date(timeIntervalSince1970: t)
+            return d > Date() ? d : nil
+        }
+        set {
+            let k = "chatPin.lock.\(uid)"
+            if let newValue { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: k) }
+            else { UserDefaults.standard.removeObject(forKey: k) }
+        }
     }
 
     /// Set or change. Validated here too, so a malformed pin never costs a round trip.
@@ -60,12 +105,23 @@ enum ChatPin {
         _ = try await call("setChatPin", ["pin": pin], onFailure: "Couldn’t save your Chat Key. Try again.")
         Keychain.set(keychainKey, pin)
         UserDefaults.standard.set(true, forKey: statusKey)
+        await MainActor.run { ChatPinState.shared.changed() }
     }
 
     static func remove() async throws {
         _ = try await call("setChatPin", ["pin": ""], onFailure: "Couldn’t remove your Chat Key. Try again.")
         Keychain.delete(keychainKey)
         UserDefaults.standard.set(false, forKey: statusKey)
+        await MainActor.run { ChatPinState.shared.changed() }
+    }
+
+    /// Forget this device's copy. The server keeps nothing to forget here — deleting the account is
+    /// what removes the hash (`onUserDeleted`) — but the digits in this Keychain would otherwise
+    /// outlive the account that chose them, under a uid nothing will ever sign in as again.
+    static func forgetLocalCopy(uid: String) {
+        guard !uid.isEmpty else { return }
+        Keychain.delete("chatPin.\(uid)")
+        UserDefaults.standard.removeObject(forKey: "chatPin.set.\(uid)")
     }
 
     /// Ask the server whether I have one. Returns nil when it could not be asked, and in that case
@@ -73,21 +129,43 @@ enum ChatPin {
     @discardableResult
     static func refreshStatus() async -> Bool? {
         guard let r = try? await call("chatPinStatus", [:]), let set = r["set"] as? Bool else { return nil }
+        let was = UserDefaults.standard.bool(forKey: statusKey)
         UserDefaults.standard.set(set, forKey: statusKey)
         // Removed from another device: the copy here would be a pin that opens nothing.
         if !set { Keychain.delete(keychainKey) }
+        // When the server's answer changed what this phone believed, the rows showing it have to
+        // hear about it too — the same reason `set` and `remove` post.
+        if was != set { await MainActor.run { ChatPinState.shared.changed() } }
+        // ⛔ WHEN IT WAS SET, for the "set on another device" line — audit L8. The server has always
+        // returned this and nothing read it, so a phone that could not show the key could not say
+        // anything about it either.
+        lastSetAt = (r["updatedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
         return set
     }
+
+    /// When the server says the key was last set, from the most recent `refreshStatus`. nil until
+    /// one has answered, or when there is no key.
+    private(set) static var lastSetAt: Date?
 
     /// Somebody else's pin. Returns the conversation id, now accepted, on success; throws with the
     /// sentence to show on failure.
     static func verify(uid other: String, pin: String) async throws -> String {
         guard isValid(pin) else { throw Failure(message: genericFailure) }
+        if let until = lockedUntil { throw Failure(message: lockSentence(until), lockedUntil: until) }
         let r = try await call("verifyChatPin", ["uid": other, "pin": pin])
         guard r["ok"] as? Bool == true, let cid = r["cid"] as? String, !cid.isEmpty else {
             throw Failure(message: genericFailure)
         }
+        // A key that opened something proves this phone is not in a guessing run.
+        lockedUntil = nil
         return cid
+    }
+
+    /// The lockout in this phone's own words, so a locally-known lock reads exactly like the
+    /// server's. Minutes, rounded up, never zero.
+    static func lockSentence(_ until: Date) -> String {
+        let mins = max(1, Int(ceil(until.timeIntervalSinceNow / 60)))
+        return "Too many attempts. Try again in \(mins) minute\(mins == 1 ? "" : "s")."
     }
 
     /// `onFailure` is the sentence for everything the server did not word itself: the verify
@@ -98,8 +176,26 @@ enum ChatPin {
             let result = try await functions.httpsCallable(name).call(data)
             return result.data as? [String: Any] ?? [:]
         } catch {
-            throw Failure(message: sentence(for: error, fallback: onFailure))
+            // A lockout carries its deadline in `details`; latch it so the sheet can refuse before
+            // spending another attempt, and hand it to the caller for this refusal's own button.
+            let until = lockDeadline(in: error)
+            if let until { lockedUntil = until }
+            throw Failure(message: sentence(for: error, fallback: onFailure), lockedUntil: until)
         }
+    }
+
+    /// `{ lockedUntil: <ms since epoch> }` out of a callable error's details, when there is one.
+    private static func lockDeadline(in error: Error) -> Date? {
+        let ns = error as NSError
+        guard ns.domain == FunctionsErrorDomain,
+              FunctionsErrorCode(rawValue: ns.code) == .resourceExhausted,
+              // ⚠️ THE LITERAL, NOT `FunctionsErrorDetailsKey`. That constant is public in the
+              // Functions SDK and its VALUE is this string, but there is no Mac here to compile
+              // against — a name that turns out not to be exported costs a 40-minute round trip,
+              // and the string cannot.
+              let details = ns.userInfo["details"] as? [String: Any],
+              let ms = details["lockedUntil"] as? Double, ms > 0 else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
     }
 
     /// The server's own words where they are safe to repeat, the fallback everywhere else.

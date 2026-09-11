@@ -709,6 +709,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     // the one thing this must never do. Groups never carry it.
     var startedBy: String
     var accepted: Bool
+    /// HOW this conversation came to be accepted: "pin" when somebody opened it with the owner's
+    /// Chat Key, empty for the ordinary route (a reply, or Accept on a request). Written by
+    /// `verifyChatPin` and read only to tell the owner — see `ContactInfoView` (audit S4).
+    var acceptedVia: String
+    /// The uid of whoever typed the key, when `acceptedVia` is "pin". Empty otherwise.
+    var acceptedBy: String
 
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -753,6 +759,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.startedBy = data["startedBy"] as? String ?? ""
         // Absent means "from before this existed" — accepted. Present means the flag decides.
         self.accepted = data["accepted"] as? Bool ?? (data["startedBy"] == nil)
+        self.acceptedVia = data["acceptedVia"] as? String ?? ""
+        self.acceptedBy = data["acceptedBy"] as? String ?? ""
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String

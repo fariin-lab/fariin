@@ -343,6 +343,15 @@ struct ContactInfoView: View {
     private var isPreview: Bool { previewUid != nil }
     /// An open 1:1 with them — the app's one meaning of "friend" (spec §3).
     private var isFriend: Bool { MessageRequests.isFriend(otherUid) }
+
+    /// THEY opened this chat with MY key — `acceptedBy` is the uid that typed it, so this is exact
+    /// whether the conversation already existed or was created by the grant. See the row (audit S4).
+    private var reachedMeWithMyKey: Bool {
+        guard !isSelf, !isPreview,
+              let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
+              !c.isGroup else { return false }
+        return c.acceptedVia == "pin" && c.acceptedBy == otherUid
+    }
     /// The Message button. Friends and Everyone accounts open the chat; a My Friends account we are
     /// not friends with gets the prompt instead (his fourth screenshot), because the thread behind
     /// it could only show a locked bar — better to ask the one useful question here.
@@ -464,6 +473,20 @@ struct ContactInfoView: View {
                 // Block; he took them out the same evening. The key is still offered where it is
                 // needed — the Message button's prompt on a keyed account, and the two bars inside
                 // the conversation — and `MessageRequests.unfriend` stays in the service, unwired.
+                // ⛔ THE OWNER IS TOLD THE KEY WAS USED — audit S4, 2026-09-11. The server has always
+                // stamped `acceptedVia: "pin"` and nothing ever read it, so a leaked key opened
+                // chats completely silently: this page showed an ordinary conversation with no hint
+                // that it began with a secret rather than with a request somebody answered.
+                //
+                // ⚠️ DERIVED, NOT WRITTEN. It is a line computed from a field that is already on the
+                // conversation, not a message put into anybody's history — so it is one line to
+                // remove if he wants it gone, and it cannot leave a trace behind in a real chat.
+                // Deliberately NOT shown to the person who typed the key: they know what they did,
+                // and "you used their key" on their own screen is noise.
+                if reachedMeWithMyKey {
+                    infoRow("Used your Chat Key to reach you", "circle.grid.3x3.fill", chevron: false) {}
+                    rowDivider
+                }
                 infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
             }
             rowDivider
@@ -1091,11 +1114,14 @@ struct ContactInfoView: View {
                        isPresented: $showPinPrompt,
                        actions: [
                         .cancel("Not Now"),
-                        .plain("Use Chat Key") { showPinEntry = true },
+                        // Next runloop turn, for the reason ThreadView's copy states (audit U2).
+                        .plain("Use Chat Key") { DispatchQueue.main.async { showPinEntry = true } },
                        ])
             // On success the conversation is accepted server-side already; opening it is all that
             // is left, and the thread shows a live composer the moment its snapshot lands.
             .sheet(isPresented: $showPinEntry) {
+                // The sheet already hands its success to the next runloop turn (audit U3), so the
+                // push begins after the dismissal rather than fighting it.
                 ChatPinEntrySheet(uid: otherUid, name: shownName, photoUrl: photoUrl,
                                   handle: handle.isEmpty ? nil : "@" + handle) { _ in openChat = true }
             }

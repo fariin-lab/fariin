@@ -16,6 +16,10 @@ struct ChatsSettingsView: View {
     @AppStorage("linkPreviewsEnabled") private var linkPreviews = true
     @State private var confirmClear = false
     @State private var clearing = false
+    /// ⛔ SO THE ROW HEARS ABOUT A NEW KEY — audit L1. `ChatPin.isSet` / `.mine` are statics over
+    /// UserDefaults and the Keychain, which publish nothing; reading `version` here is what makes
+    /// SwiftUI ask again after the key page has been and gone.
+    private var pinState = ChatPinState.shared
 
     private var chatCount: Int { ConversationsRepository.shared.conversations.count }
 
@@ -29,6 +33,8 @@ struct ChatsSettingsView: View {
                     HStack {
                         Text("Chat Key")
                         Spacer()
+                        // `_ = pinState.version` is the subscription; the value is read below.
+                        let _ = pinState.version
                         Text(ChatPin.mine ?? (ChatPin.isSet ? "On" : "Off")).foregroundStyle(.secondary)
                     }
                 }

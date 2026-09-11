@@ -105,7 +105,24 @@ enum ChatService {
                 seed["accepted"] = false
             }
         }
-        try await ref.setData(seed, merge: true)
+        // ⛔ AND WHEN THE STAMP IS WHAT THE RULES REFUSED, WRITE THE REST — audit C2, 2026-09-11.
+        //
+        // The pre-read can answer "not there" for a conversation that very much is: a stale cache,
+        // or the split second after `verifyChatPin` created it on the server. The seed then carries
+        // `accepted: false`, the rules refuse to walk an accepted chat back to a request (correctly),
+        // and the WHOLE write is lost — including the names and photos every chat list draws from,
+        // which had nothing to do with the stamp and which nothing else on this path rewrites.
+        //
+        // So a refusal is retried once without the two request fields. If that also fails, the
+        // throw is the caller's as before; every call site wraps this in `try?` already.
+        do {
+            try await ref.setData(seed, merge: true)
+        } catch {
+            guard seed["startedBy"] != nil else { throw error }
+            seed.removeValue(forKey: "startedBy")
+            seed.removeValue(forKey: "accepted")
+            try await ref.setData(seed, merge: true)
+        }
         return cid
     }
 
