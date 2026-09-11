@@ -1,12 +1,21 @@
 import SwiftUI
+import UIKit
 
 /// THE GLOWERS / GLOWING LIST — his fourth reference, 2026-09-02: the person's name as the title,
-/// TABS carrying their own counts, a search field, and rows of avatar + name + a wide action with a
-/// dismiss ✕ beside it.
+/// a header switch, a search field, and rows of avatar + name + a wide action with a dismiss ✕
+/// beside it.
 ///
-/// ⚠️ TABS WITH COUNTS, NOT A SEGMENTED SWITCH. My first pass used a segmented control, which shows
-/// two words and no numbers — and the numbers are half the information on this screen. Underlined
-/// tabs carry "12 Glowers" in the tab itself, so the count and the selection are one thing.
+/// ⛔ A SEGMENTED SWITCH AFTER ALL, AND THE COUNTS ARE OUT OF IT — owner, 2026-09-11, with a
+/// reference of the control he wants: one rounded capsule holding two equal halves, the selected
+/// one a raised pill inside it, and the halves reading just "Glowers" and "Glowing".
+///
+/// The note that stood here said the opposite, and it is kept rather than deleted because it is
+/// still the reason the screen looked the way it did: my first pass used a segmented control, he
+/// asked for underlined tabs carrying "12 Glowers" so the count and the selection were one thing,
+/// and that is what shipped on 2026-09-02. He has now looked at it next to his reference and
+/// reversed it. The numbers are not lost — the profile's stats card is the door into this screen
+/// and carries both counts (see `GlowProfileView.statsCardBody`), so putting them in the pill as
+/// well was saying the same thing twice, one tap apart.
 ///
 /// ⛔ ONLY EVER YOUR OWN LIST, and that is a privacy decision he made the same day, not a
 /// limitation. Counts are public; the names are not. The rules enforce it — a `list` on /glows is
@@ -36,56 +45,131 @@ struct GlowPeopleListView: View {
 
     @State private var tab: Side = .glowers
     @State private var query = ""
+    /// ⛔ SEARCH IS A BUTTON NOW — owner, 2026-09-11, same reference. The field used to sit under the
+    /// header on every visit, which spends a whole row of the screen on a control most openings of
+    /// this page never touch; his reference keeps the magnifier in the navigation bar and gives the
+    /// row back to people. The field itself is unchanged — same `query`, same filter, same clear ✕ —
+    /// it is only its visibility that this flag owns.
+    @State private var showSearch = false
+    @FocusState private var searchFocused: Bool
     @State private var loader = GlowPeopleLoader()
     private var glow = GlowService.shared
 
     var body: some View {
         VStack(spacing: 0) {
             tabs
-            searchField
+            if showSearch { searchField }
             list
         }
         .navigationTitle(title.isEmpty ? "Glow" : title)
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { searchButton } }
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
     }
 
+    /// ⚠️ IT TOGGLES, IT DOES NOT ONLY OPEN. A magnifier that can only reveal leaves no way back:
+    /// the field's own ✕ clears the text but keeps the row, so without this the header would be one
+    /// row shorter for the rest of the visit. The symbol says which way it goes.
+    ///
+    /// ⚠️ CLOSING CLEARS THE QUERY, and that is a correctness fix rather than tidiness. A hidden
+    /// field holding "ab" leaves the list filtered with nothing on screen explaining why — the same
+    /// trap as an invisible filter chip.
+    private var searchButton: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.22)) { showSearch.toggle() }
+            if !showSearch { query = ""; searchFocused = false }
+        } label: {
+            Image(systemName: showSearch ? "xmark" : "magnifyingglass")
+                .foregroundStyle(Color.primary)
+        }
+    }
+
     // MARK: - Chrome
 
-    /// His reference's own header: the count IS the label, and the active tab carries an underline
-    /// rather than a filled pill — which is what keeps two long labels legible side by side.
+    /// The header switch, in the shape of his 2026-09-11 reference: one capsule track, two equal
+    /// halves, the selected one raised.
+    ///
+    /// The note this replaces said the count IS the label and the active tab carries an underline
+    /// rather than a filled pill, because that is what keeps two LONG labels ("12 Glowers") legible
+    /// side by side. That reasoning was sound for the label it had; with the counts gone the labels
+    /// are one short word each, which is exactly the case a pill is for. See the file header.
+    ///
+    /// ⛔ THE UNDERLINE IS GONE WITH THEM, and his 2026-09-02 note about it — "the white line now
+    /// looks too much, make it small" — is recorded here so it is not re-invented: the mark on the
+    /// selected half must stay the width of the half, never a full-width rule across the screen,
+    /// which reads as a divider rather than as a selection. The pill obeys that by construction.
+    ///
+    /// ⚠️ EQUAL HALVES WITHOUT A `GeometryReader` AND WITHOUT A HAND-PLACED THUMB. Each label takes
+    /// `maxWidth: .infinity` inside the `HStack`, so the two split the track evenly whatever the
+    /// words are, and the pill is the SELECTED half's own background rather than a thumb offset by
+    /// a measured width. Nothing to keep in step, and it animates because both halves redraw when
+    /// `tab` changes.
     private var tabs: some View {
         HStack(spacing: 0) {
             ForEach([Side.glowers, Side.glowing], id: \.self) { s in
-                Button { tab = s; query = "" } label: {
-                    VStack(spacing: 7) {
-                        Text("\(count(s)) \(s.title)")
-                            .font(.system(size: 16, weight: tab == s ? .bold : .regular))
-                            .foregroundStyle(tab == s ? Color.primary : .secondary)
-                            .lineLimit(1)
-                        // ⛔ THE UNDERLINE IS THE WORD'S WIDTH, NOT THE TAB'S — owner, 2026-09-02:
-                        // "the white line now looks too much, make it small". It was a full-width
-                        // rule under half the screen, which reads as a divider that happens to be
-                        // white rather than as a mark on the selected tab. `fixedSize` collapses
-                        // the stack to the label, and the `maxWidth` below centres that in its half.
-                        Capsule()
-                            .fill(tab == s ? Color.primary : .clear)
-                            .frame(height: 2)
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
+                Button {
+                    withAnimation(.snappy(duration: 0.22)) { tab = s }
+                    query = ""
+                } label: {
+                    Text(s.title)
+                        .font(.system(size: 15, weight: tab == s ? .semibold : .regular))
+                        // ⛔ NOT HIS REFERENCE'S BLUE — owner, 2026-09-02 and again now: "follow my
+                        // app color is black and white". His reference draws the selected half in a
+                        // bright blue; nothing in this app is that colour and `GlowStyle.accent` has
+                        // a whole note about the last time I invented a hue for this feature. The
+                        // selected half is told apart by LIFT and WEIGHT — a pill, a hairline, a
+                        // shadow, a semibold word — which works in both schemes and adds no colour.
+                        .foregroundStyle(tab == s ? Color.primary : .secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .background {
+                            if tab == s {
+                                // ⚠️ `Color.primary`, SO THE PILL INVERTS WITH THE SCHEME: a faint
+                                // black lift on a light track by day, a faint white one at night.
+                                // A hardcoded white pill would be invisible every morning — the
+                                // trap written up on `GlowStyle.accent`.
+                                Capsule()
+                                    .fill(Color.primary.opacity(0.14))
+                                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.5))
+                                    .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
+                            }
+                        }
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
             }
         }
-        .padding(.top, 4)
-        // ⛔ NO HAND-DRAWN HAIRLINE — owner, same report: "the top header now has a border, use
+        // 3pt of track showing all the way round the pill — the inset is what makes it read as a
+        // thing sitting INSIDE the capsule rather than as the capsule's own half.
+        .padding(3)
+        .background { glassTrack }
+        .clipShape(Capsule())
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        // ⛔ NO HAND-DRAWN HAIRLINE — owner, 2026-09-02: "the top header now has a border, use
         // Apple native design". A 1pt rule under the tabs is a second edge competing with the nav
         // bar's own, which draws its separator only when there is content under it. Ours was always
         // there, which is what made the header read as boxed in.
+    }
+
+    /// ⛔ REAL LIQUID GLASS, NOT A GREY FILL — owner, 2026-09-11: the track has to be the iOS 26
+    /// material, not a flat plate. Painting the track is the exact mistake `CMContextMenu`'s
+    /// `GlassSegmentedSwitch` note and the picker's both write up: on a dark page a wash has nothing
+    /// to refract, so every tint resolves to grey plastic, which is what a `Color.primary.opacity()`
+    /// track would have given here.
+    ///
+    /// ⛔ THE APP'S OWN `liquidGlass()`, NOT A SECOND MECHANISM. `Theme.swift` has carried this
+    /// exact availability switch since the composer was built — real `glassEffect` on iOS 26, an
+    /// ultra-thin material below it — and every glass surface in the app goes through it. A private
+    /// `UIVisualEffectView` representable here would be a second answer to one question, which is
+    /// the drift this file's own comments keep warning about, and it would not pick up any future
+    /// change to the app's glass.
+    @ViewBuilder private var glassTrack: some View {
+        Color.clear.liquidGlass(Capsule())
     }
 
     /// ⛔ A NATIVE-SHAPED SEARCH FIELD — owner, 2026-09-02: "search bar size and rounded corners,
@@ -98,6 +182,7 @@ struct GlowPeopleListView: View {
             TextField("Search", text: $query)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .focused($searchFocused)
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -109,6 +194,15 @@ struct GlowPeopleListView: View {
         .frame(height: 36)
         .background(Color.primary.opacity(0.07), in: Capsule())
         .padding(.horizontal, 16).padding(.vertical, 12)
+        // It slides down out of the header rather than appearing, so the list visibly makes room
+        // for it — the row it takes is the thing the magnifier trades away.
+        .transition(.move(edge: .top).combined(with: .opacity))
+        // ⚠️ ONE RUNLOOP TURN BEFORE THE FOCUS, NOT IN THE BUTTON'S ACTION. Writing `searchFocused`
+        // in the same frame the field is inserted is dropped on the floor: there is no responder
+        // yet to take it, and the keyboard never opens — which would make the magnifier a two-tap
+        // control. `onAppear` here fires exactly when the field arrives, and the hop puts the write
+        // after the insertion.
+        .onAppear { DispatchQueue.main.async { searchFocused = true } }
     }
 
     // MARK: - The list
@@ -155,9 +249,9 @@ struct GlowPeopleListView: View {
 
     // MARK: - Data
 
-    private func count(_ s: Side) -> Int {
-        s == .glowers ? glow.displayGlowers.count : glow.displayGlowing.count
-    }
+    // `count(_:)` stood here and read `displayGlowers` / `displayGlowing` for the tab labels. It
+    // went with the counts on 2026-09-11 and is not kept commented out — the same two properties
+    // are read two lines below, so it is one line to write again if the numbers ever come back.
 
     private var uids: [String] {
         // `display*`, not the raw sets: the demo people have to be in the LIST as well as in the
@@ -204,11 +298,28 @@ private struct GlowPersonRow: View {
             Button { showProfile = true } label: {
                 HStack(spacing: 12) {
                     // 62, his number.
+                    //
+                    // ⚠️ CHECKED AGAINST THE 2026-09-11 REFERENCE AND LEFT ALONE. That reference
+                    // asks for a bigger circle and a 15 semibold line over a 14 secondary one, and
+                    // this row is already 62 / 15 semibold / 14 secondary — 62 is well past the 48
+                    // an avatar defaults to and is a number he gave himself on 2026-09-02. Nothing
+                    // here differed, so nothing here moved; the header is where that report lands.
                     AvatarView(name: person.name, photoUrl: person.photoUrl, size: 62)
+                    // ⛔ THE HANDLE IS THE TITLE LINE AND THE NAME IS UNDER IT — owner, 2026-09-11,
+                    // "make it exactly like this… name size, username". His reference puts the
+                    // username in the strong line and the real name in grey beneath it, which is the
+                    // right way round for a list you arrived at from a Glow: the handle is the thing
+                    // that is unique and the thing he searches by, and two people can share a name.
+                    //
+                    // ⚠️ SOMEBODY WITH NO HANDLE STILL GETS A TITLE. Falling back to the name in the
+                    // strong line and drawing no second line is the only arrangement where an
+                    // account without a username does not render as a grey subtitle with nothing
+                    // above it.
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(person.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                        if !person.handle.isEmpty {
-                            Text("@\(person.handle)").font(.system(size: 14))
+                        Text(person.handle.isEmpty ? person.name : "@\(person.handle)")
+                            .font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                        if !person.handle.isEmpty && !person.name.isEmpty {
+                            Text(person.name).font(.system(size: 14))
                                 .foregroundStyle(.secondary).lineLimit(1)
                         }
                     }

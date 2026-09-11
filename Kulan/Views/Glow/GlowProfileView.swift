@@ -419,7 +419,21 @@ struct GlowProfileView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(14)
+        // ⛔ THE PILL IS FLATTER — owner, 2026-09-11: this card is "too tall", with his reference
+        // beside it showing a pill whose two lines of text sit close together over tight vertical
+        // padding and whose faces are no taller than those two lines.
+        //
+        // ⚠️ HEIGHT ONLY. The 14 on the leading and trailing edges is exactly where it was, so the
+        // card's width, its margins, its corner, its type sizes and its chevron are all untouched —
+        // that was the whole of his instruction.
+        //
+        // The arithmetic, so the number is not a guess. The tallest thing in this row is the text
+        // stack: `.headline` over `.subheadline` with 2 between them, about 43pt at the default
+        // text size. `.padding(14)` added 28 on top of that for a pill of about 71. 9 a side brings
+        // it to about 61. The other half of the same fix is the face cluster below, which measured
+        // 44 and so was setting the card's height by itself; a row of faces is 24.
+        .padding(.horizontal, StatsPill.padH)
+        .padding(.vertical, StatsPill.padV)
         .background(cardColor, in: RoundedRectangle(cornerRadius: ProfileCard.corner,
                                                     style: .continuous))
     }
@@ -435,39 +449,66 @@ struct GlowProfileView: View {
         static let corner: CGFloat = 22
     }
 
-    /// ⛔ A CLUSTER, NOT A ROW — owner, 2026-09-02, with his reference beside ours: one large face
-    /// with two smaller ones tucked under its lower corners.
+    /// ⛔ THREE OVERLAPPING FACES IN A ROW — owner, 2026-09-11, with his reference beside ours: the
+    /// pill's leading edge carries up to three circles tucked into each other from left to right,
+    /// the frontmost on top, each ringed in the card's own colour so they read as separate discs
+    /// rather than one merged shape. Fewer than three people available draws however many there
+    /// are; nothing is padded out with blanks, because an empty circle claims somebody who is not
+    /// there.
     ///
-    /// ⚠️ WHAT WAS HERE WAS AN OVERLAPPING ROW — three 30pt circles at −12 spacing, the "stacked
-    /// avatars" every app uses for a list of people. It is the wrong figure for this card: a row
-    /// reads as "and N more, in order", while his cluster reads as a GROUP, which is what a glow
-    /// count is. It also fits three faces into the width of about two, which is why the card had
-    /// room for the sentence beside it.
+    /// ⚠️ WHAT WAS HERE WAS A CLUSTER — a 34pt face centred with a 22 tucked under each of its
+    /// lower corners, his 2026-09-02 choice, kept here so it is not quietly reinstated later. The
+    /// newer picture overturns it, and the cluster is also half of why the card was tall: it
+    /// measured 44 against text of about 43, so the faces were setting the pill's height on their
+    /// own. A row never does.
     ///
-    /// The geometry, so it can be adjusted without guessing: a 34pt face centred, then a 22 at the
-    /// lower left and a 22 at the lower right, each pushed out by 60% of its own width and down by
-    /// 40%. Every circle carries the card's colour as a 2pt border, which is what makes them read as
-    /// stacked rather than merged.
+    /// The geometry, so it can be adjusted without guessing: every face is `StatsPill.face` across
+    /// and the next one starts `StatsPill.step` further along, which makes the overlap the
+    /// difference between the two — 10pt, about 40% of a face, enough to read as a stack without
+    /// turning the one behind into a sliver. Three of them come to exactly 52pt, which is the width
+    /// the old cluster occupied, so the sentence beside them keeps every point of room it had.
+    ///
+    /// ⚠️ DRAWN BACK TO FRONT. Later views in a `ZStack` are painted over earlier ones, so the row
+    /// is built in reverse — the last face first — to leave the FIRST one on top. Natural order
+    /// would tuck the leading face behind its neighbour, which is the same trap the old cluster's
+    /// "the big one last" note recorded.
+    ///
+    /// ⚠️ `.offset` MOVES THE PAINT, NOT THE LAYOUT, so the `ZStack` measures one face wide however
+    /// many are in it. The explicit frame is what reserves the row's real width; without it the
+    /// second and third faces would hang over the text.
     @ViewBuilder private var faceCluster: some View {
-        let faces = Array(facePeople.prefix(3))
-        ZStack {
-            if faces.count > 1 {
-                AvatarView(name: faces[1].name, photoUrl: faces[1].photoUrl, size: 22)
-                    .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
-                    .offset(x: -13, y: 9)
+        let shown = Array(facePeople.prefix(StatsPill.maxFaces))
+        let width = StatsPill.face + CGFloat(max(0, shown.count - 1)) * StatsPill.step
+        ZStack(alignment: .leading) {
+            ForEach(Array(shown.indices.reversed()), id: \.self) { i in
+                AvatarView(name: shown[i].name, photoUrl: shown[i].photoUrl, size: StatsPill.face)
+                    .overlay(Circle().strokeBorder(cardColor, lineWidth: StatsPill.ring))
+                    .offset(x: CGFloat(i) * StatsPill.step)
             }
-            if faces.count > 2 {
-                AvatarView(name: faces[2].name, photoUrl: faces[2].photoUrl, size: 22)
-                    .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
-                    .offset(x: 13, y: 9)
-            }
-            // ⚠️ THE BIG ONE LAST, so it sits ON the two small ones rather than under them. His
-            // reference has the large face in front; drawing it first would tuck it behind.
-            AvatarView(name: faces[0].name, photoUrl: faces[0].photoUrl, size: 34)
-                .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
-                .offset(y: -4)
         }
-        .frame(width: 52, height: 44)
+        .frame(width: width, height: StatsPill.face, alignment: .leading)
+    }
+
+    /// The stats pill's own geometry — owner, 2026-09-11. Named rather than typed into the views
+    /// because his note is about HEIGHT and nothing else, and a stray number in here is exactly how
+    /// a height-only change quietly becomes a width one.
+    private enum StatsPill {
+        /// Unchanged at 14, deliberately: the side inset is what fixes the card's width and its
+        /// margins, and he asked for neither to move.
+        static let padH: CGFloat = 14
+        /// Was 14, the other half of the old `.padding(14)`. The arithmetic is at the foot of
+        /// `statsCardBody`: 9 a side puts the pill at about 61pt instead of about 71.
+        static let padV: CGFloat = 9
+        /// A face's diameter. Derived rather than chosen — three faces `step` apart have to come to
+        /// the 52pt the old cluster occupied, so the line beside them loses nothing.
+        static let face: CGFloat = 24
+        /// How far along the next face starts, so `face - step` is the overlap. 24 + 14 + 14 = 52.
+        static let step: CGFloat = 14
+        /// The ring that separates one disc from the next, in the card's own colour. The same 2pt
+        /// the cluster drew, and it is what stops three circles reading as one blob.
+        static let ring: CGFloat = 2
+        /// How many faces the pill draws. His reference shows three.
+        static let maxFaces: Int = 3
     }
 
     /// The faces on the stats card — a few of the people in the glow relationship. Only ever drawn
@@ -537,7 +578,34 @@ struct GlowProfileView: View {
                 case .loaded(let rows):
                     // Three across, each taking an equal share of what the card's padding leaves,
                     // so the row ends flush with the heading above it however wide the screen is.
-                    HStack(spacing: PostedCard.gap) {
+                    //
+                    // ⛔ AND THERE ARE THREE COLUMNS WHETHER OR NOT THERE ARE THREE STORIES —
+                    // owner, 2026-09-11: with a single story posted, this card grew until it filled
+                    // the screen.
+                    //
+                    // ⚠️ THE ROW USED TO LET THE STORIES DECIDE THE COLUMNS. An `HStack` hands its
+                    // whole width to whatever happens to be inside it, so one tile was offered the
+                    // card's entire content width instead of a third of it — and a tile solves its
+                    // HEIGHT from the width it is given (`PostedStoryTile` lays itself out on a
+                    // `Color.clear` carrying `GlowStoryCardView.aspect`, a portrait 0.655, so the
+                    // height is about 1.5x the width). One story therefore came out three times as
+                    // wide AND three times as tall as the same story sitting in a full row, which
+                    // is the card he photographed. Nothing was wrong with the tile: it was
+                    // answering the question it was asked.
+                    //
+                    // A grid states its columns up front, so "how wide is a tile" stops depending
+                    // on how many there are and the card is the same size with one story as with
+                    // ten. It is also the recipe the page behind See All already uses
+                    // (`PostedStoriesView.columns`), which is why that page never had this.
+                    //
+                    // ⚠️ THE COLUMNS ARE BUILT HERE, NOT STORED. A stored `let` of `[GridItem]` on
+                    // a view runs its initialiser outside the view's main-actor context, and these
+                    // Glow screens have already failed the compiler on that class of mistake three
+                    // times; `PostedStoriesView` computes its own for the same reason.
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(),
+                                                                spacing: PostedCard.gap),
+                                             count: PostedCard.tiles),
+                              spacing: PostedCard.gap) {
                         ForEach(rows.prefix(PostedCard.tiles)) { s in
                             PostedStoryTile(story: s) { openPosted() }
                         }
