@@ -199,7 +199,7 @@ struct ProfileLinkEditView: View {
             }
 
             Section {
-                TextField("Instagram", text: $title)
+                TextField("My website", text: $title)
                     .onChange(of: title) { _, v in
                         if v.count > ProfileLink.maxTitleChars {
                             title = String(v.prefix(ProfileLink.maxTitleChars))

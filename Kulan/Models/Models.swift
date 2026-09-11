@@ -143,7 +143,7 @@ struct ProfileLink: Identifiable, Equatable, Hashable {
     }
 
     /// ⚠️ THE SCHEME IS ADDED BACK FOR OPENING, because somebody typing a link types
-    /// "instagram.com/name" and `URL(string:)` will happily build a relative URL out of that which
+    /// "example.com/name" and `URL(string:)` will happily build a relative URL out of that which
     /// opens nothing. `https` rather than `http`: this is 2026, and the worst case is one redirect.
     var openURL: URL? {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)

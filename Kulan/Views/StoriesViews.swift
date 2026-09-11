@@ -1593,7 +1593,14 @@ struct StoryViewer: View {
                                   isVerified: VerificationIndex.isVerified(g.authorUid)),
                 isMine: g.isMine,   // drives the "…" menu: my story shows Delete, others show Hide Stories
                 stories: g.stories.map { s in
-                    StoryUI.Story(
+                    // ⚠️ HOISTED OUT OF THE CALL BELOW, and it is not a tidy-up. That initialiser
+                    // takes twenty-odd arguments and already sits at the type-checker's limit —
+                    // this file has had to be split for it twice. `canPassOn` is read three times
+                    // down there (the flag itself, and both branches of `storyType`), and the same
+                    // compound expression repeated three times inside an argument list that size is
+                    // exactly what tips it over. One `let`, resolved once.
+                    let canPassOn = StoryShareRights.allows(s) && !s.isVideo
+                    return StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,
                         // The poster the story row already drew, so the viewer has something true to
@@ -1663,7 +1670,7 @@ struct StoryViewer: View {
                         // `StoryShareRights`. Repost needs a still, so it is refused for a clip;
                         // the other two are fine on either, and the menu shows all three together
                         // rather than a partial set nobody can explain.
-                        canPassOn: StoryShareRights.allows(s) && !s.isVideo,
+                        canPassOn: canPassOn,
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an
@@ -1704,11 +1711,11 @@ struct StoryViewer: View {
                                 ? .plain()
                                 : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: true,
-                                                                              showRepostButton: !s.isVideo && StoryShareRights.allows(s)),
+                                                                              showRepostButton: canPassOn),
                                                emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
                                     : .plain(config: StoryInteractionConfig(showLikeButton: true,
-                                                                            showRepostButton: !s.isVideo && StoryShareRights.allows(s))),
+                                                                            showRepostButton: canPassOn)),
                             mediaType: s.isVideo ? .video : .image
                         )
                     )
@@ -1746,6 +1753,14 @@ struct StoryViewer: View {
     }
 
     private func sheetsAndMenus(_ v: some View) -> some View {
+        storyActions(sheetsOnly(v))
+    }
+
+    /// ⛔ SPLIT IN TWO — 2026-09-11, and for the reason the note on `body` already records: this
+    /// chain outgrew the type-checker ("unable to type-check this expression in reasonable time")
+    /// the moment the repost work added a sheet, a cover and three more `onReceive`s to it. Purely
+    /// structural; the order of the modifiers is unchanged, because a chain's order is the layering.
+    private func sheetsOnly(_ v: some View) -> some View {
         v
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
         .sheet(item: $shareURL) { p in ActivityView(items: [p.url]) }
@@ -1855,6 +1870,12 @@ struct StoryViewer: View {
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { forwardImg = StoryImagePayload(image: img) } }
         }
+    }
+
+    /// The "…" menu's actions and the footer's repost mark. See `sheetsOnly` for why these are two
+    /// functions rather than one chain.
+    private func storyActions(_ v: some View) -> some View {
+        v
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShare"))) { _ in
             guard currentIsMine else { return }
             guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
