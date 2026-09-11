@@ -633,19 +633,13 @@ struct StoriesTabView: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: StoryTileGrid.gap),
                                          count: StoryTileGrid.columns),
                           spacing: StoryTileGrid.gap) {
-                    if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
-                        let key = Self.friendsPageKey(mine.id)
-                        Button { openStoryFromRow(mine, sourceKey: key) } label: {
-                            GlowStoryCardView(
-                                thumbUrl: newest.thumbUrl.isEmpty ? newest.mediaUrl : newest.thumbUrl,
-                                name: "My Story",
-                                authorPhoto: profile.me?.photoUrl,
-                                isMine: true,
-                                rectKey: key,
-                                corner: StoryTileGrid.corner)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    // ⛔ NO "MY STORY" ON THIS PAGE — owner, 2026-09-11, with it ringed: "when i
+                    // click all friends story page, only show friends story, not my owner story."
+                    //
+                    // The card belongs on the TAB, where the section is the row you post from and
+                    // yours is the first thing in it. This page is what the "Friends" heading opens,
+                    // and it answers one question — what have my friends posted. My own story is not
+                    // an answer to it, and it is already two taps away in both directions.
                     ForEach(visibleFriends) { g in
                         let key = Self.friendsPageKey(g.id)
                         Button { openStoryFromRow(g, sourceKey: key) } label: {

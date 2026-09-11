@@ -93,7 +93,12 @@ struct GlowStoryCardView: View {
     /// ⚠️ `badgeCentreOverRadius` BELOW IS SOLVED FOR THIS EXACT RATIO. Two discs do not overlap
     /// linearly in their sizes, so if this third ever moves, that number is stale — re-solve it
     /// with the formula written there, do not scale it.
-    static let badgeRatio: CGFloat = 1.0 / 3.0
+    ///
+    /// ⛔ 0.42, UP FROM A THIRD — owner, 2026-09-11: "+ badge looks too small". A third was set when
+    /// the face was 48 and read as 16pt; the face is 44 now, which took the badge to 14.7 without
+    /// anybody choosing that. 0.42 draws it at 18.5 on the same face — bigger than it has ever been
+    /// rather than merely restored.
+    static let badgeRatio: CGFloat = 0.42
     /// HOW FAR THE ⊕'s CENTRE SITS FROM THE FACE'S CENTRE, as a fraction of the face's RADIUS, so
     /// that exactly `badgeInsideFraction` of the badge's area lands on the face.
     ///
@@ -106,15 +111,24 @@ struct GlowStoryCardView: View {
     ///          − ½·√((−d + ρ + R)(d + ρ − R)(d − ρ + R)(d + ρ + R))
     ///
     /// and his ask is A(d) = 0.65·πρ². Divide both sides by R² and every term is in x = d/R alone,
-    /// so it is scale-free and solved ONCE here instead of per card size. At x = 0.9025 the left
-    /// side is 0.226901·R² against a right side of 0.65π/9 = 0.226893·R² — 65.00% of the badge on
-    /// the face, 35.00% hanging off it, which is the number he asked for.
+    /// so it is scale-free and solved ONCE here instead of per card size.
     ///
-    /// ⚠️ THE FLAT-CHORD SHORTCUT IS NOT GOOD ENOUGH AT THIS RATIO, and I checked rather than
-    /// assumed. Treating the face's edge as a straight line across the badge — fine when the badge
-    /// is tiny, and the badge here is a third of the face — gives x = 0.921, which really leaves
-    /// 61.5% inside. That is the kind of eyeballing that put the badge where he photographed it.
-    static let badgeCentreOverRadius: CGFloat = 0.9025
+    /// ⛔ RE-SOLVED FOR ρ = 0.42R, NOT SCALED — 2026-09-11, when the badge grew. The note above
+    /// `badgeRatio` says this number goes stale the moment that fraction moves, and it did. At
+    /// x = 0.870760 both sides are 0.360215·R²: 65.00% of the badge on the face, 35.00% hanging off
+    /// it, the same split he asked for at the old size. (The previous pair was ρ = R/3, x = 0.9025.)
+    ///
+    /// ⚠️ THE FLAT-CHORD SHORTCUT IS STILL NOT GOOD ENOUGH, and it is worse at this ratio than it
+    /// was at the last one. Treating the face's edge as a straight line across the badge gives
+    /// x = 0.9001, which really leaves 60.6% inside — it was 61.5% wrong before, so a bigger badge
+    /// makes the shortcut less forgiving, not more.
+    ///
+    /// ⚠️ THE CARD'S CORNER WAS RE-CHECKED, since a bigger badge sits closer to it. On the
+    /// two-column card the face's centre is `avatarInset` + R = 32 from both edges and the 34pt
+    /// arc's centre is at 34, so the badge's centre lands √2·(2 + 13.55) = 21.99 from that centre
+    /// and its far edge at 21.99 + 9.24 = 31.23 against 34 — 2.77pt of clearance. Tighter than the
+    /// 3.98 a third left, and five times the 0.55 that he photographed as "tucking at an angle".
+    static let badgeCentreOverRadius: CGFloat = 0.870760
     /// The same distance split over the two axes, because the badge sits at 45° on the face's
     /// lower-trailing side: each axis gets d/√2.
     static let badgeAxisOffsetRatio: CGFloat = badgeCentreOverRadius / CGFloat(2).squareRoot()
