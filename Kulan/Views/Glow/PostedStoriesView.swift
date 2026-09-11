@@ -151,6 +151,36 @@ struct PostedStoriesView: View {
                 }
             }
             .toolbar {
+                // ⛔ THE SYSTEM'S OWN BOTTOM BAR — owner, 2026-09-11: "the bottom, make it real
+                // Apple iOS 26 design for the name, not custom".
+                //
+                // ⚠️ IT WAS A HAND-ROLLED `HStack` IN A `safeAreaInset` with `.background(.bar)`,
+                // which is a copy of a bottom bar rather than one: its own padding, its own idea of
+                // where the safe area ends, and none of the material, height or item spacing the
+                // system gives a real one. A `bottomBar` placement IS the control, so it inherits
+                // all of that and follows whatever iOS 26 does with it.
+                //
+                // His order is unchanged — Share, the count, Delete — and `Spacer()` between items
+                // is how a toolbar group is told to push them apart.
+                if isMe, editing {
+                    ToolbarItemGroup(placement: .bottomBar) {
+                        Button { shareSelected() } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .disabled(selected.isEmpty || deleting)
+                        Spacer()
+                        Text(selected.isEmpty ? "Select Stories" : "\(selected.count) Selected")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(selected.isEmpty ? .secondary : .primary)
+                        Spacer()
+                        Button { confirmDelete = true } label: {
+                            if deleting { ProgressView() }
+                            else { Image(systemName: "trash") }
+                        }
+                        .tint(.red)
+                        .disabled(selected.isEmpty || deleting)
+                    }
+                }
                 if isMe {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(editing ? "Done" : "Edit") {
@@ -166,12 +196,7 @@ struct PostedStoriesView: View {
                     }
                 }
             }
-            // ⛔ THE THREE CONTROLS, IN HIS ORDER — Share, the count, Delete. A `safeAreaInset`
-            // rather than an overlay, so the grid can scroll clear of the bar instead of hiding its
-            // last row behind it.
-            .safeAreaInset(edge: .bottom) {
-                if editing { selectionBar }
-            }
+
             .alert("Delete \(selected.count) \(selected.count == 1 ? "story" : "stories")?",
                    isPresented: $confirmDelete) {
                 Button("Delete", role: .destructive) { Task { await deleteSelected() } }
@@ -198,62 +223,9 @@ struct PostedStoriesView: View {
             }
     }
 
-    /// ⛔ SHARE · COUNT · DELETE, and the count is the label between them rather than a title above:
-    /// his sketch puts the number where it can be read without leaving the two actions.
-    ///
-    /// ⚠️ BOTH ACTIONS REFUSE AN EMPTY SELECTION rather than being hidden by it. A bar that appears
-    /// and disappears as the first tick lands makes the grid jump under the finger that is ticking.
-    private var selectionBar: some View {
-        HStack {
-            Button { shareSelected() } label: {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 20))
-            }
-            .disabled(selected.isEmpty || deleting)
-            Spacer()
-            Text(selected.isEmpty ? "Select Stories"
-                                  : "\(selected.count) Selected")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(selected.isEmpty ? .secondary : .primary)
-            Spacer()
-            Button { confirmDelete = true } label: {
-                if deleting { ProgressView() }
-                else { Image(systemName: "trash").font(.system(size: 20)) }
-            }
-            .tint(.red)
-            .disabled(selected.isEmpty || deleting)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
-        .background(.bar)
-    }
-
-    /// Open this person's story set. The same two doors the profile's rail uses, and for the same
-    /// reason — see `GlowProfileView.openPosted`.
-    /// ⛔ THE TILE THAT WAS TAPPED IS THE ONE IT FLIES OUT OF — owner, 2026-09-11: "when I click the
-    /// image the story is not opening from that position, and scroll down to go back does not
-    /// return to that position".
-    ///
-    /// ⚠️ THIS TOOK NO ARGUMENT AT ALL. Every tile on the page called the same `open()` and handed
-    /// the flight `mine.id` — the key of the chat row's card, on a screen that is not even visible.
-    /// So the source rectangle resolved to something off-screen or to nothing, and both the open and
-    /// the close fell back to the plain presentation, whichever tile was pressed. The story that
-    /// played was right; the movement was always wrong.
-    ///
-    /// The key is this page's own namespace over the story's id, which is what the tile files
-    /// itself under below — see `Self.tileKey`.
-    private func open(_ story: PostedStory) {
-        if isMe {
-            guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
-            StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
-                           pinned: true, deliveredToMe: true)
-        } else {
-            let p = GlowPerson(id: uid,
-                               name: person?.name ?? title,
-                               handle: person?.handle ?? "",
-                               photoUrl: person?.photoUrl)
-            Task { await GlowStoryOpen.open(p, from: Self.tileKey(story.id)) }
-        }
-    }
+    // ⛔ `selectionBar` IS GONE — 2026-09-11. It was a hand-rolled HStack in a `safeAreaInset`
+    // standing in for a bottom bar; the real one is a `ToolbarItemGroup(placement: .bottomBar)` in
+    // the toolbar above. Do not build a second one.
 
     /// The tick his sketch puts on every story in select mode. Filled when chosen, a hollow ring
     /// when not — the same pair `StoryTick` draws in the audience pickers, restated here because a
@@ -261,9 +233,21 @@ struct PostedStoriesView: View {
     private func tick(on: Bool) -> some View {
         Image(systemName: on ? "checkmark.circle.fill" : "circle")
             .font(.system(size: 22))
-            .symbolRenderingMode(on ? .palette : .monochrome)
-            .foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.9)),
-                             on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
+            // ⛔ `.blue` LITERALLY, AND `.palette` ALWAYS — owner, 2026-09-11: "make the select
+            // checkmark blue".
+            //
+            // ⚠️ IT WAS `Color.accentColor`, WHICH IS THE TRAP `StoryTick` ALREADY WRITES UP one
+            // file away: this app's accent is `Color.primary`, so on a dark screen it resolves to
+            // WHITE — a white tick on a white disc, which is the blank circle with no checkmark in
+            // his screenshot. Selection is the one place in the app that keeps the system blue, for
+            // exactly this reason, and the audience pickers have done so since 2026-08-09.
+            //
+            // ⚠️ `.palette` ON BOTH STATES, not only the ticked one. With two styles handed to a
+            // monochrome symbol the second is ignored, which is harmless — but switching rendering
+            // mode with the state is a second thing to keep in step for no gain. A hollow `circle`
+            // has one layer and takes the first style either way.
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, on ? AnyShapeStyle(Color.blue) : AnyShapeStyle(.clear))
             .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
             .padding(8)
     }

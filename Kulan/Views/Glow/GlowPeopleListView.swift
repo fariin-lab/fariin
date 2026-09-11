@@ -45,148 +45,71 @@ struct GlowPeopleListView: View {
 
     @State private var tab: Side = .glowers
     @State private var query = ""
-    @FocusState private var searchFocused: Bool
     @State private var loader = GlowPeopleLoader()
     private var glow = GlowService.shared
 
     var body: some View {
         VStack(spacing: 0) {
             tabs
-            // ⛔ ALWAYS UNDER THE BAR — owner, 2026-09-11, reversing the button he asked for the
-            // same morning: "search bar should always appear under the glowers bar". The magnifier
-            // saved a row and cost a tap, and he has now looked at both. The field, its query, its
-            // filter and its clear ✕ never moved; only whether it is behind a button.
-            searchField
             list
         }
         .navigationTitle(title.isEmpty ? "Glow" : title)
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
+        // ⛔ THE CHAT LIST'S SEARCH FIELD, WHICH IS THE SYSTEM'S — owner, 2026-09-11: "the search bar
+        // looks different, make it like the one you made in the chat list".
+        //
+        // ⚠️ IT WAS A HAND-BUILT CAPSULE: a magnifier, a `TextField`, a clear ✕ and a stated 36pt
+        // height, laid out in this page's own `VStack`. Every one of those is a number somebody
+        // chose, and none of them tracks what iOS does with a search field — the focus animation,
+        // the Cancel button, the scroll-away behaviour, Dynamic Type, or whatever iOS 26 changes
+        // next. `.searchable` in the navigation bar's drawer is the same call the chat list makes
+        // (`MainShell`), so the two are the same control rather than two drawings of one.
+        //
+        // `query` is untouched — same binding, same filter, same everything downstream.
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Search")
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
     }
 
     // MARK: - Chrome
 
-    /// The header switch, in the shape of his 2026-09-11 reference: one capsule track, two equal
-    /// halves, the selected one raised.
+    /// ⛔ A REAL `Picker`, NOT A DRAWING OF ONE — owner, 2026-09-11, twice: "the Glowers and Glowing
+    /// bar looks custom, I said please use real Apple iOS 26 liquid glass, not custom, use native".
     ///
-    /// The note this replaces said the count IS the label and the active tab carries an underline
-    /// rather than a filled pill, because that is what keeps two LONG labels ("12 Glowers") legible
-    /// side by side. That reasoning was sound for the label it had; with the counts gone the labels
-    /// are one short word each, which is exactly the case a pill is for. See the file header.
+    /// ⚠️ WHAT WAS HERE AND WHY IT COULD NEVER PASS. Two `Button`s in an `HStack`, a capsule track
+    /// behind them, and the selected half wearing a background of its own. Every version of that is
+    /// a hand-made segmented control: the first had a fill, a hairline and a drop shadow chosen by
+    /// eye, and the second swapped those for the app's own glass — which is closer, and still a
+    /// SwiftUI view arranged to resemble a control rather than the control. It cannot inherit the
+    /// system's thumb animation, its press states, its Dynamic Type behaviour, or whatever iOS 26
+    /// does with a segmented control next, because it is not one.
     ///
-    /// ⛔ THE UNDERLINE IS GONE WITH THEM, and his 2026-09-02 note about it — "the white line now
-    /// looks too much, make it small" — is recorded here so it is not re-invented: the mark on the
-    /// selected half must stay the width of the half, never a full-width rule across the screen,
-    /// which reads as a divider rather than as a selection. The pill obeys that by construction.
+    /// `.pickerStyle(.segmented)` IS the native control, so the liquid glass, the thumb and the
+    /// selected weight all arrive from the system and follow it. That also settles the colour
+    /// question the old note argued about: nothing here chooses a hue any more.
     ///
-    /// ⚠️ EQUAL HALVES WITHOUT A `GeometryReader` AND WITHOUT A HAND-PLACED THUMB. Each label takes
-    /// `maxWidth: .infinity` inside the `HStack`, so the two split the track evenly whatever the
-    /// words are, and the pill is the SELECTED half's own background rather than a thumb offset by
-    /// a measured width. Nothing to keep in step, and it animates because both halves redraw when
-    /// `tab` changes.
+    /// ⚠️ THE `.snappy` ANIMATION IS GONE WITH THEM, and deliberately: a segmented control animates
+    /// its own thumb, and a second curve over the top is what makes a native control feel wrong.
+    /// Clearing the query on a tab change stays — a filter left standing across a switch is the
+    /// invisible-filter trap written up on the search button that used to live here.
     private var tabs: some View {
-        HStack(spacing: 0) {
-            ForEach([Side.glowers, Side.glowing], id: \.self) { s in
-                Button {
-                    withAnimation(.snappy(duration: 0.22)) { tab = s }
-                    query = ""
-                } label: {
-                    Text(s.title)
-                        .font(.system(size: 15, weight: tab == s ? .semibold : .regular))
-                        // ⛔ NOT HIS REFERENCE'S BLUE — owner, 2026-09-02 and again now: "follow my
-                        // app color is black and white". His reference draws the selected half in a
-                        // bright blue; nothing in this app is that colour and `GlowStyle.accent` has
-                        // a whole note about the last time I invented a hue for this feature. The
-                        // selected half is told apart by LIFT and WEIGHT — a pill, a hairline, a
-                        // shadow, a semibold word — which works in both schemes and adds no colour.
-                        .foregroundStyle(tab == s ? Color.primary : .secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 34)
-                        .background {
-                            if tab == s {
-                                // ⚠️ `Color.primary`, SO THE PILL INVERTS WITH THE SCHEME: a faint
-                                // black lift on a light track by day, a faint white one at night.
-                                // A hardcoded white pill would be invisible every morning — the
-                                // trap written up on `GlowStyle.accent`.
-                                // ⛔ REAL GLASS, NOT A HAND-MIXED PILL — owner, 2026-09-11: "the top
-                                // bar looks custom, make it real Apple liquid glass, not custom".
-                                // This was a `Color.primary.opacity(0.14)` fill with its own
-                                // hairline and its own drop shadow: three numbers picked by eye,
-                                // which is exactly what reads as somebody's idea of a segmented
-                                // control rather than the system's. `Theme.liquidGlass` is the one
-                                // the whole app already uses and the one the track behind it uses,
-                                // so the raised half and the groove it sits in are now the same
-                                // material at two depths.
-                                Color.clear.liquidGlass(Capsule())
-                            }
-                        }
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
+        Picker("", selection: $tab) {
+            Text(Side.glowers.title).tag(Side.glowers)
+            Text(Side.glowing.title).tag(Side.glowing)
         }
-        // 3pt of track showing all the way round the pill — the inset is what makes it read as a
-        // thing sitting INSIDE the capsule rather than as the capsule's own half.
-        .padding(3)
-        .background { glassTrack }
-        .clipShape(Capsule())
+        .pickerStyle(.segmented)
+        .labelsHidden()
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        // ⛔ NO HAND-DRAWN HAIRLINE — owner, 2026-09-02: "the top header now has a border, use
-        // Apple native design". A 1pt rule under the tabs is a second edge competing with the nav
-        // bar's own, which draws its separator only when there is content under it. Ours was always
-        // there, which is what made the header read as boxed in.
+        .padding(.vertical, 8)
+        .onChange(of: tab) { _, _ in query = "" }
     }
 
-    /// ⛔ REAL LIQUID GLASS, NOT A GREY FILL — owner, 2026-09-11: the track has to be the iOS 26
-    /// material, not a flat plate. Painting the track is the exact mistake `CMContextMenu`'s
-    /// `GlassSegmentedSwitch` note and the picker's both write up: on a dark page a wash has nothing
-    /// to refract, so every tint resolves to grey plastic, which is what a `Color.primary.opacity()`
-    /// track would have given here.
-    ///
-    /// ⛔ THE APP'S OWN `liquidGlass()`, NOT A SECOND MECHANISM. `Theme.swift` has carried this
-    /// exact availability switch since the composer was built — real `glassEffect` on iOS 26, an
-    /// ultra-thin material below it — and every glass surface in the app goes through it. A private
-    /// `UIVisualEffectView` representable here would be a second answer to one question, which is
-    /// the drift this file's own comments keep warning about, and it would not pick up any future
-    /// change to the app's glass.
-    @ViewBuilder private var glassTrack: some View {
-        Color.clear.liquidGlass(Capsule())
-    }
-
-    /// ⛔ A NATIVE-SHAPED SEARCH FIELD — owner, 2026-09-02: "search bar size and rounded corners,
-    /// use Apple corners". The system's own field is a fully rounded capsule about 36pt tall; this
-    /// was a 12pt rounded rectangle at roughly 38, which reads as a text box rather than a search
-    /// field. Capsule and a stated 36 so it matches the one the chat list gets from `.searchable`.
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search", text: $query)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($searchFocused)
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 36)
-        .background(Color.primary.opacity(0.07), in: Capsule())
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        // ⛔ NO AUTO-FOCUS, AND THIS WOULD HAVE BEEN A REGRESSION. The `onAppear` here raised the
-        // keyboard the instant the field arrived, which was right while the field only arrived when
-        // the magnifier was tapped — that tap WAS the request to type. Now that the field is
-        // permanent (owner, 2026-09-11) the same line would throw the keyboard up every single time
-        // the page is opened, over a list he came to read. The slide-down transition went with it
-        // for the same reason: nothing is making room for anything any more.
-    }
+    // ⛔ `searchField` AND `glassTrack` ARE GONE — 2026-09-11. The field is `.searchable` on the
+    // body now, the same call the chat list makes, and the track belonged to the hand-made switch
+    // that a real `Picker` replaced. Do not rebuild either.
 
     // MARK: - The list
 

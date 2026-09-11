@@ -92,16 +92,32 @@ struct PostedStory: Identifiable, Equatable {
         }
         guard !uids.isEmpty else { state = .loaded([]); return }
         state = .loading
-        var out: [GlowPerson] = []
-        var anyFailed = false
-        for uid in uids {
-            if let p = await ProfileStore.shared.fetch(uid) {
-                out.append(GlowPerson(id: uid, name: p.name, handle: p.handle,
-                                      photoUrl: p.photoUrl, at: dates[uid] ?? .distantPast))
-            } else {
-                anyFailed = true
+        // ⛔ ALL AT ONCE, NOT ONE AFTER ANOTHER — owner, 2026-09-11, reporting the Glowers picker
+        // still spinning after the empty-key fix. That fix was real and was not this.
+        //
+        // ⚠️ THIS WAS A SERIAL LOOP OF NETWORK ROUND TRIPS. One `getDocument` per person, each
+        // awaited before the next was even asked for — so the spinner lasted the SUM of every
+        // fetch. His own account shows five Glowers and ten Glowing, which is fifteen round trips
+        // end to end before a single row can be drawn; on a slow connection that is many seconds of
+        // a screen that looks broken, and it gets linearly worse the more people he glows with.
+        // A group asks for all of them together, so the wait is the slowest ONE, not the total.
+        //
+        // ⚠️ THE ORDER IS RESTORED FROM THE INDEX, not from the order they come back in. `uids` is
+        // ordered and the rows must follow it — a task group finishes in whatever order the network
+        // decides, so each result carries the slot it belongs in.
+        var resolved = [GlowPerson?](repeating: nil, count: uids.count)
+        await withTaskGroup(of: (Int, UserProfile?).self) { group in
+            for (i, uid) in uids.enumerated() {
+                group.addTask { (i, await ProfileStore.shared.fetch(uid)) }
+            }
+            for await (i, p) in group {
+                guard let p else { continue }
+                resolved[i] = GlowPerson(id: uids[i], name: p.name, handle: p.handle,
+                                         photoUrl: p.photoUrl, at: dates[uids[i]] ?? .distantPast)
             }
         }
+        let out = resolved.compactMap { $0 }
+        let anyFailed = out.count < uids.count
         // ⚠️ A PARTIAL ANSWER IS STILL AN ANSWER. One profile that will not load — a deleted
         // account, a blocked read — must not turn the whole page into an error; it just is not a
         // row. Only a total failure with people to show is reported as failed.
