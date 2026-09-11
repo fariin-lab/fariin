@@ -498,25 +498,26 @@ struct ChatPinSetSheet: View {
     @State private var pin = ""
     @State private var busy = false
     @State private var failure = ""
-    /// ⛔ THE KEY IS TYPED TWICE — audit U6. One entry and Save meant a slip became your key
-    /// silently: the digits are not echoed anywhere while typing them, so the only way to learn you
-    /// had fat-fingered it was somebody telling you the key did not work. The second pass is the
-    /// standard for any code a person has to remember, and it costs four taps.
-    ///
-    /// ⚠️ THE FIRST ENTRY IS HELD HERE, NOT SENT. Nothing reaches the server until the two agree,
-    /// so a mismatch costs no round trip and no daily allowance.
-    @State private var firstEntry = ""
-    private var confirming: Bool { !firstEntry.isEmpty }
+    // ⛔ NO CONFIRM STEP — owner, 2026-09-11: "revert U6, I don't want the Chat Key to be entered
+    // twice. Keep the original flow: the user enters the Chat Key once and saves it directly."
+    //
+    // The audit's reasoning was that the digits are never echoed while typing, so a slip becomes
+    // your key silently. His answer stands on its own: the key IS echoed the moment it is saved —
+    // `ChatPinPage` shows it back in full, spaced out, with Copy and Share — so a mistyped key is
+    // visible on the very next screen and costs one tap on Change to correct. A second pass buys a
+    // check the page already performs.
+    //
+    // ⚠️ THE REST OF THE AUDIT'S WORK ON THIS SHEET STAYS: the keypad rests while a request is in
+    // flight, the saved value is frozen when it is sent, the handoff runs a runloop turn after the
+    // dismissal, and there is a way out that is not a guess.
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Text(confirming ? "Confirm your Chat Key" : "Choose a Chat Key")
+                Text("Choose a Chat Key")
                     .font(.headline)
                     .padding(.top, 26)
-                Text(confirming
-                     ? "Type it again so a slip cannot become your key."
-                     : "\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")
+                Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -554,8 +555,7 @@ struct ChatPinSetSheet: View {
         // detent instead of moving with the content. That is his own distinction — the keypad is app
         // content inside the safe area, the action is edge-attached.
         .safeAreaInset(edge: .bottom) {
-            ChatPinSubmitButton(title: confirming ? "Save" : "Next",
-                                enabled: ChatPin.isValid(pin), busy: busy) { advance() }
+            ChatPinSubmitButton(title: "Save", enabled: ChatPin.isValid(pin), busy: busy) { save() }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 // ⚠️ 8, NOT THE OLD 16. A `safeAreaInset` already sits above the home indicator, so
@@ -575,29 +575,11 @@ struct ChatPinSetSheet: View {
         .onChange(of: pin) { _, _ in failure = "" }
     }
 
-    /// First pass: remember and clear. Second: compare, and only then reach the server.
-    private func advance() {
-        guard ChatPin.isValid(pin), !busy else { return }
-        guard confirming else {
-            firstEntry = pin
-            pin = ""
-            failure = ""
-            return
-        }
-        guard pin == firstEntry else {
-            // Back to the start rather than to the second pass: the two entries disagree and there
-            // is no way to know which of them was the slip.
-            failure = "Those didn’t match. Try again."
-            firstEntry = ""
-            pin = ""
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-            return
-        }
-        save()
-    }
-
     private func save() {
+        guard ChatPin.isValid(pin), !busy else { return }
         busy = true
+        // Frozen here rather than read inside the Task, so a key press landing in the same turn
+        // cannot change what is saved — audit L6's other half, which stays.
         let chosen = pin
         Task {
             do {
@@ -609,9 +591,8 @@ struct ChatPinSetSheet: View {
                 DispatchQueue.main.async { handoff() }
             } catch {
                 busy = false
-                // Back to a single entry so the next attempt is a whole, deliberate one.
-                firstEntry = ""
-                pin = ""
+                // The typed key stays on screen: it was refused by the server, not mistyped, and
+                // clearing it would make the person re-enter something that was already right.
                 failure = error.localizedDescription
             }
         }
