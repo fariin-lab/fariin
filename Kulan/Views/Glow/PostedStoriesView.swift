@@ -291,6 +291,35 @@ struct PostedStoriesView: View {
     /// because the profile card behind See All draws the SAME stories a few points away — two
     /// screens filing one id would make the flight land on whichever of them registered last. The
     /// friends page and the Glowing page each carry their own prefix for exactly this reason.
+    /// ⛔ `openStory`, NOT `open` — and the name is the fix, not a preference. As `open(_:)` this
+    /// resolved to POSIX `open(_:_:)` from Darwin, which is a global visible in every Swift file:
+    /// the compiler reported "cannot convert PostedStory to UnsafePointer<CChar>", which is C's
+    /// file-opening path argument. A one-argument member called `open` on a View is a trap the next
+    /// person would fall into too.
+    ///
+    /// ⛔ THE TILE THAT WAS TAPPED IS THE ONE IT FLIES OUT OF — owner, 2026-09-11: "when I click the
+    /// image the story is not opening from that position, and scroll down to go back does not
+    /// return to that position".
+    ///
+    /// ⚠️ THIS TOOK NO ARGUMENT AT ALL. Every tile on the page called one function and handed the
+    /// flight `mine.id` — the key of the chat row's card, on a screen that is not even visible. So
+    /// the source rectangle resolved to something off-screen or to nothing, and both the open and
+    /// the close fell back to the plain presentation, whichever tile was pressed. The story that
+    /// played was right; the movement was always wrong.
+    private func openStory(_ story: PostedStory) {
+        if isMe {
+            guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
+            StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
+                           pinned: true, deliveredToMe: true)
+        } else {
+            let p = GlowPerson(id: uid,
+                               name: person?.name ?? title,
+                               handle: person?.handle ?? "",
+                               photoUrl: person?.photoUrl)
+            Task { await GlowStoryOpen.open(p, from: Self.tileKey(story.id)) }
+        }
+    }
+
     private static func tileKey(_ storyId: String) -> String { "postedpage-\(storyId)" }
 
     @ViewBuilder private var content: some View {
@@ -355,7 +384,7 @@ struct PostedStoriesView: View {
                                 // In select mode the tap CHOOSES rather than opens. Two meanings
                                 // for one gesture, told apart by the mode the bar is announcing.
                                 if editing { withAnimation(.snappy(duration: 0.18)) { toggle(s.id) } }
-                                else { open(s) }
+                                else { openStory(s) }
                             }
                             .overlay(alignment: .topLeading) {
                                 if editing { tick(on: selected.contains(s.id)) }
