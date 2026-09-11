@@ -112,7 +112,21 @@ struct StoryAudienceRow<Trailing: View>: View {
                 // white glyph on a solid tinted circle, which is exactly where the filled weight
                 // belongs. The outline of the same pair is used on the viewer's audience pill, where
                 // the glyph sits over a photograph.
-                if audience.kind == .custom {
+                // ⛔ GLOW'S OWN MARK, NOT `sparkles` — 2026-09-11 consistency pass, and the last
+                // call site the 2026-09-02 sweep missed. `GlowStyle.icon` replaced the symbol
+                // everywhere else the feature draws itself, with a note saying `sparkles` was "the
+                // system's nearest idea of a glow" and would go the day he sent a real drawing. He
+                // sent one; this badge kept the placeholder, so the Glowers row in Settings wore a
+                // different logo from the Glowers row one screen away.
+                //
+                // ⚠️ SAME 23 AS THE FOLDER BELOW, for the reason written there: a drawn glyph given
+                // an N-point frame really is N points, while an SF Symbol's point size is its CAP
+                // HEIGHT and draws visibly bigger. 23 is what makes a drawing match the 17pt symbols
+                // sharing this badge. The tint comes from `badgeGlyph` on the ZStack, which for
+                // Glowers is the background colour — see its note.
+                if audience.kind == .glowers {
+                    GlowStyle.mark(23).foregroundStyle(badgeGlyph)
+                } else if audience.kind == .custom {
                     // ⚠️ 23, NOT 19, and the reason is that these two are not measured the same way.
                     // `person.2.fill` beside it is an SF Symbol at 17pt, and a symbol's point size is
                     // its CAP HEIGHT, not its box — it draws noticeably wider and taller than 17.
@@ -138,6 +152,9 @@ struct StoryAudienceRow<Trailing: View>: View {
         switch audience.kind {
         case .everyone: return "globe"
         case .myFriends: return "person.2.fill"
+        // ⚠️ NO LONGER REACHED — Glowers is answered by its own drawing in the badge above, and
+        // this case survives only to keep the switch exhaustive. Left as the old symbol rather than
+        // deleted so it is obvious which branch went where if the badge is ever refactored.
         case .glowers: return "sparkles"
         case .custom: return "rectangle.stack.fill"
         // Never drawn: `StoryAudienceStore.all` excludes the hide list, because it is not an

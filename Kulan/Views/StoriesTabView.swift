@@ -698,7 +698,17 @@ struct StoriesTabView: View {
 
     @ViewBuilder private var notificationsButton: some View {
         NavigationLink(value: GlowRoute.notifications) {
-            Image(systemName: "bell")
+            // ⛔ THE APP'S OWN BELL — 2026-09-11 consistency pass. This was `Image(systemName:
+            // "bell")`, an SF Symbol, sitting in the SAME toolbar as `addStoryButton`'s `ic_stories`
+            // drawing a few points away: two icon families in one bar, which is exactly what he
+            // means by the app feeling like several people made it. `ic_bell` already exists and is
+            // already what the contact page's mute control uses.
+            //
+            // ⚠️ SIZED BY A `frame`, NOT BY `font`, and drawn as a template so it takes the tint —
+            // an asset ignores `font` entirely. Same 22 as the `ic_stories` button beside it, which
+            // is what makes the pair read as one bar. Both notes are written up on that button.
+            Image("ic_bell").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 22, height: 22)
                 .overlay(alignment: .topTrailing) {
                     if hasUnreadGlow {
                         Circle().fill(GlowStyle.accent)
