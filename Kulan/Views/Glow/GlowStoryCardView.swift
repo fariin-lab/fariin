@@ -425,14 +425,38 @@ struct GlowStoryCardView: View {
             // spring lives in `fingerDown`/`fingerUp`, so the press and the release cannot drift
             // apart from each other here.
             //
-            // BEFORE the reporter, the same order the archive strip uses, so the rectangle the lift
-            // is cropped from is the card as it is DRAWN mid-dip rather than as the model says.
-            .scaleEffect(pressKey != nil && pressVisual.squeezedKey == pressKey
-                         ? StoryPressVisual.dipScale : 1)
-            // LAST, so the rect it files is the whole card including its overlays — the flight lands
-            // on a rectangle, and half a rectangle would land short.
+            // ⛔ THE REPORTER GOES INSIDE THE DIP, NOT AFTER IT — owner, 2026-09-11, his second
+            // report of a white rim: "when I long press glowing stories card I see white border".
+            //
+            // ⚠️ THE ORDER WAS BACKWARDS AND THE OLD NOTE SAID SO WHILE DOING THE OPPOSITE. It read
+            // "BEFORE the reporter ... so the rectangle the lift is cropped from is the card as it
+            // is DRAWN mid-dip", which is the right intention and the wrong arrangement.
+            // `view.scaleEffect(s).background(anchor)` puts the anchor BEHIND the scaled view and
+            // OUTSIDE its transform: `scaleEffect` does not change a layout frame, so the background
+            // is laid out at the card's full size and stays there while the card shrinks.
+            //
+            // So the lift cropped a rectangle about 8.7% larger than the card it was photographing —
+            // roughly seven points of page background all the way round a 168pt card, which under
+            // the corner mask is the white rim he ringed. It is uniform on every side because it is
+            // a scale about the centre, which is why it never read as a corner problem.
+            //
+            // Applying the reporter FIRST puts the anchor inside the subtree the scale transforms,
+            // so its presentation layer carries the dip and `drawnRect` answers with the card as
+            // drawn. The crop and the pixels agree at every instant of the spring.
+            //
+            // ⚠️ THE FLIGHT IS UNAFFECTED AND THAT IS CHECKED, not assumed. `rects[key]` comes from
+            // the `GeometryReader`, which reports LAYOUT geometry — unchanged by a render transform
+            // — so the resting rectangle the open and close fly to is the same number it always was.
+            // And by the time either runs the press has ended and the scale is 1.
+            //
+            // Still LAST among the things that draw, so the rect covers the whole card including its
+            // overlays — the flight lands on a rectangle and half a rectangle would land short.
             .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow,
                                         cornerRadius: corner))
+            // 0.92 on a 0.28/0.7 spring, which is the chat row's dip — see the note above for why it
+            // now sits outside the reporter rather than inside it.
+            .scaleEffect(pressKey != nil && pressVisual.squeezedKey == pressKey
+                         ? StoryPressVisual.dipScale : 1)
     }
 }
 
