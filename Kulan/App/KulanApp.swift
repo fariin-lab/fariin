@@ -103,10 +103,20 @@ struct KulanApp: App {
                       let cid = try? await ChatService.openConversation(other: user) else { return }
                 await MainActor.run { AppRouter.shared.pendingChatId = cid }
             }
+        case .story:
+            // Deliberately nothing yet, and the shape is still parsed on purpose — see `DeepLink`.
+            // Doing nothing is the right behaviour until the site serves these: a half-built handler
+            // that opened the wrong screen would be worse than the link being inert.
+            return
         }
     }
 
-    enum DeepLink: Equatable { case user(String), group(String) }
+    /// ⚠️ `story` CARRIES AN ID THE APP CAN LOOK UP, which is the whole point of the shape — see
+    /// `storyLink`. Nothing consumes it yet: opening a shared story inside the app needs the site to
+    /// serve `/s/<id>` and the apple-app-site-association file on fariin.com to claim that path, and
+    /// neither is done. Parsed now so a link shared today is a link the app already understands the
+    /// day those two land, rather than one it has to be taught to recognise afterwards.
+    enum DeepLink: Equatable { case user(String), group(String), story(String) }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -121,6 +131,23 @@ struct KulanApp: App {
 
     static func groupLink(code: String) -> String {
         "\(linkHost)/g/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? code)"
+    }
+
+    /// ⛔ A STORY'S OWN ADDRESS — owner, 2026-09-11, with what Share was actually putting on his
+    /// clipboard pasted in full:
+    ///
+    ///     https://firebasestorage.googleapis.com:443/v0/b/kulan-2ef85.firebasestorage.app/o/
+    ///     stories%2FECBC3CED-…%2Fphoto.jpg?alt=media&token=813b9092-…
+    ///
+    /// "Please make it a simple link, use my domain."
+    ///
+    /// ⚠️ AND IT WAS WORSE THAN UGLY. That address is the FILE, not the story: it carries a
+    /// permanent unauthenticated download token, so anybody it is forwarded to can fetch the picture
+    /// for ever, with no account, after the story has expired and after it has been deleted. Sharing
+    /// a story must hand over a reference the app and the site can decide about, not a key to the
+    /// bucket.
+    static func storyLink(id: String) -> String {
+        "\(linkHost)/s/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)"
     }
 
     /// Reads either link shape into one answer. Static and pure so it can be tested without a
@@ -153,6 +180,7 @@ struct KulanApp: App {
         switch kind {
         case "u": return .user(value)
         case "g": return .group(value)
+        case "s": return .story(value)
         default:  return nil
         }
     }

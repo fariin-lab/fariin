@@ -295,9 +295,16 @@ struct PostedStoriesView: View {
         if selected.isEmpty { editing = false }
     }
 
+    /// ⛔ THE STORY'S OWN ADDRESS, NOT THE FILE'S — owner, 2026-09-11, with what this was putting on
+    /// his clipboard pasted in full: a firebasestorage.googleapis.com URL two hundred characters
+    /// long carrying a download token. "Please make it a simple link, use my domain."
+    ///
+    /// ⚠️ THE UGLINESS WAS THE SMALLER HALF OF IT. That address is the FILE: the token on the end is
+    /// permanent and unauthenticated, so anybody it reaches can fetch the picture for ever, with no
+    /// account, after the story has expired and after it has been deleted. See `KulanApp.storyLink`.
     private func shareSelected() {
-        let urls = selected.compactMap { myStory($0)?.mediaUrl }
-            .compactMap { URL(string: $0) }
+        let urls = selected.compactMap { myStory($0)?.id }
+            .compactMap { URL(string: KulanApp.storyLink(id: $0)) }
         guard !urls.isEmpty else { return }
         shareURLs = ShareURLs(urls: urls)
     }
@@ -414,7 +421,9 @@ struct PostedStoriesView: View {
                                         Label("Edit Viewers", systemImage: "person.2")
                                     }
                                     Button {
-                                        if let u = URL(string: full.mediaUrl) {
+                                        // The story's address, not the storage file's — see
+                                        // `shareSelected` for what that used to hand out.
+                                        if let u = URL(string: KulanApp.storyLink(id: full.id)) {
                                             shareURLs = ShareURLs(urls: [u])
                                         }
                                     } label: {
