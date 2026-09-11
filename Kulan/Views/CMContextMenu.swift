@@ -749,9 +749,17 @@ final class CMActionsCard: UIView {
     private let verticalInset: CGFloat = {
         if #available(iOS 26.0, *) { return 10 } else { return 0 }
     }()
-    private let corner: CGFloat = {
+    /// ⛔ THE CARD'S CORNER, AND NOW ALSO THE CHAT PEEK'S — his 2026-09-11 "the preview corners look
+    /// custom, use iOS 26 rounded corners", with the square ones circled. The chat list's long-press
+    /// preview hangs directly above this card and was drawing a hardcoded 12, which is this same
+    /// rule's PRE-26 branch. Two surfaces of one menu rounding differently is what he photographed.
+    ///
+    /// `static` so the peek can ask for it instead of copying the number — see `MainShell`'s `peek`.
+    /// The instance constant below stays, so nothing inside this file changes.
+    static let cardCorner: CGFloat = {
         if #available(iOS 26.0, *) { return 33 } else { return 12 }
     }()
+    private let corner: CGFloat = CMActionsCard.cardCorner
 
     init(actions: [CMAction]) {
         self.actions = actions

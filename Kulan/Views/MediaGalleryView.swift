@@ -1022,6 +1022,12 @@ struct MediaGalleryView: View {
 /// ⚠️ AND IT IS A COPY OF WHAT IS ALREADY THERE, not a fresh appearance. A new
 /// `UINavigationBarAppearance()` starts transparent and would take this bar's glass with it — the
 /// same trade the segmented control lost twice. Only `shadowColor` changes.
+///
+/// ⚠️ DO NOT REACH FOR THIS ON THE CHAT LIST. It was tried there on 2026-09-11 for his "top header
+/// is using border" and it is the wrong tool: `ChatNavigationItem.clearBarAppearance` deliberately
+/// nils every per-item appearance on that screen, and its own note says an override there is what
+/// drew the band he was reporting back in build 282. Whatever the chat list's outline is, it is not
+/// this bar's shadow.
 private struct NavBarNoHairline: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = UIView(frame: .zero)

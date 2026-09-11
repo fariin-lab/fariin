@@ -1598,14 +1598,29 @@ struct ChatsView: View {
     // Right: Mark all read + filter (All / Unread / Groups) + Message Requests + Archive.
     private var filterMenu: some View {
         Menu {
-            Button { markAllRead() } label: { Label("Mark All Read", systemImage: "checkmark.circle") }
-            Divider()
-            // Flat filter items (no "Filter by" header) — checkmark on the active one.
-            Button { chatFilter = 0 } label: { if chatFilter == 0 { Label("All", systemImage: "checkmark") } else { Text("All") } }
-            Button { chatFilter = 1 } label: { if chatFilter == 1 { Label("Unread", systemImage: "checkmark") } else { Text("Unread") } }
-            if Flags.groupsEnabled {
-                Button { chatFilter = 2 } label: { if chatFilter == 2 { Label("Groups", systemImage: "checkmark") } else { Text("Groups") } }
+            // ⛔ THE THREE FILTERS ARE A `Picker` NOW, AND THAT IS WHAT LETS THEM CARRY ICONS —
+            // owner, 2026-09-11: "add icons to All, Unread, Groups… use my custom icons only".
+            //
+            // ⚠️ THREE HAND-ROLLED `Button`s COULD NOT DO BOTH. Each one drew EITHER a checkmark
+            // (when it was the active filter) OR nothing, because a menu row has one leading slot
+            // and the tick was using it. Giving the rows icons that way would mean the selected
+            // filter silently losing its icon, or losing the tick — one or the other, on whichever
+            // row you are looking at. An inline `Picker` is the platform's own answer: the row keeps
+            // its icon and the selection is drawn as a trailing tick, which is what every system
+            // menu with a chosen option does.
+            //
+            // ⚠️ ALL TAKES THE READ DRAWING AND UNREAD TAKES THE UNREAD ONE — his pairing, not a
+            // choice of mine. Groups takes `person.2.fill`, which is the glyph this app already
+            // means "a group" with (New Group in the compose sheet, the My Friends story audience);
+            // he has no drawing of his own for it and asked for the one that already fits.
+            Picker("", selection: $chatFilter) {
+                Label { Text("All") } icon: { MenuIcon("ic_menu_read") }.tag(0)
+                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }.tag(1)
+                if Flags.groupsEnabled {
+                    Label { Text("Groups") } icon: { MenuIcon(system: "person.2.fill") }.tag(2)
+                }
             }
+            .pickerStyle(.inline)
             Divider()
             // ⛔ MESSAGE REQUESTS — owner, 2026-09-09: "Message Requests put when users click ...
             // Chats Open comtext menu inside chats". This is that menu, and the entry sits in the
@@ -1623,6 +1638,15 @@ struct ChatsView: View {
             }
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
+            }
+            // ⛔ LAST, NOT FIRST — owner, 2026-09-11, who wrote the order out in full. It sat at the
+            // top with a divider under it, which put the one ACTION in this menu above the things
+            // that only change what you are looking at. On its own at the bottom it reads the way a
+            // menu's one irreversible-ish entry should: after everything you might have come here
+            // for, not in front of them.
+            Divider()
+            Button { markAllRead() } label: {
+                Label { Text("Mark All Read") } icon: { MenuIcon(system: "checkmark.circle") }
             }
             // ⛔ NO "ADD STORY" HERE — owner, 2026-09-02, with the entry ringed. Posting a story is
             // the Stories tab's job and that tab now opens with its own add button in the header;
@@ -1743,8 +1767,14 @@ struct ChatsView: View {
         let nowMs = Date().timeIntervalSince1970 * 1000
         var out: [UIMenuElement] = []
 
+        // ⛔ HIS OWN DRAWING FOR READ — owner, 2026-09-11, with the row circled: "read icon update…
+        // don't touch unread icon, only update read icon". It was `envelope.open`, an SF Symbol, and
+        // the Unread row beside it has been one of his drawings since it was added. Two rows of one
+        // menu in two different hands is the mismatch he keeps photographing.
+        //
+        // ⚠️ `ic_menu_unread` IS UNTOUCHED, which he asked for in the same breath.
         if !conv.isBlockedByMe(me) && conv.hasUnreadMark(me) {
-            out.append(UIAction(title: "Read", image: ChatListIcon.symbol("envelope.open")) { _ in
+            out.append(UIAction(title: "Read", image: ChatListIcon.asset("ic_menu_read")) { _ in
                 // Full parity with opening the chat: reset MY counter, send read receipts, and drop
                 // its delivered notifications + fix the app badge.
                 Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
@@ -1756,10 +1786,18 @@ struct ChatsView: View {
             })
         }
 
+        // ⛔ HIS OWN TWO BELLS — owner, 2026-09-11, "mute and unmute icon update", with the Mute row
+        // circled and two SVGs attached. They were `bell` / `bell.slash`, SF Symbols.
+        //
+        // ⚠️ WHICH BELL GOES ON WHICH ROW IS HIS CALL, NOT THE CONVENTION, AND HE WAS ASKED. The
+        // drawing he labelled "mute icon" has NO slash and the one he labelled "unmute icon" HAS
+        // one — the opposite of what this menu drew before and of what a slash usually means. He was
+        // shown that and answered "exactly as I labelled them". So `ic_menu_mute` is the plain bell
+        // and `ic_menu_unmute` is the struck one. Do not "fix" this back.
         if OfficialChannel.isOfficial(conv.id) {
             let quiet = conv.isMuted(me, now: nowMs)
             out.append(UIAction(title: quiet ? "Unmute" : "Mute",
-                                image: ChatListIcon.symbol(quiet ? "bell" : "bell.slash")) { _ in
+                                image: ChatListIcon.asset(quiet ? "ic_menu_unmute" : "ic_menu_mute")) { _ in
                 Task { await ChatService.setMuted(conv.id, !quiet) }
             })
         } else {
@@ -1782,7 +1820,9 @@ struct ChatsView: View {
             mutes.append(UIAction(title: "Mute Always") { _ in
                 Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) }
             })
-            out.append(UIMenu(title: "Mute", image: ChatListIcon.symbol("bell.slash"), children: mutes))
+            // The submenu's own row, which is the one he circled. Same drawing as the plain Mute
+            // above — it is the same action, only with a choice of durations behind it.
+            out.append(UIMenu(title: "Mute", image: ChatListIcon.asset("ic_menu_mute"), children: mutes))
         }
 
         let pinned = conv.isPinned(me)
@@ -2046,8 +2086,19 @@ struct ChatsView: View {
                 //
                 // The view clips itself instead. `continuous` because every other rounded surface in
                 // this app is, and a circular corner beside them reads as the odd one out.
+                //
+                // ⛔ 33 ON iOS 26, NOT A FLAT 12 — his 2026-09-11 "the preview corners now look
+                // custom, please use rounded corners for iOS 26", with the square top corners
+                // circled. 12 is the PRE-26 number: `CMContextMenu`'s card already switches 33/12 on
+                // the same availability check, so the menu under the preview was drawing a 33pt
+                // corner while the preview above it drew 12. On a preview this wide 12 does not read
+                // as rounded at all, and beside a 33 it reads as a different design.
+                //
+                // ⚠️ ONE RULE, TWO SURFACES. Taken from the menu rather than measured off the
+                // screenshot, so the card and the thing it hangs off cannot drift apart again — the
+                // same reason `StoryAudienceRow.insets` and `StoryPeoplePicker.rowInsets` exist.
                 vc.view.clipsToBounds = true
-                vc.view.layer.cornerRadius = 12
+                vc.view.layer.cornerRadius = CMActionsCard.cardCorner
                 vc.view.layer.cornerCurve = .continuous
                 return vc
             }
@@ -3289,6 +3340,18 @@ struct ChatRow: View, Equatable {
     var voiceDraftSecs: Double = 0  // parked voice recording (local-only) → "Draft: 🎤 0:05" preview
     var voiceUnplayed: Bool = false // newest incoming voice note not played yet → accent mic
 
+    /// ⛔ THE RINGED AVATAR'S TWO NUMBERS, AND THEY MOVE TOGETHER — owner, 2026-09-11. The ring's
+    /// outer circle and the photo inside it are one measurement: the 2pt gap between the arc's inner
+    /// edge and the face is his, settled on 2026-09-02, and changing either of these alone would
+    /// close or open it. Named here rather than typed at the two use sites for that reason. The
+    /// reasoning, and what this reverses, is on `photoSize` in the row's body.
+    ///
+    /// A plain row's photo stays a flat 56 and is NOT written here — it is the layout slot, shared
+    /// with the official channel's avatar and with the frame the ring overhangs, and giving it a
+    /// name beside these two would invite somebody to "keep them in step".
+    private static let ringedSide: CGFloat = 58
+    private static let ringedPhotoSide: CGFloat = 50
+
     // The 15s self-clear the THREAD's typing already had, applied to the row (audit HIGH: a sender
     // whose app died mid-typing/recording labeled this row "typing…"/"recording…" FOREVER, across
     // restarts, hiding the real preview). task(id: typingRawKey) restarts the window whenever the
@@ -3673,7 +3736,19 @@ struct ChatRow: View, Equatable {
             // findable rather than a guess: at a 0pt gap (ring 60 over a 56pt photo) he asked for
             // space; at 3 (ring 56 over 46) he says it is too much. 48 puts the photo's edge at 24
             // against the arc's inner edge at 26 — a 2pt gap, the midpoint of his own two reports.
-            let photoSize: CGFloat = storySeen.isEmpty ? 56 : 48
+            //
+            // ⛔ THE RINGED CIRCLE IS 58 NOW, TWO POINTS PROUD OF A PLAIN ROW — owner, 2026-09-11,
+            // his FOURTH setting of this and it reverses the equal-circles rule above: "make the
+            // avatars that have a Story ring slightly larger than normal… very subtle, about 1–2
+            // pixels, just enough to make the Story ring clearly visible".
+            //
+            // ⚠️ WHAT MOVED AND WHAT DID NOT. The ring went 56 → 58 and the photo inside it 48 → 50,
+            // both by the same two points, so the 2pt gap between arc and face that he settled on is
+            // untouched: the arc's inner edge is 29 − 2 = 27 and the photo's is 25. A plain row's
+            // photo is still exactly 56. The LAYOUT SLOT is still a flat 56 (see the frame below) —
+            // the ring simply overhangs it by one point all round, which is why the text column, the
+            // row height and the margins do not move. That was his condition.
+            let photoSize: CGFloat = storySeen.isEmpty ? 56 : Self.ringedPhotoSide
             Group {
                 // The official channel has no account and therefore no profile photo to fetch: its
                 // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
@@ -3704,11 +3779,12 @@ struct ChatRow: View, Equatable {
                 .frame(width: 56, height: 56)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
-                        // 56, THE SAME OUTER CIRCLE A PLAIN AVATAR HAS — see the note above. It was
-                        // 66 while the photo stayed 56; both numbers moved together because they are
-                        // one measurement, and the 3pt gap between arc and face is unchanged.
+                        // TWO POINTS PROUD OF THE 56pt SLOT — see the note on `photoSize`. An
+                        // overlay is centred and does not clip, so this overhangs by one point all
+                        // round and changes no layout; the one point it takes vertically comes out
+                        // of the 12pt padding below and is not visible.
                         StoryRingView(seen: storySeen, lineWidth: 2)
-                            .frame(width: 56, height: 56)
+                            .frame(width: Self.ringedSide, height: Self.ringedSide)
                     }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).

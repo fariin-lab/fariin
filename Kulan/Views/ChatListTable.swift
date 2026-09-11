@@ -1399,6 +1399,27 @@ private final class ChatListCell: UITableViewCell {
             background.backgroundColor = UIBackgroundConfiguration.listPlainCell()
                 .updated(for: state).backgroundColor ?? .systemFill
         }
+        // ⛔ THE SWIPED ROW WEARS A GREY PLATE — owner, 2026-09-11, with Messages beside it: "when I
+        // swipe left or right there is now no grey, please make the Apple grey highlight like image
+        // 2". It is the same `isSwiped` state the clause above deliberately keeps CLEAR, and the two
+        // are not in conflict: that one is about the PRESS fill, which must not sit under a half-open
+        // platter, and this is the plate the row itself slides on.
+        //
+        // ⚠️ THIS IS NOT A RETURN OF THE 2026-09-05 REMNANT. That bug was a background resolved for
+        // one state and never re-asked when the swipe closed; this is resolved by the same
+        // `updateConfiguration` pass as everything else, so it goes when `isSwiped` goes. The reason
+        // the reset lives here and not in a completion handler is written above and still holds.
+        //
+        // ⚠️ THE TWO NUMBERS ARE MEASURED OFF HIS SCREENSHOT, not read from a system API, because
+        // there is no system background configuration for a swiped row to resolve. The radius is
+        // about a quarter of the row's height in his reference, and the plate bleeds off the leading
+        // edge rather than being inset there — it is sliding out from under the screen edge, so an
+        // inset would draw a corner in mid-air.
+        if state.isSwiped {
+            background.backgroundColor = .secondarySystemBackground
+            background.cornerRadius = 18
+            background.backgroundInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+        }
         backgroundConfiguration = background
     }
 }
