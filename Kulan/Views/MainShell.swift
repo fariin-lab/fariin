@@ -1091,11 +1091,20 @@ struct ChatsView: View {
     // inline text links instead.
     private var emptyWelcome: some View {
         VStack(spacing: 14) {
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 40))
+            // ⛔ HIS OWN CHAT MARK — owner, 2026-09-11: "update, use my custom icon chats". It was
+            // `bubble.left.and.bubble.right.fill`, an SF Symbol, on the one screen a brand-new
+            // account sees first — drawn in a different hand from the tab bar two inches below it.
+            //
+            // ⚠️ AN ASSET CANNOT TAKE `.symbolEffect`, so the greeting had to be re-expressed rather
+            // than dropped. `symbolEffect(.bounce)` is SF Symbols only; on an `Image(_:)` it does
+            // nothing at all, quietly. A spring on a `scaleEffect` driven by the same one-shot
+            // counter gives the same single greeting — the note that was here about an endless
+            // repeat reading as fidgety is still the reason it fires once.
+            Image("ic_chat").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 40, height: 40)
                 .foregroundStyle(.quaternary)
-                // One greeting bounce on appear (endless repeat read as fidgety).
-                .symbolEffect(.bounce, value: welcomeGreet)
+                .scaleEffect(welcomeGreet > 0 ? 1 : 0.86)
+                .animation(.spring(response: 0.5, dampingFraction: 0.55), value: welcomeGreet)
                 .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { welcomeGreet += 1 } }
             VStack(spacing: 4) {
                 Text("No chats yet").font(.title3.weight(.semibold))
@@ -2320,10 +2329,23 @@ struct ChatsView: View {
                                     // + the archive row when it is showing: archive every chat you
                                     // have and the list is "empty", so this overlay would otherwise
                                     // land on top of the one row still standing (and eat its taps).
+                                    // ⛔ CENTRED IN THE LIST AREA — owner, 2026-09-11, with the
+                                    // block and the space under it circled: "make it centre".
+                                    //
+                                    // ⚠️ THE OVERLAY IS `alignment: .top`, WHICH IS RIGHT FOR ITS
+                                    // OTHER TWO BRANCHES AND WRONG FOR THIS ONE. Both of those are
+                                    // `ContentUnavailableView`, which fills whatever space it is
+                                    // given and centres its own content — so the alignment never
+                                    // mattered to them. `emptyWelcome` is a plain `VStack` that
+                                    // hugs its content, so under a top alignment it parked 24
+                                    // points below the search field with the rest of the screen
+                                    // empty beneath it.
+                                    //
+                                    // Filling the overlay makes it centre itself the same way the
+                                    // system view does, rather than changing the overlay's
+                                    // alignment and moving the other two branches with it.
                                     emptyWelcome
-                                        // Was `24 + archivedRowHeight` when that row could sit
-                                        // under an empty list. There is no row to clear now.
-                                        .padding(.top, 24)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 } else {
                                     // Per-filter copy — the Groups filter was showing the Unread text.
                                     ContentUnavailableView(
