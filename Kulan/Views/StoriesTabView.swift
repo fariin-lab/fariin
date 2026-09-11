@@ -438,6 +438,29 @@ struct StoriesTabView: View {
                                           rectKey: mine.id)
                     }
                     .buttonStyle(.plain)
+                } else {
+                    // ⛔ AND WHEN THERE IS NO STORY YET, THE SAME CARD IS THE WAY TO POST ONE —
+                    // owner, 2026-09-11, on a fresh account: "when i create new account, add story
+                    // card is not appearing".
+                    //
+                    // ⚠️ THE GRID HAD NO DOOR TO THE COMPOSER AT ALL. The branch above is gated on
+                    // `mine` AND on that group holding a story, which is exactly the state a new
+                    // account is not in — so the page drew its "Friends" heading over nothing, with
+                    // no way to post from the screen whose whole purpose is posting. The UIKit strip
+                    // has always had its compose card (`onCompose`), and this grid is the layout
+                    // used INSTEAD of that strip, so losing it here lost it outright.
+                    //
+                    // It is deliberately the same card rather than a second design: same face, ring,
+                    // badge, corner and aspect as the My Story card it becomes the moment something
+                    // is posted, so the page does not change shape when the first story lands.
+                    Button { composeStory() } label: {
+                        GlowStoryCardView(thumbUrl: "",
+                                          name: "Add Story",
+                                          authorPhoto: profile.me?.photoUrl,
+                                          isMine: true,
+                                          isAdd: true)
+                    }
+                    .buttonStyle(.plain)
                 }
                 ForEach(groups) { g in
                     Button { openStoryFromRow(g) } label: {

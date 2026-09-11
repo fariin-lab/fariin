@@ -129,6 +129,16 @@ struct GlowStoryCardView: View {
     /// Draws the small ⊕ on the face, which marks YOUR OWN card — his reference has it on My Story
     /// and nowhere else.
     var isMine: Bool = false
+    /// ⛔ THE CARD WITH NO STORY BEHIND IT — the compose button on the Friends grid, for an account
+    /// that has not posted yet. It draws the Glowing grid's own placeholder surface where the photo
+    /// would be and is otherwise this card exactly: same aspect, same corner, same face, same ring,
+    /// same badge, same name treatment.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE AN EMPTY `thumbUrl` IS NOT AN EMPTY CARD. The picture layer is
+    /// `StoryImage`, and with no image it draws the shimmer skeleton and retries the load with
+    /// backoff — deliberately, so a real card never shows a dead black photo. A card that never had
+    /// a url would therefore shimmer for ever, which is worse than the blank page it replaces.
+    var isAdd: Bool = false
     /// ⛔ THE FACE IS ITS OWN TAP TARGET — his correction, 2026-09-02. The CARD opens the story;
     /// the face on it opens the person. Nil leaves the face inert, which is what the friends grid
     /// wants (its whole card is one story door).
@@ -197,12 +207,14 @@ struct GlowStoryCardView: View {
     }
 
     init(thumbUrl: String, name: String, authorPhoto: String?, isMine: Bool = false,
+         isAdd: Bool = false,
          rectKey: String? = nil, corner: CGFloat = GlowStoryCardView.corner,
          onAvatarTap: (() -> Void)? = nil) {
         self.thumbUrl = thumbUrl
         self.name = name
         self.authorPhoto = authorPhoto
         self.isMine = isMine
+        self.isAdd = isAdd
         self.rectKey = rectKey
         self.corner = corner
         self.onAvatarTap = onAvatarTap
@@ -219,7 +231,9 @@ struct GlowStoryCardView: View {
             // His reference's proportion: a tall card, a touch shorter than a full 9:16 story, so
             // two columns of them leave room for a third row to peek and invite a scroll.
             .aspectRatio(Self.aspect, contentMode: .fit)
-            .overlay { StoryImage(url: thumbUrl) }
+            // The compose card has no photo to draw and must not be handed to `StoryImage` — see
+            // `isAdd`. Same fill the Glowing grid waits behind, so the two read as one family.
+            .overlay { if isAdd { Color.primary.opacity(0.08) } else { StoryImage(url: thumbUrl) } }
             .overlay(alignment: .bottom) {
                 // The name has to survive a bright photograph, and a scrim is what does that
                 // without dimming the whole card — the same trick the story caption uses.
