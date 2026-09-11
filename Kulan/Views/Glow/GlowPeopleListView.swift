@@ -45,12 +45,6 @@ struct GlowPeopleListView: View {
 
     @State private var tab: Side = .glowers
     @State private var query = ""
-    /// ⛔ SEARCH IS A BUTTON NOW — owner, 2026-09-11, same reference. The field used to sit under the
-    /// header on every visit, which spends a whole row of the screen on a control most openings of
-    /// this page never touch; his reference keeps the magnifier in the navigation bar and gives the
-    /// row back to people. The field itself is unchanged — same `query`, same filter, same clear ✕ —
-    /// it is only its visibility that this flag owns.
-    @State private var showSearch = false
     @FocusState private var searchFocused: Bool
     @State private var loader = GlowPeopleLoader()
     private var glow = GlowService.shared
@@ -58,33 +52,19 @@ struct GlowPeopleListView: View {
     var body: some View {
         VStack(spacing: 0) {
             tabs
-            if showSearch { searchField }
+            // ⛔ ALWAYS UNDER THE BAR — owner, 2026-09-11, reversing the button he asked for the
+            // same morning: "search bar should always appear under the glowers bar". The magnifier
+            // saved a row and cost a tap, and he has now looked at both. The field, its query, its
+            // filter and its clear ✕ never moved; only whether it is behind a button.
+            searchField
             list
         }
         .navigationTitle(title.isEmpty ? "Glow" : title)
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { searchButton } }
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
-    }
-
-    /// ⚠️ IT TOGGLES, IT DOES NOT ONLY OPEN. A magnifier that can only reveal leaves no way back:
-    /// the field's own ✕ clears the text but keeps the row, so without this the header would be one
-    /// row shorter for the rest of the visit. The symbol says which way it goes.
-    ///
-    /// ⚠️ CLOSING CLEARS THE QUERY, and that is a correctness fix rather than tidiness. A hidden
-    /// field holding "ab" leaves the list filtered with nothing on screen explaining why — the same
-    /// trap as an invisible filter chip.
-    private var searchButton: some View {
-        Button {
-            withAnimation(.snappy(duration: 0.22)) { showSearch.toggle() }
-            if !showSearch { query = ""; searchFocused = false }
-        } label: {
-            Image(systemName: showSearch ? "xmark" : "magnifyingglass")
-                .foregroundStyle(Color.primary)
-        }
     }
 
     // MARK: - Chrome
@@ -200,15 +180,12 @@ struct GlowPeopleListView: View {
         .frame(height: 36)
         .background(Color.primary.opacity(0.07), in: Capsule())
         .padding(.horizontal, 16).padding(.vertical, 12)
-        // It slides down out of the header rather than appearing, so the list visibly makes room
-        // for it — the row it takes is the thing the magnifier trades away.
-        .transition(.move(edge: .top).combined(with: .opacity))
-        // ⚠️ ONE RUNLOOP TURN BEFORE THE FOCUS, NOT IN THE BUTTON'S ACTION. Writing `searchFocused`
-        // in the same frame the field is inserted is dropped on the floor: there is no responder
-        // yet to take it, and the keyboard never opens — which would make the magnifier a two-tap
-        // control. `onAppear` here fires exactly when the field arrives, and the hop puts the write
-        // after the insertion.
-        .onAppear { DispatchQueue.main.async { searchFocused = true } }
+        // ⛔ NO AUTO-FOCUS, AND THIS WOULD HAVE BEEN A REGRESSION. The `onAppear` here raised the
+        // keyboard the instant the field arrived, which was right while the field only arrived when
+        // the magnifier was tapped — that tap WAS the request to type. Now that the field is
+        // permanent (owner, 2026-09-11) the same line would throw the keyboard up every single time
+        // the page is opened, over a list he came to read. The slide-down transition went with it
+        // for the same reason: nothing is making room for anything any more.
     }
 
     // MARK: - The list
