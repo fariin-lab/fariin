@@ -94,9 +94,27 @@ struct WallpaperPickerSheet: View {
                             libraryTile(pid).id("p-\(pid)")
                         }
                     }
-                    .padding(.horizontal, 20)
+                    // ⛔ THE LEAD-IN IS SPLIT BETWEEN THE CONTENT AND THE VIEWPORT NOW — owner,
+                    // 2026-09-11, ringing both ends of this row: "wallpaper left and right angles,
+                    // make like an inner border, fix, make like image 2 — image 2 is not cutting
+                    // the corners like this. Only the angles, don't touch other areas."
+                    //
+                    // ⚠️ ALL TWENTY POINTS USED TO BE ON THE CONTENT, AND CONTENT PADDING SCROLLS
+                    // AWAY. It gives a gap before the first tile at rest and nothing at all once the
+                    // row has moved — and this row opens ALREADY SCROLLED, to centre whichever
+                    // wallpaper is in use. So in practice the first thing he ever sees is a tile
+                    // sliced off flat against the sheet's own edge, its rounded corner gone, at both
+                    // ends at once. That is the picture he ringed.
+                    //
+                    // Padding the SCROLL VIEW instead insets the viewport, so the clip happens 16
+                    // points in from the sheet and a strip of sheet shows either side however far
+                    // the row is scrolled — which is the inner border his reference has. The 4 left
+                    // on the content keeps the at-rest gap at the same 20 it has always been, so
+                    // nothing about the resting layout moves.
+                    .padding(.horizontal, 4)
                     .padding(.vertical, 4)
                 }
+                .padding(.horizontal, 16)
                 // Open scrolled to the wallpaper currently in use, so it's visible + clearly selected.
                 .onAppear {
                     DispatchQueue.main.async {
