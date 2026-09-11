@@ -495,6 +495,26 @@ struct ChatListTable: UIViewControllerRepresentable {
 final class ChatListSelfSizingTable: UITableView {
     private let footer = UIView()
 
+    /// ⛔ SET WHILE A PUSH OR POP IS IN FLIGHT — audit, 2026-09-11, and it is half of his "the list
+    /// jumps when I come back from a chat".
+    ///
+    /// ⚠️ THIS VIEW RECOMPUTES FROM `frame` AND `adjustedContentInset`, AND BOTH MOVE EVERY FRAME OF
+    /// A TRANSITION — the navigation bar changes height as the search row comes and goes, the tab
+    /// bar slides back in, and the controller writes `contentInset.bottom` from
+    /// `viewSafeAreaInsetsDidChange` as it does. So the footer was being reassigned, and
+    /// `contentSize` moved with it, once per frame for the whole animation.
+    ///
+    /// A shrinking `contentSize` makes UIKit CLAMP `contentOffset`. That clamp is unanimated, it is
+    /// not undone by anything, and nothing in this file saves an offset to restore — so the list
+    /// simply arrives somewhere else. Holding the footer still for the length of the transition
+    /// costs one recompute at the end and removes the whole class of jump.
+    var suspendFooterUpdates = false {
+        didSet {
+            guard !suspendFooterUpdates, oldValue else { return }
+            updateFooterHeight()
+        }
+    }
+
     override init(frame: CGRect, style: UITableView.Style) {
         super.init(frame: frame, style: style)
         tableFooterView = footer
@@ -512,6 +532,9 @@ final class ChatListSelfSizingTable: UITableView {
     }
 
     private func updateFooterHeight() {
+        // See `suspendFooterUpdates`: during a transition this would move `contentSize` on every
+        // frame, and a shrinking content size clamps the scroll position.
+        guard !suspendFooterUpdates else { return }
         // What the rows actually have to fill, once the bars and the bottom clearance are removed.
         var available = frame.inset(by: adjustedContentInset).height
             - (tableHeaderView?.frame.height ?? 0)
@@ -733,12 +756,55 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        registerAsContentScrollView()
+        // ⛔ REGISTERED ONCE, NOT ON EVERY APPEARANCE — audit, 2026-09-11. `setContentScrollView`
+        // makes the navigation bar re-decide `standard` vs `scrollEdge` and re-lay-out its content,
+        // the search row included; doing that while the bar is ALREADY animating a pop is a flicker
+        // for no gain. `didMove(toParent:)` has always done the real registration.
+        if tableView.window == nil { registerAsContentScrollView() }
+        isInTransition = true
         pinSearchBar()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        isInTransition = false
+    }
+
+    /// ⛔ THE PIN IS RE-ASSERTED IN THE LAYOUT PASS, AND THAT IS THE WHOLE FIX — owner,
+    /// 2026-09-11: "when I open a chat and press Back, the search bar disappears temporarily, the
+    /// list jumps, and the search bar reappears after a second, which looks like the UI is
+    /// rebuilding."
+    ///
+    /// ⚠️ THE PIN WAS BEING LOST AND REPAIRED TOO LATE, and that one fact produces all three
+    /// symptoms in the order he lists them. The pop re-renders the SwiftUI body, so `.searchable`
+    /// re-installs its `UISearchController` — and a freshly installed one has
+    /// `hidesSearchBarWhenScrolling` back at its default `true` with no search row laid out. So:
+    ///
+    ///   1. the bar shrinks by the search row's height → THE FIELD DISAPPEARS;
+    ///   2. the table's top inset shrinks with it while `contentOffset` is deliberately left alone
+    ///      (see the two "DO NOT compensate" notes in this file) → EVERY ROW SHIFTS UP;
+    ///   3. `viewDidAppear`, or whichever render lands next, calls `reassertNavChrome` and sets the
+    ///      flag back → THE FIELD RETURNS and the rows shift back.
+    ///
+    /// His "about a second" is exactly the gap between the render that tore it down and the callback
+    /// that repaired it. Repairing it from `viewWillLayoutSubviews` closes that gap: the flag is
+    /// restored in the SAME layout pass that installed the controller, so there is never a frame
+    /// drawn without it.
+    ///
+    /// ⚠️ AND A NIL LOOKUP IS NO LONGER A DEAD END. `searchHostItem()` returns nil while the
+    /// controller is transiently absent, and the old code simply gave up until some later render
+    /// happened along. This runs on every layout pass, so a nil now is retried a few milliseconds
+    /// later by construction rather than by a scheduled retry.
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        reassertNavChrome()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // The arrival has settled: let the footer resize again and replay whatever the transition
+        // held back, in one pass rather than one per frame.
+        isInTransition = false
         // SwiftUI installs the search controller around the time the page appears, so the flag is
         // set once more here — the `viewWillAppear` pass can run before there is an item to set it
         // on. Guarded, so the second call is a comparison and nothing else.
@@ -951,7 +1017,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // A stationary finger was never the problem anyway. The jump he reported is content moving
         // under a finger that is SCROLLING, and `isDragging` is exactly that. The reference app gates
         // on neither: it defers only while the view is off screen or the app is not active.
-        if tableView.isDragging || tableView.isDecelerating {
+        if tableView.isDragging || tableView.isDecelerating || isInTransition {
             deferredState = (new, animated)
             // `state` has already advanced to `new` above, and the replay needs the diff against
             // what is actually ON SCREEN — so it is rewound here and the replay does the comparing.
@@ -1619,6 +1685,27 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// The state that arrived while a finger was down — see the guard in `apply`. Whole snapshots,
     /// so a later one simply replaces an earlier one and the list never replays a backlog.
     private var deferredState: (ChatListRenderState, Bool)?
+
+    /// ⛔ TRUE FROM `viewWillAppear` UNTIL THE ARRIVAL HAS SETTLED — audit, 2026-09-11. Two separate
+    /// things read it, and both were causing his "looks like the UI is rebuilding":
+    ///
+    ///   • `apply` defers, because `updateUIViewController` fires TWICE across a pop (once when the
+    ///     path changes, once when the header icons flip back) and each pass hands every visible
+    ///     cell a fresh hosting configuration while UIKit is animating the transition snapshot;
+    ///   • the table's self-sizing footer stops recomputing, because the safe area moves every frame
+    ///     of a pop and the footer was reassigning `tableFooterView` — and therefore `contentSize` —
+    ///     once per frame. A shrinking content size makes UIKit CLAMP `contentOffset`, which is an
+    ///     unanimated jump nothing here ever restores.
+    ///
+    /// The drag guard could not cover either: during a pop the table is neither dragging nor
+    /// decelerating, so both went straight through.
+    private var isInTransition = false {
+        didSet {
+            guard isInTransition != oldValue else { return }
+            (tableView as? ChatListSelfSizingTable)?.suspendFooterUpdates = isInTransition
+            if !isInTransition { flushDeferredState() }
+        }
+    }
 
     /// Scrolling has genuinely stopped: put the newest state on screen.
     ///

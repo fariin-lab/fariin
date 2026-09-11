@@ -205,6 +205,13 @@ struct StoriesTabView: View {
             await glowPeople.load(Array(glow.glowRelationship).sorted(), key: glowKey)
             await glowStories.load(Array(glow.glowRelationship).sorted(), key: glowKey)
         }
+        // ⛔ THE FIRST RUN IS OVER THE MOMENT THE SKELETON COMES DOWN, not when the glow fetch
+        // finishes. `GlowStoriesCache.write` marks it too, but that lands after two round trips per
+        // person — so leaving the tab before it returned would show the skeleton all over again on
+        // the next visit, which is exactly what he ruled out.
+        .onChange(of: showsFirstRunSkeleton, initial: true) { _, showing in
+            if !showing { GlowStoriesCache.hasEverLoaded = true }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -413,8 +420,21 @@ struct StoriesTabView: View {
     /// the data on a slow connection.
     private var showsFirstRunSkeleton: Bool {
         guard !GlowStoriesCache.hasEverLoaded else { return false }
-        // Nothing to draw AND nothing known yet. Either answer arriving empty is still an answer.
-        return !glow.hasLoaded || !StoriesRepository.shared.didLoad || glowStories.state.isLoading
+        // ⛔ IT WAITS FOR THE LAYOUT, NOT FOR THE CONTENT — owner, 2026-09-11, minutes after the
+        // first build of it: "skeleton loading in story is taking more time, fix."
+        //
+        // ⚠️ `glowStories.state.isLoading` WAS IN THIS CONDITION AND IS THE WHOLE OF THAT REPORT.
+        // That loader does two round trips PER PERSON, one after another, so on a first run with
+        // eight glow people it stays `.loading` for sixteen sequential requests — and the skeleton
+        // was covering every one of them. His own spec is narrower than that: the skeleton is for
+        // "while the system is determining whether the user has Glowing avatars and whether Friends
+        // Stories are available", which is a question about the SHAPE of the page.
+        //
+        // Both of those are answered by the two flags below, and `hasGlowGrid` already knows what to
+        // draw while the glow fetch is still running — it returns true for `.loading` whenever there
+        // is a relationship at all. So the skeleton now comes down as soon as the page knows its own
+        // shape, and the Glowing cards fill in behind it, which is both his spec and the fast thing.
+        return !glow.hasLoaded || !StoriesRepository.shared.didLoad
     }
 
     /// The grey cards he photographed: the Friends heading, then two columns of plain rounded
