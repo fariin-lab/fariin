@@ -380,9 +380,19 @@ final class StoryCubePagerVC: UIViewController {
     /// just drops them for longer. The frames themselves are fixed in `applyFold` instead.
     private static let settleDuration: CFTimeInterval = 0.165
 
-    /// ⛔ KEPT AS HISTORY, DELIBERATELY UNUSED. Their full-face duration, tried and rejected — see
-    /// the note above before reaching for it again.
-    private static let fullFaceDuration: CFTimeInterval = 0.4
+    /// ⛔ 0.28, AND IT IS IN USE AGAIN — how long a WHOLE face takes, which in practice means a tap.
+    ///
+    /// ⚠️ NOT THEIR 0.4, AND THAT DISTINCTION IS THE WHOLE REASON THIS IS A SEPARATE NUMBER. Their
+    /// duration was tried on 2026-08-20 and he rejected it on sight ("use the speed you used
+    /// before, just make it smooth and more fps"), so 0.4 is known to be too slow for him and is not
+    /// what came back. 0.28 sits between his 0.165 and their 0.4: two thirds again as long as the
+    /// turn he liked the speed of, which buys the tail its fourteen frames without the turn reading
+    /// as slow.
+    ///
+    /// ⛔ THIS IS THE ONE NUMBER TO TURN if the turn now feels sluggish — down towards 0.22, where
+    /// the last tenth still gets eleven frames. Up towards 0.34 if the settle is still not visible.
+    /// `settleDuration` is the floor and belongs to swipes; leave it alone.
+    private static let fullFaceDuration: CFTimeInterval = 0.28
 
     /// ⛔ HOW LONG A TURN TAKES DEPENDS ON HOW FAR IT HAS TO GO, and until now it did not.
     ///
@@ -399,9 +409,29 @@ final class StoryCubePagerVC: UIViewController {
     /// them — it is the FLOOR. Anything longer than a bit over four tenths of a face scales up to
     /// their 0.4 for a full one, so a tap now gets the time their turn takes and every swipe that
     /// lands inside the floor feels precisely as it did before.
+    /// ⛔ A TAP GETS LONGER THAN A SWIPE TAIL AGAIN — owner, 2026-09-11, reporting the snap a SECOND
+    /// time on build 742, which already carries the curve fix (`springDuration` 0.5 → 2.0): "when I
+    /// click to go to the next person ... the image suddenly jumps into place at the end. [Theirs]
+    /// has a small, slow, smooth settling animation as the image finishes moving into position."
+    ///
+    /// ⚠️ THE CURVE WAS ONLY HALF OF IT, AND THE ARITHMETIC SAYS WHY. Redistributing the spring gave
+    /// the last tenth of the rotation 42% of the turn instead of 15% — a real change, and it is in
+    /// the build he is holding. But 42% of 0.165s is 0.07s, which is eight frames at 120Hz to cover
+    /// the final nine degrees. There is no curve that makes eight frames read as a settle; the tail
+    /// he is describing needs more clock than the whole turn has.
+    ///
+    /// His words name the case exactly — "when I CLICK to go to the next person" — and a tap is the
+    /// long one: it turns a WHOLE face from a standing start, where a swipe-release only finishes
+    /// whatever the finger left, usually a tenth to four tenths. One duration covered both, which is
+    /// why the swipe he has always called smooth and the tap he keeps reporting felt different.
+    ///
+    /// So the clock scales with the distance again — the thing this function was built for and then
+    /// disabled. `settleDuration` stays exactly as it is and becomes the FLOOR, so every swipe tail
+    /// is untouched to the frame; a full face gets `fullFaceDuration`, and its last tenth is now
+    /// about 0.12s, fourteen frames, which is a deceleration the eye can follow.
     private static func span(forDistance distance: CGFloat) -> CFTimeInterval {
-        _ = distance          // his speed, whatever the distance — see `settleDuration`
-        return Self.settleDuration
+        let faces = min(1, abs(CGFloat(distance)))
+        return max(Self.settleDuration, Self.fullFaceDuration * CFTimeInterval(faces))
     }
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
