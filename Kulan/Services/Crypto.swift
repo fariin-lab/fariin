@@ -279,6 +279,14 @@ final class Crypto {
 
     /// Fetch + cache another user's public key. Returns nil if they have none yet.
     @discardableResult
+    /// Is this peer's public key already in memory? Synchronous and lock-guarded, so a caller can
+    /// tell a cache hit from a real fetch without awaiting one — see the chat list's key warm, which
+    /// republishes only when something was actually fetched.
+    func hasCachedKey(_ uid: String) -> Bool {
+        guard !uid.isEmpty else { return false }
+        return lock.withLock { pubCache[uid] != nil }
+    }
+
     func preloadKey(_ uid: String) async -> Bytes? {
         guard !uid.isEmpty else { return nil }
         if let cached = lock.withLock({ pubCache[uid] }) { return cached }

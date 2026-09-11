@@ -113,13 +113,44 @@ final class ConversationsRepository {
                 // (was N sequential round-trips → slow cold start). preloadKey is cached, so the
                 // re-run on later snapshots is mostly hits.
                 Task {
-                    await withTaskGroup(of: Void.self) { group in
+                    // ⛔ AND TELL THE LIST WHEN A KEY ARRIVES — owner, 2026-09-11: "when I send a
+                    // message for someone for request message, in the chat list I can't see the
+                    // message I sent ... 2 people I sent request message but the message I sent I
+                    // can't see."
+                    //
+                    // ⚠️ THE PREVIEW WAS NOT EMPTY, IT WAS THE "KEYS NOT READY" MARKER. `decrypt`
+                    // returns "…" when the other person's public key is not in the cache yet, and
+                    // that ellipsis is exactly what he photographed. The order here is what put it
+                    // there: `publish` hands the rows to SwiftUI, the rows decrypt immediately, and
+                    // only THEN does this task fetch the keys they needed.
+                    //
+                    // ⚠️ WHY IT ONLY BIT REQUEST CHATS, which is the part worth keeping. The sentinel
+                    // is deliberately not memoised (see `decryptCached`), so any later render heals
+                    // it — and a busy chat gets one within seconds, because every typing flag and
+                    // read receipt is another snapshot. A request nobody has answered produces NO
+                    // further snapshots at all: the one message is the last thing that will ever
+                    // happen in it until they reply. So the first render was the only render, and
+                    // the ellipsis was permanent in precisely the chats that never change.
+                    //
+                    // Republishing once, and only when something was actually fetched, is the whole
+                    // fix: the rows re-decrypt with the keys now in hand. `wasCached` costs a
+                    // dictionary read, so a snapshot whose keys are all warm — which is nearly all
+                    // of them — does nothing at all.
+                    var fetchedAny = false
+                    await withTaskGroup(of: Bool.self) { group in
                         for c in convs {
                             let key = c.isGroup ? c.lastSender : c.otherUid(uid)
                             guard !key.isEmpty else { continue }
-                            group.addTask { _ = await Crypto.shared.preloadKey(key) }
+                            group.addTask {
+                                let alreadyWarm = Crypto.shared.hasCachedKey(key)
+                                _ = await Crypto.shared.preloadKey(key)
+                                return !alreadyWarm && Crypto.shared.hasCachedKey(key)
+                            }
                         }
+                        for await didFetch in group where didFetch { fetchedAny = true }
                     }
+                    guard fetchedAny else { return }
+                    await MainActor.run { self.republishForKeys() }
                 }
             }
         Task { try? await Crypto.shared.ensureReady() }   // key setup in the background
@@ -163,6 +194,23 @@ final class ConversationsRepository {
                 self?.voicePrefetchInFlight.remove(cid)
             }
         }
+    }
+
+    /// ⛔ NUDGE THE LIST AFTER A KEY LANDS — see the warm task in the listener for the report and the
+    /// reasoning. This is NOT a re-run of `publish`: that would re-add the demo chats, re-run the
+    /// voice prefetch and re-warm the history preloader, none of which has anything to do with a
+    /// public key arriving. All that is needed is for SwiftUI to ask the rows for their text again.
+    ///
+    /// ⚠️ REASSIGNING THE SAME VALUES IS THE POINT, not a mistake. `Conversation` is `Equatable` and
+    /// nothing about it has changed — what changed is a cache OUTSIDE it, which `@Observable` cannot
+    /// see. Writing the array is the one thing that makes the rows re-decrypt. It happens at most
+    /// once per genuinely new key, so it is not a loop and not a per-snapshot cost.
+    @MainActor
+    private func republishForKeys() {
+        guard !conversations.isEmpty else { return }
+        let current = conversations
+        conversations = []
+        conversations = current
     }
 
     private func publish(_ raw: [Conversation]) {
