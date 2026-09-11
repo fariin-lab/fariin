@@ -56,7 +56,9 @@ struct GlowStoryCardView: View {
     /// ⚠️ The name's trailing padding is DERIVED from this, not typed beside it. The two are one
     /// measurement — the text has to stop before the face starts — and the day this number moves
     /// again a typed 62 would let the name run under the picture.
-    static let avatar: CGFloat = 48
+    /// ⛔ 44, DOWN FROM 48 — owner, 2026-09-11, with both Glowing faces ringed: "make it 44". Still
+    /// the two-column measurement; `avatarRatio` below carries it to every other card size.
+    static let avatar: CGFloat = 44
     /// The face's inset from the card's bottom and trailing edges.
     static let avatarInset: CGFloat = 10
     /// ⛔ THE FACE IS A FRACTION OF THE CARD'S WIDTH NOW, NOT A TYPED 48 — owner, 2026-09-11, with
@@ -74,10 +76,11 @@ struct GlowStoryCardView: View {
     ///
     /// ⚠️ `Self.avatar` STAYS as the measured value it always was. It is the numerator here and the
     /// fallback when the card has not been measured yet; nothing outside this file reads it.
-    static let avatarRatio: CGFloat = 48.0 / 168.0
-    /// The ring the face wears, as a fraction of the face. 2 on a 48 face, so the wide cards keep
-    /// the exact stroke they have and the tile cards stop wearing a proportionally fatter one.
-    static let ringRatio: CGFloat = 2.0 / 48.0
+    static let avatarRatio: CGFloat = avatar / 168.0
+    /// The ring the face wears, as a fraction of the face. 2 on the measured face, so the wide
+    /// cards keep the exact stroke they have and the tile cards stop wearing a proportionally
+    /// fatter one.
+    static let ringRatio: CGFloat = 2.0 / avatar
 
     /// ⛔ 65% OF THE ⊕ INSIDE THE FACE — owner, 2026-09-11, and it is HIS number rather than a
     /// nudge: "the + badge must be inside 65% in the circle avatar". Read as AREA, which is what
