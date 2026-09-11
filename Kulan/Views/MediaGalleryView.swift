@@ -1024,10 +1024,24 @@ struct MediaGalleryView: View {
 /// same trade the segmented control lost twice. Only `shadowColor` changes.
 ///
 /// ⚠️ DO NOT REACH FOR THIS ON THE CHAT LIST. It was tried there on 2026-09-11 for his "top header
-/// is using border" and it is the wrong tool: `ChatNavigationItem.clearBarAppearance` deliberately
-/// nils every per-item appearance on that screen, and its own note says an override there is what
-/// drew the band he was reporting back in build 282. Whatever the chat list's outline is, it is not
-/// this bar's shadow.
+/// is using border" and it is the wrong tool — but NOT for the reason first written here, which was
+/// wrong and is corrected rather than deleted so the mistake is not made again.
+///
+/// ⚠️ THE CLAIM WAS THAT `ChatNavigationItem.clearBarAppearance` NILS THE CHAT LIST'S APPEARANCE. It
+/// does not: `ChatNavigationItem` is `ThreadView`'s and `OfficialChatView`'s, and has never touched
+/// the chat list. Reasoning from it cost two rounds of telling him his report was the system's
+/// chrome when it was not.
+///
+/// What his report actually was: the chat list's bar sits in its transparent SCROLL-EDGE appearance
+/// and never leaves it, because the list is a `UITableView` inside a representable and the bar has
+/// no scroll view of its own to watch. With no material behind them, the toolbar buttons' glass
+/// edges are the only thing drawn, which reads as an outline. Fixed in `MainShell` with
+/// `.toolbarBackground(.visible, for: .navigationBar)` — one line, and not an appearance override,
+/// which is the thing that drew the band in build 282.
+///
+/// This type stays what it always was: the MEDIA GALLERY's hairline remover. It is still the wrong
+/// tool for the chat list, because the chat list's problem was a missing background rather than an
+/// unwanted shadow.
 private struct NavBarNoHairline: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = UIView(frame: .zero)

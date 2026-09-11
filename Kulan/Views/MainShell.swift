@@ -2349,6 +2349,30 @@ struct ChatsView: View {
             }
             .navigationTitle("Chats")
             .navigationBarTitleDisplayMode(.inline)   // one row: avatar · Chats · compose
+            // ⛔ THE BAR KEEPS ITS MATERIAL — owner, 2026-09-11, fourth time, and this time with the
+            // comparison that settles it: "use the native Apple blur like the conversation page
+            // header". That is an IN-APP difference, not the system chrome I had twice told him it
+            // was, and it is worth writing down how I got that wrong.
+            //
+            // ⚠️ THE TWO SCREENS CONFIGURE THEIR BARS BY COMPLETELY DIFFERENT ROUTES.
+            // `ChatNavigationItem` — whose `clearBarAppearance` I cited as the reason this could not
+            // be fixed — belongs to `ThreadView` and `OfficialChatView`. It has never touched the
+            // chat list. So the two bars were never the same bar, and the conversation page's blur
+            // was never evidence about this one.
+            //
+            // ⚠️ WHAT HE IS ACTUALLY POINTING AT. This bar sits in its SCROLL-EDGE appearance, which
+            // is transparent — his screenshot shows a row sliding under the header with no band
+            // behind it at all. With nothing behind them, the toolbar buttons' own glass edges are
+            // the only thing drawn up there, and an outlined pill floating on the content is exactly
+            // what reads as "a border". There is no border: there is a missing background.
+            //
+            // A scroll-edge bar is supposed to become opaque as content goes under it, and this one
+            // never does — the list is a `UITableView` inside a representable, so the bar has no
+            // scroll view of its own to watch and stays at the edge appearance for ever. Asking for
+            // the material outright is the fix, and it is one line of SwiftUI rather than a
+            // `UINavigationBarAppearance` override — which is the thing that drew the band he
+            // reported back in build 282.
+            .toolbarBackground(.visible, for: .navigationBar)
             // ⛔ THE TITLE OPENS A MENU — owner, 2026-09-09: "Message Requests put when users click
             // Chats, open context menu inside chats". He photographed the header with a chevron
             // beside the word, which is what a title menu draws; there was none in the code, so
