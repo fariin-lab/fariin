@@ -83,6 +83,9 @@ struct MainShell: View {
         return (chatsRepo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 }).filter {
             !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                 && (Flags.groupsEnabled || !$0.isGroup)   // audit: a hidden legacy group badged a list that refused to show it
+                // A pending request is not in this list any more (see `visible`), so it does not
+                // badge the tab either; its count is on the Message Requests menu entry instead.
+                && MessageRequests.stance($0, myUid: me) != .incoming
                 // `hasUnreadMark`, not a count: a chat you marked unread yourself still badges the
                 // tab, it just does not claim a number. See Conversation.unread.
                 && $0.hasUnreadMark(me)
@@ -974,6 +977,22 @@ struct ChatsView: View {
     /// second case on `ArchiveRoute`: the path is type-erased, so a route type that names one page
     /// costs nothing and reads at the destination as the thing it actually is.
     enum RequestsRoute: Hashable { case requests }
+    /// My Chat PIN, a page of the same stack, for the same reason `RequestsRoute` is its own type.
+    enum ChatPinRoute: Hashable { case mine }
+    /// Somebody's unanswered requests to me, by the Message Requests page's own definition (not
+    /// cleared, not blocked, stance `.incoming`), so the number on the menu entry and the rows on
+    /// the page cannot disagree.
+    private var pendingRequestCount: Int {
+        repo.conversations.filter {
+            !$0.isCleared(me) && !$0.isBlockedByMe(me) && MessageRequests.stance($0, myUid: me) == .incoming
+        }.count
+    }
+    /// "Message Requests (3)" — the count travels on the entry now that the rows are out of the
+    /// list and off the tab badge; without it nothing on the Chats tab would say anyone is waiting.
+    private var requestsMenuTitle: String {
+        let n = pendingRequestCount
+        return n > 0 ? "Message Requests (\(n))" : "Message Requests"
+    }
     @State private var showDeleteSelected = false
     @State private var storyLimitReached = false
     /// The server says this account may not post a story at all — see `AppLimits.storiesEnabled`.
@@ -1547,6 +1566,12 @@ struct ChatsView: View {
         var out = repo.conversations + [officialChannel.listEntry].compactMap { $0 }
         out = out.filter { !$0.isCleared(me) && !$0.isArchived(me) }
         out = out.filter { Flags.groupsEnabled || !$0.isGroup }
+        // ⛔ A PENDING REQUEST IS NOT A CHAT — owner, 2026-09-11, on the new spec (§11): "A pending
+        // request must NOT appear as a normal conversation in the Main Chat List." This reverses
+        // his 08-04 placement, on his word. Somebody's unanswered request to me lives on the
+        // Message Requests page and nowhere else; my OWN unanswered request to somebody stays
+        // here, because that is my chat and I am the one waiting.
+        out = out.filter { MessageRequests.stance($0, myUid: me) != .incoming }
         // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
         // in stays OUT of the list (standard behavior) until something real happens: a message
         // either way, an unread, a pin, or a draft you typed. Groups always list — creating
@@ -1634,7 +1659,7 @@ struct ChatsView: View {
             // in the list. Which the "Automatically Archive New Chats From Unknown Users" setting
             // could quietly hide in the archive. See `MessageRequestsView`.
             Button { path.append(RequestsRoute.requests) } label: {
-                Label { Text("Message Requests") } icon: { MenuIcon(system: "person.crop.circle.badge.questionmark") }
+                Label { Text(requestsMenuTitle) } icon: { MenuIcon(system: "person.crop.circle.badge.questionmark") }
             }
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
@@ -2336,7 +2361,14 @@ struct ChatsView: View {
             // filter menu is where someone already looking for Archive will find it.
             .toolbarTitleMenu {
                 Button { path.append(RequestsRoute.requests) } label: {
-                    Label { Text("Message Requests") } icon: { MenuIcon(system: "person.crop.circle.badge.questionmark") }
+                    Label { Text(requestsMenuTitle) } icon: { MenuIcon(system: "person.crop.circle.badge.questionmark") }
+                }
+                // ⛔ CHAT PIN, HERE — owner, 2026-09-11, with the reference app's title menu
+                // screenshot and an arrow on its "Number" entry: the private number that opens
+                // your chat lives in the menu under the chat list's own title. The page shows the
+                // pin this phone set, with Copy and Share, and is where it is changed or removed.
+                Button { path.append(ChatPinRoute.mine) } label: {
+                    Label { Text("Chat PIN") } icon: { MenuIcon(system: "circle.grid.3x3.fill") }
                 }
             }
             // ⛔ SEARCH IS BACK ON THE PAGE — his call, 2026-08-30: "settings does not need search at
@@ -2452,6 +2484,9 @@ struct ChatsView: View {
             // answers for `ChatTarget`; the page hands the tap back up here through `onOpenChat`.
             .navigationDestination(for: RequestsRoute.self) { _ in
                 MessageRequestsView(onOpenChat: { t in path.append(t) })
+            }
+            .navigationDestination(for: ChatPinRoute.self) { _ in
+                ChatPinPage()
             }
             .navigationDestination(for: ChatTarget.self) { t in
                 // The official channel gets its own screen. ThreadView is built around a composer and

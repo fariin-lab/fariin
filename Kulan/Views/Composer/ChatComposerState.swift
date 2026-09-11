@@ -33,6 +33,10 @@ struct ChatComposerState: Equatable {
     var editing = false
     /// "+" shows an ellipsis while a photo is going out.
     var attachBusy = false
+    /// A MESSAGE REQUEST IS TEXT ONLY — owner's spec, 2026-09-11 §9. While the one message to a
+    /// stranger is being written there is no "+", no GIF and no mic, and the pill takes the whole
+    /// bar. The rules refuse anything but text on that message; this just does not offer it.
+    var textOnly = false
     /// Reply / edit / link cards stacked above the field, in this order. Empty while recording.
     var banners: [ChatComposerBanner] = []
 

@@ -134,6 +134,12 @@ struct ContactInfoView: View {
     /// The Delete Chat confirmation on a blocked person's page. Deleting a conversation cannot be
     /// undone from here, so it asks first, the same way the chat list's own delete does.
     @State private var showDeleteChat = false
+    /// CHAT PIN + REMOVE FRIEND — owner's spec, 2026-09-11. The prompt is his fourth screenshot
+    /// ("doesn't follow you. If you know their X Number you can message them now", Not Now / Use);
+    /// the sheet is his third; the remove confirm is §23.
+    @State private var showPinPrompt = false
+    @State private var showPinEntry = false
+    @State private var showUnfriend = false
     @State private var showShare = false
     /// What the share sheet said it did, shown briefly after it closes. Empty = nothing to say.
     @State private var shareToast = ""
@@ -336,6 +342,19 @@ struct ContactInfoView: View {
 
     /// Am I looking at my own profile as somebody else would see it?
     private var isPreview: Bool { previewUid != nil }
+    /// An open 1:1 with them — the app's one meaning of "friend" (spec §3).
+    private var isFriend: Bool { MessageRequests.isFriend(otherUid) }
+    /// The Message button. Friends and Everyone accounts open the chat; a My Friends account we are
+    /// not friends with gets the prompt instead (his fourth screenshot), because the thread behind
+    /// it could only show a locked bar — better to ask the one useful question here.
+    private func tapMessage() {
+        let audience = Audience(rawValue: targetPrivacy["messages"] ?? "") ?? .everyone
+        if audience == .contacts && !isFriend {
+            showPinPrompt = true
+        } else {
+            openChat = true
+        }
+    }
 
     // Split into layers so the type-checker doesn't time out on one giant modifier chain.
     var body: some View {
@@ -441,6 +460,16 @@ struct ContactInfoView: View {
                 // symbols left on a page that is otherwise drawn in the app's own set. Both are
                 // template SVGs in the catalogue, so `infoRow` picks them up by the "ic_" prefix
                 // and the red tint still reaches them.
+                // FRIEND OR NOT, ONE ROW EACH — owner's spec, 2026-09-11. A friend (an open 1:1,
+                // see `MessageRequests.isFriend`) can be removed (§23); anybody else can be reached
+                // with their Chat PIN (§5). Both sit here, above Block, because this card is the
+                // one place on the page that is always visible and always about the relationship.
+                if isFriend {
+                    infoRow("Remove Friend", "person.crop.circle.badge.minus", chevron: false) { showUnfriend = true }
+                } else {
+                    infoRow("Use Chat PIN", "circle.grid.3x3.fill", chevron: false) { showPinEntry = true }
+                }
+                rowDivider
                 infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
             }
             rowDivider
@@ -1038,6 +1067,31 @@ struct ContactInfoView: View {
             //
             // ⚠️ "Blocked users", not their name. His sentence, and it reads as the app stating a
             // rule rather than as a page narrating one person, which is the tone this dialog wants.
+            // ⛔ THE REFERENCE'S PROMPT, WORD FOR WORD IN SHAPE — owner's fourth screenshot: one
+            // sentence, Not Now on the left, the way in on the right. Shown by the Message button
+            // when they only take messages from friends and we are not; Not Now simply closes it.
+            .darkAlert("\(shownName) only accepts messages from friends",
+                       message: "If you know their Chat PIN, you can message them now.",
+                       isPresented: $showPinPrompt,
+                       actions: [
+                        .cancel("Not Now"),
+                        .plain("Use Chat PIN") { showPinEntry = true },
+                       ])
+            // Remove Friend (spec §23). What it does and what it does not do, in one breath: the
+            // chat stays, they lose the open door, and the two ways back in are named.
+            .darkAlert("Remove \(shownName) from friends?",
+                       message: "They’ll need to send you a new message request, or use your Chat PIN, to message you again. Your chat and its messages stay.",
+                       isPresented: $showUnfriend,
+                       actions: [
+                        .cancel(),
+                        .destructive("Remove") { Task { try? await MessageRequests.unfriend(cid) } },
+                       ])
+            // On success the conversation is accepted server-side already; opening it is all that
+            // is left, and the thread shows a live composer the moment its snapshot lands.
+            .sheet(isPresented: $showPinEntry) {
+                ChatPinEntrySheet(uid: otherUid, name: shownName, photoUrl: photoUrl,
+                                  handle: handle.isEmpty ? nil : "@" + handle) { _ in openChat = true }
+            }
             .darkAlert("Block \(shownName)?",
                        message: "Blocked users will not be able to call you or send you messages.",
                        isPresented: $showBlock,
@@ -1711,7 +1765,7 @@ struct ContactInfoView: View {
             // call buttons already carry: an action offered to somebody you have blocked is a button
             // that can only disappoint.
             if source != .chat, !isSelf, !blocked {
-                Button { openChat = true } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader) }.tint(.primary)
+                Button { tapMessage() } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader) }.tint(.primary)
             }
             // THE CALL BUTTONS STAY ON THE PROFILE even when the person refuses calls (owner
             // 2026-08-04: "why you are hiding call voice and call video button… plz show that

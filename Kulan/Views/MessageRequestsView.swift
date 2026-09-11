@@ -100,7 +100,8 @@ struct MessageRequestsView: View {
             // Says what it does and what it does not do. Declining is not blocking — that is its own
             // action with its own button, and quietly conflating the two would tell someone they had
             // done something they had not.
-            Text("The conversation is deleted. This does not block them.")
+            // ...and the cooldown (owner's spec §10), so the sentence says what actually happens.
+            Text("The conversation is deleted and they can’t send you another request for \(MessageRequests.declineCooldownDays) days. This does not block them.")
         }
     }
 
@@ -147,6 +148,13 @@ struct MessageRequestsView: View {
             }
             Button(role: .destructive) { pendingDecline = conv } label: {
                 Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
+            }
+            // The third answer (owner's spec §14). The same write the profile's Block makes; the
+            // row leaves this page on its own because `requests` filters `isBlockedByMe`. Their
+            // request is not deleted and they are not told — a blocked person's writes still land
+            // and are simply never shown, which is how blocking has always worked here.
+            Button(role: .destructive) { Task { await ChatService.setBlocked(conv.id, true) } } label: {
+                Label { Text("Block") } icon: { MenuIcon("ic_block", ink: .systemRed) }
             }
         }
     }

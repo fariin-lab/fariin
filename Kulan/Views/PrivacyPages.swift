@@ -252,7 +252,23 @@ struct MessagesPrivacyPage: View {
             } header: {
                 Text("Who can message you")
             } footer: {
-                Text("People who can't message you won't be able to start a new chat. Chats you already have keep working.")
+                // The two modes in the owner's own mental model (spec, "Final Goal"): Everyone can
+                // knock once with a short text; My Friends closes even that door.
+                Text("Everyone: anyone can send you one short message request. My Friends: only friends and people with your Chat PIN can message you. Chats you already have keep working.")
+            }
+
+            // CHAT PIN — owner's spec, 2026-09-11. The private invitation that goes past both modes,
+            // beside the setting it goes past, and also behind the Chats title menu (see MainShell).
+            Section {
+                NavigationLink { ChatPinPage() } label: {
+                    HStack {
+                        Text("Chat PIN")
+                        Spacer()
+                        Text(ChatPin.isSet ? "On" : "Off").foregroundStyle(.secondary)
+                    }
+                }
+            } footer: {
+                Text("Anyone who knows your Chat PIN can message you directly, whatever you choose above.")
             }
 
             Section {

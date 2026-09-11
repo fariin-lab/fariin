@@ -25,12 +25,18 @@ enum MessageRequests {
     /// A first message is short on purpose. Long enough to say who you are and why, short enough that
     /// an unanswered request cannot be used to shout at someone.
     ///
-    /// ENFORCED ON THE CLIENT ONLY, and that is not an oversight. Message bodies are end-to-end
-    /// encrypted, so the server is handed a cipher and cannot measure the words inside it — a rule
-    /// counting characters would be counting the encryption. What the rules DO enforce is the part
-    /// that matters: exactly one message, from one person, until it is answered. A patched client can
-    /// make that one message long; it cannot make it a second message.
-    static let firstMessageLimit = 300
+    /// ⛔ 150, DOWN FROM 300 — owner's spec, 2026-09-11 §2, confirmed by him the same day. The
+    /// CHARACTERS are counted here, on the phone, because message bodies are end-to-end encrypted
+    /// and the server is handed a cipher it cannot read a single character of. What the rules DO
+    /// enforce is a byte cap on that cipher (880 characters of sealed text, which is what 150 of the
+    /// widest UTF-8 characters seal to), plus text-only, plus exactly one message until answered. A
+    /// patched client can therefore make its one message somewhat longer than 150 characters of
+    /// plain ASCII; it cannot make it an essay, a photo, or a second message.
+    static let firstMessageLimit = 150
+
+    /// How long a deleted request holds the sender off (owner's spec §10). The number that counts
+    /// is the one in `firestore.rules` (`declinedRecently`); this copy only words the alert.
+    static let declineCooldownDays = 7
 
     /// What this conversation currently allows.
     enum Stance: Equatable {
@@ -73,7 +79,52 @@ enum MessageRequests {
     /// action and its own button, and quietly conflating the two would tell people they had done
     /// something they had not.
     static func decline(_ cid: String) async throws {
-        try await Firestore.firestore().collection("conversations").document(cid).delete()
+        let me = ChatService.uid
+        let db = Firestore.firestore()
+        // THE DECLINE IS REMEMBERED FIRST — owner's spec, 2026-09-11 §10. One document under my own
+        // uid, keyed by theirs, stamped with the server's clock; the conversation `create` rule
+        // reads it and refuses a new request from this person for `declineCooldownDays`. Written
+        // before the delete so a delete that lands and a ledger that does not can never leave the
+        // door open; the reverse order can. They cannot read it (rules), so being declined looks to
+        // them exactly like being ignored, which is what §13 asks for.
+        if let sender = cid.split(separator: "_").map(String.init).first(where: { $0 != me }) {
+            try await db.collection("requestDeclines").document(me).collection("from").document(sender)
+                .setData(["at": FieldValue.serverTimestamp()])
+        }
+        try await db.collection("conversations").document(cid).delete()
+    }
+
+    /// REMOVE FRIEND — owner's spec, 2026-09-11 §23. Takes back the direct access an accepted chat
+    /// gave them, without deleting anything: the conversation goes back to being THEIR pending
+    /// request with the one message unspent, and from then on they are subject to my privacy like
+    /// any stranger. Everyone lets them knock once; My Friends does not; my Chat PIN still opens
+    /// the door. The rules allow exactly this write and no other way back through `accepted`.
+    ///
+    /// The chat stays in both lists with its history. If they do knock, their message arrives as a
+    /// request on the Message Requests page, and the row leaves the main list until it is answered.
+    static func unfriend(_ cid: String) async throws {
+        let me = ChatService.uid
+        guard let other = cid.split(separator: "_").map(String.init).first(where: { $0 != me }) else { return }
+        try await Firestore.firestore().collection("conversations").document(cid).setData([
+            "accepted": false,
+            "startedBy": other,
+            "lastSender": "",
+            "unfriendedBy": me,
+            "unfriendedAt": FieldValue.serverTimestamp(),
+        ], merge: true)
+    }
+
+    /// Are we friends, in the one sense this app has (spec §3): an open 1:1 conversation. Accepted
+    /// if it is from the request era, or with a message in it if it predates requests. The same
+    /// test `ThreadView.hasChatHistory` makes, and the same one the rules make.
+    @MainActor
+    static func isFriend(_ uid: String, myUid: String = ChatService.uid) -> Bool {
+        guard !uid.isEmpty, uid != myUid else { return false }
+        let cid = ChatService.convId(myUid, uid)
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
+              !c.isGroup else { return false }
+        if !c.startedBy.isEmpty { return c.accepted }
+        return !c.lastMessageCipher.isEmpty
     }
 
     // THERE IS DELIBERATELY NO "may I open a chat with them" CHECK HERE.

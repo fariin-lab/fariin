@@ -1197,6 +1197,12 @@ struct ThreadView: View {
                 // presentation owns it: no transition override. (The zoom morph fought the detent snap.)
         }
         .sheet(item: $comingSoon) { c in comingSoonSheet(c).presentationDetents([.fraction(0.6)]) }
+        // Somebody else's Chat PIN. On success the server has already marked this conversation
+        // accepted; the snapshot lands, `requestStance` reads `.open`, and the composer takes the
+        // bar on its own. Nothing to do here but close.
+        .sheet(isPresented: $showPinEntry) {
+            ChatPinEntrySheet(uid: otherUid, name: title, photoUrl: photoUrl) { _ in }
+        }
         // Call-back confirm: tapping a call-history row asks first (never dials on a stray tap).
         .alert(pendingCallBack == .video ? "Video call" : "Voice call",
                isPresented: Binding(get: { pendingCallBack != nil }, set: { if !$0 { pendingCallBack = nil } }),
@@ -2037,6 +2043,8 @@ struct ThreadView: View {
     // Cached conversation: resolved once + refreshed only when it changes (onAppear + onChange
     // below), so reading it per render is O(1) instead of an O(n) scan of the whole conversations
     // singleton on every body pass (and a body re-eval on unrelated chats stays cheap).
+    /// The "Enter Chat PIN" sheet, from the cannot-message and awaiting-reply bars.
+    @State private var showPinEntry = false
     @State private var cachedConv: Conversation?
     private var conversation: Conversation? { cachedConv }
     private var isGroup: Bool { conversation?.isGroup ?? false }
@@ -5702,6 +5710,11 @@ struct ThreadView: View {
                 Text("You can send another message once \(title) replies.")
                     .font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                // The pin goes past the wait too (owner's spec, 2026-09-11 §5): a friend who told
+                // you their number should not have to notice your request first.
+                Button("Use Chat PIN") { showPinEntry = true }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.top, 4)
             }
         }
     }
@@ -5718,15 +5731,29 @@ struct ThreadView: View {
 
     private var cannotMessageBar: some View {
         composerNotice {
-            VStack(spacing: 3) {
-                Label("You can't message \(title)", systemImage: "lock.fill")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                // "Their contacts" named something this app does not have, the same mistake the
-                // Settings audit found in the auto-archive footer. The audience this reads is
-                // Everyone or My Friends, and only the second one lands you here.
-                Text("They only accept messages from their friends.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+            VStack(spacing: 10) {
+                VStack(spacing: 3) {
+                    Label("You can't message \(title)", systemImage: "lock.fill")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    // "Their contacts" named something this app does not have, the same mistake the
+                    // Settings audit found in the auto-archive footer. The audience this reads is
+                    // Everyone or My Friends, and only the second one lands you here.
+                    // ⛔ AND THE WAY IN — owner's spec, 2026-09-11, with the reference app's
+                    // "doesn't follow you. If you know their X Number you can message them now"
+                    // screenshot. The sentence names the one door that is still open.
+                    Text("They only accept messages from friends. If you know their Chat PIN, you can message them now.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                Button { showPinEntry = true } label: {
+                    Text("Use Chat PIN").font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                // The same tinted glass as the request bar's Accept, for the same reason: the one
+                // primary action on a notice, in the app's own material.
+                .foregroundStyle(Theme.onAccent(dark))
+                .liquidGlass(Capsule(), interactive: true, tint: Color.accentColor)
             }
         }
     }
@@ -6000,6 +6027,9 @@ struct ThreadView: View {
         s.focused = inputFocused
         s.editing = editingMessage != nil
         s.attachBusy = sendingPhoto
+        // The one message to a stranger is text only (owner's spec, 2026-09-11 §9; the rules
+        // refuse anything else on it). No "+", no GIF, no mic while it is being written.
+        s.textOnly = requestStance == .firstMessage
         s.banners = composerBanners
         // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
         s.holdStarted = holdStarted && holdRevealed

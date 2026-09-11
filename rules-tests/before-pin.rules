@@ -464,48 +464,6 @@ service cloud.firestore {
     // Writes stay closed. claimUsername runs with admin rights and does not pass through here; a
     // client writing this directly would be taking a name without the transaction that keeps two
     // people from taking the same one.
-    // ── CHAT PIN — owner's spec, 2026-09-11 ──
-    //
-    // The hash lives in `chatPins/{uid}` and every attempt counter in `pinAttempts/{uid}`, and both
-    // are the server's alone. Written and compared only by `setChatPin` / `verifyChatPin`
-    // (functions-chatpin in the backend repo), which run as admin and never pass through here.
-    //
-    // ⛔ WRITTEN OUT AS A REFUSAL rather than left to default-deny, so nobody reading this file has
-    // to know that an absent match denies. There is nothing a client may learn from these
-    // documents, not even that one exists: who has a pin is private (§34), and a counter the person
-    // being limited could read or reset is not a limit (the `usernameChecks` lesson).
-    match /chatPins/{uid} {
-      allow read, write: if false;
-    }
-    match /pinAttempts/{uid} {
-      allow read, write: if false;
-    }
-
-    // ── A DECLINED REQUEST IS REMEMBERED — owner's spec, 2026-09-11 §10 ──
-    //
-    // "If the recipient declines the request, do not immediately allow the sender to create
-    // unlimited new requests." The recipient writes one document here as they delete the request,
-    // and the conversation `create` rule reads it back and refuses a new request from that person
-    // until the cooldown has passed (`declinedRecently`, below).
-    //
-    // NESTED UNDER THE RECIPIENT, `requestDeclines/{me}/from/{them}`, so the create rule can address
-    // it with two plain variables and no query. Readable by the recipient alone: the SENDER learning
-    // they were declined rather than simply unanswered is exactly the information §13 says not to
-    // hand out, and the rules read it server-side without anybody's client needing to.
-    //
-    // `at == request.time` — the server's clock, never the client's. A recipient could otherwise
-    // write a date in the far future and hold someone off for ever, or the past and mean nothing.
-    match /requestDeclines/{recipient}/from/{sender} {
-      allow read: if signedIn() && request.auth.uid == recipient;
-      allow create, update: if signedIn()
-        && request.auth.uid == recipient
-        && sender != recipient
-        && request.resource.data.keys().hasOnly(['at'])
-        && request.resource.data.at == request.time;
-      // Taking it back early is the recipient's to do: it only ever lets somebody knock sooner.
-      allow delete: if signedIn() && request.auth.uid == recipient;
-    }
-
     match /usernames/{name} {
       allow get: if signedIn();
       allow list, write: if false;
@@ -813,57 +771,6 @@ service cloud.firestore {
         return !exists(/databases/$(database)/documents/users/$(u))
           || get(/databases/$(database)/documents/users/$(u)).data.get('privacy', {}).get('messages', 'everyone') != 'contacts';
       }
-      // THE DECLINE COOLDOWN — owner's spec, 2026-09-11 §10. `u` deleted my last request less than
-      // seven days ago, so I may not open another. Read from `requestDeclines/{u}/from/{me}`, which
-      // only `u` can write (see that match); an absent document is simply "never declined".
-      //
-      // Seven days is the whole configuration: it is here, in the rules, which are the server, and
-      // nowhere a client can reach. GUARDED BY exists() for the reason `acceptsFromStrangers` is.
-      function declinedRecently(u) {
-        return exists(/databases/$(database)/documents/requestDeclines/$(u)/from/$(request.auth.uid))
-          && get(/databases/$(database)/documents/requestDeclines/$(u)/from/$(request.auth.uid))
-               .data.at.toMillis() + 7 * 24 * 60 * 60 * 1000 > request.time.toMillis();
-      }
-      // A pending request whose one message has not been sent yet — the state every new 1:1 is born
-      // in, and the state "Remove Friend" puts an old one back into. It is the ONLY state in which
-      // a message may be written into a pending conversation, so it is where the request rules
-      // (text only, short, and the other person's privacy) are enforced; see the message rule.
-      function isPendingFirstMessage() {
-        return convData().get('startedBy', '') != ''
-          && convData().get('accepted', false) == false
-          && convData().get('lastSender', '') == '';
-      }
-      // The other half of a 1:1 id, for the message rule, where `request.resource.data.users` does
-      // not exist. THE ID IS THE MEMBERSHIP (see the read rule below).
-      function otherHalf() {
-        return cid.split('_')[0] == request.auth.uid ? cid.split('_')[1] : cid.split('_')[0];
-      }
-      // The other member of an EXISTING conversation, for update rules.
-      function otherExistingMember() {
-        return resource.data.users[0] == request.auth.uid ? resource.data.users[1] : resource.data.users[0];
-      }
-      // REMOVE FRIEND — owner's spec, 2026-09-11 §23. Direct access is taken back by putting the
-      // conversation back where it started: pending, with the OTHER person as the one who has to
-      // ask, and their one message unspent. The history stays; nothing is deleted. They are then
-      // subject to my privacy like any stranger: Everyone lets them knock once, My Friends does not
-      // (the message rule checks it), and my Chat PIN still opens the door.
-      //
-      // ⚠️ THE ONLY WAY BACK THROUGH THE ONE-WAY DOOR, and it is checked to the key: `accepted` may
-      // go true → false only from a conversation that is currently OPEN, only when `startedBy`
-      // becomes the other member and `lastSender` is cleared in the SAME write, and only when that
-      // write touches nothing else. A requester whose one message is spent cannot use it to buy a
-      // second (their chat is not open), and a member of an open chat who uses it is trading
-      // unlimited messages for one — there is no privilege to gain.
-      function isUnfriend() {
-        return resource.data.get('type', '') != 'group'
-          && resource.data.users.size() == 2
-          && (resource.data.get('startedBy', '') == '' || resource.data.get('accepted', false) == true)
-          && request.resource.data.get('accepted', true) == false
-          && request.resource.data.get('startedBy', '') == otherExistingMember()
-          && request.resource.data.get('lastSender', '') == ''
-          && request.resource.data.diff(resource.data).affectedKeys()
-               .hasOnly(['accepted', 'startedBy', 'lastSender', 'unfriendedBy', 'unfriendedAt']);
-      }
       // ⚠️ A CHAT THAT DOES NOT EXIST YET MUST READ AS EMPTY, OR NO NEW CHAT CAN EVER BE STARTED.
       //
       // This was the single `uid in resource.data.users` line, and on a document that is not there
@@ -914,9 +821,6 @@ service cloud.firestore {
           || (
             request.resource.data.users.size() == 2
             && (request.auth.uid == otherMember() || acceptsFromStrangers(otherMember()))
-            // ...and not somebody who deleted my last request this week (§10). Same guard shape
-            // as the privacy read above; the document is theirs and this is the only reader.
-            && (request.auth.uid == otherMember() || !declinedRecently(otherMember()))
             // EVERY NEW 1:1 IS BORN AS A REQUEST, and the database is what says so.
             //
             // Without this there was a way around the whole feature: the media send paths touch the
@@ -973,16 +877,10 @@ service cloud.firestore {
             // accepted conversation and turn a real friendship back into a pending request, days
             // later, when the queued write finally landed. Cheap to prevent here, and impossible to
             // notice in testing.
-            // ...except for Remove Friend, which is the one transition allowed back through it and
-            // is checked to the key in `isUnfriend()`.
-            && (
-                 !(resource.data.get('accepted', false) == true
-                   && request.resource.data.get('accepted', true) == false)
-                 || isUnfriend()
-               )
+            && !(resource.data.get('accepted', false) == true
+                 && request.resource.data.get('accepted', true) == false)
             && (resource.data.get('startedBy', '') == ''
-                || request.resource.data.get('startedBy', '') == resource.data.startedBy
-                || isUnfriend())
+                || request.resource.data.get('startedBy', '') == resource.data.startedBy)
             // The other member cannot rewrite YOUR block, mute, clear or read state. See above.
             && privateMapsUntouched()
           )
@@ -1121,39 +1019,6 @@ service cloud.firestore {
                || convData().get('accepted', false) == true
                || convData().get('lastSender', '') == ''
                || convData().get('lastSender', '') != request.auth.uid
-             )
-          // A REQUEST IS ONE SHORT TEXT — owner's spec, 2026-09-11 §9, and the database says so.
-          //
-          // The one message a pending conversation accepts may carry no media of any kind: none of
-          // the keys a photo, album, voice note, video, file, sticker, GIF, call record or link card
-          // is written with. `type` is absent on a text message and present on every other, so its
-          // absence is required outright rather than compared.
-          //
-          // THE LENGTH IS A BYTE CAP ON THE CIPHER, NOT A CHARACTER COUNT. The text is end-to-end
-          // encrypted and the server cannot see a single character of it. What it CAN measure is
-          // the sealed string: "enc1:" + a 24-byte nonce + a 16-byte MAC + the UTF-8 of the
-          // message, base64'd. 150 characters of the widest UTF-8 (4 bytes each) seals to 862
-          // characters, so 880 lets every legitimate 150-character message through — including
-          // 150 emoji — and refuses a patched client's essay. The app counts the 150 itself.
-          //
-          // AND THE OTHER PERSON'S PRIVACY, AGAIN. It was only ever checked when the conversation
-          // was CREATED; Remove Friend puts an old conversation back into this state without a
-          // create, so a "My Friends" account would otherwise accept a knock from the person it had
-          // just removed. Checked here, on the knock itself, it holds either way.
-          && (
-               !isPendingFirstMessage()
-               || (
-                    request.resource.data.text is string
-                    && request.resource.data.text.size() <= 880
-                    && !request.resource.data.keys().hasAny([
-                         'type', 'imageUrl', 'audioUrl', 'videoUrl', 'fileUrl', 'fileName',
-                         'fileSize', 'album', 'albumSizes', 'thumb', 'thumbUrl', 'thumbEnc',
-                         'blurhash', 'width', 'height', 'duration', 'waveform', 'viewOnce',
-                         'callerUid', 'callOutcome', 'linkPreview', 'sticker', 'gif', 'location',
-                         'poll', 'contact'
-                       ])
-                    && acceptsFromStrangers(otherHalf())
-                  )
              )
           // Restricted member (Telegram-style timed mute): a member whose restrictedFlags contains
           // 'sendText' with restrictedUntil still in the future cannot create ANY message. Admins and
@@ -1543,39 +1408,6 @@ service cloud.firestore {
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
         && request.resource.data.expiresAt < request.time + duration.value(30, 'h')
-        // ⛔ AND `createdAt` IS THE SERVER'S CLOCK, NOT THE PHONE'S — 2026-09-11 security pass.
-        //
-        // Every field beside it was already pinned: `authorUid` to the caller, `mediaPath` to this
-        // story's own folder, `type` paired with that path, `expiresAt` bounded to ~30h. This one
-        // was required to be PRESENT and then never looked at — and the update rule freezes it for
-        // life, so whatever a client stamped was permanent and unrepairable.
-        //
-        // ⚠️ IT IS NOT COSMETIC. `createdAt` decides where a story sits in every recipient's tray
-        // and what the "posted Xh ago" label says, for the story's whole life. Back-dated, it
-        // arrives already buried; forward-dated, it sits at the top of everyone's row until it
-        // expires. Neither needs anything more than a modified client.
-        //
-        // ⚠️ SAFE FOR BOTH POST PATHS, CHECKED RATHER THAN ASSUMED. The photo and video creates
-        // both send `FieldValue.serverTimestamp()`. The one place that stamps a CLIENT date is
-        // `writePublicMirror`, and that writes to `users/{uid}/publicStories`, a different
-        // collection this rule does not govern — it is deliberately given the original story's time
-        // so a re-mirrored story does not claim to be brand new. This does not reach it.
-        //
-        // ⛔ A WINDOW, NOT `== request.time`, AND THE REASON IS THAT THE STRICT FORM CANNOT BE
-        // TESTED HERE. The suites drive the emulator over REST with literal ISO timestamps; a
-        // server-timestamp sentinel is a DocumentTransform and there is no way to express one
-        // through this harness. So strict equality would be a rule whose ALLOW path no test could
-        // ever exercise — and if the equivalence were ever wrong, every story post in the app would
-        // be refused with nothing having caught it.
-        //
-        // The window closes exactly the same hole. The attack is a story that arrives already
-        // buried, or one that sits at the top of every recipient's row until it expires; both need
-        // hours, not minutes. Five minutes each way also absorbs the device-clock skew the
-        // `expiresAt` clause above already says it is tolerating, and `serverTimestamp()` lands
-        // trivially inside it.
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.createdAt > request.time - duration.value(5, 'm')
-        && request.resource.data.createdAt < request.time + duration.value(5, 'm')
         // Pin mediaPath to THIS story's own folder. Defense-in-depth: onStoryDeleted already ignores
         // the client field, but this stops a hostile client even writing a foreign path.
         // Type must match the path: photo stories point at photo.jpg, video stories at video.mp4

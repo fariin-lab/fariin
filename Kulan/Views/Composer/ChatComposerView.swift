@@ -566,7 +566,7 @@ final class ChatComposerView: UIView {
         stripRecording.isUserInteractionEnabled = !s.reviewing
         stripReview.alpha = s.reviewing ? 1 : 0
         stripReview.isUserInteractionEnabled = s.reviewing
-        gifButton.alpha = (!s.recordingActive && !s.hasText) ? 1 : 0
+        gifButton.alpha = (!s.recordingActive && !s.hasText && !s.textOnly) ? 1 : 0
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
         // lives in its slot then). While a finger holds it only the glyph fades — the view stays, so
         // the gesture keeps tracking; a lock ends the gesture, and then the whole button can leave.
@@ -585,14 +585,16 @@ final class ChatComposerView: UIView {
         // edit was open), and the edit itself then silently abandoned by the empty-text branch of
         // save. Two wrong outcomes and no warning, from one reasonable intention. Nothing on the
         // voice path consults `editingMessage`; the honest fix is not to offer the mic at all.
-        micButton.alpha = (s.hasText || s.recordLocked || s.editing) ? 0 : 1
-        micGlyph.alpha = (s.hasText || s.recordLocked || s.recordingHeld) ? 0 : 1
+        // ...and never on a text-only request (`textOnly`): a voice note is not text.
+        micButton.alpha = (s.hasText || s.recordLocked || s.editing || s.textOnly) ? 0 : 1
+        micGlyph.alpha = (s.hasText || s.recordLocked || s.recordingHeld || s.textOnly) ? 0 : 1
         for (_, v) in bannerViews { v.alpha = s.recordingActive ? 0 : 1 }
     }
 
     private func targetAlpha(for b: UIButton) -> CGFloat {
         let s = shown
-        if b === plusButton { return s.recordingActive ? 0 : 1 }
+        // No "+" on a text-only request either — see `ChatComposerState.textOnly`.
+        if b === plusButton { return (s.recordingActive || s.textOnly) ? 0 : 1 }
         if b === trashButton { return s.recordLocked && s.reviewing ? 1 : 0 }
         return (s.hasText || s.recordLocked) ? 1 : 0
     }
@@ -781,15 +783,17 @@ final class ChatComposerView: UIView {
     private func pillSpan(width: CGFloat) -> (left: CGFloat, right: CGFloat) {
         let s = shown
         let slot = M.button + M.gap
-        let left: CGFloat = s.recordingActive ? (s.reviewing ? slot : 0) : slot
+        // A text-only request has no "+", so the pill starts at the edge — the same left the bar
+        // already takes while a recording holds the row.
+        let left: CGFloat = s.textOnly ? 0 : (s.recordingActive ? (s.reviewing ? slot : 0) : slot)
         let right: CGFloat = (s.hasText || s.recordLocked) ? width - slot : width
         return (left, max(left, right))
     }
 
-    /// The text's own width inside the pill: the whole pill once there is text, else what the GIF
-    /// and mic leave.
+    /// The text's own width inside the pill: the whole pill once there is text (or when there is no
+    /// GIF and no mic to make room for), else what the GIF and mic leave.
     private func textWidth(pillWidth: CGFloat) -> CGFloat {
-        shown.hasText ? pillWidth
+        (shown.hasText || shown.textOnly) ? pillWidth
                       : pillWidth - M.micTrailing - M.button - M.inPillSpacing - M.button - M.inPillSpacing
     }
 
