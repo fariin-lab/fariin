@@ -1573,11 +1573,23 @@ private final class ChatListCell: UITableViewCell {
         // about a quarter of the row's height in his reference, and the plate bleeds off the leading
         // edge rather than being inset there — it is sliding out from under the screen edge, so an
         // inset would draw a corner in mid-air.
-        if state.isSwiped {
-            background.backgroundColor = .secondarySystemBackground
-            background.cornerRadius = 18
-            background.backgroundInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
-        }
+        // ⛔ AND IT IS GONE AGAIN — owner, 2026-09-11, hours later and with the swipe photographed
+        // mid-open: "when I start swipe I see also grey highlights, please use native Apple not
+        // custom, and also Apple rounded corners ... now it looks like under the chat height".
+        //
+        // ⚠️ HE HAS REVERSED HIS OWN ASK AND BOTH READINGS WERE FAIR. The note above is his, from
+        // this morning, with a reference screenshot; what that reference actually showed was the
+        // system's own row treatment, and a hand-drawn plate is not that. These two lines were the
+        // only thing on this screen the system did not draw: a colour and an 18pt radius measured
+        // off a picture, which is what "custom" means and is exactly what he is now pointing at —
+        // the plate's corner floats inside the row's height, so the row looks shorter than its
+        // neighbours the moment a swipe starts.
+        //
+        // ⚠️ THE BUTTONS THEMSELVES WERE ALWAYS APPLE'S. They are `UIContextualAction`s in a
+        // `UISwipeActionsConfiguration` (see the two delegate methods above) — the circles with
+        // labels underneath are how iOS 26 draws that, not a style of ours, and there is no API to
+        // ask for the older pill shape. Nothing to change there; deleting the plate is the whole of
+        // what was ours.
         backgroundConfiguration = background
     }
 }
