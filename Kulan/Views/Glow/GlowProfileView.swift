@@ -505,44 +505,66 @@ struct GlowProfileView: View {
         static let corner: CGFloat = 22
     }
 
-    /// ⛔ THREE OVERLAPPING FACES IN A ROW — owner, 2026-09-11, with his reference beside ours: the
-    /// pill's leading edge carries up to three circles tucked into each other from left to right,
-    /// the frontmost on top, each ringed in the card's own colour so they read as separate discs
-    /// rather than one merged shape. Fewer than three people available draws however many there
-    /// are; nothing is padded out with blanks, because an empty circle claims somebody who is not
-    /// there.
+    /// ⛔ A CLUSTER, NOT A ROW, AND THE MIDDLE FACE IS THE BIG ONE — owner, 2026-09-11, with two
+    /// close crops of his reference beside ours: "in profile preview user looks small, make this
+    /// design like image 2". The picture shows one large disc in the middle sitting IN FRONT, with
+    /// a smaller one tucked under each of its lower corners and peeking out from behind it.
     ///
-    /// ⚠️ WHAT WAS HERE WAS A CLUSTER — a 34pt face centred with a 22 tucked under each of its
-    /// lower corners, his 2026-09-02 choice, kept here so it is not quietly reinstated later. The
-    /// newer picture overturns it, and the cluster is also half of why the card was tall: it
-    /// measured 44 against text of about 43, so the faces were setting the pill's height on their
-    /// own. A row never does.
+    /// ⚠️ THIS OVERTURNS THE ROW OF 2026-09-11 (three equal 24pt faces stepping 14pt to the right,
+    /// frontmost on the left) and restores the shape that was here before it, at a larger size.
+    /// Both of those were his, so the order matters: the row was read off a wider screenshot where
+    /// the cluster was small enough to look flat, and these two crops are the same card up close.
+    /// The newer, closer picture wins. Do not quietly step back to the row.
     ///
-    /// The geometry, so it can be adjusted without guessing: every face is `StatsPill.face` across
-    /// and the next one starts `StatsPill.step` further along, which makes the overlap the
-    /// difference between the two — 10pt, about 40% of a face, enough to read as a stack without
-    /// turning the one behind into a sliver. Three of them come to exactly 52pt, which is the width
-    /// the old cluster occupied, so the sentence beside them keeps every point of room it had.
+    /// The geometry, so it can be adjusted without guessing, all of it in `StatsPill`:
+    ///   • the middle face is `face` across; the two behind it are `sideFace`, about 78% of it
+    ///   • a side face's centre sits `spread` to the side of the middle one's and `drop` below it,
+    ///     which is what makes them read as tucked UNDER rather than beside
+    ///   • every disc is ringed in the card's own colour, which is the only thing stopping three
+    ///     overlapping circles from reading as one blob
     ///
-    /// ⚠️ DRAWN BACK TO FRONT. Later views in a `ZStack` are painted over earlier ones, so the row
-    /// is built in reverse — the last face first — to leave the FIRST one on top. Natural order
-    /// would tuck the leading face behind its neighbour, which is the same trap the old cluster's
-    /// "the big one last" note recorded.
+    /// ⚠️ HEIGHT IS THE ONE THING TO WATCH HERE. The cluster comes to about 45pt against text of
+    /// about 43, so for the first time since the pill was flattened the faces set the card's height
+    /// rather than the words — by a point and a half, which is the price of the size he asked for.
+    /// Anything taller and the pill he called "too tall" starts growing again.
     ///
-    /// ⚠️ `.offset` MOVES THE PAINT, NOT THE LAYOUT, so the `ZStack` measures one face wide however
-    /// many are in it. The explicit frame is what reserves the row's real width; without it the
-    /// second and third faces would hang over the text.
+    /// ⚠️ DRAWN BACK TO FRONT: later views in a `ZStack` paint over earlier ones, so the two side
+    /// faces are emitted first and the middle one last, which is what puts it in front.
+    ///
+    /// ⚠️ NOTHING IS PADDED OUT WITH BLANKS. One person draws one face and two draw the middle plus
+    /// the right, and the frame narrows to match — an empty circle would claim somebody who is not
+    /// there, and a fixed frame would leave a hole at the card's leading edge.
     @ViewBuilder private var faceCluster: some View {
         let shown = Array(facePeople.prefix(StatsPill.maxFaces))
-        let width = StatsPill.face + CGFloat(max(0, shown.count - 1)) * StatsPill.step
-        ZStack(alignment: .leading) {
-            ForEach(Array(shown.indices.reversed()), id: \.self) { i in
-                AvatarView(name: shown[i].name, photoUrl: shown[i].photoUrl, size: StatsPill.face)
-                    .overlay(Circle().strokeBorder(cardColor, lineWidth: StatsPill.ring))
-                    .offset(x: CGFloat(i) * StatsPill.step)
+        // The middle face is the first person; the second goes to the right, the third to the left,
+        // so a two-face cluster grows away from the card's leading edge instead of off it.
+        let hasLeft = shown.count >= 3
+        let hasRight = shown.count >= 2
+        // Measured from the middle face's centre, then shifted so the leftmost edge lands on zero.
+        let originX = hasLeft ? StatsPill.spread + StatsPill.sideFace / 2 : StatsPill.face / 2
+        let maxX = hasRight ? StatsPill.spread + StatsPill.sideFace / 2 : StatsPill.face / 2
+        let sideTop = StatsPill.face / 2 + StatsPill.drop - StatsPill.sideFace / 2
+        ZStack(alignment: .topLeading) {
+            if hasLeft {
+                sideFace(shown[2])
+                    .offset(x: originX - StatsPill.spread - StatsPill.sideFace / 2, y: sideTop)
             }
+            if hasRight {
+                sideFace(shown[1])
+                    .offset(x: originX + StatsPill.spread - StatsPill.sideFace / 2, y: sideTop)
+            }
+            AvatarView(name: shown[0].name, photoUrl: shown[0].photoUrl, size: StatsPill.face)
+                .overlay(Circle().strokeBorder(cardColor, lineWidth: StatsPill.ring))
+                .offset(x: originX - StatsPill.face / 2)
         }
-        .frame(width: width, height: StatsPill.face, alignment: .leading)
+        .frame(width: originX + maxX,
+               height: StatsPill.face / 2 + StatsPill.drop + StatsPill.sideFace / 2,
+               alignment: .topLeading)
+    }
+
+    private func sideFace(_ p: GlowPerson) -> some View {
+        AvatarView(name: p.name, photoUrl: p.photoUrl, size: StatsPill.sideFace)
+            .overlay(Circle().strokeBorder(cardColor, lineWidth: StatsPill.ring))
     }
 
     /// The stats pill's own geometry — owner, 2026-09-11. Named rather than typed into the views
@@ -555,11 +577,19 @@ struct GlowProfileView: View {
         /// Was 14, the other half of the old `.padding(14)`. The arithmetic is at the foot of
         /// `statsCardBody`: 9 a side puts the pill at about 61pt instead of about 71.
         static let padV: CGFloat = 9
-        /// A face's diameter. Derived rather than chosen — three faces `step` apart have to come to
-        /// the 52pt the old cluster occupied, so the line beside them loses nothing.
-        static let face: CGFloat = 24
-        /// How far along the next face starts, so `face - step` is the overlap. 24 + 14 + 14 = 52.
-        static let step: CGFloat = 14
+        /// The MIDDLE face's diameter, the one in front. Was 24 in the flat row; his close crop
+        /// shows a disc about as tall as the pill's two lines of text, which is where 40 comes
+        /// from — the cluster then measures 44.5 against text of about 43, so it adds a point and a
+        /// half to the card and no more.
+        static let face: CGFloat = 40
+        /// The two behind it, at 78% of the middle one — the ratio measured off his crop, where the
+        /// side discs are clearly smaller but not so small they read as decoration.
+        static let sideFace: CGFloat = 31
+        /// How far a side face's centre sits from the middle face's, sideways. 22 is 55% of a face,
+        /// which leaves a little under half of each side disc showing.
+        static let spread: CGFloat = 22
+        /// And how far BELOW it, which is the whole difference between "tucked under" and "beside".
+        static let drop: CGFloat = 9
         /// The ring that separates one disc from the next, in the card's own colour. The same 2pt
         /// the cluster drew, and it is what stops three circles reading as one blob.
         static let ring: CGFloat = 2
