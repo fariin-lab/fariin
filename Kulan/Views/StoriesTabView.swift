@@ -308,6 +308,7 @@ struct StoriesTabView: View {
                                         thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                                         name: g.name,
                                         authorPhoto: g.photoUrl,
+                                        seen: !g.hasUnseen,
                                         rectKey: g.id)
                                 }
                                 .buttonStyle(.plain)
@@ -435,6 +436,7 @@ struct StoriesTabView: View {
                                           name: "My Story",
                                           authorPhoto: profile.me?.photoUrl,
                                           isMine: true,
+                                          seen: !mine.hasUnseen,
                                           rectKey: mine.id)
                     }
                     .buttonStyle(.plain)
@@ -468,6 +470,7 @@ struct StoriesTabView: View {
                             thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                             name: g.name,
                             authorPhoto: g.photoUrl,
+                            seen: !g.hasUnseen,
                             rectKey: g.id)
                     }
                     .buttonStyle(.plain)
@@ -647,6 +650,7 @@ struct StoriesTabView: View {
                                 thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                                 name: g.name,
                                 authorPhoto: g.photoUrl,
+                                seen: !g.hasUnseen,
                                 rectKey: key,
                                 corner: StoryTileGrid.corner)
                         }

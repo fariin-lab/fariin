@@ -81,6 +81,8 @@ struct GlowStoryCardView: View {
     /// cards keep the exact stroke they have and the tile cards stop wearing a proportionally
     /// fatter one.
     static let ringRatio: CGFloat = 2.0 / avatar
+    /// The watched ring is one of two greys, picked by theme — see the ring itself.
+    @Environment(\.colorScheme) private var scheme
 
     /// ⛔ 65% OF THE ⊕ INSIDE THE FACE — owner, 2026-09-11, and it is HIS number rather than a
     /// nudge: "the + badge must be inside 65% in the circle avatar". Read as AREA, which is what
@@ -143,6 +145,19 @@ struct GlowStoryCardView: View {
     /// Draws the small ⊕ on the face, which marks YOUR OWN card — his reference has it on My Story
     /// and nowhere else.
     var isMine: Bool = false
+    /// ⛔ HAS THIS STORY BEEN WATCHED — owner, 2026-09-11: "fix glowing story: when I view a circle
+    /// unseen story, it still looks like an unseen story instead of a viewed story."
+    ///
+    /// ⚠️ THE RING WAS A CONSTANT. It is drawn from a hardcoded green-to-blue gradient below and had
+    /// no input at all, so every Glowing card has worn the unwatched colours since the grid was
+    /// built — watching a story could not change it because nothing ever asked. The strip has had
+    /// `displayedSeen` for this since it was written; this card simply never got the same question.
+    ///
+    /// Resolved by the CALLER rather than read here, which is the rule the strip already follows:
+    /// the seen state is a `UserDefaults` read behind a static, so a view that read it directly
+    /// would not re-render when it changed. The grid passes it, the grid re-renders, the ring
+    /// follows.
+    var seen: Bool = false
     /// ⛔ THE CARD WITH NO STORY BEHIND IT — the compose button on the Friends grid, for an account
     /// that has not posted yet. It draws the Glowing grid's own placeholder surface where the photo
     /// would be and is otherwise this card exactly: same aspect, same corner, same face, same ring,
@@ -221,7 +236,7 @@ struct GlowStoryCardView: View {
     }
 
     init(thumbUrl: String, name: String, authorPhoto: String?, isMine: Bool = false,
-         isAdd: Bool = false,
+         isAdd: Bool = false, seen: Bool = false,
          rectKey: String? = nil, corner: CGFloat = GlowStoryCardView.corner,
          onAvatarTap: (() -> Void)? = nil) {
         self.thumbUrl = thumbUrl
@@ -229,6 +244,7 @@ struct GlowStoryCardView: View {
         self.authorPhoto = authorPhoto
         self.isMine = isMine
         self.isAdd = isAdd
+        self.seen = seen
         self.rectKey = rectKey
         self.corner = corner
         self.onAvatarTap = onAvatarTap
@@ -236,8 +252,13 @@ struct GlowStoryCardView: View {
 
     /// The Glowing grid's convenience spelling.
     init(card: GlowStoryCard, rectKey: String? = nil, onAvatarTap: (() -> Void)? = nil) {
+        // The card carries its one story, so the seen state is a direct question about that id —
+        // no watermark and no flag array, which is what the strip needs only because a person
+        // there stands for several stories at once.
         self.init(thumbUrl: card.story.thumbUrl, name: card.person.name,
-                  authorPhoto: card.person.photoUrl, rectKey: rectKey, onAvatarTap: onAvatarTap)
+                  authorPhoto: card.person.photoUrl,
+                  seen: StoryPrefs.isStorySeen(card.story.id),
+                  rectKey: rectKey, onAvatarTap: onAvatarTap)
     }
 
     var body: some View {
@@ -327,10 +348,18 @@ struct GlowStoryCardView: View {
                     ZStack {
                         AvatarView(name: name, photoUrl: authorPhoto, size: face)
                             .overlay {
+                                // Watched draws the strip's own spent grey, and THINNER, exactly as
+                                // `StoryRingView` does: "already seen" is said by being quieter than
+                                // the page, so it needs two greys, not one — darker than white,
+                                // lighter than black. A single grey that reads as spent on one
+                                // background reads as a deliberate mark on the other.
                                 Circle().strokeBorder(
-                                    LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
-                                                   startPoint: .bottomLeading, endPoint: .topTrailing),
-                                    lineWidth: face * Self.ringRatio)
+                                    seen
+                                        ? AnyShapeStyle(scheme == .dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA))
+                                        : AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
+                                                                       startPoint: .bottomLeading, endPoint: .topTrailing)),
+                                    lineWidth: seen ? max(1, face * Self.ringRatio * 0.66)
+                                                    : face * Self.ringRatio)
                             }
                         if isMine {
                             // ⛔ PLACED FROM THE FACE'S CENTRE ALONG THE 45° DIAGONAL — owner,
