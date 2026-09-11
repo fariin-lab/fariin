@@ -727,6 +727,29 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         let rowAnimation: UITableView.RowAnimation = animated ? .automatic : .none
 
         let work = {
+            // ⛔ A SWIPED ROW THAT IS ABOUT TO BE DELETED LOSES ITS PLATTER FIRST, AND NOT INSIDE THE
+            // TRANSACTION — owner, 2026-09-11, with the ghost photographed: swipe a chat, tap
+            // Archive, and for a moment the row is drawn AGAIN over the top of the list before it
+            // goes. "first time chat is appearing under to chats, after that is going archive."
+            //
+            // ⚠️ THE LEFT SHIFT IN HIS SCREENSHOT IS THE TELL. The ghost's avatar hangs off the
+            // leading edge and its name sits on top of the first row's, which is the swiped cell's
+            // own offset — the platter pushes the content left, and this cell still had it. So the
+            // thing flying to the wrong place is the row that was under the finger.
+            //
+            // UIKit was asked to do two things to that one cell in a single transaction: un-swipe it
+            // (its content animating back to the right) and delete it (the cell animating out of the
+            // list). It composited the two into a cell that travels somewhere neither asked for.
+            //
+            // ⚠️ THE ANIMATED CLOSE BELOW STAYS, AND IS NOT WHAT WAS WRONG. It was written for the
+            // MOVE case — a platter left stranded on the wrong chat when the list re-sorts under it
+            // — and it is still right for that. A row that is LEAVING is the one case that does not
+            // want its platter animated shut: it wants it gone before the delete begins. After this
+            // runs `isEditing` is false, so the clause below simply finds nothing to do.
+            if !changes.deletes.isEmpty, self.tableView.isEditing,
+               !(self.host?.parent.selecting ?? false) {
+                self.tableView.setEditing(false, animated: false)
+            }
             self.tableView.beginUpdates()
             // ⛔ THEIRS, VERBATIM IN INTENT: "animate all UI changes within the same transaction",
             // and the change is dropping OUT of editing state when the list rearranges under an open
