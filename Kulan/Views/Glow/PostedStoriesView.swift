@@ -22,14 +22,24 @@ struct PostedStoriesView: View {
     /// included because it exists and a filter that cannot show one of the four would hide stories
     /// with no way to find them; his three named ones are the rest.
     enum Filter: String, CaseIterable, Identifiable {
-        case all, friends, custom, glowers
+        /// ⛔ HIS ORDER — owner, 2026-09-11: "All posted stories / My friends / Glowers / all
+        /// Custom". Glowers ahead of Custom is his, not alphabetical.
+        case all, friends, glowers, custom
         var id: String { rawValue }
+        /// ⛔ THE WHOLE LABEL, AND NOTHING ELSE — owner, 2026-09-11: "the posted stories texts, fix
+        /// please, users feel confused, just make it minimalist".
+        ///
+        /// ⚠️ THE MENU CARRIED THE EXPLANATION TOO. Each row read "My Friends — Stories visible to
+        /// your friends", which wrapped onto three lines and turned a four-item filter into a wall
+        /// of prose the width of the screen. The sentence was added so the filter would explain
+        /// itself; it is still doing that where it belongs — see `explain`, which the EMPTY STATE
+        /// shows, at the moment somebody actually needs to know why a filter found nothing.
         var title: String {
             switch self {
-            case .all: return "All"
+            case .all: return "All posted stories"
             case .friends: return "My Friends"
-            case .custom: return "Custom"
             case .glowers: return "Glowers"
+            case .custom: return "All Custom"
             }
         }
         /// What it means in one line, his "the filtering behaviour should be clear and easy to
@@ -61,6 +71,25 @@ struct PostedStoriesView: View {
     @State private var person: UserProfile?
     @State private var filter: Filter = .all
     @State private var showFilters = false
+    /// ⛔ SELECT MODE — owner, 2026-09-11: "add a new button on the right called Edit; when I click
+    /// Edit show a checkmark on every story, and when I select, the bottom shows three buttons:
+    /// Share, the selected count, and Delete… so a user can delete more stories at one time."
+    ///
+    /// ⚠️ MINE ONLY, and not as a policy decision — there is nothing here another person's stories
+    /// could do. Delete and Edit Viewers are the author's alone (the rules refuse both), and the
+    /// full media a share would carry only exists locally for my own stories. The button is not
+    /// drawn at all on somebody else's page rather than drawn and refused.
+    @State private var editing = false
+    /// Story ids, not indices: this grid re-sorts under a filter change and a story can expire out
+    /// from under the selection while it is open.
+    @State private var selected: Set<String> = []
+    @State private var confirmDelete = false
+    @State private var deleting = false
+    /// The system share sheet's payload, held rather than built inline so the sheet has something
+    /// stable to present. Identifiable through its own wrapper — an array is not.
+    @State private var shareURLs: ShareURLs?
+    /// One story whose audience is being edited, from the long-press menu.
+    @State private var editViewersFor: Story?
     @Environment(\.dismiss) private var dismiss
 
     /// ⛔ THE APP'S OWN STORY GRID, NOT A FOURTH ONE — owner, 2026-09-05, item 17: "Posted stories
@@ -104,12 +133,15 @@ struct PostedStoriesView: View {
                             ForEach(Filter.allCases) { f in
                                 // The sentence rides along inside the menu row, so the explanation
                                 // he asked for survives losing the sheet.
-                                Text(f == .all ? f.title : "\(f.title) — \(f.explain)").tag(f)
+                                Text(f.title).tag(f)
                             }
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(filter == .all ? "Posted stories" : filter.title)
+                            // The filter's own word, always — "All posted stories" IS the title
+                            // now (owner, 2026-09-11), so the page no longer needs a second name
+                            // for the unfiltered case.
+                            Text(filter.title)
                                 .font(.headline)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 11, weight: .bold))
@@ -118,11 +150,81 @@ struct PostedStoriesView: View {
                     }
                 }
             }
+            .toolbar {
+                if isMe {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(editing ? "Done" : "Edit") {
+                            withAnimation(.snappy(duration: 0.22)) {
+                                editing.toggle()
+                                // Leaving select mode drops the selection rather than remembering
+                                // it: a tick still standing when he comes back names stories he
+                                // chose for an action he already walked away from.
+                                if !editing { selected.removeAll() }
+                            }
+                        }
+                        .tint(.primary)
+                    }
+                }
+            }
+            // ⛔ THE THREE CONTROLS, IN HIS ORDER — Share, the count, Delete. A `safeAreaInset`
+            // rather than an overlay, so the grid can scroll clear of the bar instead of hiding its
+            // last row behind it.
+            .safeAreaInset(edge: .bottom) {
+                if editing { selectionBar }
+            }
+            .alert("Delete \(selected.count) \(selected.count == 1 ? "story" : "stories")?",
+                   isPresented: $confirmDelete) {
+                Button("Delete", role: .destructive) { Task { await deleteSelected() } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This cannot be undone. People who already saw them keep what they saw.")
+            }
+            .sheet(item: $shareURLs) { SystemShareSheet(items: $0.urls) }
+            .sheet(item: $editViewersFor) { story in
+                // The same sheet the viewer's own "Edit Viewers" raises, with the same completion —
+                // one door, so a story's audience cannot be edited two different ways.
+                ShareStorySheet(editing: story, onPosted: {
+                    Task {
+                        loader.invalidate()
+                        await loader.load(uid: uid, force: true)
+                        await loader.loadViewCounts(isMe: isMe)
+                    }
+                })
+            }
             .task {
                 await loader.load(uid: uid)
                 await loader.loadViewCounts(isMe: isMe)
                 if !isMe, person == nil { person = await ProfileStore.shared.fetch(uid) }
             }
+    }
+
+    /// ⛔ SHARE · COUNT · DELETE, and the count is the label between them rather than a title above:
+    /// his sketch puts the number where it can be read without leaving the two actions.
+    ///
+    /// ⚠️ BOTH ACTIONS REFUSE AN EMPTY SELECTION rather than being hidden by it. A bar that appears
+    /// and disappears as the first tick lands makes the grid jump under the finger that is ticking.
+    private var selectionBar: some View {
+        HStack {
+            Button { shareSelected() } label: {
+                Image(systemName: "square.and.arrow.up").font(.system(size: 20))
+            }
+            .disabled(selected.isEmpty || deleting)
+            Spacer()
+            Text(selected.isEmpty ? "Select Stories"
+                                  : "\(selected.count) Selected")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selected.isEmpty ? .secondary : .primary)
+            Spacer()
+            Button { confirmDelete = true } label: {
+                if deleting { ProgressView() }
+                else { Image(systemName: "trash").font(.system(size: 20)) }
+            }
+            .tint(.red)
+            .disabled(selected.isEmpty || deleting)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 
     /// Open this person's story set. The same two doors the profile's rail uses, and for the same
@@ -151,6 +253,54 @@ struct PostedStoriesView: View {
                                photoUrl: person?.photoUrl)
             Task { await GlowStoryOpen.open(p, from: Self.tileKey(story.id)) }
         }
+    }
+
+    /// The tick his sketch puts on every story in select mode. Filled when chosen, a hollow ring
+    /// when not — the same pair `StoryTick` draws in the audience pickers, restated here because a
+    /// tile needs it over a photograph and therefore needs a shadow the list version never does.
+    private func tick(on: Bool) -> some View {
+        Image(systemName: on ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 22))
+            .symbolRenderingMode(on ? .palette : .monochrome)
+            .foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.9)),
+                             on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear))
+            .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+            .padding(8)
+    }
+
+    /// The full `Story` behind a tile, for the actions that need more than the public mirror
+    /// carries. Only my own page can answer it — `StoriesRepository.mine` is this account's own
+    /// stories with their media urls and their audiences, where `PostedStory` is the mirror and
+    /// deliberately holds neither.
+    private func myStory(_ id: String) -> Story? {
+        guard isMe else { return nil }
+        return StoriesRepository.shared.mine?.stories.first { $0.id == id }
+    }
+
+    private func toggle(_ id: String) {
+        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+    }
+
+    /// ⚠️ ONE AT A TIME, AND THE FAILURES ARE NOT SWALLOWED. `deleteStory` answers whether the
+    /// server took it; a batch that reports success while half of it stayed up is worse than one
+    /// that stops. Whatever did go leaves the selection, so a retry only re-sends what is left.
+    private func deleteSelected() async {
+        deleting = true
+        for id in selected {
+            if await StoriesService.shared.deleteStory(id) { selected.remove(id) }
+        }
+        deleting = false
+        loader.invalidate()
+        await loader.load(uid: uid, force: true)
+        await loader.loadViewCounts(isMe: isMe)
+        if selected.isEmpty { editing = false }
+    }
+
+    private func shareSelected() {
+        let urls = selected.compactMap { myStory($0)?.mediaUrl }
+            .compactMap { URL(string: $0) }
+        guard !urls.isEmpty else { return }
+        shareURLs = ShareURLs(urls: urls)
     }
 
     /// This page's own key namespace for a tile's rectangle. Its own, and not the bare story id,
@@ -217,7 +367,39 @@ struct PostedStoriesView: View {
                         // as the same tile at different sizes, and one tile cannot drift from
                         // itself. It brings its own Button, so the wrapper here goes with it.
                         ForEach(rows) { s in
-                            PostedStoryTile(story: s, rectKey: Self.tileKey(s.id)) { open(s) }
+                            PostedStoryTile(story: s, rectKey: Self.tileKey(s.id)) {
+                                // In select mode the tap CHOOSES rather than opens. Two meanings
+                                // for one gesture, told apart by the mode the bar is announcing.
+                                if editing { withAnimation(.snappy(duration: 0.18)) { toggle(s.id) } }
+                                else { open(s) }
+                            }
+                            .overlay(alignment: .topLeading) {
+                                if editing { tick(on: selected.contains(s.id)) }
+                            }
+                            // ⛔ THE HOLD MENU — owner, 2026-09-11: "when I long press show a
+                            // context menu: Edit viewers, Share, Delete". Mine only, and off in
+                            // select mode: a hold while ticking is a hold on a thing that is
+                            // already being chosen for one of these very actions.
+                            .contextMenu {
+                                if isMe, !editing, let full = myStory(s.id) {
+                                    Button { editViewersFor = full } label: {
+                                        Label("Edit Viewers", systemImage: "person.2")
+                                    }
+                                    Button {
+                                        if let u = URL(string: full.mediaUrl) {
+                                            shareURLs = ShareURLs(urls: [u])
+                                        }
+                                    } label: {
+                                        Label("Share", systemImage: "square.and.arrow.up")
+                                    }
+                                    Button(role: .destructive) {
+                                        selected = [s.id]
+                                        confirmDelete = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
                         }
                     }
                     // The tiles run close to the screen's edges in his image, so the margin matches
@@ -274,6 +456,14 @@ private struct FilterSheet: View {
             }
         }
     }
+}
+
+/// The system share sheet's payload. `.sheet(item:)` needs something `Identifiable` and an array
+/// is not one, so the urls travel in a box with an identity of their own. A fresh box per share
+/// means presenting twice in a row cannot be swallowed as "the same item".
+private struct ShareURLs: Identifiable {
+    let id = UUID()
+    let urls: [URL]
 }
 
 // ⛔ `PostedStoryGridTile` IS GONE — 2026-09-11. It was this page's own copy of the profile's
