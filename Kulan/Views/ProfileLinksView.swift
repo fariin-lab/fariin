@@ -263,6 +263,20 @@ struct ProfileLinkEditView: View {
 /// picture or a grey smear on a light one.
 struct ProfileLinkChips: View {
     let links: [ProfileLink]
+    /// ⛔ THE PROFILE'S OWN COLOUR — owner, 2026-09-11, with the two pills ringed: "fix colour
+    /// please. When I add links to my profile and I click my profile, the link badges — make it
+    /// colour, look like my colour, every colour must follow."
+    ///
+    /// ⚠️ THEY WERE THE ONLY THING ON THAT PAGE NOT FOLLOWING IT. Every card there takes its fill
+    /// from `ProfilePalette`, which is derived from the person's own photograph, and these pills
+    /// were `.ultraThinMaterial` — a frosted grey that is the same on every profile in the app.
+    /// Against a page tinted from a picture that reads as a foreign element rather than a subtle
+    /// one, which is exactly what he ringed.
+    ///
+    /// Passed in rather than read from `\.profilePalette`, because only one of the two pages that
+    /// draw these publishes that environment, and a pill that follows the colour on one profile and
+    /// not the other is worse than one that follows it on neither.
+    var tint: Color?
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -283,7 +297,12 @@ struct ProfileLinkChips: View {
                         }
                         .padding(.horizontal, 11)
                         .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        // The palette's card fill where there is one, the frosted fallback where
+                        // there is not — an account with no photograph has no colour to follow.
+                        .background {
+                            if let tint { Capsule().fill(tint) }
+                            else { Capsule().fill(.ultraThinMaterial) }
+                        }
                     }
                     .buttonStyle(.plain)
                 }

@@ -559,26 +559,44 @@ struct ShareProfileSheet: View {
     private var link: String { fariinLink(handle) }
     private var shareLine: String { "Chat with \(name.isEmpty ? handle : name) on Fariin" }
 
+    /// ⛔ REDESIGNED, MINIMALIST, NOTHING DROPPED — owner, 2026-09-11, with the first build of it
+    /// photographed: "this sheet, please make it minimalist and redesign, make good design, and
+    /// don't miss any features, just make it redesign, good design."
+    ///
+    /// ⚠️ WHAT WAS WRONG WAS THE FURNITURE, NOT THE CONTENT. The four actions were wearing two
+    /// different chrome styles — two tall filled cards, then a two-row list with a divider — so a
+    /// screen with four equal actions on it looked like a screen with two important ones and two
+    /// afterthoughts. That is three container shapes and a divider for four taps.
+    ///
+    /// One row of four now: a glyph in a soft disc and a word under it, evenly spaced, no cards, no
+    /// divider, no list. Every feature is still here — Download, Scan, Copy link, Share — and Share
+    /// is still a real `ShareLink` so the system sheet can build a preview from the URL.
+    ///
+    /// ⚠️ THE LINK ITSELF IS ON SCREEN NOW, under the handle. It is the thing the whole sheet is
+    /// about and it was the one piece of information the design did not show; a code is unreadable
+    /// to a human and "Copy link" asked people to trust what they were copying.
     var body: some View {
         ZStack {
             Color(.systemGroupedBackground).ignoresSafeArea()
             VStack(spacing: 0) {
-                Spacer(minLength: 12)
+                Spacer(minLength: 8)
                 code
-                // The handle, and it is the only writing on the top half — his picture has no name
-                // and no explaining sentence there, because the code above it is the explanation.
-                Text(handle.isEmpty ? " " : handle)
-                    .font(.title2.weight(.bold))
-                    .padding(.top, 10)
-                Spacer(minLength: 16)
-                HStack(spacing: 12) {
-                    bigButton("Download", icon: "arrow.down", busy: saving) { saveCode() }
-                    bigButton("Scan", icon: "qrcode.viewfinder", busy: false) { showScanner = true }
+                VStack(spacing: 2) {
+                    Text(handle.isEmpty ? " " : handle)
+                        .font(.title3.weight(.semibold))
+                    Text(handle.isEmpty ? " " : link.replacingOccurrences(of: "https://", with: ""))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                listCard.padding(.top, 12)
+                .padding(.top, 14)
+                .padding(.horizontal, 24)
+                Spacer(minLength: 20)
+                actionRow
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
 
             if let toast {
                 Text(toast)
@@ -634,59 +652,64 @@ struct ShareProfileSheet: View {
             }
     }
 
-    private func bigButton(_ title: String, icon: String, busy: Bool,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 10) {
-                if busy {
-                    ProgressView().frame(height: 30)
-                } else {
-                    Image(systemName: icon)
-                        .font(.system(size: 26, weight: .medium))
-                        .frame(height: 30)
-                }
-                Text(title).font(.system(size: 17, weight: .semibold))
-            }
-            .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 22)
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(busy || handle.isEmpty)
-    }
-
-    private var listCard: some View {
-        VStack(spacing: 0) {
-            Button { copyLink() } label: { listRow("Copy link", icon: "link") }
-                .buttonStyle(.plain)
-            Divider().padding(.leading, 16)
-            // ⚠️ A REAL `URL`, NOT THE STRING. An item that is only text gives Messages and the rest
-            // nothing to build a preview card from — the same correction `MyQRView`'s toolbar
-            // carries, and the reason the row is inert rather than dead while the handle loads.
+    /// ⛔ ONE ROW OF FOUR — his redesign, 2026-09-11. Same four actions, one shape, evenly spaced.
+    ///
+    /// ⚠️ THEY ARE ALL THE SAME SIZE ON PURPOSE. What made the old layout read as a mess was that
+    /// four equal actions wore three different container styles between them — two tall filled
+    /// cards, then a two-row list with a divider — so the design implied a hierarchy the actions do
+    /// not have. Download is not more important than Copy link.
+    private var actionRow: some View {
+        HStack(alignment: .top, spacing: 0) {
+            action("Download", icon: "arrow.down", busy: saving) { saveCode() }
+            action("Scan", icon: "qrcode.viewfinder") { showScanner = true }
+            action("Copy", icon: "link") { copyLink() }
+            // ⚠️ A REAL `ShareLink` WITH A REAL `URL`, not a button that opens one. An item that is
+            // only text gives Messages and the rest nothing to build a preview card from — the same
+            // correction `MyQRView`'s toolbar carries. Inert rather than absent while the handle
+            // loads, so the row does not change width under the eye.
             if !handle.isEmpty, let url = URL(string: link) {
                 ShareLink(item: url, subject: Text(shareLine), message: Text(shareLine)) {
-                    listRow("Share", icon: "paperplane")
+                    actionLabel("Share", icon: "square.and.arrow.up", busy: false)
                 }
                 .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
             } else {
-                listRow("Share", icon: "paperplane").opacity(0.4)
+                actionLabel("Share", icon: "square.and.arrow.up", busy: false)
+                    .frame(maxWidth: .infinity)
+                    .opacity(0.35)
             }
         }
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
-    private func listRow(_ title: String, icon: String) -> some View {
-        HStack {
-            Text(title).font(.system(size: 17, weight: .semibold))
-            Spacer()
-            Image(systemName: icon).font(.system(size: 19, weight: .medium))
+    private func action(_ title: String, icon: String, busy: Bool = false,
+                        _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) { actionLabel(title, icon: icon, busy: busy) }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .disabled(busy || handle.isEmpty)
+            .opacity(handle.isEmpty ? 0.35 : 1)
+    }
+
+    /// The glyph in its disc with a word under it. Shared by the buttons and by `ShareLink`, which
+    /// takes a label rather than an action — so the row cannot end up with three of one shape and
+    /// one of another, which is the thing this redesign exists to fix.
+    private func actionLabel(_ title: String, icon: String, busy: Bool) -> some View {
+        VStack(spacing: 7) {
+            ZStack {
+                Circle().fill(Color(.secondarySystemGroupedBackground))
+                if busy {
+                    ProgressView()
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .frame(width: 54, height: 54)
+            Text(title)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 16)
-        .frame(height: 58)
         .contentShape(Rectangle())
     }
 

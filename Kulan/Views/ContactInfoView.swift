@@ -1682,7 +1682,7 @@ struct ContactInfoView: View {
             // ⛔ THEIR LINKS, DIRECTLY UNDER THE BIO — owner, 2026-09-11, his third screenshot: two
             // small capsules between the bio and the row of action circles. Drawn by one shared
             // view so this header and the poster one below cannot drift apart.
-            ProfileLinkChips(links: links)
+            ProfileLinkChips(links: links, tint: palette.map { Color(uiColor: $0.card) })
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 20)
@@ -1773,7 +1773,7 @@ struct ContactInfoView: View {
                     .padding(.top, 2)
                     .transition(.opacity)
             }
-            ProfileLinkChips(links: links)
+            ProfileLinkChips(links: links, tint: palette.map { Color(uiColor: $0.card) })
         }
         .frame(maxWidth: .infinity)
         .animation(.easeOut(duration: 0.22), value: gatedAbout)

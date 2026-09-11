@@ -308,6 +308,19 @@ struct GlowProfileView: View {
                 .tint(.white)
                 .accessibilityLabel("Share profile")
             }
+            // ⛔ TWO BUTTONS, NOT ONE — owner, 2026-09-11, with them photographed fused into a
+            // single glass capsule: "share profile and edit button, don't make one button, make
+            // each one alone button."
+            //
+            // ⚠️ THAT FUSING IS iOS 26 DOING ITS JOB. Adjacent items in one placement are drawn as
+            // ONE grouped glass pill now — it is how the system says "these belong together", and
+            // it is why the bell and the add-story button on the Stories page share a capsule on
+            // purpose. Here they do not belong together: one edits the page, the other hands it to
+            // somebody else.
+            //
+            // `ToolbarSpacer(.fixed)` is the system's own way to say so, and it is the only way:
+            // padding inside the labels widens the shared capsule rather than splitting it.
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showEdit = true }.tint(.white)
             }
@@ -358,7 +371,7 @@ struct GlowProfileView: View {
             // ⛔ THE PROFILE'S LINKS — owner, 2026-09-11: "if I use a link and then enter my
             // profile, it must be appearing also in my profile". Same capsules as the contact page,
             // same shared view, directly under the bio and above the Joined pill.
-            ProfileLinkChips(links: profile?.links ?? [])
+            ProfileLinkChips(links: profile?.links ?? [], tint: cardColor)
             // ⛔ "Joined May 2026" — his concept, 2026-09-09, a small pill under the bio and above
             // the stats card.
             //
