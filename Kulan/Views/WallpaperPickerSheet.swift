@@ -168,6 +168,15 @@ struct WallpaperPickerSheet: View {
         // the wallpaper strip — which is the half of his report about the tiles being cut off.
         .presentationDetents([.height((hasPendingChange && !globalOnly ? 389 : 345) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
+        // ⛔ CLEAR — owner, 2026-09-11: "Chat Wallpaper sheet looks different colors top header and
+        // bottom ... that sheet make clear". The system's glass sheet was tinting the two bar bands
+        // differently from the body; with no surface at all there is nothing to tint, and the chat
+        // behind — wearing the wallpaper being previewed — is the sheet's background. The tiles and
+        // buttons are glass of their own, so they keep their shape over whatever is back there.
+        //
+        // ⚠️ `SendContactSheet` still copies this sheet's OLD look (no background at all) on his
+        // 2026-08-21 word; he has not asked for that one to follow.
+        .presentationBackground(.clear)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
                 colorStore.addCustom(spec)   // save into the reusable custom library (deduped)
