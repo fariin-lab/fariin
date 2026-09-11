@@ -415,8 +415,8 @@ struct PostedStoriesView: View {
                             }
                         }
                     }
-                    // The tiles run close to the screen's edges in his image, so the margin matches
-                    // the gap between them rather than the wide inset a two-column grid takes.
+                    // The tiles sit tight against each other and the PAGE keeps its edge — see the
+                    // note on `StoryTileGrid.margin` for why those are two separate numbers.
                     .padding(.horizontal, PostedGrid.margin)
                     .padding(.top, 8)
                 }
@@ -509,8 +509,19 @@ enum StoryTileGrid {
     /// ⚠️ THE MARGIN STAYS WIDER THAN THE GAP, which is the one part of the earlier note that held
     /// up: the page's edge needs more air than two tiles need from each other, or the outer column
     /// looks cropped.
+    ///
+    /// ⛔ THE MARGIN IS 20 AND THE GAP STAYS 4 — owner, 2026-09-11: "posted stories cards, space
+    /// between angles and cards looks small". The two numbers moved together last time and only one
+    /// of them was wrong: he wants the TILES tight against each other (that is what "the card space
+    /// is big" bought) and the PAGE to have an edge. At 8 the outer columns read as cropped against
+    /// the screen, which is exactly what he photographed.
+    ///
+    /// 20 is not a fresh guess. It is `GlowStoryCardView.margin`, which is `StoryRowMetrics.hPad`,
+    /// which is the single left edge he asked every Stories surface to share on 2026-09-02. This
+    /// page is one of those surfaces, so it takes that edge rather than a number of its own; the
+    /// day he moves the Stories edge again, this moves with it instead of being found later.
     static let gap: CGFloat = 4
-    static let margin: CGFloat = 8
+    static let margin: CGFloat = 20
     /// Smaller than the story cards' own 34, because a tile is about a third of the width and a
     /// 34pt arc on something this narrow eats the picture. 16 is his concept's corner measured the
     /// same way as the gap above.
