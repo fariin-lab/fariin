@@ -164,6 +164,12 @@ struct ChatListRowChanges {
     var deletes: [IndexPath] = []
     var inserts: [IndexPath] = []
     var moves: [(from: IndexPath, to: IndexPath)] = []
+    /// ⚠️ A ROW THAT IS LEAVING THE LIST, AS OPPOSED TO ONE THAT IS ONLY BEING RE-ORDERED, and the
+    /// two are not distinguishable from `deletes` — audit, 2026-09-11. A same-section re-sort is
+    /// expressed as a delete plus an insert (see the long note in `between`), so `deletes` is
+    /// non-empty on EVERY incoming message, and code that read it as "something is being removed"
+    /// was firing on the most ordinary event this list has.
+    var removesRows: Bool = false
 
     var isEmpty: Bool { deletes.isEmpty && inserts.isEmpty && moves.isEmpty }
 
@@ -177,7 +183,7 @@ struct ChatListRowChanges {
         let newIds = Set(new.pinned + new.unpinned + new.people)
 
         for id in oldIds.subtracting(newIds) {
-            if let p = old.indexPath(of: id) { out.deletes.append(p) }
+            if let p = old.indexPath(of: id) { out.deletes.append(p); out.removesRows = true }
         }
         for id in newIds.subtracting(oldIds) {
             if let p = new.indexPath(of: id) { out.inserts.append(p) }
@@ -392,6 +398,14 @@ struct ChatListTable: UIViewControllerRepresentable {
         // after it, means UIKit animates the indent from a layout that the row change has already
         // invalidated. The editing state settles first, then the diff runs against it.
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
+        // ⛔ THE SEARCH-BAR PIN IS RE-ASSERTED ON EVERY PASS — audit, 2026-09-11. `pinSearchBar()`
+        // is what sets `hidesSearchBarWhenScrolling = false`, and it only ran in `viewWillAppear`
+        // and `viewDidAppear`. Its own note says SwiftUI rebuilds the navigation item freely, and
+        // when `.searchable` re-installs its controller mid-session — cancelling a search is enough
+        // — the flag reverts to `true` with no appearance event left to repair it, and the small
+        // jump on scroll-up comes straight back. Both calls are guarded comparisons, so re-asserting
+        // them on every render costs nothing.
+        vc.reassertNavChrome()
         vc.setSelecting(selecting)
         vc.apply(state: .make(pinned: pinned.map(\.id),
                               unpinned: unpinned.map(\.id),
@@ -456,6 +470,65 @@ struct ChatListTable: UIViewControllerRepresentable {
 
 /// The controller that owns the table. Deliberately thin: it holds the render state, applies a diff
 /// to it, and vends cells.
+/// ⛔ A FOOTER THAT GROWS TO KEEP THE CONTENT ONE PIXEL TALLER THAN THE SCREEN — owner, 2026-09-11,
+/// fifth and sixth reports of the same jump, the last one as "this time no guess, deep research and
+/// compare [the reference app]". This is theirs, and their own comment on it names his symptom:
+///
+///     A `tableFooterView` that always expands to fill available contentSize when the table view
+///     contents otherwise wouldn't fill the space. … What this does in practice is to prevent a
+///     glitch where the search bar would momentarily disappear and then animate back in with the
+///     adjusted content insets. It also allows the user to swipe up to dismiss the search bar (if
+///     the content height is too small, the search bar otherwise becomes un-hideable).
+///
+/// ⚠️ ONE PIXEL, NOT ONE POINT, AND THE SIZE IS THE WHOLE TRICK. `1 / displayScale` is the smallest
+/// amount that makes the table scrollable at all, and — their words — it is far smaller than the
+/// amount the adjusted inset can change by, so it cannot make a scroll indicator appear that should
+/// not be there. A round point would be visible slack at the bottom of a short list.
+///
+/// ⚠️ RECOMPUTED ON BOTH EVENTS, because either one alone leaves a stale height: `layoutSubviews`
+/// catches rows arriving and leaving, `adjustedContentInsetDidChange` catches the safe area and the
+/// search field moving.
+///
+/// ⚠️ NOTHING ELSE MAY ASSIGN `tableFooterView`. Their own data source does, a few hundred lines
+/// from this code, which leaves this view resizing an object no longer attached to the table — the
+/// one bug in the mechanism, and it is free to avoid.
+final class ChatListSelfSizingTable: UITableView {
+    private let footer = UIView()
+
+    override init(frame: CGRect, style: UITableView.Style) {
+        super.init(frame: frame, style: style)
+        tableFooterView = footer
+    }
+    required init?(coder: NSCoder) { fatalError("ChatListSelfSizingTable is never built from a nib") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateFooterHeight()
+    }
+
+    override func adjustedContentInsetDidChange() {
+        super.adjustedContentInsetDidChange()
+        updateFooterHeight()
+    }
+
+    private func updateFooterHeight() {
+        // What the rows actually have to fill, once the bars and the bottom clearance are removed.
+        var available = frame.inset(by: adjustedContentInset).height
+            - (tableHeaderView?.frame.height ?? 0)
+        for section in 0..<numberOfSections where available > 0 {
+            available = max(0, available - rect(forSection: section).height)
+        }
+        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
+        let target = available + 1 / scale
+        guard abs(footer.frame.height - target) > 0.01 else { return }
+        footer.frame.size.height = target
+        // Re-assigned rather than only resized: the table caches the footer's height and will not
+        // re-read it otherwise. The guard above is what stops this re-entering `layoutSubviews`
+        // for ever — the second pass computes the same target and returns.
+        tableFooterView = footer
+    }
+}
+
 final class ChatListTableController: UIViewController, UITableViewDataSource, UITableViewDelegate {
     var host: ChatListTable.Coordinator?
     private(set) var state = ChatListRenderState()
@@ -501,7 +574,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     /// Their table, their style. See the file header for why `.grouped` rather than `.plain`.
     private lazy var tableView: UITableView = {
-        let t = UITableView(frame: .zero, style: .grouped)
+        // See `ChatListSelfSizingTable` — the footer is the reference app's own cure for the
+        // search-field jump, and it only works from inside the table.
+        let t = ChatListSelfSizingTable(frame: .zero, style: .grouped)
         t.separatorStyle = .none
         t.backgroundColor = .clear
         // ⚠️ THESE TWO NOW SPEAK ONLY FOR THE STRANGER ROWS. A chat row's height is answered
@@ -555,8 +630,21 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         tableView.tintColor = color
     }
 
+    /// ⛔ THE MODE IS TRACKED HERE, NOT READ BACK OFF THE TABLE — audit, 2026-09-11. `isEditing` is
+    /// true for a revealed SWIPE PLATTER as well as for Select mode (this file says so itself, where
+    /// `apply` closes a stranded platter), so `guard tableView.isEditing != on` read a platter as
+    /// "already in Select mode" and returned without doing anything: swipe a row open, long-press
+    /// another, choose Select, and no circles and no indent ever appeared while the SwiftUI side
+    /// believed the mode was on — taps then fell into the editing branch of `didSelectRowAt` and
+    /// silently ticked rows nobody could see.
+    private var isSelectMode = false
+
     func setSelecting(_ on: Bool) {
-        guard tableView.isEditing != on else { return }
+        guard isSelectMode != on else { return }
+        isSelectMode = on
+        // An open platter has to go first, for the same reason: it holds the table in editing state,
+        // and asking for Select on top of it is asking UIKit for two editing modes at once.
+        if on, tableView.isEditing { tableView.setEditing(false, animated: false) }
         tableView.setEditing(on, animated: true)
     }
 
@@ -708,13 +796,30 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// installs it; this reaches the item it was installed on and changes one flag. Applied on every
     /// appearance because SwiftUI rebuilds that item freely, and guarded so it costs nothing once it
     /// is already false.
-    private func pinSearchBar() {
+    private func pinSearchBar() { reassertNavChrome() }
+
+    /// The item `.searchable` installed its controller on, wherever SwiftUI put it.
+    private func searchHostItem() -> UINavigationItem? {
         var page: UIViewController? = self
         while let p = page, p.navigationItem.searchController == nil, !(p is UINavigationController) {
             page = p.parent
         }
-        guard let item = page?.navigationItem, item.searchController != nil else { return }
+        guard let item = page?.navigationItem, item.searchController != nil else { return nil }
+        return item
+    }
+
+    /// The last item the bar appearance was written to. Compared by identity rather than kept as a
+    /// `Bool`, because the whole reason this is re-asserted is that SwiftUI can hand us a DIFFERENT
+    /// item mid-session — a flag would say "already done" about an item that no longer exists.
+    private weak var chromedItem: UINavigationItem?
+
+    /// Re-assert both nav-bar settings. Called on every render as well as on appearance: the pin is
+    /// a flag comparison, and the appearance is only rebuilt when the item itself changed.
+    func reassertNavChrome() {
+        guard let item = searchHostItem() else { return }
         if item.hidesSearchBarWhenScrolling { item.hidesSearchBarWhenScrolling = false }
+        guard chromedItem !== item else { return }
+        chromedItem = item
         configureNavBar(item)
     }
 
@@ -805,13 +910,6 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
         let old = state
         state = new
-        // The content cache is keyed by id and would otherwise keep every chat that has ever been on
-        // screen. Pruned here rather than in the refresh, because this is the one place that knows
-        // which ids still exist.
-        if configured.count > new.pinned.count + new.unpinned.count {
-            let live = Set(new.pinned + new.unpinned)
-            configured = configured.filter { live.contains($0.key) }
-        }
 
         guard hasEverApplied else {
             hasEverApplied = true
@@ -841,12 +939,38 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The newest state is KEPT, not dropped, and replayed the moment scrolling stops. Only the
         // last one matters: the states are whole snapshots rather than deltas, so a burst of six
         // renders during a flick collapses into one transaction at the end.
-        if tableView.isDragging || tableView.isTracking || tableView.isDecelerating {
+        //
+        // ⛔ `isTracking` WAS IN THIS CONDITION AND HAD TO COME OUT — audit, same day, and it is the
+        // more dangerous bug of the two. `isTracking` is true from the instant a finger LANDS, before
+        // any drag, and the three places that replay the state are all scroll-END delegates. A touch
+        // that never becomes a scroll — a tap that opens a chat, a long press waiting for the context
+        // menu — therefore parks a snapshot that nothing ever comes back for, and the list silently
+        // stops updating: no new message, no re-sort, no badge clearing, until some unrelated render
+        // happens to land with no finger on the glass.
+        //
+        // A stationary finger was never the problem anyway. The jump he reported is content moving
+        // under a finger that is SCROLLING, and `isDragging` is exactly that. The reference app gates
+        // on neither: it defers only while the view is off screen or the app is not active.
+        if tableView.isDragging || tableView.isDecelerating {
             deferredState = (new, animated)
             // `state` has already advanced to `new` above, and the replay needs the diff against
             // what is actually ON SCREEN — so it is rewound here and the replay does the comparing.
             state = old
             return
+        }
+
+        // The content cache is keyed by id and would otherwise keep every chat that has ever been on
+        // screen. Pruned here rather than in the refresh, because this is the one place that knows
+        // which ids still exist.
+        //
+        // ⚠️ BELOW THE GUARD ABOVE, NOT ABOVE IT. It used to run before the rewind, so a deferred
+        // apply dropped the cached content of rows that were still on screen while putting `state`
+        // back — and on the replay those rows looked uncached, which makes `contentChangedOldPaths`
+        // skip them outright and makes the refresh rebuild hosting configurations that did not need
+        // it, resetting each row's own `@State` (the typing self-expire, the relative-time tick).
+        if configured.count > new.pinned.count + new.unpinned.count {
+            let live = Set(new.pinned + new.unpinned)
+            configured = configured.filter { live.contains($0.key) }
         }
 
         let changes = ChatListRowChanges.between(old, new)
@@ -886,7 +1010,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             // — and it is still right for that. A row that is LEAVING is the one case that does not
             // want its platter animated shut: it wants it gone before the delete begins. After this
             // runs `isEditing` is false, so the clause below simply finds nothing to do.
-            if !changes.deletes.isEmpty, self.tableView.isEditing,
+            //
+            // ⛔ `removesRows`, NOT `deletes` — audit, 2026-09-11. `deletes` is also how a
+            // same-section re-sort is expressed, so this read as "a row is being removed" on every
+            // incoming message: swipe a chat open, let a message land in a different chat, and the
+            // platter vanished instantly with no close animation. The animated close below was dead
+            // code in that case, because `isEditing` was already false by the time it ran.
+            if changes.removesRows, self.tableView.isEditing,
                !(self.host?.parent.selecting ?? false) {
                 self.tableView.setEditing(false, animated: false)
             }
@@ -983,10 +1113,19 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         CATransaction.setCompletionBlock { [weak self] in
             guard let self else { return }
             self.isAnimatingRows = false
-            if self.refreshWasDeferred {
-                self.refreshWasDeferred = false
-                self.refreshVisibleContent()
-            }
+            // ⛔ ALWAYS, NOT ONLY WHEN A REFRESH WAS TURNED AWAY MID-FLIGHT — audit, 2026-09-11.
+            // `contentChangedOldPaths` deliberately skips any survivor whose index moved (`from ==
+            // to`), because reloading a travelling row inside its own transaction is the flicker
+            // this file spent a week removing. Nothing then picked those rows up afterwards: the
+            // refresh at the foot of `apply` runs only when the diff was empty. So a snapshot where
+            // chat B jumps to the top on a new message and chat C also got a new preview left C
+            // showing its old preview, timestamp and unread count until some unrelated render.
+            //
+            // Here is the right moment for it — the rows have landed, nothing is in flight, and
+            // `refreshVisibleContent` compares each visible row against its cached content, so rows
+            // that did not change cost a comparison and no redraw.
+            self.refreshWasDeferred = false
+            self.refreshVisibleContent()
             if let owed = self.ticksWereDeferred {
                 self.ticksWereDeferred = nil
                 self.syncTicks(selected: owed)
@@ -1335,13 +1474,25 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // ⚠️ `.destructive` ON DELETE, AND IT IS NOT ONLY THE COLOUR. A destructive contextual
         // action is the one a FULL swipe performs, and it is the one UIKit animates the row out on.
         // Ours was destructive too; the difference is that it now sits where theirs does.
+        // ⛔ `done(false)`, NOT `done(true)`, AND IT IS A CORRECTNESS BUG RATHER THAN A STYLE
+        // CHOICE — audit, 2026-09-11. `onDelete` does not delete anything; it raises the app's
+        // confirmation alert (`pendingDelete = $0` at the call site). Passing `true` to a
+        // `.destructive` action tells UIKit the row HAS BEEN REMOVED, so it collapses the row on the
+        // spot, before the alert has been answered — and on Cancel the table and the data source
+        // disagree about how many rows the section has, which is the classic setup for the
+        // "number of rows after the update must be equal to…" crash on the next diff.
+        //
+        // `false` means "I handled the tap, put the platter back": the platter closes, the row stays,
+        // and the real removal arrives through the normal snapshot diff if he confirms.
         let del = UIContextualAction(style: .destructive, title: "Delete") { _, _, done in
-            p.onDelete(c); done(true)
+            p.onDelete(c); done(false)
         }
         del.image = ChatListIcon.symbol("trash.fill")
 
+        // Same reasoning as Delete: Mute opens the duration sheet rather than muting outright, so
+        // the row is not finished with when this returns.
         let mute = UIContextualAction(style: .normal, title: "Mute") { _, _, done in
-            p.onMute(c); done(true)
+            p.onMute(c); done(false)
         }
         mute.image = ChatListIcon.symbol("bell.slash.fill")
         mute.backgroundColor = .systemIndigo
@@ -1418,7 +1569,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             guard let tableView else { return }
             for cell in tableView.visibleCells {
                 cell.setHighlighted(false, animated: false)
-                cell.setSelected(false, animated: false)
+                // ⛔ NOT IN SELECT MODE — audit, 2026-09-11. In Select mode the selection is the
+                // TICK, and `UITableViewCell.setSelected` moves only the cell: it does not touch
+                // `tableView.indexPathsForSelectedRows`. So `syncTicks` still saw every row's table
+                // state matching the app's set, found nothing to do, and never repainted them — the
+                // circles went empty on every visible row while the toolbar still said "3 Selected",
+                // and Archive or Delete then acted on chats that looked unticked.
+                if !tableView.isEditing { cell.setSelected(false, animated: false) }
             }
         }
         // The timing above was never the problem and is kept: in the completion when there is an
@@ -1446,6 +1603,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// a message arrives, so the row that was swiped may not be at that index by now. `indexPath` is
     /// optional here for the same reason and is deliberately not consulted.
     func tableView(_ tableView: UITableView, didEndEditingRowAt indexPath: IndexPath?) {
+        // ⚠️ NOT WHILE A FINGER IS STILL DOWN. This fires on every path that closes a platter,
+        // including `apply`'s own `setEditing(false, …)` on an ordinary re-sort — so with a row
+        // swiped open, pressing a DIFFERENT row closes the first platter, lands here, and used to
+        // wipe the press fill out from under the finger that was still holding the second row. A
+        // highlight is only "stuck" when nothing is touching the table; while it is tracking, UIKit
+        // owns that state and clears it itself on lift.
+        guard !tableView.isTracking else { return }
         clearStuckHighlights(in: tableView)
     }
 
@@ -1463,12 +1627,18 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// `didEndDragging(decelerate: false)`; a flick ends at `didEndDecelerating`; a programmatic
     /// scroll ends at `didEndScrollingAnimation`.
     private func flushDeferredState() {
-        guard let (pending, animated) = deferredState else { return }
+        guard let (pending, _) = deferredState else { return }
         deferredState = nil
         // Never animate the catch-up. The rows moved while he was scrolling and the reason for the
         // move is already off screen; a spring here would draw attention to a rearrangement he did
         // not ask to watch.
-        apply(state: pending, animated: animated && !tableView.isDecelerating)
+        //
+        // ⚠️ FLATLY `false`, WHICH IS WHAT THE LINE ABOVE ALWAYS MEANT. It used to read
+        // `animated && !tableView.isDecelerating`, and both halves were already decided: every
+        // caller of `apply` hard-codes `animated: true`, and all three flush points are scroll-END
+        // delegates where `isDecelerating` is false by definition. So the comment said "never" and
+        // the code said "always", and he watched the list reshuffle after every flick.
+        apply(state: pending, animated: false)
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -1478,6 +1648,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { flushDeferredState() }
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { flushDeferredState() }
+    /// The status-bar tap. It ends in `didEndScrollingAnimation` on its own, but only when the list
+    /// was not already at the top — so it needs its own flush for the case where nothing moves.
+    func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { flushDeferredState() }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         guard let table = scrollView as? UITableView else { return }
@@ -1731,7 +1904,22 @@ private final class ChatListCell: UITableViewCell {
         // mode the mark is the tick, and grey behind it would be a second answer to a question the
         // circle already answers. While swiped the row must stay clear so the platter's colour is
         // never seen through it.
-        if state.isHighlighted && !state.isSwiped {
+        // ⛔ AND THE `!isSwiped` HALF IS GONE AGAIN — owner, 2026-09-11, third report on this one
+        // line: "when I swipe left or right chat the grey highlight is not appearing".
+        //
+        // ⚠️ WHAT HE OBJECTED TO EARLIER WAS THE CUSTOM PLATE, NOT THIS. The complaint that put
+        // `!isSwiped` here read "it is appearing when I start swipe, I see also grey highlights,
+        // please use native Apple not custom, and also Apple rounded corners" — and the thing in
+        // that photograph with a hand-drawn radius was the 18pt plate deleted below. This clause is
+        // the SYSTEM's press fill, resolved from `listPlainCell()`, which is the native treatment he
+        // was asking for. Suppressing it threw out the native half of the answer with the custom
+        // half, and the row has been going straight from clear to slid-open with no press feedback
+        // at all ever since.
+        //
+        // ⚠️ THE REFERENCE APP DOES NOT CONSULT THE SWIPE STATE EITHER. Its cell branches on exactly
+        // `isSelected || isHighlighted` and has no swipe clause anywhere, so an opening swipe gets
+        // the same fill any press gets. That is the whole of what "native" means here.
+        if state.isHighlighted {
             // The system's own press fill, resolved for this state rather than picked by eye, so it
             // is right in both themes and stays right if Apple changes it.
             background.backgroundColor = UIBackgroundConfiguration.listPlainCell()
