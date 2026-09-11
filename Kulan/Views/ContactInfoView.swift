@@ -484,7 +484,7 @@ struct ContactInfoView: View {
                 // Deliberately NOT shown to the person who typed the key: they know what they did,
                 // and "you used their key" on their own screen is noise.
                 if reachedMeWithMyKey {
-                    infoRow("Used your Chat Key to reach you", "circle.grid.3x3.fill", chevron: false) {}
+                    infoRow("Used your Chat Key to reach you", "ic_chat_key", chevron: false) {}
                     rowDivider
                 }
                 infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
