@@ -492,7 +492,44 @@ final class StoryCubePagerVC: UIViewController {
         return (1 - (r2 * exp(r1 * t) - r1 * exp(r2 * t)) / (r2 - r1)) / springFinal
     }
 
-    private static let springDuration: CGFloat = 0.5
+    /// HOW MUCH OF THE SPRING IS SAMPLED, in spring-seconds, before the curve is normalised and
+    /// replayed over `settleDuration`.
+    ///
+    /// ⛔ 2.0, UP FROM 0.5 — owner, 2026-09-11, comparing the turn with the reference app's: "the
+    /// image suddenly jumps/snaps into place at the end. [Theirs] has a small, slow, smooth settling
+    /// animation as the image finishes moving into position. The speed gradually slows down instead
+    /// of suddenly stopping at the same speed it started with."
+    ///
+    /// ⚠️ THE SNAP WAS ARITHMETIC, NOT A MISSING EASE, and this is the part worth keeping. The slow
+    /// root of this spring is -1.8199, so its time constant is 0.55s and it needs about three of
+    /// those to be visually finished. The window was 0.5s — barely ONE — so the sampled curve was
+    /// the spring's opening rush and none of its approach, and `springFinal` then rescaled that 59%
+    /// of the travel up to a full face. Normalising does not remove the velocity, it multiplies it:
+    /// the fraction was still moving at
+    ///
+    ///     D · y'(D) / y(D) / settleDuration
+    ///     = 0.5 · 0.740690 / 0.592956 / 0.165 ≈ 3.79 faces per second
+    ///
+    /// at the instant the display link stopped and wrote the final value. A turn that ends with
+    /// three quarters of its starting speed still on it does not settle, it stops — which is his
+    /// "suddenly stopping at the same speed it started with", stated exactly.
+    ///
+    /// At 2.0 the same expression gives 2.0 · 0.048318 / 0.973448 / 0.165 ≈ 0.60, so the card
+    /// arrives six times slower than it used to, and the tail that was being cut off is now what the
+    /// eye sees at the end. Where the time goes, measured on the curve rather than guessed:
+    ///
+    ///     last 10% of the rotation    old 14.9% of the turn    new 42.3%
+    ///
+    /// So nine tenths of the travel still happens in the first 57% of his 0.165s — the 3D turn keeps
+    /// the snap he likes at the start — and the remaining 9 degrees are spread over about eight
+    /// frames at 120Hz instead of three.
+    ///
+    /// ⚠️ HIS 0.165s IS NOT TOUCHED AND IS NOT THE KNOB. This redistributes the same time inside the
+    /// turn; a longer turn is what he rejected on 2026-08-20 ("use the speed you used before, just
+    /// make it smooth"). If the landing now reads as floaty, come DOWN towards 1.5 (last 10% ≈ 32%
+    /// of the turn); if it still snaps, up towards 2.5. `springFinal` is derived from this line, so
+    /// it is genuinely one number — unlike `springStiffness`, whose roots must be re-solved with it.
+    private static let springDuration: CGFloat = 2.0
 
     /// ⛔ STIFFNESS 1000 → 900 (owner, 2026-08-21), AND IT IS THE SAME KNOB, TURNED THE SAME WAY,
     /// AS THE STORY OPEN'S 530 → 480. He asked for it in exactly those words.
