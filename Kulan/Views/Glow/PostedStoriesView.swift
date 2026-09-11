@@ -184,9 +184,21 @@ struct PostedStoriesView: View {
                         // ⛔ THE CELL OPENS THE STORY — owner, 2026-09-02: "when I click a story
                         // it is not opening". Same omission as the profile's rail: the tile was
                         // drawn and never wired to anything.
+                        // ⛔ `PostedStoryTile`, THE PROFILE'S OWN TILE — owner, 2026-09-11: "the
+                        // views count is pointing centre of the image". This page had a SECOND tile
+                        // of its own, `PostedStoryGridTile`, drawn from the same description, and
+                        // the two disagreed about one thing: the profile's stacks its badge in a
+                        // `ZStack(alignment: .bottomLeading)` and this one laid it on with
+                        // `.overlay(alignment: .bottomLeading)` carrying TWO conditional children —
+                        // a scrim that fills the height and a label. The label came out centred.
+                        //
+                        // The profile's card has always drawn it in the right corner, which is the
+                        // proof of which of the two forms to keep. So the duplicate is gone rather
+                        // than repaired: the design pass on 2026-09-11 had already named these two
+                        // as the same tile at different sizes, and one tile cannot drift from
+                        // itself. It brings its own Button, so the wrapper here goes with it.
                         ForEach(rows) { s in
-                            Button { open() } label: { PostedStoryGridTile(story: s) }
-                                .buttonStyle(.plain)
+                            PostedStoryTile(story: s) { open() }
                         }
                     }
                     // The tiles run close to the screen's edges in his image, so the margin matches
@@ -245,74 +257,11 @@ private struct FilterSheet: View {
     }
 }
 
-/// One cell of the full-page grid: the poster, the view count, and a mark for a video.
-///
-/// ⛔ THE SAME CARD SHAPE AS `GlowStoryCardView` — owner, 2026-09-05, item 17: "Posted stories
-/// page: redesign exactly like the image (grid + view counts)."
-///
-/// ⚠️ NOT `GlowStoryCardView` ITSELF, ON PURPOSE. That card's whole bottom edge is WHOSE story this
-/// is — a name and a ringed face — and this page is one person's own stories, so every tile would
-/// carry the same name and the same face repeated down the screen. The SHAPE is shared (aspect,
-/// corner, gutter, margin, all read off that type); the thing written on it is different, because
-/// the question the page answers is different: not who posted it, but how many people saw it.
-private struct PostedStoryGridTile: View {
-    let story: PostedStory
-
-    var body: some View {
-        Color.clear
-            .aspectRatio(GlowStoryCardView.aspect, contentMode: .fit)
-            .overlay { StoryImage(url: story.thumbUrl) }
-            .overlay(alignment: .bottomLeading) {
-                // ⛔ THE VIEW COUNT, WHICH IS HALF OF WHAT HE ASKED FOR. Absent, never zero, when
-                // the number is unknown — the count is author-only (`stories/{id}/meta/views` is
-                // readable by its owner alone), so somebody else's posted page has no number to
-                // show and this draws none rather than a confident 0. That mistake is on the
-                // record: `fetchViewSummary`'s own note, and the 2026-08-18 batch where a counter
-                // doc saying 0 was trusted over receipts that named a viewer.
-                // ⛔ NO CAPSULE, AND A SCRIM INSTEAD — his concept image of this page, 2026-09-09.
-                // He reads the count as plain white sitting on the photograph. A gradient along the
-                // bottom edge is what keeps it readable over a bright picture, which is the job the
-                // capsule was doing and the thing his image does not have.
-                //
-                // The clearances come down with the corner: 8 is right against an 18pt arc, where
-                // 14 was clearance from 34.
-                if story.views != nil {
-                    LinearGradient(colors: [.black.opacity(0.45), .clear],
-                                   startPoint: .bottom, endPoint: .top)
-                        .frame(height: 52)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                        .allowsHitTesting(false)
-                }
-                if let v = story.views {
-                    Label(GlowCount.short(v), systemImage: "eye.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.leading, 8)
-                        .padding(.bottom, 8)
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if story.isVideo {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(5)
-                        .background(.black.opacity(0.45), in: Circle())
-                        // Same arc clearance as the count, on the corner it sits in.
-                        .padding(.trailing, 8)
-                        .padding(.top, 8)
-                }
-            }
-            // ⚠️ ONE CLIP, LAST, OVER THE FINISHED TILE — and `compositingGroup()` before it. Both
-            // halves are `GlowStoryCardView`'s hard-won rule: without the group the rounded rect is
-            // applied per layer as each is drawn, and the layers that miss it are what show up in
-            // the corners under the open/close transform. `.clipped()` (a square crop, halfway up
-            // the chain) was what stood here.
-            .compositingGroup()
-            .clipShape(RoundedRectangle(cornerRadius: PostedTile.corner, style: .continuous))
-    }
-}
-
+// ⛔ `PostedStoryGridTile` IS GONE — 2026-09-11. It was this page's own copy of the profile's
+// `PostedStoryTile`, and the copy had the badge bug: `.overlay(alignment:)` over two conditional
+// children centred the count instead of putting it in the corner. The page uses the profile's tile
+// now, which has always drawn it correctly. Do not reintroduce a second one; the geometry both of
+// them read lives on `StoryTileGrid` below.
 
 /// ⛔ THE STORY TILE GRID, IN ONE PLACE — his concept images of the posted stories page and of the
 /// all-friends page, 2026-09-09, and his instruction that the second should look like the first:
@@ -328,10 +277,28 @@ enum StoryTileGrid {
     /// ninth of a tile's width, which on three columns of a 430pt screen is 12, and the page's own
     /// side margin is a little wider than the gap at 14. Ours were both 6, which is what made the
     /// grid read as one block rather than as tiles.
-    static let gap: CGFloat = 12
-    static let margin: CGFloat = 14
+    /// ⛔ TIGHTER AGAIN — owner, 2026-09-11, with his concept beside a screenshot of ours: "the
+    /// card space is big, fix". This REVERSES the 12/14 set two days earlier off the same image,
+    /// and the measurement is why: that pass read the gap as about a ninth of a tile's width, and
+    /// on the picture he sent this time it is nearer a thirtieth — the tiles almost touch, and the
+    /// grid reads as one sheet of pictures rather than as separate cards. 4 and 8 put it there on a
+    /// three-column 430pt screen.
+    ///
+    /// ⚠️ THE MARGIN STAYS WIDER THAN THE GAP, which is the one part of the earlier note that held
+    /// up: the page's edge needs more air than two tiles need from each other, or the outer column
+    /// looks cropped.
+    static let gap: CGFloat = 4
+    static let margin: CGFloat = 8
     /// Smaller than the story cards' own 34, because a tile is about a third of the width and a
     /// 34pt arc on something this narrow eats the picture. 16 is his concept's corner measured the
     /// same way as the gap above.
-    static let corner: CGFloat = 16
+    /// ⛔ 12, DOWN FROM 16 — owner, 2026-09-11: "it is using the wrong rounded corners". Measured
+    /// the same way as the gap above: in his concept the arc is about a tenth of a tile's width,
+    /// and with the tiles now ~135 wide that is 13, where 16 was read off a wider tile. The tiles
+    /// grew when the gaps shrank, so holding 16 would have made them rounder relative to the
+    /// picture, not merely unchanged.
+    ///
+    /// ⚠️ THE PROFILE'S CARD FOLLOWS THIS. `PostedTile.corner` reads it, so a story keeps its shape
+    /// when he taps See All — which was the point of putting the number here in the first place.
+    static let corner: CGFloat = 12
 }
