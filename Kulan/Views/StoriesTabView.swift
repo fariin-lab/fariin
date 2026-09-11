@@ -246,7 +246,13 @@ struct StoriesTabView: View {
                                // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
                                // unseen story re-sorts the row live, so their card slid out from
                                // under the close before it could land on it.
-                               freezeOrder: storyDoorState.isOpen,
+                               // ⛔ THE ORDER IS HELD FOR THE SESSION, THE RINGS ONLY WHILE THE
+                               // VIEWER IS UP — owner, 2026-09-11. See
+                               // `StoryDoorState.orderHeldForSession`: closing a story greys its
+                               // ring at once and moves nothing; the row re-sorts when he leaves
+                               // the tab and comes back, which is where the hold is dropped.
+                               freezeOrder: storyDoorState.isOpen || storyDoorState.orderHeldForSession,
+                               freezeRings: storyDoorState.isOpen,
                                onCompose: { composeStory() },
                                onOpen: { g in openStoryFromRow(g) },
                                onMessage: { g in openStoryChat(g) },

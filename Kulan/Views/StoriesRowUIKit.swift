@@ -1315,7 +1315,13 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
     // Inputs, pushed in by the representable.
     var meName: String = "You"
     var mePhoto: String?
-    var freezeOrder: Bool = false { didSet { if freezeOrder != oldValue { freezeChanged() } } }
+    /// THE CARDS' PLACES. Held for the whole Stories session, not just while a viewer is up — see
+    /// `StoryDoorState.orderHeldForSession`.
+    var freezeOrder: Bool = false { didSet { if freezeOrder != oldValue { orderFreezeChanged() } } }
+    /// THE RINGS. The viewer's own lifetime, and deliberately NOT the same window as the order: a
+    /// story he has just watched should look watched the moment he closes it (his "the opened state
+    /// can change immediately"), while the card it belongs to stays exactly where it was.
+    var freezeRings: Bool = false { didSet { if freezeRings != oldValue { ringFreezeChanged() } } }
     var onCompose: () -> Void = {}
     var onOpen: (StoryGroup) -> Void = { _ in }
     var onMessage: (StoryGroup) -> Void = { _ in }
@@ -1472,15 +1478,21 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
     /// The ring a card draws: the latched one while a viewer is up, the live one otherwise. One door,
     /// so the row and my own card cannot answer this differently.
     private func displayedSeen(_ g: StoryGroup) -> [Bool] {
-        if freezeOrder, let latched = frozenSeen[g.id] { return latched }
+        if freezeRings, let latched = frozenSeen[g.id] { return latched }
         return StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt)
     }
 
-    /// Latch the order the moment a viewer opens, drop it the moment it closes. Nothing is kept
-    /// beyond that, so a later row can never inherit a stale one.
-    private func freezeChanged() {
+    /// Latch the ORDER when the hold goes up, drop it when it comes down. The hold spans the whole
+    /// Stories session, so this fires once at the first open and once on the return to the tab.
+    private func orderFreezeChanged() {
         frozenOrder = freezeOrder ? orderedOthers.map(\.id) : []
-        guard freezeOrder else { frozenSeen = [:]; apply(animated: true); return }
+        apply(animated: true)
+    }
+
+    /// Latch the RINGS for the viewer's lifetime only, so a ring greys as soon as the story closes
+    /// while the card keeps its seat — see `freezeRings`.
+    private func ringFreezeChanged() {
+        guard freezeRings else { frozenSeen = [:]; apply(animated: true); return }
         var flags: [String: [Bool]] = [:]
         for g in orderedOthers { flags[g.id] = StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt) }
         // My own card is in here too: watching my own last story greys my own ring mid-visit exactly
@@ -1730,8 +1742,14 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
     /// safe because the row is kept in step with the viewer while it is open — see `activeChanged` —
     /// so at the close the offset already describes where he is.
     private func restoreRowIfAsked() {
-        guard !freezeOrder, let uid = doorState.restoreRowToUid, !uid.isEmpty else { return }
+        guard let uid = doorState.restoreRowToUid, !uid.isEmpty else { return }
         doorState.restoreRowToUid = nil
+        // ⚠️ CONSUMED EVEN WHEN THE ORDER IS HELD, rather than left standing. With the hold now
+        // spanning the whole session (2026-09-11) this guard is true right through the close, and a
+        // request left on the state would fire whenever the hold finally dropped — scrolling the row
+        // on his RETURN to the tab, for a visit that ended long before. Nothing has moved while the
+        // order is held, so the offset is already right and there is nothing to restore.
+        guard !freezeOrder else { return }
         // Still something unseen → they held their seat, and bringing them back is the old rule.
         guard displayedOthers.first(where: { $0.authorUid == uid })?.hasUnseen == true else { return }
         scrollToAuthor(uid)
@@ -1940,6 +1958,8 @@ struct StoriesRow: UIViewRepresentable {
     var meName: String
     var mePhoto: String?
     var freezeOrder: Bool = false
+    /// The ring latch, on the viewer's own lifetime — see the view's own property.
+    var freezeRings: Bool = false
     var onCompose: () -> Void
     var onOpen: (StoryGroup) -> Void
     var onMessage: (StoryGroup) -> Void = { _ in }
@@ -1966,6 +1986,7 @@ struct StoriesRow: UIViewRepresentable {
         v.onProfile = onProfile
         v.onOpenUploading = onOpenUploading
         v.onPostedStories = onPostedStories
+        v.freezeRings = freezeRings      // before the order: both observers re-lay out, and the
         v.freezeOrder = freezeOrder      // last: its observer re-lays the row out
     }
 

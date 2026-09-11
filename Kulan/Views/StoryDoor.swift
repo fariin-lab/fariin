@@ -36,6 +36,30 @@ import StoryUI
     var uploadingOpen = false
     var isOpen: Bool { openGroup != nil || uploadingOpen }
 
+    /// ⛔ THE ROW'S ORDER IS HELD FOR THE WHOLE STORIES SESSION, NOT JUST WHILE A STORY IS UP —
+    /// owner, 2026-09-11, with the reference app's behaviour written out: "closing the story should
+    /// only update its opened/read state. The UI position must remain stable during the current
+    /// stories session. When the user leaves the stories context and comes back — for example by
+    /// switching to another tab and then returning — refresh the story state and apply the new
+    /// position. Do not make the story jump, disappear, or reposition immediately after closing."
+    ///
+    /// Raised when a door opens and lowered by `releaseOrderHold()`, which the shell calls as the
+    /// Stories tab is re-entered. So the three things he asked to be separated really are:
+    ///
+    ///   1. the READ state — written the moment a story is watched, and the rings follow it as soon
+    ///      as the viewer closes (`freezeRings`, which is the viewer's own lifetime);
+    ///   2. the VISUAL POSITION — this flag, held until the tab is left and returned to;
+    ///   3. the REFRESH — that return, which drops the hold and lets the row re-sort.
+    ///
+    /// ⚠️ SET AT THE OPEN RATHER THAN AT THE CLOSE, and that is what makes it work. The row latches
+    /// its order the instant this turns true, so what it holds is the order as it stood BEFORE the
+    /// story was watched — which is the position he is asking to keep. Latching at the close would
+    /// preserve an order the re-sort had already changed.
+    var orderHeldForSession = false
+
+    /// The Stories tab was re-entered: let the row re-sort. Safe to call when nothing is held.
+    func releaseOrderHold() { orderHeldForSession = false }
+
     // MARK: - THE ONE ANSWER TO "WHOSE STORY IS ON SCREEN RIGHT NOW"
     //
     // ⚠️ READ THIS BEFORE TOUCHING THE CLOSE'S LANDING.
@@ -177,6 +201,10 @@ enum StoryDoor {
                           deliveredToMe: deliveredToMe, onProfile: onProfile, onClosed: onClosed)
         request = req
         StoryDoorState.shared.openGroup = g
+        // The row's order is pinned from here until the Stories tab is re-entered — see
+        // `orderHeldForSession`. Raised at the OPEN so what the row latches is the order as it
+        // stood before this story was watched.
+        StoryDoorState.shared.orderHeldForSession = true
         // A fresh session starts on the person who was tapped, and owes nothing to the last one. The
         // pending row restore goes too: it belongs to a visit that is over, and letting it survive
         // into this one would scroll the row out from under the story that is opening.

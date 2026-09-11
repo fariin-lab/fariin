@@ -158,6 +158,16 @@ struct MainShell: View {
         // knows what it searches, so there is nothing left to remember.
         .onChange(of: tab) { _, new in
             if new == 1 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
+            // ⛔ RE-ENTERING STORIES IS THE REFRESH — owner, 2026-09-11: "when the user leaves the
+            // stories context and comes back, for example by switching to another tab and then
+            // returning, refresh the story state and apply the new position". Dropping the hold
+            // lets the row re-sort, so a story he watched last session takes its new place here and
+            // nowhere else. See `StoryDoorState.orderHeldForSession`.
+            //
+            // ⚠️ ON THE TAB, NOT ON THE PAGE'S `onAppear`. That fires when a pushed page is popped
+            // too — coming back from Glowing or All Friends is still the Stories context, and
+            // re-sorting the row under him there is the jump this whole change exists to stop.
+            if new == 0 { StoryDoorState.shared.releaseOrderHold() }
         }
         // New records landing while the user is already ON the Calls tab count as seen too.
         .onChange(of: callsRepo.calls) { _, _ in
