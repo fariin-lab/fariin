@@ -613,7 +613,9 @@ struct ContactInfoView: View {
 
     private var coreScrollBody: some View {
         ScrollView {
-            VStack(spacing: 20) { sections }
+            // A floor — see `coreScrollBars`. The cards below it are the deepest single tower on
+            // the page, and this keeps them out of the chain's.
+            VStack(spacing: 20) { AnyView(sections) }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
         }
@@ -778,8 +780,25 @@ struct ContactInfoView: View {
     /// three, and that was enough to put THIS half back over the same limit. Same remedy, same rule:
     /// do not merge them back, and if a modifier has to be added here, add it to whichever half is
     /// shorter.
+    ///
+    /// ⛔ THE `AnyView` BELOW IS LOAD-BEARING. IT IS NOT A STYLE CHOICE AND IT MUST NOT BE REMOVED.
+    ///
+    /// Splitting into computed properties pleased the type CHECKER but changed nothing for the
+    /// RUNTIME: `some View` is still one concrete type, and the four halves stack back up into a
+    /// single generic tower about sixty levels deep. Swift builds that type from its mangled name
+    /// with a RECURSIVE decoder, one stack frame per level, and it does that while the navigation
+    /// push is already ~150 frames down the main thread's stack. Build 738 ran out of stack in the
+    /// middle of the decode and died on the guard page: `EXC_BAD_ACCESS (SIGSEGV)`, "Thread stack
+    /// size exceeded", with sixty-four `decodeMangledType` frames on top. Every profile, every time.
+    ///
+    /// `AnyView` is the only thing in SwiftUI that ENDS a type. Each one here is a floor: the half
+    /// above it is decoded on its own, and the half below is decoded on its own, so the deepest
+    /// single tower is roughly a third of what it was and the decoder finishes with room to spare.
+    /// Three floors, one per joint. The cost is one box per body pass, which is nothing.
+    ///
+    /// If this page ever grows another modifier chain, give it a floor too.
     private var coreScrollBars: some View {
-        coreScrollBody
+        AnyView(coreScrollBody)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         // Keep the nav bar visible always: toggling it hidden while the photo viewer opens
@@ -830,7 +849,8 @@ struct ContactInfoView: View {
     /// The second half of the chain above — the bar's own appearance, and the load. Split only for
     /// the type checker; it runs in the same sequence it always did.
     private var coreScrollWithBars: some View {
-        coreScrollBars
+        // A floor — see `coreScrollBars`.
+        AnyView(coreScrollBars)
         // Let the photo run under the bar while it is still there, then hand the bar back its own
         // material the moment the photo's bottom edge passes it.
         //
@@ -924,7 +944,8 @@ struct ContactInfoView: View {
 
     // Sheets, full-screen covers and pushes.
     private var withSheets: some View {
-        coreScrollWithBars
+        // A floor — see `coreScrollBars`.
+        AnyView(coreScrollWithBars)
             .fullScreenCover(item: $viewerImage) { msg in
                 // No system .zoom: MediaOpen flies the tapped thumb (see the strip's tap),
                 // the same pipeline as the conversation and the gallery. The story cover below still
@@ -1034,7 +1055,8 @@ struct ContactInfoView: View {
 
     // Menus, dialogs and the rename alert.
     private var withAlerts: some View {
-        withSheets
+        // A floor — see `coreScrollBars`.
+        AnyView(withSheets)
             // ⛔ `darkAlert`, NOT `.alert`. This page is always dark whatever the phone is set to,
             // and a SwiftUI alert cannot be told that from here — the whole reckoning, including the
             // two ways it has already been tried and reverted, is in `DarkAlert.swift`. Same titles,
