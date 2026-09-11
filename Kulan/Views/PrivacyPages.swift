@@ -276,6 +276,46 @@ struct MessagesPrivacyPage: View {
     @AppStorage("typingIndicators") private var typingIndicators = true
     /// The key row's subscription — see `ChatPinState` (audit L1).
     private var pinState = ChatPinState.shared
+    /// The Choose-a-key sheet, raised by picking the key-only mode without one — see `choose`.
+    @State private var settingKey = false
+
+    /// ⛔ THE KEY-ONLY MODE CANNOT BE CHOSEN WITHOUT A KEY — owner, 2026-09-11: "this is a major
+    /// bug, I can select people who know my key without creating a chat key ... if I click go back,
+    /// don't select people who know my key because I am still not creating a chat key."
+    ///
+    /// ⚠️ IT WAS A DOOR THAT LOCKED ITSELF AND THREW THE KEY AWAY. The mode means "nobody new
+    /// reaches me without my key", and with no key set that is not a privacy setting, it is an
+    /// account nobody new can ever contact — by any route, with nothing on any screen to undo it
+    /// except finding this page again. The footer said so and the row let you do it anyway, which is
+    /// a warning standing in for a guard.
+    ///
+    /// So the tap OPENS THE KEY SHEET instead of committing, and the mode is written only by that
+    /// sheet's success. Backing out of it leaves the selection exactly where it was, which is his
+    /// sentence. Choosing Everyone is unconditional and always has been.
+    private func choose(_ a: Audience) {
+        if a == .contacts, !ChatPin.isSet {
+            settingKey = true
+            return
+        }
+        privMessages = a.rawValue
+        PrivacyPrefs.setMine("messages", a)
+    }
+
+    /// EVERYONE IS THE DEFAULT, AND IT IS ALSO THE FALLBACK — his "and also for default select
+    /// everyone", same message. `PrivacyPrefs.defaultAudience` has always answered Everyone for this
+    /// key, so a fresh account was never the problem; what was missing is the way BACK. A key
+    /// removed on another device (or by the bug above) left the mode standing with nothing behind
+    /// it, and this heals that the moment the page is opened.
+    ///
+    /// ⚠️ ONLY ON A REAL ANSWER. `refreshStatus` returns nil when it could not ask, and treating
+    /// "I don't know" as "no key" would switch a correctly configured account to Everyone because
+    /// the network blinked — which is a privacy setting changing itself in the open direction.
+    private func healIfKeyless() async {
+        guard let set = await ChatPin.refreshStatus(), !set,
+              privMessages == Audience.contacts.rawValue else { return }
+        privMessages = Audience.everyone.rawValue
+        PrivacyPrefs.setMine("messages", .everyone)
+    }
 
     var body: some View {
         List {
@@ -285,8 +325,7 @@ struct MessagesPrivacyPage: View {
                 // make yourself unreachable by accident. The other two audiences are unchanged.
                 ForEach(PrivacyPrefs.options(for: "messages"), id: \.self) { a in
                     Button {
-                        privMessages = a.rawValue
-                        PrivacyPrefs.setMine("messages", a)
+                        choose(a)
                     } label: {
                         HStack {
                             Text(a.label(for: "messages")).foregroundStyle(.primary)
@@ -351,5 +390,17 @@ struct MessagesPrivacyPage: View {
         }
         .navigationTitle("Messages")
         .navigationBarTitleDisplayMode(.inline)
+        // The mode is written by the sheet's SUCCESS and by nothing else — see `choose`. Dismissing
+        // it without saving leaves the selection where it was.
+        .sheet(isPresented: $settingKey) {
+            ChatPinSetSheet {
+                privMessages = Audience.contacts.rawValue
+                PrivacyPrefs.setMine("messages", .contacts)
+            }
+        }
+        // Every visit, not the first: a key can be removed from another device while this page is
+        // cached. See `healIfKeyless`.
+        .task { await healIfKeyless() }
+        .onAppear { Task { await healIfKeyless() } }
     }
 }

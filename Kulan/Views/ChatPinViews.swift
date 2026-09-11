@@ -479,6 +479,14 @@ struct ChatPinPage: View {
                 isSet = false
                 mine = nil
                 failure = ""
+                // ⛔ AND THE MODE THAT DEPENDED ON IT COMES BACK TO EVERYONE — owner, 2026-09-11,
+                // reporting the other half of this: a Messages setting of "People who know my key"
+                // with no key is an account nobody new can contact at all. Removing the key here is
+                // the one moment we KNOW that has happened, so it is healed at the source rather
+                // than left for the privacy page to notice on its next visit (it does that too).
+                if PrivacyPrefs.mine("messages") == .contacts {
+                    PrivacyPrefs.setMine("messages", .everyone)
+                }
             } catch {
                 failure = error.localizedDescription
             }
