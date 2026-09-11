@@ -347,6 +347,16 @@ struct MainShell: View {
         // ⚠️ SETTINGS IS THE EXCEPTION AND STAYS ONE. Its icon is his profile photograph, drawn
         // `.renderingMode(.original)` so it keeps its own colours; a tint has nothing to say about
         // a photo. Its LABEL still follows the tint, which is the right half to follow.
+        //
+        // ⛔ AND EVERY TAB'S CONTENT TAKES `.tint(.primary)` BACK — owner, 2026-09-11, with the
+        // whole of Settings blue: "i said only bottom bar but all my setting and text is goin
+        // blue". A tint is an ENVIRONMENT value, not a property of the bar: set here it reaches
+        // the bar AND everything inside every tab, so it repainted the settings glyphs, the
+        // chevrons and every plain Button in the app. `KulanApp` sets `.tint(.primary)` above this
+        // view, which is the black-and-white rule, and this line was overriding it wholesale.
+        //
+        // So the blue is applied here, where the bar reads it, and each tab's ROOT restores the
+        // app's own tint for its content. The bar is outside those roots and keeps the blue.
         .tint(.blue)
         .onChange(of: StoriesService.shared.uploading) { _, uploading in
             let wasUploading = sawStoryUpload
@@ -382,7 +392,7 @@ struct MainShell: View {
             // reads as "stories", and the circle-dashed stand-in that was here first read as a
             // loading state.
             Tab(value: 0) {
-                StoriesTabView(onSignOut: onSignOut)
+                StoriesTabView(onSignOut: onSignOut).tint(.primary)
             } label: {
                 storiesTabLabel
             }
@@ -390,19 +400,19 @@ struct MainShell: View {
             // The two middle tabs are swapped from where they were this morning; the indices
             // follow the position, so Calls is 1 and Chats is 2 everywhere in this file.
             Tab(value: 1) {
-                CallsView()
+                CallsView().tint(.primary)
             } label: {
                 callsTabLabel
             }
             .badge(missedBadge)   // 0 hides it
             Tab(value: 2) {
-                ChatsView(onSignOut: onSignOut)
+                ChatsView(onSignOut: onSignOut).tint(.primary)
             } label: {
                 chatsTabLabel
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
             Tab(value: 3) {
-                SettingsView(onSignOut: onSignOut, asTab: true)
+                SettingsView(onSignOut: onSignOut, asTab: true).tint(.primary)
             } label: {
                 settingsTabLabel
             }
@@ -412,17 +422,21 @@ struct MainShell: View {
     private var legacyTabView: some View {
         TabView(selection: $tab) {
             StoriesTabView(onSignOut: onSignOut)
+                .tint(.primary)
                 .tabItem { storiesTabLabel }
                 .tag(0)
             CallsView()
+                .tint(.primary)
                 .tabItem { callsTabLabel }
                 .badge(missedBadge)
                 .tag(1)
             ChatsView(onSignOut: onSignOut)
+                .tint(.primary)
                 .tabItem { chatsTabLabel }
                 .badge(unreadChatsBadge)
                 .tag(2)
             SettingsView(onSignOut: onSignOut, asTab: true)
+                .tint(.primary)
                 .tabItem { settingsTabLabel }
                 .tag(3)
         }
