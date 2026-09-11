@@ -745,7 +745,19 @@ struct StoriesTabView: View {
             // ⚠️ BOTTOM-TRAILING AND OUTSIDE THE MARK'S OWN BOX. The offset pushes it clear of the
             // lower card's corner so the two shapes read as separate rather than as one smudge, and
             // `.heavy` keeps it legible at eleven points against a filled drawing.
-            Image("ic_stories_stack_fill").renderingMode(.template).resizable().scaledToFit()
+            // ⛔ ITS OWN DRAWING NOW — owner, 2026-09-11, ringing this button and sending a new
+            // SVG for it. It used to share `ic_stories_stack_fill` with the tab bar, which was his
+            // earlier call and is why the note above argues for the plus so hard: two buttons on one
+            // screen wearing one picture needed the sign to tell them apart. With a mark of its own
+            // that argument is weaker, but the plus stays — "add a story" is still the verb, and a
+            // toolbar button that only shows a subject says nothing about what tapping it does.
+            //
+            // ⚠️ THE FILE HE SENT WAS AN EDITOR EXPORT, not artwork: a 400x400 canvas holding the
+            // shape twice (once in `currentColor`, once in flat black), a stray text node, and a
+            // pile of transforms. What is in the catalogue is the two paths from it on a clean 24pt
+            // box with the transforms folded in — same drawing, nothing else in the file. Template
+            // rendering reads the alpha, so the fill colour in there is a convention, not a choice.
+            Image("ic_add_story").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: 22, height: 22)
                 .overlay(alignment: .bottomTrailing) {
                     Image(systemName: "plus")
