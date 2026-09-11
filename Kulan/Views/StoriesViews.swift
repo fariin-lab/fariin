@@ -3764,9 +3764,12 @@ struct StoryViewer: View {
             // No cover on this one, but the SHAPE still has to converge: it is landing on somebody
             // else's card and a 9:16 rectangle would overhang their slot top and bottom. Same curve,
             // so it too is the row's shape before it touches down.
+            // `alphaCurve` precedes `settle` in the signature, and Swift holds a call to the
+            // declared order even where every argument is labelled.
             runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
+                    alphaCurve: { $0 * $0 * $0 },
                     settle: Self.heroSettle(remaining: remaining),
-                    alphaCurve: { $0 * $0 * $0 }, crop: heroCoverIn,
+                    crop: heroCoverIn,
                     dimFloor: { 1 - $0 }, done: land)
         }
         // A FLIGHT THAT NEVER LANDS MUST NOT TRAP HIM IN THE VIEWER.
