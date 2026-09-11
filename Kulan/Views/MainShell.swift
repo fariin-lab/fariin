@@ -2506,7 +2506,19 @@ struct ChatsView: View {
             // ⚠️ THE TRADE, SO IT IS NOT A SURPRISE: there is now NO blur behind the header at any
             // scroll position. Rows pass under the Edit/Chats/compose buttons with nothing between
             // them. Those buttons carry their own glass, which is what keeps them legible.
-            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            // ⛔ AND HIDING IT WAS NOT WHAT HE WANTED EITHER — owner, 2026-09-11, after that
+            // shipped: "now chat list bottom, you removed border correctly. Please fix the header:
+            // remove border and use Apple blur, make it like the Call page header."
+            //
+            // Hiding the background removed the border by removing everything, and what he is
+            // asking for is the blur WITHOUT the line under it. Those are two different settings on
+            // the bar, and SwiftUI exposes only the first — `toolbarBackground` turns the material
+            // on and off and has nothing to say about the shadow. The shadow IS the border.
+            //
+            // So the bar is configured in `ChatListTableController.configureNavBar`, which already
+            // walks to this page's navigation item for the search field. See that method for why an
+            // appearance override is the right tool HERE and the wrong one on the conversation
+            // screen, which is the case the old warning was written about.
             // ⛔ THE TITLE OPENS A MENU — owner, 2026-09-09: "Message Requests put when users click
             // Chats, open context menu inside chats". He photographed the header with a chevron
             // beside the word, which is what a title menu draws; there was none in the code, so

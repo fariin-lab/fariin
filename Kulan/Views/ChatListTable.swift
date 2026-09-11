@@ -713,9 +713,48 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         while let p = page, p.navigationItem.searchController == nil, !(p is UINavigationController) {
             page = p.parent
         }
-        guard let item = page?.navigationItem, item.searchController != nil,
-              item.hidesSearchBarWhenScrolling else { return }
-        item.hidesSearchBarWhenScrolling = false
+        guard let item = page?.navigationItem, item.searchController != nil else { return }
+        if item.hidesSearchBarWhenScrolling { item.hidesSearchBarWhenScrolling = false }
+        configureNavBar(item)
+    }
+
+    /// ⛔ THE BLUR STAYS, THE LINE UNDER IT GOES — owner, 2026-09-11, after the background was
+    /// hidden outright: "now chat list bottom you removed border correctly. Please fix the header:
+    /// remove border and use Apple blur, make it like the Call page header."
+    ///
+    /// ⚠️ THOSE ARE TWO SETTINGS AND SWIFTUI EXPOSES ONE. `toolbarBackground` turns the material on
+    /// and off; it says nothing about the shadow, and the shadow IS the line he keeps ringing.
+    /// Hiding the background removed the line by removing the blur with it, which is why that build
+    /// answered half the report. `UINavigationBarAppearance.shadowColor` is the only thing that
+    /// separates them.
+    ///
+    /// ⚠️ AN OVERRIDE IS THE RIGHT TOOL HERE AND THE WRONG ONE ON THE CONVERSATION SCREEN, and the
+    /// old warning about build 282 is about that screen, not this one: `ChatNavigationItem` nils
+    /// per-item appearances there on purpose, so anything set here would be fought over. Nothing
+    /// touches this page's item except this method.
+    ///
+    /// ⚠️ BOTH APPEARANCES CARRY THE SAME MATERIAL, deliberately. The bar picks `scrollEdge` when
+    /// its tracked scroll view is at the top and `standard` otherwise — and this page has no tracked
+    /// scroll view to pick by, because the list is a `UITableView` inside a representable and
+    /// `setContentScrollView` did not reach SwiftUI's bar (tried, shipped, reported still wrong).
+    /// Giving the two appearances the same background means the bar looks right whichever it
+    /// chooses, instead of depending on a decision it cannot make. The search field is pinned under
+    /// it now, so there is no bare-topped state for a clear bar to serve anyway.
+    private func configureNavBar(_ item: UINavigationItem) {
+        let a = UINavigationBarAppearance()
+        // The system's own blur — `configureWithDefaultBackground` is what every unmodified bar in
+        // iOS uses, so this asks for Apple's material rather than describing one.
+        a.configureWithDefaultBackground()
+        // The border, and the whole of what he asked to remove.
+        a.shadowColor = .clear
+        a.shadowImage = UIImage()
+        // ⚠️ SET UNCONDITIONALLY, no "has it changed" guard. `UINavigationBarAppearance` is an
+        // NSObject and whether `==` compares its VALUES or its identity is not something to bet a
+        // 40-minute build on. This runs on appear only, and assigning three properties is cheaper
+        // than the comparison would have been anyway.
+        item.standardAppearance = a
+        item.scrollEdgeAppearance = a
+        item.compactAppearance = a
     }
 
     private func registerAsContentScrollView() {
