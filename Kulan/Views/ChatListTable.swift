@@ -1228,8 +1228,22 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// ⚠️ EVERY VISIBLE CELL, NOT THE ONE THE MENU CAME FROM. The identifier names a CHAT, and this
     /// list re-sorts under an open menu whenever a message arrives, so the row that was pressed may
     /// not be at that index any more — and a stuck highlight is cheap to clear everywhere and
-    /// expensive to miss. `setNeedsUpdateConfiguration` on a cell whose state has not changed is a
-    /// no-op, so this costs nothing on the ordinary path.
+    /// expensive to miss.
+    ///
+    /// ⛔ CLEAR THE STATE, DO NOT RE-ASK FOR IT. THIS IS THE SECOND ATTEMPT AND THE FIRST ONE'S
+    /// MISTAKE IS THE WHOLE LESSON — he reported the same grey band again on 2026-09-11.
+    ///
+    /// That attempt called `setNeedsUpdateConfiguration()` here, on the reasoning that the cell had
+    /// never been asked to re-resolve. It HAD been asked, by this very line, and it answered with
+    /// the same grey — because `setNeedsUpdateConfiguration` only makes UIKit ask the cell what it
+    /// looks like in the state it is in, and the stuck state IS `isHighlighted == true`. Asking a
+    /// question again does not change its answer. `updateConfiguration(using:)` faithfully painted
+    /// the highlight it was told the row still had.
+    ///
+    /// `setHighlighted(false, …)` changes the fact instead of re-reading it, and the configuration
+    /// update follows on its own because the state actually moved. `setSelected` goes with it for
+    /// the dismissal that leaves a row selected rather than highlighted; that one paints nothing
+    /// today, but it is the same stuck-state family and free to clear here.
     func tableView(_ tableView: UITableView,
                    willEndContextMenuInteraction configuration: UIContextMenuConfiguration,
                    animator: (any UIContextMenuInteractionAnimating)?) {
@@ -1239,8 +1253,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // that `addCompletion` wants. It reads as a Void body and is not one.
         let clear: () -> Void = { [weak tableView] in
             guard let tableView else { return }
-            tableView.visibleCells.forEach { $0.setNeedsUpdateConfiguration() }
+            for cell in tableView.visibleCells {
+                cell.setHighlighted(false, animated: false)
+                cell.setSelected(false, animated: false)
+            }
         }
+        // The timing above was never the problem and is kept: in the completion when there is an
+        // animator, because clearing mid-flight would take the grey out from under the preview as it
+        // flies home, and immediately when there is none to wait for.
         if let animator { animator.addCompletion(clear) } else { clear() }
     }
 
