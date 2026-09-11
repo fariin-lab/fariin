@@ -59,6 +59,66 @@ struct GlowStoryCardView: View {
     static let avatar: CGFloat = 48
     /// The face's inset from the card's bottom and trailing edges.
     static let avatarInset: CGFloat = 10
+    /// ⛔ THE FACE IS A FRACTION OF THE CARD'S WIDTH NOW, NOT A TYPED 48 — owner, 2026-09-11, with
+    /// the ⊕ badge ringed on My Story: "why are you using a different type when the story is big".
+    ///
+    /// It was never a different TYPE, which is worth saying because the fix follows from the real
+    /// cause: it was ONE hardcoded size drawn on cards of two different widths. His 48 was measured
+    /// on the two-column card, which this file's own note above puts at 168 wide — the face is
+    /// 28.6% of it. The three-column tile page draws the SAME card about 114 wide, where a 48 face
+    /// is 42% of the width, so the two cards really do read as two different designs.
+    ///
+    /// 48/168 reproduces his 48 exactly on the grid he measured it on and shrinks the face in step
+    /// everywhere else. The story ring, the ⊕ badge and the ⊕'s glyph all hang off this one number
+    /// below, so a card's face is the same drawing at every card size.
+    ///
+    /// ⚠️ `Self.avatar` STAYS as the measured value it always was. It is the numerator here and the
+    /// fallback when the card has not been measured yet; nothing outside this file reads it.
+    static let avatarRatio: CGFloat = 48.0 / 168.0
+    /// The ring the face wears, as a fraction of the face. 2 on a 48 face, so the wide cards keep
+    /// the exact stroke they have and the tile cards stop wearing a proportionally fatter one.
+    static let ringRatio: CGFloat = 2.0 / 48.0
+
+    /// ⛔ 65% OF THE ⊕ INSIDE THE FACE — owner, 2026-09-11, and it is HIS number rather than a
+    /// nudge: "the + badge must be inside 65% in the circle avatar". Read as AREA, which is what
+    /// the eye actually judges on two overlapping discs.
+    static let badgeInsideFraction: CGFloat = 0.65
+    /// The ⊕'s diameter as a fraction of the face's. 16 on a 48 face is exactly a third, so this
+    /// keeps the badge the size it already was on the two-column card and scales it with the face
+    /// everywhere else.
+    ///
+    /// ⚠️ `badgeCentreOverRadius` BELOW IS SOLVED FOR THIS EXACT RATIO. Two discs do not overlap
+    /// linearly in their sizes, so if this third ever moves, that number is stale — re-solve it
+    /// with the formula written there, do not scale it.
+    static let badgeRatio: CGFloat = 1.0 / 3.0
+    /// HOW FAR THE ⊕'s CENTRE SITS FROM THE FACE'S CENTRE, as a fraction of the face's RADIUS, so
+    /// that exactly `badgeInsideFraction` of the badge's area lands on the face.
+    ///
+    /// THE DERIVATION, because a number this specific is worth nothing without it. Face radius R,
+    /// badge radius ρ = `badgeRatio`·R = R/3, centres d apart along the 45° diagonal. The area the
+    /// two discs share is the standard circle-circle lens:
+    ///
+    ///     A(d) = ρ²·acos((d² + ρ² − R²) / (2dρ))
+    ///          + R²·acos((d² + R² − ρ²) / (2dR))
+    ///          − ½·√((−d + ρ + R)(d + ρ − R)(d − ρ + R)(d + ρ + R))
+    ///
+    /// and his ask is A(d) = 0.65·πρ². Divide both sides by R² and every term is in x = d/R alone,
+    /// so it is scale-free and solved ONCE here instead of per card size. At x = 0.9025 the left
+    /// side is 0.226901·R² against a right side of 0.65π/9 = 0.226893·R² — 65.00% of the badge on
+    /// the face, 35.00% hanging off it, which is the number he asked for.
+    ///
+    /// ⚠️ THE FLAT-CHORD SHORTCUT IS NOT GOOD ENOUGH AT THIS RATIO, and I checked rather than
+    /// assumed. Treating the face's edge as a straight line across the badge — fine when the badge
+    /// is tiny, and the badge here is a third of the face — gives x = 0.921, which really leaves
+    /// 61.5% inside. That is the kind of eyeballing that put the badge where he photographed it.
+    static let badgeCentreOverRadius: CGFloat = 0.9025
+    /// The same distance split over the two axes, because the badge sits at 45° on the face's
+    /// lower-trailing side: each axis gets d/√2.
+    static let badgeAxisOffsetRatio: CGFloat = badgeCentreOverRadius / CGFloat(2).squareRoot()
+    /// The ⊕ glyph and the badge's own stroke, both as fractions of the badge. 9pt and 1.5pt on a
+    /// 16pt badge, which is what the wide cards already draw.
+    static let badgePlusRatio: CGFloat = 9.0 / 16.0
+    static let badgeStrokeRatio: CGFloat = 1.5 / 16.0
 
     let thumbUrl: String
     let name: String
@@ -100,6 +160,18 @@ struct GlowStoryCardView: View {
     /// `d > r(1 - 1/√2)`, about `0.293r`. The floor of 10 keeps the tighter tile cards from pushing
     /// the name flat against the picture's edge.
     private var nameInset: CGFloat { max(10, ceil(0.41 * corner)) }
+
+    /// The face's diameter on a card of this width — see `Self.avatarRatio` for why it is a
+    /// fraction and not the typed 48 it used to be.
+    ///
+    /// ⚠️ ROUNDED TO WHOLE POINTS so the ring's stroke and the badge's circle land on the pixel
+    /// grid the same way on every card, and guarded at zero because a `GeometryReader` can report
+    /// an empty size on the pass before the card has been measured. Falling back to the measured
+    /// 48 for that one frame is invisible; a face of size 0 would not be.
+    private func avatarSize(cardWidth: CGFloat) -> CGFloat {
+        guard cardWidth > 0 else { return Self.avatar }
+        return (cardWidth * Self.avatarRatio).rounded()
+    }
 
     /// ⛔ THE PRESS DIP, AND IT LIVES ON THE CARD RATHER THAN AT THE FOUR CALL SITES — his report the
     /// last time a press was wired up on a SwiftUI card ("now long press is working but there's no
@@ -158,64 +230,147 @@ struct GlowStoryCardView: View {
                     .frame(height: 90)
                     .allowsHitTesting(false)
             }
-            .overlay(alignment: .bottomLeading) {
-                // ⛔ TWO LINES, NOT AN ELLIPSIS — owner, 2026-09-02, with "Ayaan Warsa…" ringed and
-                // his reference beside it, where a long label wraps rather than truncating.
-                //
-                // ⚠️ ONE LINE WAS THE WRONG ECONOMY. A card is 168 wide less the face and its
-                // margins, so about 100 points of room — which cuts most people off mid-surname,
-                // and a name you cannot read is the one thing this card has to get right. Two lines
-                // of 15pt is 36 points inside a 90pt scrim, so nothing else has to move.
-                // ⛔ 13, DOWN FROM 15 — owner, 2026-09-09, with two names ringed on the Glowing
-                // grid: "now is looks big make small". Two lines of 13 is 32 points inside the 90pt
-                // scrim, so it still clears and nothing around it moves.
-                Text(name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    // ⛔ EQUAL ON BOTH EDGES, BUT NOT 10 — his second report on this, 2026-09-09:
-                    // "glowing stories names is tucking angels, bottom angel and left angel".
+            .overlay {
+                // ⚠️ A READER, AND THE BOTTOM-LEADING MOVED ONTO THE `.frame` BELOW — 2026-09-11,
+                // the same change as the face's overlay and for the same reason. The name's
+                // trailing padding is derived from the face, the face is now derived from the
+                // card's width, so this overlay has to know the card's width too. A
+                // `GeometryReader` always takes every point it is offered, so an `alignment:` on
+                // the overlay itself would have nothing left to align.
+                GeometryReader { geo in
+                    // ⛔ TWO LINES, NOT AN ELLIPSIS — owner, 2026-09-02, with "Ayaan Warsa…" ringed
+                    // and his reference beside it, where a long label wraps rather than truncating.
                     //
-                    // ⚠️ I CAUSED THAT. His first note asked for the left and bottom gaps to be one
-                    // number, and I took the face's 10 for both. On a 34pt corner that puts the
-                    // text's own corner INSIDE the curve: a point inset by d from both edges clears
-                    // an arc of radius r only when d is greater than about 0.293r, which is 10.0 at
-                    // r = 34. Exactly on the boundary, which is what tucking looks like.
-                    //
-                    // So the inset is derived from the arc it has to clear, and stays equal on both
-                    // edges. The wide grids get their old 14 back; the three-column pages, drawn at
-                    // an 18pt corner, keep 10 because 10 clears 18 with room to spare.
-                    .padding(.leading, nameInset)
-                    .padding(.bottom, nameInset)
-                    // clear of the face: its width, its inset, and 4 of daylight between the two
-                    .padding(.trailing, Self.avatar + Self.avatarInset + 4)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                ZStack(alignment: .bottomTrailing) {
-                    AvatarView(name: name, photoUrl: authorPhoto, size: Self.avatar)
-                        .overlay {
-                            Circle().strokeBorder(
-                                LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
-                                               startPoint: .bottomLeading, endPoint: .topTrailing),
-                                lineWidth: 2)
-                        }
-                    if isMine {
-                        Image(systemName: "plus")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 16, height: 16)
-                            .background(Color.black, in: Circle())
-                            .overlay(Circle().strokeBorder(.black, lineWidth: 1.5))
-                            .offset(x: 2, y: 2)
-                    }
+                    // ⚠️ ONE LINE WAS THE WRONG ECONOMY. A card is 168 wide less the face and its
+                    // margins, so about 100 points of room — which cuts most people off mid-surname,
+                    // and a name you cannot read is the one thing this card has to get right. Two
+                    // lines of 15pt is 36 points inside a 90pt scrim, so nothing else has to move.
+                    // ⛔ 13, DOWN FROM 15 — owner, 2026-09-09, with two names ringed on the Glowing
+                    // grid: "now is looks big make small". Two lines of 13 is 32 points inside the
+                    // 90pt scrim, so it still clears and nothing around it moves.
+                    Text(name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        // ⛔ EQUAL ON BOTH EDGES, BUT NOT 10 — his second report on this,
+                        // 2026-09-09: "glowing stories names is tucking angels, bottom angel and
+                        // left angel".
+                        //
+                        // ⚠️ I CAUSED THAT. His first note asked for the left and bottom gaps to be
+                        // one number, and I took the face's 10 for both. On a 34pt corner that puts
+                        // the text's own corner INSIDE the curve: a point inset by d from both
+                        // edges clears an arc of radius r only when d is greater than about 0.293r,
+                        // which is 10.0 at r = 34. Exactly on the boundary, which is what tucking
+                        // looks like.
+                        //
+                        // So the inset is derived from the arc it has to clear, and stays equal on
+                        // both edges. The wide grids get their old 14 back; the three-column pages,
+                        // drawn at an 18pt corner, keep 10 because 10 clears 18 with room to spare.
+                        .padding(.leading, nameInset)
+                        .padding(.bottom, nameInset)
+                        // clear of the face: its width, its inset, and 4 of daylight between the
+                        // two
+                        //
+                        // ⚠️ STILL DERIVED, WHICH IS THE WHOLE POINT OF THE NOTE ON `Self.avatar`.
+                        // The face is a fraction of the card as of 2026-09-11, so a typed 62 here
+                        // would let the name run under the picture on the tile page and leave a
+                        // hole on the wide grid. On the tile card this now asks for 46 instead of
+                        // 62, which hands the name 16 more points to wrap in.
+                        .padding(.trailing, avatarSize(cardWidth: geo.size.width)
+                                            + Self.avatarInset + 4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: .bottomLeading)
                 }
-                .padding(Self.avatarInset)
-                // ⚠️ HIGH PRIORITY, or the card's own tap underneath wins the touch and the face
-                // opens the story instead of the person — the same rule the chat list's ringed
-                // avatar follows for exactly this reason.
-                .highPriorityGesture(TapGesture().onEnded { onAvatarTap?() },
-                                     including: onAvatarTap == nil ? .subviews : .all)
+            }
+            .overlay {
+                // ⚠️ A READER, BECAUSE THE FACE IS A FRACTION OF THE CARD NOW — 2026-09-11.
+                // `geo.size` here is the card's own size, so one line settles the face, its ring,
+                // the badge and the badge's glyph on whichever grid this card was built for. The
+                // bottom-trailing alignment moved off the overlay and onto the `.frame` at the
+                // bottom of this block, because a `GeometryReader` always takes every point it is
+                // offered and would leave the overlay's own alignment nothing to do.
+                GeometryReader { geo in
+                    let face = avatarSize(cardWidth: geo.size.width)
+                    // ⚠️ CENTRED, NOT BOTTOM-TRAILING, AND THAT IS THE FIX ITSELF. See the badge.
+                    ZStack {
+                        AvatarView(name: name, photoUrl: authorPhoto, size: face)
+                            .overlay {
+                                Circle().strokeBorder(
+                                    LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
+                                                   startPoint: .bottomLeading, endPoint: .topTrailing),
+                                    lineWidth: face * Self.ringRatio)
+                            }
+                        if isMine {
+                            // ⛔ PLACED FROM THE FACE'S CENTRE ALONG THE 45° DIAGONAL — owner,
+                            // 2026-09-11, with the badge ringed on My Story: "the add + button and
+                            // avatar looks wrong. the + button is tucking at an angle, fix. also
+                            // the positioning is wrong. give space. and the + badge must be inside
+                            // 65% in the circle avatar".
+                            //
+                            // ⚠️ WHAT WAS WRONG, because it explains all three of his complaints at
+                            // once. The badge was the ZStack's bottom-trailing child with an
+                            // `.offset(x: 2, y: 2)` on top, so it hung off the CORNER OF THE FACE'S
+                            // SQUARE BOX rather than off the face's CIRCLE. That corner is √2·18 =
+                            // 25.5 from the face's centre against a radius of 24, and the lens area
+                            // at that distance leaves about 65% of the badge OUTSIDE the face — the
+                            // exact inverse of the number he asked for.
+                            //
+                            // The box's corner is also the point nearest the card's own corner, so
+                            // the same mistake caused the tucking: the badge's outer edge landed 8
+                            // in from both card edges, where a disc of radius 8 clears a 34pt arc
+                            // by 0.55pt. Half a point is what "tucking at an angle" looks like, and
+                            // it is the identical arithmetic that bit the name two reports ago at
+                            // the other corner of this card.
+                            //
+                            // So nothing is aligned to a box corner any more. The badge is centred
+                            // on the face and pushed out by the solved fraction of the face's
+                            // RADIUS, split over the two axes — see `Self.badgeCentreOverRadius`
+                            // for the lens equation and the solve.
+                            //
+                            // ⚠️ IT NO LONGER LEAVES THE FACE'S BOX AT ALL, which is worth knowing
+                            // before anyone adds a `.frame` or a clip here. The badge's far edge
+                            // sits R·0.9025/√2 + ρ = 15.32 + 8 = 23.3 from the centre on each axis,
+                            // inside the face's own 24. It pokes out of the CIRCLE, which is what
+                            // he wants, and out of nothing else.
+                            let badge = face * Self.badgeRatio
+                            let push = face / 2 * Self.badgeAxisOffsetRatio
+                            Image(systemName: "plus")
+                                .font(.system(size: badge * Self.badgePlusRatio, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: badge, height: badge)
+                                .background(Color.black, in: Circle())
+                                .overlay(Circle().strokeBorder(.black,
+                                                               lineWidth: badge * Self.badgeStrokeRatio))
+                                .offset(x: push, y: push)
+                        }
+                    }
+                    .padding(Self.avatarInset)
+                    // ⚠️ HIGH PRIORITY, or the card's own tap underneath wins the touch and the face
+                    // opens the story instead of the person — the same rule the chat list's ringed
+                    // avatar follows for exactly this reason.
+                    .highPriorityGesture(TapGesture().onEnded { onAvatarTap?() },
+                                         including: onAvatarTap == nil ? .subviews : .all)
+                    // ⛔ THE SPACE HE ASKED FOR, CHECKED AGAINST THE CARD'S OWN ARC INSTEAD OF
+                    // EYEBALLED — "give space", same report. A disc of radius ρ whose centre sits e
+                    // from the corner arc's centre is inside a corner of radius `corner` when
+                    // e + ρ ≤ corner.
+                    //
+                    // Two-column card: the face's centre lands `avatarInset` + R = 10 + 24 = 34
+                    // from both edges, which IS the 34pt arc's centre, so e is just the badge's own
+                    // offset d and the test reads d + ρ ≤ corner: 21.66 + 8 = 29.7 against 34,
+                    // clear by 4.3pt where the old placement cleared by 0.55.
+                    //
+                    // Three-column tile card (16pt corner, a 114pt card, so a 32pt face): the
+                    // badge's centre lands 15.8 from both edges against an arc centre at 16, so
+                    // e = 0.3 and 0.3 + 5.3 = 5.6 against 16. Clear at both sizes, which is the
+                    // whole reason for deriving it rather than typing an offset.
+                    //
+                    // ⚠️ THIS `.frame` COMES AFTER THE GESTURE ON PURPOSE. Put it before and the
+                    // tap target becomes the whole card, and a tap anywhere on the picture would
+                    // open the person instead of the story.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
             }
             // ⛔ ONE CLIP, OVER THE FINISHED CARD — owner, 2026-09-02: "when I scroll down to close,
             // as it goes back to position I see something at the story card's bottom corners; in a
