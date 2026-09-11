@@ -102,6 +102,17 @@ struct GlowPeopleListView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        // ⛔ AS TALL AS THE SEARCH FIELD ABOVE IT — owner, 2026-09-11: "Glowers and Glowing bar,
+        // make height like search bar". The two sit directly above each other and a segmented
+        // control is shorter than a search field by four points, which is exactly the amount that
+        // reads as "these two were not drawn by the same person".
+        //
+        // ⚠️ 36 IS THE SEARCH FIELD'S NUMBER, NOT A PICKED ONE. `.searchable` in a navigation bar
+        // drawer draws a `UISearchBar`, whose text field is 36 points tall; a `UISegmentedControl`
+        // is 32 by default and nothing in SwiftUI exposes that as a setting. Stating the height is
+        // the only lever, and it is the field's own height rather than a number that happened to
+        // look right.
+        .frame(height: 36)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .onChange(of: tab) { _, _ in query = "" }
