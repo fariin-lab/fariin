@@ -3035,6 +3035,36 @@ struct StoryViewer: View {
         max(0, min(1, t / 0.85))
     }
 
+    /// ⛔ WHEN THE FLIGHT IS ALLOWED TO CALL ITSELF FINISHED, IN POINTS RATHER THAN IN PERCENT —
+    /// owner, 2026-09-11: "when I scroll down to close a Glowing story the transition switches
+    /// late, it is still running when the story has already reached the position. The friends story
+    /// on top does not do it because that one is small and has space to travel; Glowing is big and
+    /// has no space. Make the transition finish before it is seated."
+    ///
+    /// ⚠️ THE SPRING STOPPED ON A FRACTION, AND A FRACTION IS NOT A DISTANCE. `SheetProgressAnimator`
+    /// ends the run when `abs(target - current) < settleEpsilon`, and the hero's epsilon is a flat
+    /// 0.004 of the whole journey — so the tail takes the same WALL-CLOCK time whether the card is
+    /// flying five hundred points to a strip thumbnail or sixty to a half-screen Glowing card. On
+    /// the long flight those last 0.4% are about two points and the card is still visibly moving
+    /// right up to the hand-over, which is why the strip has never looked wrong. On the short one
+    /// they are a quarter of a POINT: the card has been sitting on its slot for the whole tail,
+    /// visibly done, while the spring quietly finishes and only then swaps the picture. That pause
+    /// between "arrived" and "switched" is the lateness he is describing, and it gets worse the
+    /// bigger the card is, exactly as he says.
+    ///
+    /// So the stop is stated in points and converted into this flight's own fraction. Two points is
+    /// what the old 0.004 bought on a long flight, so nothing about the case he is happy with
+    /// changes; a short flight now stops when it is two points from home instead of chasing a
+    /// distance no screen can show.
+    ///
+    /// ⚠️ BOUNDED AT BOTH ENDS. The floor keeps it from ever chasing tighter than it does today. The
+    /// ceiling matters more: a very short flight would otherwise be allowed to stop while a visible
+    /// gap is still open, and a hand-over across a gap is the pop this whole exchange exists to
+    /// avoid — 5% of the journey is the furthest it may ever cut the tail.
+    private static func heroSettle(remaining: CGFloat) -> CGFloat {
+        min(0.05, max(0.004, 2 / max(1, remaining)))
+    }
+
     /// The same exchange on the way IN, reversed: the seat wears the thumbnail, and it dissolves
     /// into the live story over the first half of the open so the glide to full screen is the story
     /// itself. (The open's `t` runs the other way round — 0 at the row, 1 at full screen.)
@@ -3728,12 +3758,14 @@ struct StoryViewer: View {
             // white flash this file has warned about since it was written. The floor is the DRAG's,
             // not the landing's.
             runHero(to: 1, center: anchorCentre, alpha: 1, velocity: min(6, max(0, vy) / remaining),
+                    settle: Self.heroSettle(remaining: remaining),
                     cover: heroCoverIn, crop: heroCoverIn, dimFloor: { 1 - $0 }, done: land)
         } else {
             // No cover on this one, but the SHAPE still has to converge: it is landing on somebody
             // else's card and a 9:16 rectangle would overhang their slot top and bottom. Same curve,
             // so it too is the row's shape before it touches down.
             runHero(to: 1, center: anchorCentre, alpha: 0, velocity: min(6, max(0, vy) / remaining),
+                    settle: Self.heroSettle(remaining: remaining),
                     alphaCurve: { $0 * $0 * $0 }, crop: heroCoverIn,
                     dimFloor: { 1 - $0 }, done: land)
         }
@@ -3764,6 +3796,7 @@ struct StoryViewer: View {
         // No cover on a spring-back: there is nothing to exchange, the story is going back to being
         // the whole screen. It was already 0 through the drag and stays there.
         runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining,
+                settle: Self.heroSettle(remaining: remaining),
                 cover: { _ in 0 }, crop: { _ in 0 }) {
             hero.live = false
             hero.cover = false
