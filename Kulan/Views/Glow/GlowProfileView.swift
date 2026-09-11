@@ -442,7 +442,18 @@ struct GlowProfileView: View {
                 // to a second line now and the card grows to hold it, which is what his concept
                 // shows; the size follows the phone's text setting either way.
                 Text("\(GlowCount.short(glowers)) Glowers  ·  \(GlowCount.short(glowing)) Glowing")
-                    .font(.headline)
+                    // ⛔ SUBHEADLINE SEMIBOLD, DOWN FROM `.headline` — owner, 2026-09-11: "in
+                    // profile, Glowers and Glowing text looks big".
+                    //
+                    // ⚠️ THE WEIGHT IS WHAT CARRIES IT NOW, NOT THE SIZE. The line below it is
+                    // `.subheadline` regular in `.secondary`, so both are 15pt and the pair is told
+                    // apart by weight and colour — which is exactly how a chat list row separates a
+                    // name from its preview, and is the reason dropping four points here does not
+                    // flatten the card.
+                    //
+                    // ⚠️ A SYSTEM STYLE, NOT A TYPED 15, so it still follows the phone's text
+                    // setting — the property this line's own note above was written to protect.
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .minimumScaleFactor(0.9)
