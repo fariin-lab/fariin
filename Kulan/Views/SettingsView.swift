@@ -1211,7 +1211,7 @@ struct PrivacySettingsView: View {
                 audienceRow("Bio", key: "bio", value: privBio,
                             footerText: "Who can see the few words about you.")
                 audienceRow("Calls", key: "calls", value: privCalls,
-                            footerText: "Who can call you. Calls from anyone else are declined automatically.")
+                            footerText: "Who can call you. Friends include anyone who used your Chat PIN. Calls from anyone else are declined automatically.")
                 // Shows its value like every other row here. It was the one row with a bare title, so
                 // it read as broken next to five rows that each state their setting (user: "messages
                 // when i select everyone or same one i am not seeing").

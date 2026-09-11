@@ -281,7 +281,9 @@ struct ChatPinPage: View {
             } header: {
                 Text(isSet ? "Your Chat PIN" : "")
             } footer: {
-                Text("Friends and anyone who knows your Chat PIN can message you directly, even when Messages is set to My Friends. Share it only with people you want to hear from.")
+                // "make it can call and message who know the pin" — owner, 2026-09-11. A pin makes
+                // the chat accepted, and an accepted chat is what "friend" means for calls too.
+                Text("Friends and anyone who knows your Chat PIN can message and call you directly, even when Messages or Calls is set to My Friends. Share it only with people you want to hear from.")
             }
 
             if isSet {
@@ -361,7 +363,7 @@ struct ChatPinSetSheet: View {
                 Text("Choose a Chat PIN")
                     .font(.headline)
                     .padding(.top, 26)
-                Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message you directly.")
+                Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

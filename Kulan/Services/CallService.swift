@@ -2220,6 +2220,12 @@ final class CallService: NSObject {
         guard !me.isEmpty, !uid.isEmpty else { return false }
         guard let conv = ConversationsRepository.shared.conversations
             .first(where: { !$0.isGroup && $0.otherUid(me) == uid }) else { return false }
+        // ⛔ AN ACCEPTED CHAT IS THE CONTACT — owner, 2026-09-11: "make it can call and message who
+        // know the pin". A Chat PIN marks the conversation accepted before a word is exchanged, so
+        // "carries a last message" said no to the very person the pin let in; and it said yes to a
+        // stranger whose one unanswered request was that message. Same test as `decideAllowed`
+        // on the other phone and `PrivacyPrefs.isContact` everywhere else.
+        if !conv.startedBy.isEmpty { return conv.accepted }
         return !conv.lastMessageCipher.isEmpty
     }
 
@@ -2265,7 +2271,15 @@ final class CallService: NSObject {
     private func decideAllowed(_ cs: DocumentSnapshot?) -> Bool {
         let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[me] as? Bool) ?? false
         let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
-        let isContact = (cs?.exists == true) && !((cs?.data()?["lastMessage"] as? String ?? "").isEmpty)
+        // An ACCEPTED chat, not "a last message" — the same test as `iAmContactOf` on the caller's
+        // phone, so a Chat PIN opens calls the moment it opens the chat, and a stranger's one
+        // unanswered request does not (owner, 2026-09-11). A chat from before requests existed
+        // has no `startedBy` and keeps the old test.
+        let d = cs?.data() ?? [:]
+        let startedBy = d["startedBy"] as? String ?? ""
+        let isContact = cs?.exists == true
+            && (startedBy.isEmpty ? !((d["lastMessage"] as? String ?? "").isEmpty)
+                                  : (d["accepted"] as? Bool ?? false))
         return !blocked && (audience == .everyone || (audience == .contacts && isContact))
     }
 

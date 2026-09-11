@@ -21,6 +21,21 @@ struct ChatsSettingsView: View {
 
     var body: some View {
         List {
+            // ⛔ CHAT PIN, FIRST ON THIS PAGE — owner, 2026-09-11: "chatpin feature also add in
+            // setting/chats ... user can see easy". The same page the Chats title menu and
+            // Privacy › Messages open; this is a third door, not a second copy.
+            Section {
+                NavigationLink { ChatPinPage() } label: {
+                    HStack {
+                        Text("Chat PIN")
+                        Spacer()
+                        Text(ChatPin.isSet ? "On" : "Off").foregroundStyle(.secondary)
+                    }
+                }
+            } footer: {
+                Text("A private number you can share. Anyone who knows it can message and call you directly.")
+            }
+
             Section {
                 Toggle("Save to Photos", isOn: $saveToPhotos).tint(.green)
             } footer: {

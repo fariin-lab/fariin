@@ -1664,6 +1664,12 @@ struct ChatsView: View {
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
             }
+            // ⛔ CHAT PIN HERE TOO — owner, 2026-09-11: "also add in chatlist when i click filter
+            // button". The same page the title menu opens; this menu is where someone already
+            // looking for Archive and Message Requests will look for it.
+            Button { path.append(ChatPinRoute.mine) } label: {
+                Label { Text("Chat PIN") } icon: { MenuIcon(system: "circle.grid.3x3.fill") }
+            }
             // ⛔ LAST, NOT FIRST — owner, 2026-09-11, who wrote the order out in full. It sat at the
             // top with a divider under it, which put the one ACTION in this menu above the things
             // that only change what you are looking at. On its own at the bottom it reads the way a

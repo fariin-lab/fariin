@@ -54,13 +54,16 @@ enum ChatPin {
         guard isValid(pin) else {
             throw Failure(message: "A Chat PIN is \(minDigits) to \(maxDigits) digits.")
         }
-        _ = try await call("setChatPin", ["pin": pin])
+        // ⛔ NOT THE VERIFY SENTENCE — owner, 2026-09-11, with "Unable to verify Chat PIN." under
+        // his own Save button. That line is for typing somebody ELSE's pin, where nothing may be
+        // revealed; saving my own has nothing to hide, and the phone should say what happened.
+        _ = try await call("setChatPin", ["pin": pin], onFailure: "Couldn’t save your Chat PIN. Try again.")
         Keychain.set(keychainKey, pin)
         UserDefaults.standard.set(true, forKey: statusKey)
     }
 
     static func remove() async throws {
-        _ = try await call("setChatPin", ["pin": ""])
+        _ = try await call("setChatPin", ["pin": ""], onFailure: "Couldn’t remove your Chat PIN. Try again.")
         Keychain.delete(keychainKey)
         UserDefaults.standard.set(false, forKey: statusKey)
     }
@@ -87,28 +90,33 @@ enum ChatPin {
         return cid
     }
 
-    private static func call(_ name: String, _ data: [String: Any]) async throws -> [String: Any] {
+    /// `onFailure` is the sentence for everything the server did not word itself: the verify
+    /// sentence by default (it must give nothing away), a plain "couldn't save" for my own pin.
+    private static func call(_ name: String, _ data: [String: Any],
+                             onFailure: String = genericFailure) async throws -> [String: Any] {
         do {
             let result = try await functions.httpsCallable(name).call(data)
             return result.data as? [String: Any] ?? [:]
         } catch {
-            throw Failure(message: sentence(for: error))
+            throw Failure(message: sentence(for: error, fallback: onFailure))
         }
     }
 
-    /// The server's own words where they are safe to repeat, the generic line everywhere else.
+    /// The server's own words where they are safe to repeat, the fallback everywhere else.
     /// `resourceExhausted` is the lockout and `invalidArgument` is "4 to 6 digits" — both about the
     /// caller, neither about the pin. A `permissionDenied` carries the generic sentence already but
     /// is mapped here too, so a future server message cannot leak through a client that predates it.
-    private static func sentence(for error: Error) -> String {
+    /// A function that is not deployed yet answers `notFound`, which also lands on the fallback —
+    /// the case behind his "Unable to verify Chat PIN." under Save on 2026-09-11.
+    private static func sentence(for error: Error, fallback: String) -> String {
         let ns = error as NSError
         guard ns.domain == FunctionsErrorDomain, let code = FunctionsErrorCode(rawValue: ns.code) else {
-            return genericFailure
+            return fallback
         }
         switch code {
         case .resourceExhausted, .invalidArgument: return ns.localizedDescription
         case .unavailable, .deadlineExceeded: return "Try again in a moment."
-        default: return genericFailure
+        default: return fallback
         }
     }
 }

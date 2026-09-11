@@ -275,7 +275,7 @@ struct MessagesPrivacyPage: View {
                     }
                 }
             } footer: {
-                Text("Anyone who knows your Chat PIN can message you directly, whatever you choose above.")
+                Text("Anyone who knows your Chat PIN can message and call you directly, whatever you choose here or under Calls.")
             }
 
             Section {
