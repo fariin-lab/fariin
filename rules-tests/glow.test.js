@@ -21,7 +21,12 @@ const A = 'uidAAA';   // the giver
 const B = 'uidBBB';   // the receiver
 const C = 'uidCCC';   // a complete stranger
 
+// ⚠️ ONE CLOCK FOR THE WHOLE SUITE. The create rule pins `createdAt` to `request.time` (that is what
+// `FieldValue.serverTimestamp()` resolves to before a rule sees it), so the stamp on the payload and
+// the stamp on the request have to be the SAME STRING or every ordinary give reads as a forged one.
+// The runner below hands `NOW` to `request.time` unless a case names its own.
 const NOW = new Date().toISOString();
+const iso = (ms) => new Date(Date.parse(NOW) + ms).toISOString();
 const edge = { from: A, to: B, createdAt: NOW };
 
 /// isBanned() reads users/{caller}. An unmocked read makes the whole rule evaluate to nothing and
@@ -68,6 +73,36 @@ const cases = [
   { name: 'GUARD an edge is edited in place', expect: 'DENY', uid: A, method: 'update',
     path: `${D}/glows/${A}_${B}`, after: { ...edge, to: C }, before: edge },
 
+  // ── THE STAMP (2026-09-11). The notifications page is ordered by `createdAt`, so a glow that
+  //    picks its own time picks its own place in the receiver's list — for ever, because there is
+  //    no update. Both rows DENY on the live file only after the pin; before it they ALLOWED.
+  { name: 'GUARD a glow is back-dated', expect: 'DENY', uid: A, method: 'create',
+    path: `${D}/glows/${A}_${B}`, after: { from: A, to: B, createdAt: iso(-7 * 24 * 3600e3) },
+    mocks: mocksFor(A) },
+  { name: 'GUARD a glow is dated into the future', expect: 'DENY', uid: A, method: 'create',
+    path: `${D}/glows/${A}_${B}`, after: { from: A, to: B, createdAt: iso(365 * 24 * 3600e3) },
+    mocks: mocksFor(A) },
+
+  // ── THE LIST (2026-09-11). Nothing in this folder had ever tested a `list` on any collection,
+  //    so the half of the privacy model the comment calls "his ruling — counts are public, the name
+  //    lists are yours alone" was the untested half.
+  //
+  //    ⚠️ WHAT A ROW HERE CAN AND CANNOT PROVE. The test API binds `resource` to one document and
+  //    asks whether the rule BODY admits it, which is what proves the owner-scoping: a document
+  //    with the caller on neither end is refused. It does not model the query planner, and that is
+  //    the other half of the enforcement — because the rule names `resource.data.from` /
+  //    `resource.data.to`, Firestore can only satisfy it when the query itself pins one of them to
+  //    the caller, so an unconstrained list of the collection fails before a document is read.
+  { name: 'FIX   A lists the glows they have given', expect: 'ALLOW', uid: A, method: 'list',
+    path: `${D}/glows/${A}_${B}`, before: edge },
+  { name: 'FIX   B lists the glows aimed at them', expect: 'ALLOW', uid: B, method: 'list',
+    path: `${D}/glows/${A}_${B}`, before: edge },
+  { name: 'GUARD a stranger lists somebody else\'s glowers', expect: 'DENY', uid: C, method: 'list',
+    path: `${D}/glows/${A}_${B}`, before: edge },
+  { name: 'GUARD a row of a list belonging to two other people', expect: 'DENY', uid: C,
+    method: 'list', path: `${D}/glows/${B}_uidDDD`,
+    before: { from: B, to: 'uidDDD', createdAt: NOW } },
+
   // ── THE COUNTERS (the user-doc halves; the ALLOW row must hold on BOTH files) ──
   { name: 'GUARD A inflates their own glowerCount', expect: 'DENY', uid: A, method: 'update',
     path: `${D}/users/${A}`, after: { name: 'A', glowerCount: 9999 },
@@ -89,7 +124,10 @@ const cases = [
       auth: { uid: c.uid, token: { firebase: { sign_in_provider: 'password' } } },
       path: c.path,
       method: c.method,
-      time: new Date().toISOString(),
+      // ⚠️ `NOW`, NOT A FRESH `new Date()`. A second clock here is a few milliseconds past the one
+      // on the payload, and the create rule compares the two for equality — every ordinary give
+      // would read as a forged stamp and the suite would fail on its own timing.
+      time: c.time || NOW,
     };
     if (c.after) request.resource = { data: c.after };
     const testCase = { expectation: c.expect, request };

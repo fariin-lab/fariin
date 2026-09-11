@@ -519,6 +519,17 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['from', 'to', 'createdAt'])
         && request.resource.data.keys().hasAll(['from', 'to', 'createdAt'])
         && request.resource.data.to is string && request.resource.data.to.size() > 0
+        // ⛔ THE STAMP IS THE SERVER'S, NOT THE CLIENT'S. `createdAt` was required to be PRESENT and
+        // then never looked at again, and an edge cannot be updated — so whatever a client wrote at
+        // create is that glow's time for ever. The receiver's notifications page is ordered by it
+        // (`GlowService` asks for `to == me` by `createdAt` descending), so a back-dated glow never
+        // surfaces as new and a forward-dated one holds the top of that list permanently.
+        //
+        // The app already sends `FieldValue.serverTimestamp()`, which IS `request.time` by the time
+        // a rule sees it, so this pins the value the app was sending anyway. Same shape as
+        // `windowStart == request.time` on the rate counter above, and the same reasoning: a field
+        // the client chooses is a field the client can invent.
+        && request.resource.data.createdAt == request.time
         && !isBanned();
       // No update: a glow has nothing to edit. Give again after a remove is a fresh create.
       allow update: if false;
