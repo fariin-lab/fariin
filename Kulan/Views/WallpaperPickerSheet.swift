@@ -120,7 +120,25 @@ struct WallpaperPickerSheet: View {
         //
         // ⚠️ AND IT IS WHY THE GRABBER GAP STOPS BEING A NUMBER. The 8 that was here was clearing the
         // system's own drag indicator by hand. `safeAreaBar` places the bar under it.
-        .safeAreaBar(edge: .top) { header }
+        // ⛔ THE HEADER IS ORDINARY CONTENT AGAIN — owner, 2026-09-11: "chat wallpaper sheet looks
+        // different, the header sheet and other areas look different, fix, and also give space
+        // between wallpaper and the header sheet".
+        //
+        // ⚠️ THIS IS THE COST OF MAKING THE SHEET CLEAR, and the two changes are one story. While
+        // the sheet had a surface, a top BAR and the body sat on the same ground and read as one
+        // thing. With `presentationBackground(.clear)` the body has no ground at all — so the bar,
+        // which brings its own, became the only lit band on the screen. That band is what he has
+        // ringed: not a colour anybody chose, but the one piece of this sheet still carrying a
+        // material after the rest stopped.
+        //
+        // ⚠️ AND IT REVERSES HIS 2026-09-02 RULING that this header is a system bar rather than the
+        // first row of a stack. That ruling was right for a sheet with a surface and is wrong for a
+        // clear one; he is looking at the clear one. The note on `header` is kept as history.
+        //
+        // `safeAreaInset` keeps the header pinned to the top edge and out of the scrolling content —
+        // so nothing about where it sits changes — while drawing no background of its own, which is
+        // what makes the whole sheet one surface again.
+        .safeAreaInset(edge: .top, spacing: 0) { header }
         // ⛔ THE BUTTON IS SYSTEM CHROME, SO IT SITS WHERE SYSTEM CHROME SITS — owner,
         // 2026-08-24, third time he has sent the same rule: "use system chrome / edge-attached UI,
         // system-positioned", with the space under Apply Wallpaper circled.
@@ -149,7 +167,10 @@ struct WallpaperPickerSheet: View {
         //
         // ⚠️ THE DETENT STILL MEASURES FROM THE BOTTOM OF THE SCREEN and still has to cover the bar,
         // which is why the band term stays in the height below even though nothing pads by it now.
-        .safeAreaBar(edge: .bottom) { bottomBar }
+        // The buttons take the same treatment as the header, and for the same reason: a bar's own
+        // material is the thing that no longer matches a clear sheet. They stay edge-attached and
+        // above the home indicator; only the background they were carrying is gone.
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         // ⛔ THE HEIGHT CAME DOWN 48 — owner, 2026-09-02, ringing the dead band above Apply
         // Wallpaper. Moving both bars out of the VStack did not shrink the sheet with them: a fixed
         // detent is a number, it does not follow its content, so the space the two rows used to
@@ -166,7 +187,12 @@ struct WallpaperPickerSheet: View {
         // ⚠️ +26 ON BOTH, for the header's new 14 above and 12 below. A fixed detent does not follow
         // its content, so padding the bar without paying for it here would just take the room out of
         // the wallpaper strip — which is the half of his report about the tiles being cut off.
-        .presentationDetents([.height((hasPendingChange && !globalOnly ? 389 : 345) + Self.bottomInset)])
+        // ⚠️ +10 ON BOTH, FOR THE HEADER'S NEW GAP. A fixed detent does not follow its content, so
+        // the 10 points the header's bottom padding just gained (12 → 22) would otherwise be taken
+        // out of the wallpaper strip rather than added to the sheet — which is the half of his
+        // 2026-09-02 report about the tiles being cut off, and the same arithmetic as the +26 that
+        // note records.
+        .presentationDetents([.height((hasPendingChange && !globalOnly ? 399 : 355) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         // ⛔ CLEAR — owner, 2026-09-11: "Chat Wallpaper sheet looks different colors top header and
         // bottom ... that sheet make clear". The system's glass sheet was tinting the two bar bands
@@ -290,7 +316,16 @@ struct WallpaperPickerSheet: View {
         //
         // 14 above clears the indicator; 12 below is the gap the strip should have had all along.
         .padding(.top, 14)
-        .padding(.bottom, 12)
+        // ⛔ 22, UP FROM 12 — owner, 2026-09-11: "give space between wallpaper and the header
+        // sheet". The tiles were starting straight under the title with the 12 that was measured
+        // when this header still had a bar's own material behind it: a band reads as a divider, so
+        // 12 was enough to separate two SURFACES. With the sheet clear there is no band, the header
+        // and the strip are on one ground, and the only thing keeping them apart is this number.
+        //
+        // 22 rather than a round 24 so the space above the title (14) and the space below it stay
+        // in the ratio a header's own padding should have — the gap under a heading belongs to what
+        // follows it, which is the same rule the chat list's section headings are built on.
+        .padding(.bottom, 22)
     }
 
     private func resetToDefault() {
