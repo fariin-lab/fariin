@@ -158,6 +158,60 @@ struct Story: Identifiable, Hashable, Codable {
     var previewUrl: String { isVideo ? thumbUrl : mediaUrl }
 }
 
+/// ⛔ MAY THIS PERSON PASS THIS STORY ON — owner's spec, 2026-09-11:
+///
+///   • Story audience = Everyone → show Share, Copy Story Link and Repost.
+///   • The story's owner has blocked the viewer → hide all three completely.
+///   • "Make sure this logic is enforced consistently in both the UI and the underlying story
+///     permissions."
+///
+/// ⚠️ ONE ANSWER, ASKED BY EVERY SURFACE. That last line is the whole reason this is a type rather
+/// than a condition written at each button. The viewer's footer, the long-press menu on a card, the
+/// posted-stories grid and whatever comes next each have their own idea of what they are looking at,
+/// and a rule spelled out four times is a rule that is three-quarters right within a month. Every
+/// one of them calls `allows(_:)`.
+///
+/// ⚠️ AND IT IS NOT ONLY THE AUDIENCE. Two other flags on a story already say "do not copy this",
+/// and a Share button that ignored them would be a hole underneath two settings the author has
+/// already used:
+///
+///   • `oneTime` — each recipient may open it exactly once. A link that outlives that single view is
+///     the opposite of the promise, and the server enforces the single view by removing people from
+///     the audience, which a shared copy walks straight around.
+///   • `captureProtected` — the author asked for this story not to be copied. Screenshots are only
+///     as blockable as iOS allows (see `CaptureShield`), but a Share button is entirely ours to not
+///     draw, and it would be strange to fight the screenshot and then offer the file.
+///
+/// ⚠️ MY OWN STORY IS ALWAYS SHAREABLE, whatever its audience. A private story of mine is private
+/// from other people, not from me — sending my own picture on is a thing I am allowed to decide, and
+/// the Posted Stories page has offered exactly that since it was built.
+enum StoryShareRights {
+    /// The viewer's uid, or "" when signed out.
+    private static var me: String { AuthService.shared.uid ?? "" }
+
+    /// Has this author blocked me? Read from the conversation between us, which is where a block
+    /// lives: `isBlockedByMe(them)` means "them blocked the other party", i.e. them blocked me.
+    /// No conversation means no block — two people who have never spoken cannot have one.
+    @MainActor static func authorHasBlockedMe(_ authorUid: String) -> Bool {
+        guard !authorUid.isEmpty, authorUid != me else { return false }
+        let cid = ChatService.convId(me, authorUid)
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        else { return false }
+        return c.isBlockedByMe(authorUid)
+    }
+
+    /// The one question. True = Share, Copy Story Link and Repost may all be offered.
+    @MainActor static func allows(_ s: Story) -> Bool {
+        // The author's own copy, and the two flags that say "not this one" even then. A one-time
+        // story I posted is still one-time for the people who got it, and passing it on would hand
+        // it to somebody who is not in that count at all.
+        if s.authorUid == me { return !s.oneTime && !s.captureProtected }
+        guard s.audienceLabel == StoryAudienceTag.everyone.label else { return false }
+        guard !s.oneTime, !s.captureProtected else { return false }
+        return !authorHasBlockedMe(s.authorUid)
+    }
+}
+
 extension StoriesService {
     /// A COVER SMALL ENOUGH TO PUT IN THE DOCUMENT, which is what makes it impossible to be missing.
     ///

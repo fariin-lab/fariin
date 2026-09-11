@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // `UIPasteboard`, for Copy Story Link
 
 /// POSTED STORIES, FULL PAGE — his requirement 6: a header, a Filter button top right, and filter
 /// options for My Friends / Custom / Glowers.
@@ -303,8 +304,9 @@ struct PostedStoriesView: View {
     /// permanent and unauthenticated, so anybody it reaches can fetch the picture for ever, with no
     /// account, after the story has expired and after it has been deleted. See `KulanApp.storyLink`.
     private func shareSelected() {
-        let urls = selected.compactMap { myStory($0)?.id }
-            .compactMap { URL(string: KulanApp.storyLink(id: $0)) }
+        let urls = selected.compactMap { myStory($0) }
+            .filter { StoryShareRights.allows($0) }
+            .compactMap { URL(string: KulanApp.storyLink(id: $0.id)) }
         guard !urls.isEmpty else { return }
         shareURLs = ShareURLs(urls: urls)
     }
@@ -420,14 +422,27 @@ struct PostedStoriesView: View {
                                     Button { editViewersFor = full } label: {
                                         Label("Edit Viewers", systemImage: "person.2")
                                     }
-                                    Button {
-                                        // The story's address, not the storage file's — see
-                                        // `shareSelected` for what that used to hand out.
-                                        if let u = URL(string: KulanApp.storyLink(id: full.id)) {
-                                            shareURLs = ShareURLs(urls: [u])
+                                    // ⛔ AND NOT EVERY STORY MAY BE PASSED ON — his spec,
+                                    // 2026-09-11. `StoryShareRights` is the one place that answers
+                                    // it, so this menu, the story viewer's footer and anything added
+                                    // later cannot disagree. Here it is my own story, so what it
+                                    // rules out is the pair of flags that say "do not copy this":
+                                    // one-time, and capture-protected.
+                                    if StoryShareRights.allows(full) {
+                                        Button {
+                                            // The story's address, not the storage file's — see
+                                            // `shareSelected` for what that used to hand out.
+                                            if let u = URL(string: KulanApp.storyLink(id: full.id)) {
+                                                shareURLs = ShareURLs(urls: [u])
+                                            }
+                                        } label: {
+                                            Label("Share", systemImage: "square.and.arrow.up")
                                         }
-                                    } label: {
-                                        Label("Share", systemImage: "square.and.arrow.up")
+                                        Button {
+                                            UIPasteboard.general.string = KulanApp.storyLink(id: full.id)
+                                        } label: {
+                                            Label("Copy Story Link", systemImage: "link")
+                                        }
                                     }
                                     Button(role: .destructive) {
                                         selected = [s.id]
