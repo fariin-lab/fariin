@@ -467,7 +467,7 @@ struct ContactInfoView: View {
                 if isFriend {
                     infoRow("Remove Friend", "person.crop.circle.badge.minus", chevron: false) { showUnfriend = true }
                 } else {
-                    infoRow("Use Chat PIN", "circle.grid.3x3.fill", chevron: false) { showPinEntry = true }
+                    infoRow("Use Chat Key", "circle.grid.3x3.fill", chevron: false) { showPinEntry = true }
                 }
                 rowDivider
                 infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
@@ -1092,17 +1092,17 @@ struct ContactInfoView: View {
             // ⛔ THE REFERENCE'S PROMPT, WORD FOR WORD IN SHAPE — owner's fourth screenshot: one
             // sentence, Not Now on the left, the way in on the right. Shown by the Message button
             // when they only take messages from friends and we are not; Not Now simply closes it.
-            .darkAlert("\(shownName) only accepts messages from friends",
-                       message: "If you know their Chat PIN, you can message them now.",
+            .darkAlert("\(shownName) only accepts messages from people who know their Chat Key",
+                       message: "If you know it, you can message them now.",
                        isPresented: $showPinPrompt,
                        actions: [
                         .cancel("Not Now"),
-                        .plain("Use Chat PIN") { showPinEntry = true },
+                        .plain("Use Chat Key") { showPinEntry = true },
                        ])
             // Remove Friend (spec §23). What it does and what it does not do, in one breath: the
             // chat stays, they lose the open door, and the two ways back in are named.
             .darkAlert("Remove \(shownName) from friends?",
-                       message: "They’ll need to send you a new message request, or use your Chat PIN, to message you again. Your chat and its messages stay.",
+                       message: "They’ll need to send you a new message request, or use your Chat Key, to message you again. Your chat and its messages stay.",
                        isPresented: $showUnfriend,
                        actions: [
                         .cancel(),

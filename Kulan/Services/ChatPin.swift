@@ -24,7 +24,7 @@ import FirebaseFunctions
 enum ChatPin {
     static let minDigits = 4
     static let maxDigits = 6
-    static let genericFailure = "Unable to verify Chat PIN."
+    static let genericFailure = "Unable to verify Chat Key."
 
     private static var functions: Functions { Functions.functions(region: "me-central1") }
     private static var uid: String { Auth.auth().currentUser?.uid ?? "" }
@@ -52,18 +52,18 @@ enum ChatPin {
     /// Set or change. Validated here too, so a malformed pin never costs a round trip.
     static func set(_ pin: String) async throws {
         guard isValid(pin) else {
-            throw Failure(message: "A Chat PIN is \(minDigits) to \(maxDigits) digits.")
+            throw Failure(message: "A Chat Key is \(minDigits) to \(maxDigits) digits.")
         }
-        // ⛔ NOT THE VERIFY SENTENCE — owner, 2026-09-11, with "Unable to verify Chat PIN." under
+        // ⛔ NOT THE VERIFY SENTENCE — owner, 2026-09-11, with "Unable to verify Chat Key." under
         // his own Save button. That line is for typing somebody ELSE's pin, where nothing may be
         // revealed; saving my own has nothing to hide, and the phone should say what happened.
-        _ = try await call("setChatPin", ["pin": pin], onFailure: "Couldn’t save your Chat PIN. Try again.")
+        _ = try await call("setChatPin", ["pin": pin], onFailure: "Couldn’t save your Chat Key. Try again.")
         Keychain.set(keychainKey, pin)
         UserDefaults.standard.set(true, forKey: statusKey)
     }
 
     static func remove() async throws {
-        _ = try await call("setChatPin", ["pin": ""], onFailure: "Couldn’t remove your Chat PIN. Try again.")
+        _ = try await call("setChatPin", ["pin": ""], onFailure: "Couldn’t remove your Chat Key. Try again.")
         Keychain.delete(keychainKey)
         UserDefaults.standard.set(false, forKey: statusKey)
     }
@@ -107,7 +107,7 @@ enum ChatPin {
     /// caller, neither about the pin. A `permissionDenied` carries the generic sentence already but
     /// is mapped here too, so a future server message cannot leak through a client that predates it.
     /// A function that is not deployed yet answers `notFound`, which also lands on the fallback —
-    /// the case behind his "Unable to verify Chat PIN." under Save on 2026-09-11.
+    /// the case behind his "Unable to verify Chat Key." under Save on 2026-09-11.
     private static func sentence(for error: Error, fallback: String) -> String {
         let ns = error as NSError
         guard ns.domain == FunctionsErrorDomain, let code = FunctionsErrorCode(rawValue: ns.code) else {

@@ -57,8 +57,11 @@ enum CallPrivacyIndex {
     /// predict.
     static func record(uid: String, privacy: [String: String]) {
         guard !uid.isEmpty else { return }
-        let value = Audience(rawValue: privacy["calls"] ?? "")
-            ?? PrivacyPrefs.defaultAudience(for: "calls")
+        // Normalised the way the callee's own phone reads it (`PrivacyPrefs.normalized`): an old
+        // No One is Nobody, which means "nobody new", so a friend's phone must not refuse first.
+        let value = PrivacyPrefs.normalized(
+            Audience(rawValue: privacy["calls"] ?? "") ?? PrivacyPrefs.defaultAudience(for: "calls"),
+            for: "calls")
         lock.lock(); defer { lock.unlock() }
         audiences[uid] = value
     }
@@ -82,7 +85,9 @@ enum CallPrivacyIndex {
         // Through `audience(for:)` rather than the dictionary, so there is exactly one place that
         // touches the storage and no reader can be added later that forgets the lock.
         switch audience(for: uid) {
-        case .nobody:   return true
+        // "Nobody" is nobody NEW (owner, 2026-09-11): the same test as My Chats. `record` already
+        // folds an old No One into `contacts`; this row only exists so the switch stays exhaustive.
+        case .nobody:   return !iAmTheirContact
         case .contacts: return !iAmTheirContact
         case .everyone: return false
         case nil:       return false

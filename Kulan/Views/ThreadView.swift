@@ -1203,6 +1203,15 @@ struct ThreadView: View {
         .sheet(isPresented: $showPinEntry) {
             ChatPinEntrySheet(uid: otherUid, name: title, photoUrl: photoUrl) { _ in }
         }
+        // The question itself — the reference's "Not Now / Use" pair, the same shape the profile
+        // asks with. Not Now closes it and the request simply waits.
+        .darkAlert("Know \(title)’s Chat Key?",
+                   message: "Your message request is sent. If you know their Chat Key, you can message them now instead of waiting.",
+                   isPresented: $showKeyAsk,
+                   actions: [
+                    .cancel("Not Now"),
+                    .plain("Use Chat Key") { showPinEntry = true },
+                   ])
         // Call-back confirm: tapping a call-history row asks first (never dials on a stray tap).
         .alert(pendingCallBack == .video ? "Video call" : "Voice call",
                isPresented: Binding(get: { pendingCallBack != nil }, set: { if !$0 { pendingCallBack = nil } }),
@@ -1568,6 +1577,20 @@ struct ThreadView: View {
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
+        }
+        // ⛔ ASK FOR THE KEY THE MOMENT THE REQUEST IS SENT — owner, 2026-09-11 ("Everyone: new
+        // user → 1 message → Message Request → ask for Chat Key → correct key → main chat"). Once
+        // per chat, remembered on this phone; the awaiting-reply bar keeps the button for after.
+        //
+        // ⚠️ ASKED WHETHER OR NOT THEY HAVE A KEY. His words were "if I have a Chat Key enabled",
+        // but who has one is private by his own earlier spec (§34), and the app cannot know without
+        // publishing that fact on every profile. One question with a Not Now costs less than that.
+        .onChange(of: requestStance) { old, new in
+            guard old == .firstMessage, new == .awaitingReply else { return }
+            let asked = "chatKeyAsked.\(cid)"
+            guard !UserDefaults.standard.bool(forKey: asked) else { return }
+            UserDefaults.standard.set(true, forKey: asked)
+            showKeyAsk = true
         }
         // Both retry triggers, as ONE modifier taking two method references — see `RetrySweep`.
         .modifier(RetrySweep(itemCount: repo.items.count,
@@ -2043,8 +2066,10 @@ struct ThreadView: View {
     // Cached conversation: resolved once + refreshed only when it changes (onAppear + onChange
     // below), so reading it per render is O(1) instead of an O(n) scan of the whole conversations
     // singleton on every body pass (and a body re-eval on unrelated chats stays cheap).
-    /// The "Enter Chat PIN" sheet, from the cannot-message and awaiting-reply bars.
+    /// The "Enter Chat Key" sheet, from the cannot-message and awaiting-reply bars.
     @State private var showPinEntry = false
+    /// The one-time "know their Chat Key?" question, the moment a request is sent.
+    @State private var showKeyAsk = false
     @State private var cachedConv: Conversation?
     private var conversation: Conversation? { cachedConv }
     private var isGroup: Bool { conversation?.isGroup ?? false }
@@ -5712,7 +5737,7 @@ struct ThreadView: View {
                     .multilineTextAlignment(.center)
                 // The pin goes past the wait too (owner's spec, 2026-09-11 §5): a friend who told
                 // you their number should not have to notice your request first.
-                Button("Use Chat PIN") { showPinEntry = true }
+                Button("Use Chat Key") { showPinEntry = true }
                     .font(.subheadline.weight(.semibold))
                     .padding(.top, 4)
             }
@@ -5741,12 +5766,12 @@ struct ThreadView: View {
                     // ⛔ AND THE WAY IN — owner's spec, 2026-09-11, with the reference app's
                     // "doesn't follow you. If you know their X Number you can message them now"
                     // screenshot. The sentence names the one door that is still open.
-                    Text("They only accept messages from friends. If you know their Chat PIN, you can message them now.")
+                    Text("They only accept messages from people who know their Chat Key. If you know it, you can message them now.")
                         .font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 Button { showPinEntry = true } label: {
-                    Text("Use Chat PIN").font(.body.weight(.semibold))
+                    Text("Use Chat Key").font(.body.weight(.semibold))
                         .frame(maxWidth: .infinity).frame(height: 44)
                 }
                 .buttonStyle(.plain)

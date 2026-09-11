@@ -3,9 +3,9 @@ import SwiftUI
 // CHAT PIN, THE SCREENS — owner's spec, 2026-09-11, drawn from his four reference screenshots.
 //
 // Three views and two parts:
-//   ChatPinEntrySheet   somebody ELSE's pin — the sheet with the face, "Enter Chat PIN", the six
+//   ChatPinEntrySheet   somebody ELSE's pin — the sheet with the face, "Enter Chat Key", the six
 //                       slots, the keypad and the Enter button (his third screenshot).
-//   ChatPinPage         MY pin — behind "Chat PIN" in the Chats title menu (his first screenshot,
+//   ChatPinPage         MY pin — behind "Chat Key" in the Chats title menu (his first screenshot,
 //                       where the reference app keeps "Number") and behind Privacy › Messages.
 //   ChatPinSetSheet     choosing a pin, from that page.
 //   ChatPinKeypad / ChatPinDigitsBox  the two parts both sheets are built from.
@@ -126,7 +126,7 @@ private struct ChatPinSubmitButton: View {
 
 // MARK: - Somebody else's pin
 
-/// "Enter @handle's Chat PIN to contact them." Verified on the server; on success the conversation
+/// "Enter @handle's Chat Key to contact them." Verified on the server; on success the conversation
 /// is already accepted by the time `onSuccess` runs, so the caller only has to open it.
 struct ChatPinEntrySheet: View {
     let uid: String
@@ -176,7 +176,7 @@ struct ChatPinEntrySheet: View {
                 }
                 .padding(.top, 20)
 
-                Text("Enter Chat PIN")
+                Text("Enter Chat Key")
                     .font(.headline)
                     .padding(.top, 18)
                 Divider()
@@ -184,7 +184,7 @@ struct ChatPinEntrySheet: View {
                     .padding(.horizontal, 20)
 
                 (Text("Enter ") + Text(handleText.isEmpty ? name : handleText).fontWeight(.semibold)
-                    + Text("’s Chat PIN to contact them."))
+                    + Text("’s Chat Key to contact them."))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -258,7 +258,7 @@ struct ChatPinEntrySheet: View {
 
 // MARK: - My pin
 
-/// Behind "Chat PIN" in the Chats title menu and Privacy › Messages. Shows the pin this phone set,
+/// Behind "Chat Key" in the Chats title menu and Privacy › Messages. Shows the pin this phone set,
 /// with Copy and Share; says "set on another device" when it cannot; offers Set, Change and Remove.
 struct ChatPinPage: View {
     @State private var isSet = ChatPin.isSet
@@ -295,7 +295,7 @@ struct ChatPinPage: View {
                                 }
                                 .buttonStyle(.plain)
                                 .background(Color(.secondarySystemFill), in: Capsule())
-                                ShareLink(item: "My Chat PIN on Fariin is \(mine). Enter it to message me directly.") {
+                                ShareLink(item: "My Chat Key on Fariin is \(mine). Enter it to message me directly.") {
                                     Label("Share", systemImage: "square.and.arrow.up")
                                         .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity).frame(height: 40)
@@ -308,35 +308,35 @@ struct ChatPinPage: View {
                     } else {
                         // Set from another phone. The server holds only a hash, so there is nothing
                         // to show here but the fact; changing it from this phone puts it on screen.
-                        Label("Your Chat PIN was set on another device.", systemImage: "iphone")
+                        Label("Your Chat Key was set on another device.", systemImage: "iphone")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 } else if checking {
-                    HStack { Text("Chat PIN"); Spacer(); ProgressView() }
+                    HStack { Text("Chat Key"); Spacer(); ProgressView() }
                 } else {
                     Button { setting = true } label: {
-                        Text("Set a Chat PIN").frame(maxWidth: .infinity)
+                        Text("Set a Chat Key").frame(maxWidth: .infinity)
                     }
                 }
             } header: {
-                Text(isSet ? "Your Chat PIN" : "")
+                Text(isSet ? "Your Chat Key" : "")
             } footer: {
                 // "make it can call and message who know the pin" — owner, 2026-09-11. A pin makes
                 // the chat accepted, and an accepted chat is what "friend" means for calls too.
-                Text("Friends and anyone who knows your Chat PIN can message and call you directly, even when Messages or Calls is set to My Chats. Share it only with people you want to hear from.")
+                Text("Anyone who knows your Chat Key can message and call you directly, whatever your Messages and Calls settings say. Share it only with people you want to hear from.")
             }
 
             if isSet {
                 Section {
-                    Button("Change Chat PIN") { setting = true }
+                    Button("Change Chat Key") { setting = true }
                     Button(role: .destructive) { confirmRemove = true } label: {
-                        HStack { Text("Remove Chat PIN"); if removing { Spacer(); ProgressView() } }
+                        HStack { Text("Remove Chat Key"); if removing { Spacer(); ProgressView() } }
                     }
                     .disabled(removing)
                 } footer: {
                     // Spec §22: rotating controls NEW access only.
-                    Text("Changing or removing your Chat PIN doesn’t remove anyone who already used it. Remove a friend from their profile instead.")
+                    Text("Changing or removing your Chat Key doesn’t remove anyone who already used it. Remove a friend from their profile instead.")
                 }
             }
 
@@ -344,7 +344,7 @@ struct ChatPinPage: View {
                 Section { Text(failure).font(.footnote).foregroundStyle(.red) }
             }
         }
-        .navigationTitle("Chat PIN")
+        .navigationTitle("Chat Key")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .task {
@@ -362,7 +362,7 @@ struct ChatPinPage: View {
                 failure = ""
             }
         }
-        .alert("Remove your Chat PIN?", isPresented: $confirmRemove) {
+        .alert("Remove your Chat Key?", isPresented: $confirmRemove) {
             Button("Remove", role: .destructive) { remove() }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -401,7 +401,7 @@ struct ChatPinSetSheet: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Text("Choose a Chat PIN")
+                Text("Choose a Chat Key")
                     .font(.headline)
                     .padding(.top, 26)
                 Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")

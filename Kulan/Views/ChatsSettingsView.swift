@@ -27,7 +27,7 @@ struct ChatsSettingsView: View {
             Section {
                 NavigationLink { ChatPinPage() } label: {
                     HStack {
-                        Text("Chat PIN")
+                        Text("Chat Key")
                         Spacer()
                         Text(ChatPin.isSet ? "On" : "Off").foregroundStyle(.secondary)
                     }

@@ -1215,7 +1215,10 @@ struct PrivacySettingsView: View {
                 audienceRow("Bio", key: "bio", value: privBio,
                             footerText: "Who can see the few words about you.")
                 audienceRow("Calls", key: "calls", value: privCalls,
-                            footerText: "Who can call you. My Chats includes anyone who used your Chat PIN. Calls from anyone else are declined automatically.")
+                            // ⛔ TWO CHOICES — owner, 2026-09-11: "Everyone should mean everyone,
+                            // including people who send message requests"; Nobody is nobody NEW.
+                            // People in your chats can always call; a block always wins.
+                            footerText: "Who can call you. Everyone: anyone you haven’t blocked, including people who sent you a message request. Nobody: only people already in your chats. Anyone who used your Chat Key is in your chats.")
                 // Shows its value like every other row here. It was the one row with a bare title, so
                 // it read as broken next to five rows that each state their setting (user: "messages
                 // when i select everyone or same one i am not seeing").
@@ -1223,7 +1226,7 @@ struct PrivacySettingsView: View {
                     HStack {
                         Text("Messages")
                         Spacer()
-                        Text(label(privMessages)).foregroundStyle(.secondary)
+                        Text((Audience(rawValue: privMessages) ?? .everyone).label(for: "messages")).foregroundStyle(.secondary)
                     }
                 }
                 if Flags.groupsEnabled {
@@ -1244,7 +1247,10 @@ struct PrivacySettingsView: View {
             HStack {
                 Text(title)
                 Spacer()
-                Text(label(value)).foregroundStyle(.secondary)
+                // Key-aware: Calls reads its `contacts` (and any old `nobody`) as "Nobody".
+                Text(PrivacyPrefs.normalized(Audience(rawValue: value) ?? PrivacyPrefs.defaultAudience(for: key), for: key)
+                        .label(for: key))
+                    .foregroundStyle(.secondary)
             }
         }
     }

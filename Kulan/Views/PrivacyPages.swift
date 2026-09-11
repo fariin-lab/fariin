@@ -27,6 +27,19 @@ enum Audience: String, CaseIterable {
         case .nobody:   return "No One"
         }
     }
+
+    /// THE LABEL A KEY GIVES THE SAME STORED VALUE — owner, 2026-09-11 ("Calls — Private Settings").
+    /// Calls: "Nobody" means nobody NEW. The value is still `contacts`, so people in your chats keep
+    /// calling and every older build reads it as it always did. Messages: `contacts` is "People Who
+    /// Know My Chat Key" — a stranger's only way in has been the key since it shipped, so the stored
+    /// value is unchanged there too. Everything else keeps the three plain words.
+    func label(for key: String) -> String {
+        switch (key, self) {
+        case ("calls", .contacts), ("calls", .nobody): return "Nobody"
+        case ("messages", .contacts): return "People Who Know My Chat Key"
+        default: return label
+        }
+    }
 }
 
 enum PrivacyPrefs {
@@ -37,7 +50,27 @@ enum PrivacyPrefs {
     static func defaultAudience(for key: String) -> Audience { key == "calls" ? .contacts : .everyone }
 
     static func mine(_ key: String) -> Audience {
-        Audience(rawValue: UserDefaults.standard.string(forKey: "priv.\(key)") ?? "") ?? defaultAudience(for: key)
+        let stored = Audience(rawValue: UserDefaults.standard.string(forKey: "priv.\(key)") ?? "")
+            ?? defaultAudience(for: key)
+        return normalized(stored, for: key)
+    }
+
+    /// ⛔ CALLS HAVE TWO CHOICES NOW, Everyone and Nobody — owner, 2026-09-11 — and "Nobody" IS the
+    /// old My Chats value: people you already chat with can always reach you, the setting is about
+    /// everyone else. An account that had picked the old No One is read as that too, on his word
+    /// that a third option "does not make sense"; without this it would keep refusing its own
+    /// friends behind a row that now says something else. Applied wherever the value is READ, ours
+    /// or a caller's copy of somebody else's, so the two phones in a call agree.
+    static func normalized(_ a: Audience, for key: String) -> Audience {
+        key == "calls" && a == .nobody ? .contacts : a
+    }
+
+    /// The choices a key offers. Calls and Messages: two. The rest: the three plain words.
+    static func options(for key: String) -> [Audience] {
+        switch key {
+        case "calls", "messages": return [.everyone, .contacts]
+        default: return Audience.allCases
+        }
     }
 
     static func setMine(_ key: String, _ a: Audience) {
@@ -111,14 +144,14 @@ struct AudiencePage: View {
     var body: some View {
         List {
             Section {
-                ForEach(Audience.allCases, id: \.self) { a in
+                ForEach(PrivacyPrefs.options(for: key), id: \.self) { a in
                     Button {
                         selection = a
                         PrivacyPrefs.setMine(key, a)
                         if key == "lastSeen" { Task { await PresenceService.set(online: true) } }
                     } label: {
                         HStack {
-                            Text(a.label).foregroundStyle(.primary)
+                            Text(a.label(for: key)).foregroundStyle(.primary)
                             Spacer()
                             if selection == a {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
@@ -246,13 +279,13 @@ struct MessagesPrivacyPage: View {
                 // NO "No One" HERE (owner 2026-08-04). Messaging is the app; a switch that turns it
                 // off entirely is being held back as a paid option rather than shipped as a way to
                 // make yourself unreachable by accident. The other two audiences are unchanged.
-                ForEach([Audience.everyone, .contacts], id: \.self) { a in
+                ForEach(PrivacyPrefs.options(for: "messages"), id: \.self) { a in
                     Button {
                         privMessages = a.rawValue
                         PrivacyPrefs.setMine("messages", a)
                     } label: {
                         HStack {
-                            Text(a.label).foregroundStyle(.primary)
+                            Text(a.label(for: "messages")).foregroundStyle(.primary)
                             Spacer()
                             if privMessages == a.rawValue {
                                 Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor)
@@ -266,7 +299,10 @@ struct MessagesPrivacyPage: View {
             } footer: {
                 // The two modes in the owner's own mental model (spec, "Final Goal"): Everyone can
                 // knock once with a short text; My Friends closes even that door.
-                Text("Everyone: anyone can send you one short message request. My Chats: only friends and people with your Chat PIN can message you. Chats you already have keep working.")
+                // The two modes in the owner's own words, 2026-09-11 ("Messages — Who Can Send Me
+                // Messages"): Everyone can knock once with a short text and the key lets them
+                // straight in; the second closes even that first knock to anyone without it.
+                Text("Everyone: anyone new can send you one short message request, and your Chat Key lets them straight into a chat. People Who Know My Chat Key: nobody new can reach you without it. People already in your chats keep messaging you either way.")
             }
 
             // CHAT PIN — owner's spec, 2026-09-11. The private invitation that goes past both modes,
@@ -274,13 +310,19 @@ struct MessagesPrivacyPage: View {
             Section {
                 NavigationLink { ChatPinPage() } label: {
                     HStack {
-                        Text("Chat PIN")
+                        Text("Chat Key")
                         Spacer()
                         Text(ChatPin.isSet ? "On" : "Off").foregroundStyle(.secondary)
                     }
                 }
             } footer: {
-                Text("Anyone who knows your Chat PIN can message and call you directly, whatever you choose here or under Calls.")
+                // ⚠️ THE ONE STATE THAT LOCKS EVERYBODY NEW OUT, said out loud: the second mode with
+                // no key set. A legitimate choice, but not one a person should arrive at by accident.
+                if privMessages == Audience.contacts.rawValue && !ChatPin.isSet {
+                    Text("You haven’t set a Chat Key yet, so nobody new can message you until you do. People already in your chats are not affected.")
+                } else {
+                    Text("Anyone who knows your Chat Key can message and call you directly, whatever you choose here or under Calls.")
+                }
             }
 
             Section {

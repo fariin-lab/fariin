@@ -1702,7 +1702,7 @@ struct ChatsView: View {
             // button". The same page the title menu opens; this menu is where someone already
             // looking for Archive and Message Requests will look for it.
             Button { path.append(ChatPinRoute.mine) } label: {
-                Label { Text("Chat PIN") } icon: { MenuIcon(system: "circle.grid.3x3.fill") }
+                Label { Text("Chat Key") } icon: { MenuIcon(system: "circle.grid.3x3.fill") }
             }
             // ⛔ LAST, NOT FIRST — owner, 2026-09-11, who wrote the order out in full. It sat at the
             // top with a divider under it, which put the one ACTION in this menu above the things
@@ -2445,7 +2445,7 @@ struct ChatsView: View {
                 // your chat lives in the menu under the chat list's own title. The page shows the
                 // pin this phone set, with Copy and Share, and is where it is changed or removed.
                 Button { path.append(ChatPinRoute.mine) } label: {
-                    Label { Text("Chat PIN") } icon: { MenuIcon(system: "circle.grid.3x3.fill") }
+                    Label { Text("Chat Key") } icon: { MenuIcon(system: "circle.grid.3x3.fill") }
                 }
             }
             // ⛔ SEARCH IS BACK ON THE PAGE — his call, 2026-08-30: "settings does not need search at
