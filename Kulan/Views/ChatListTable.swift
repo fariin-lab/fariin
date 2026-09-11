@@ -521,8 +521,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // ⛔ 28pt OF CLEARANCE AT THE BOTTOM, HIS NUMBER, CARRIED OVER FROM THE LIST. Without it the
         // last rows sit UNDER the floating tab bar: its margins are transparent, so the row shows
         // through and the tap goes to the row rather than the pill.
-        t.contentInset.bottom = 28
-        t.verticalScrollIndicatorInsets.bottom = 28
+        // The starting value; `viewSafeAreaInsetsDidChange` adds the home indicator to it once the
+        // view has one, now that the table runs to the screen's edge.
+        t.contentInset.bottom = Self.bottomClearance
+        t.verticalScrollIndicatorInsets.bottom = Self.bottomClearance
         // ⛔ THE TICK IS THE CHAT COLOUR, NOT THE APP TINT — the same note the calls list carries.
         // The app's `.primary` tint draws a white check on a white disc, which is a tick you cannot
         // see. Set from `dark` in `updateUIViewController`, because the theme can change under it.
@@ -645,6 +647,27 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         super.viewWillAppear(animated)
         registerAsContentScrollView()
     }
+
+    /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
+    /// under the pill. The page now hands this table the FULL height (`ignoresSafeArea(.container,
+    /// edges: .bottom)` at the call site) so its rows run under the floating tab bar and give the
+    /// blur something to blur. That moved the table's bottom EDGE down by the home indicator's
+    /// height, so his 28 — measured when the edge stopped at the safe area — would leave the last
+    /// row 34 points lower than it used to sit, half under the pill.
+    ///
+    /// Read from the view rather than typed, so it is right on a phone with no indicator as well as
+    /// on one with a tall one, and it re-reads whenever that changes.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        let clearance = Self.bottomClearance + view.safeAreaInsets.bottom
+        guard abs(tableView.contentInset.bottom - clearance) > 0.5 else { return }
+        tableView.contentInset.bottom = clearance
+        tableView.verticalScrollIndicatorInsets.bottom = clearance
+    }
+
+    /// His 28, kept as the number it always was — see `viewSafeAreaInsetsDidChange` for what is now
+    /// added to it and why.
+    static let bottomClearance: CGFloat = 28
 
     private func registerAsContentScrollView() {
         setContentScrollView(tableView, for: .all)

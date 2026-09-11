@@ -2237,6 +2237,24 @@ struct ChatsView: View {
                           // shape of his report that "the Chats text jumps before the chat card
                           // comes down".
                           chatListTable
+                          // ⛔ THE LIST RUNS UNDER THE TAB PILL — owner, 2026-09-11: "also bottom I
+                          // see black border", with the Calls page beside it where rows show
+                          // through the pill's blur.
+                          //
+                          // ⚠️ IT WAS NOT A BORDER, IT WAS THE END OF THE TABLE. SwiftUI insets a
+                          // representable by the bottom safe area, and the table is pinned to its
+                          // own view's edges — so the table simply STOPPED above the home
+                          // indicator, and what he ringed is the page's background in the strip
+                          // below it, with the floating pill sitting on top of that. A `List` does
+                          // not do this because SwiftUI runs its content under the bar itself and
+                          // insets only the scrolled content.
+                          //
+                          // Ignoring the container's bottom edge gives the table the full height,
+                          // so the rows are behind the pill and its blur has something to blur.
+                          // `contentInset.bottom` (see `ChatListTable`) is what still keeps the
+                          // LAST row reachable above the pill, and it is unchanged — this moves the
+                          // view's edge, not the scrolling clearance.
+                          .ignoresSafeArea(.container, edges: .bottom)
                           // ⚠️ THE SECTION SPLIT MOVED INTO `chatListTable`, WHICH TAKES THE TWO
                           // HALVES SEPARATELY. The branch that used to flatten them into one
                           // `ForEach` when either was empty is gone and is not missed: an empty
@@ -2460,6 +2478,30 @@ struct ChatsView: View {
             // registers its table with `setContentScrollView`, the same thing SwiftUI does for the
             // `List` on the Calls page — so the automatic appearance does here what it does there:
             // clear at the top, the system blur as rows go under. Nothing is set on the bar.
+            //
+            // ⛔ THAT REGISTRATION DID NOT WORK, AND THE BAR'S BACKGROUND IS HIDDEN OUTRIGHT NOW —
+            // owner, 2026-09-11, on build 742 (`5e617d40`, which contains it): "the bug still I see
+            // in build 1.0 (742), plz remove border". Third report on one band.
+            //
+            // ⚠️ WHAT IS ACTUALLY DRAWING IT, and why this is the end of the road rather than a
+            // fourth guess. There is no stroke of ours up there — a session verified that on
+            // 2026-09-11 and wrote it down ([[kulan-ios26-chrome-is-apples-not-ours]]): it is iOS
+            // 26's own glass, and its bottom edge is the line he keeps ringing. A `List` makes that
+            // glass go clear at the top because SwiftUI hands its OWN scroll view to the bar; a
+            // `UITableView` in a representable has no such channel, and `setContentScrollView` on
+            // the hosting controller — the documented UIKit equivalent — did not reach SwiftUI's
+            // bar. So the dynamic behaviour the Calls page gets is not available to this screen
+            // without making the list a SwiftUI one again, which is the migration he ordered undone.
+            //
+            // `toolbarBackgroundVisibility(.hidden)` is the SwiftUI API for "this bar has no
+            // background", not a `UINavigationBarAppearance` override — overrides are what drew the
+            // band in build 282 and that note still stands. It removes the border permanently, which
+            // is what he asked for in those words.
+            //
+            // ⚠️ THE TRADE, SO IT IS NOT A SURPRISE: there is now NO blur behind the header at any
+            // scroll position. Rows pass under the Edit/Chats/compose buttons with nothing between
+            // them. Those buttons carry their own glass, which is what keeps them legible.
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
             // ⛔ THE TITLE OPENS A MENU — owner, 2026-09-09: "Message Requests put when users click
             // Chats, open context menu inside chats". He photographed the header with a chevron
             // beside the word, which is what a title menu draws; there was none in the code, so
