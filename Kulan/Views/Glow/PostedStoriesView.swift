@@ -169,9 +169,24 @@ struct PostedStoriesView: View {
                         }
                         .disabled(selected.isEmpty || deleting)
                         Spacer()
-                        Text(selected.isEmpty ? "Select Stories" : "\(selected.count) Selected")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(selected.isEmpty ? .secondary : .primary)
+                        // ⛔ ONE WIDTH, WHATEVER IT SAYS — owner, 2026-09-11, with the pill ringed:
+                        // "selected button fix width size". On iOS 26 a bottom-bar item is drawn in
+                        // its own glass capsule sized to its content, so this one grew and shrank
+                        // as the words changed: "Select Stories" is the widest thing it ever says,
+                        // "1 Selected" much narrower, and every tick on a tile resized the capsule
+                        // between two round buttons that never move.
+                        //
+                        // ⚠️ THE WIDEST LABEL RESERVES THE ROOM, rather than a number I pick. A
+                        // `ZStack` takes the size of its largest child, so the hidden copy of the
+                        // longest state sets the width once and the visible line is centred in it.
+                        // A typed width would be measured at one text size and wrong at every
+                        // other; this is correct at all of them, including Larger Text.
+                        ZStack {
+                            Text("Select Stories").hidden()
+                            Text(selected.isEmpty ? "Select Stories" : "\(selected.count) Selected")
+                                .foregroundStyle(selected.isEmpty ? .secondary : .primary)
+                        }
+                        .font(.subheadline.weight(.semibold))
                         Spacer()
                         Button { confirmDelete = true } label: {
                             if deleting { ProgressView() }
