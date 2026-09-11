@@ -646,6 +646,15 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         registerAsContentScrollView()
+        pinSearchBar()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // SwiftUI installs the search controller around the time the page appears, so the flag is
+        // set once more here — the `viewWillAppear` pass can run before there is an item to set it
+        // on. Guarded, so the second call is a comparison and nothing else.
+        pinSearchBar()
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
@@ -668,6 +677,46 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// His 28, kept as the number it always was — see `viewSafeAreaInsetsDidChange` for what is now
     /// added to it and why.
     static let bottomClearance: CGFloat = 28
+
+    /// ⛔ THE SEARCH FIELD STOPS COLLAPSING, WHICH IS THE JUMP'S CAUSE RATHER THAN ITS SYMPTOM —
+    /// owner, 2026-09-11, his fourth report: "when I scroll up it is doing jumping, it is not
+    /// following my finger, it is doing small jumping, fix, check deep".
+    ///
+    /// ⚠️ THE ARITHMETIC, BECAUSE THE LAST TWO ATTEMPTS BOTH AIMED AT THE WRONG END. `.searchable`
+    /// puts its field in the navigation bar, and by default that field HIDES as you scroll down and
+    /// comes back as you scroll up. Hiding it shrinks the safe area above this table by the field's
+    /// height; showing it grows it again. A scroll view answers an inset change by moving
+    /// `adjustedContentInset` and deliberately leaving `contentOffset` where it was — the offset is
+    /// measured from the content's origin, not from what the eye sees — so every row shifts by that
+    /// height. That shift IS the jump, it happens on the way up because that is when the field comes
+    /// back, and it cannot follow his finger because it is not a scroll at all.
+    ///
+    /// ⛔ DO NOT GO BACK TO COMPENSATING `contentOffset`. That was tried, shipped in build 736 and
+    /// reverted — the note above `ChatListCell` records why: UIKit already compensates part of that
+    /// transition, so subtracting the delta a second time doubles the movement. Both of those were
+    /// attempts to cancel a movement out. This removes the thing that causes it.
+    ///
+    /// With `hidesSearchBarWhenScrolling = false` the field is always there, the safe area above the
+    /// table never changes, and there is no delta for anybody to compensate for. The Calls page
+    /// shows its own field permanently and has never been reported for this.
+    ///
+    /// ⚠️ IT IS A VISIBLE CHANGE AND HE SHOULD BE TOLD: the search field no longer slides away when
+    /// the list is scrolled. One line to undo if he wants the sliding back, and the jump comes with
+    /// it — the two are the same mechanism.
+    ///
+    /// ⚠️ SET ON THE NAVIGATION ITEM SwiftUI OWNS. `.searchable` builds the `UISearchController` and
+    /// installs it; this reaches the item it was installed on and changes one flag. Applied on every
+    /// appearance because SwiftUI rebuilds that item freely, and guarded so it costs nothing once it
+    /// is already false.
+    private func pinSearchBar() {
+        var page: UIViewController? = self
+        while let p = page, p.navigationItem.searchController == nil, !(p is UINavigationController) {
+            page = p.parent
+        }
+        guard let item = page?.navigationItem, item.searchController != nil,
+              item.hidesSearchBarWhenScrolling else { return }
+        item.hidesSearchBarWhenScrolling = false
+    }
 
     private func registerAsContentScrollView() {
         setContentScrollView(tableView, for: .all)
