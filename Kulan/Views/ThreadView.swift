@@ -5600,6 +5600,25 @@ struct ThreadView: View {
     /// and any of these states changes the words and nothing else about the furniture.
     /// `liquidGlass` takes a concrete `some Shape`, so the two shapes cannot be a ternary at the
     /// call site — one modifier picking between them keeps a single glass call for both notices.
+    /// ⛔ THE SHAPE AND HEIGHT OF A NOTICE'S PRIMARY BUTTON — owner, 2026-09-11: "this bar, add
+    /// rounded corners, corners still not looks smooth rounded corner, Apple iOS 26 design".
+    ///
+    /// ⚠️ A CAPSULE IS NOT THE SMOOTH CORNER, IT IS THE OPPOSITE END OF THE SCALE. Its ends are
+    /// exact half-circles, so the curve meets the straight edge at a hard change of curvature — the
+    /// very thing the squircle exists to remove, and at a 44pt height it is the widest that gap can
+    /// be. `.continuous` at half the height keeps the same silhouette and draws Apple's own curve
+    /// into it, which is what every iOS 26 control on this screen is using.
+    ///
+    /// Named, not typed in twice: this notice bar has two of these buttons (Accept on a request, Use
+    /// Chat Key on the locked one) and they sit one screen apart, which is exactly how two shapes
+    /// drift a point at a time.
+    enum ChatNoticeButton {
+        static let height: CGFloat = 44
+        static var shape: RoundedRectangle {
+            RoundedRectangle(cornerRadius: height / 2, style: .continuous)
+        }
+    }
+
     private struct ComposerNoticeGlass: ViewModifier {
         let hugsContent: Bool
         @ViewBuilder func body(content: Content) -> some View {
@@ -5727,17 +5746,19 @@ struct ThreadView: View {
                         Task { try? await MessageRequests.decline(cid); dismiss() }
                     } label: {
                         Text("Delete").font(.body.weight(.semibold))
-                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
-                    .liquidGlass(Capsule(), interactive: true)
+                    // Its neighbour's shape exactly. These two sit side by side, and one capsule
+                    // beside one squircle is more visible than either shape is on its own.
+                    .liquidGlass(ChatNoticeButton.shape, interactive: true)
 
                     Button {
                         Task { try? await MessageRequests.accept(cid) }
                     } label: {
                         Text("Accept").font(.body.weight(.semibold))
-                            .frame(maxWidth: .infinity).frame(height: 44)
+                            .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)
                     }
                     .buttonStyle(.plain)
                     // The glass is tinted with the accent, which is white at night, and on the
@@ -5748,7 +5769,11 @@ struct ThreadView: View {
                     // read as a different material from a different app — and in light mode it
                     // photographed as a hard black slab. Apple's own tint keeps it clearly the
                     // primary action while both buttons stay the same substance.
-                    .liquidGlass(Capsule(), interactive: true, tint: Color.accentColor)
+                    //
+                    // ⛔ `Theme.accent(dark)`, NOT `Color.accentColor` — see the twin of this button
+                    // on `cannotMessageBar`, where he photographed the failure. The two must be read
+                    // from the SAME answer or the label and the pill end up the same colour.
+                    .liquidGlass(ChatNoticeButton.shape, interactive: true, tint: Theme.accent(dark))
                 }
             }
         }
@@ -5815,13 +5840,27 @@ struct ThreadView: View {
                 }
                 Button { showPinEntry = true } label: {
                     Text("Use Chat Key").font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity).frame(height: 44)
+                        .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)
                 }
                 .buttonStyle(.plain)
                 // The same tinted glass as the request bar's Accept, for the same reason: the one
                 // primary action on a notice, in the app's own material.
+                //
+                // ⛔ BLACK LETTERS ON A BLACK PILL — owner, 2026-09-11, with the button photographed
+                // and ringed: "enter Chat Key bar, fix when text is black".
+                //
+                // ⚠️ THE LABEL AND THE PILL WERE ASKING TWO DIFFERENT QUESTIONS. The label reads
+                // `Theme.onAccent(dark)`, and `dark` on this screen is `chatHasWallpaper || scheme ==
+                // .dark` — a CHAT with a dark wallpaper counts as dark whatever the phone is set to.
+                // The pill read `Color.accentColor`, which is the app's `.primary` tint resolved
+                // against the ENVIRONMENT's scheme, and knows nothing about the wallpaper. So on a
+                // light-mode phone in a dark-wallpapered chat the label went black for the wallpaper
+                // and the pill went black for the phone, and the button disappeared into itself.
+                //
+                // Both sides read `dark` now. `Theme.accent` and `Theme.onAccent` are a matched pair
+                // — white-on-black or black-on-white — and neither can be right on its own.
                 .foregroundStyle(Theme.onAccent(dark))
-                .liquidGlass(Capsule(), interactive: true, tint: Color.accentColor)
+                .liquidGlass(ChatNoticeButton.shape, interactive: true, tint: Theme.accent(dark))
             }
         }
     }
