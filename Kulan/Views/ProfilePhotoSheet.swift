@@ -285,7 +285,10 @@ struct ProfilePhotoSheet: View {
     /// system alert in front of a screen somebody may well have opened only to look at their picture.
     /// (This line used to say "to press one emoji"; the emoji section went on 2026-09-11, the reason
     /// for not prompting did not.)
-    private static func recentImages(_ count: Int = 12) async -> [UIImage] {
+    /// ⛔ TEN, NOT TWELVE — owner, 2026-09-11, with the last two circled: "recent images make it
+    /// only 10, remove 2". Four to a row, so ten is two full rows and a short one; twelve filled a
+    /// third row exactly and pushed the sheet longer than the picture it is about.
+    private static func recentImages(_ count: Int = 10) async -> [UIImage] {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return [] }
         let f = PHFetchOptions()
