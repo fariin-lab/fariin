@@ -28,7 +28,14 @@ struct ChatPinKeypad: View {
                         Button { tap(key) } label: {
                             Group {
                                 if key == "⌫" {
-                                    Image(systemName: "chevron.left").font(.system(size: 24, weight: .medium))
+                                    // ⛔ `delete.left`, NOT `chevron.left` — owner, 2026-09-11: "the
+                                    // clear number icon looks like a back button". It was one: a
+                                    // bare left chevron is the glyph every navigation bar in the app
+                                    // uses to go back, so on a keypad it reads as "leave this sheet"
+                                    // rather than "rub out a digit". `delete.left` is the key Apple's
+                                    // own number pads draw for this and is the only symbol a person
+                                    // will already know means backspace.
+                                    Image(systemName: "delete.left").font(.system(size: 24, weight: .medium))
                                 } else {
                                     Text(key).font(.system(size: 30, weight: .regular))
                                 }
@@ -181,11 +188,15 @@ struct ChatPinEntrySheet: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 4)
 
-                ChatPinSubmitButton(title: "Enter", enabled: ChatPin.isValid(pin), busy: busy) { submit() }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 16)
             }
+        }
+        // Anchored exactly as the Choose sheet's Save is, and for the same reason — the full
+        // reasoning is written there. The two are one control on two sheets and must not drift.
+        .safeAreaInset(edge: .bottom) {
+            ChatPinSubmitButton(title: "Enter", enabled: ChatPin.isValid(pin), busy: busy) { submit() }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
         }
         .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.fraction(0.84), .large])
@@ -385,12 +396,29 @@ struct ChatPinSetSheet: View {
                 ChatPinKeypad(pin: $pin)
                     .padding(.horizontal, 20)
                     .padding(.top, 4)
-
-                ChatPinSubmitButton(title: "Save", enabled: ChatPin.isValid(pin), busy: busy) { save() }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 16)
             }
+        }
+        // ⛔ SAVE IS ANCHORED TO THE SHEET, NOT PARKED AFTER THE KEYPAD — owner, 2026-09-11: "the
+        // Save button position is wrong", with the dead band under it circled.
+        //
+        // ⚠️ IT WAS THE LAST ITEM IN A `ScrollView`'s stack, and this sheet opens at a detent
+        // (0.72) taller than its own content. A scroll view lays its content out from the top and
+        // leaves whatever is left over BELOW it, so Save came to rest somewhere in the middle of
+        // the sheet with an empty band beneath — which reads as a mistake rather than as space.
+        //
+        // A `safeAreaInset` is the system-positioned place for a sheet's one action: it is pinned to
+        // the bottom edge, it keeps clear of the home indicator on its own, the keypad above it
+        // scrolls under it when the sheet is dragged to `.large`, and it stays reachable at every
+        // detent instead of moving with the content. That is his own distinction — the keypad is app
+        // content inside the safe area, the action is edge-attached.
+        .safeAreaInset(edge: .bottom) {
+            ChatPinSubmitButton(title: "Save", enabled: ChatPin.isValid(pin), busy: busy) { save() }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                // ⚠️ 8, NOT THE OLD 16. A `safeAreaInset` already sits above the home indicator, so
+                // the old bottom padding would now be stacked on top of that inset and push the
+                // button up off the edge again — the same gap, smaller.
+                .padding(.bottom, 8)
         }
         .scrollBounceBehavior(.basedOnSize)
         .presentationDetents([.fraction(0.72), .large])
