@@ -160,6 +160,32 @@ final class AudioRecorder {
         if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
     }
 
+    /// ⛔ iOS MUTES HAPTICS WHILE THE MIC IS LIVE. THAT IS WHY THE RECORD TAPS WERE NOT FELT.
+    ///
+    /// Owner, 2026-09-11: "when i start Recording voice there no haptic… now only is working
+    /// sametime also add when i lock". Both taps were already written and both were correct —
+    /// `beginHoldRecording` fires `.medium` and `lockRecording` fires `.medium`. The system was
+    /// throwing them away.
+    ///
+    /// A `.record` or `.playAndRecord` session silences system haptics for as long as it is active,
+    /// so the microphone cannot pick the Taptic Engine's own buzz up through the case. That explains
+    /// the exact shape of his report: the START tap RACES the session coming up, so it lands or does
+    /// not depending on how warm the session was ("only sometimes"), and the LOCK tap always happens
+    /// mid-recording, so it never landed at all. Nothing fails and nothing logs; the tap is simply
+    /// not there.
+    ///
+    /// One opt-in turns it back on. It has to be set on EVERY path that configures the session,
+    /// including the warm paths that skip the category work to save the ~100-300ms `setActive` costs
+    /// — those skip the configuration but still record, and a session configured elsewhere does not
+    /// carry this flag for them.
+    ///
+    /// ⚠️ THE TRADE IS REAL AND IT IS THE ONE HE ASKED FOR: the mic can now hear the tap faintly on
+    /// a quiet recording. That is the price of feeling the thing you just started, and it is what
+    /// every messenger that buzzes on lock is already paying.
+    static func allowHapticsWhileRecording(_ s: AVAudioSession) {
+        try? s.setAllowHapticsAndSystemSoundsDuringRecording(true)
+    }
+
     // Pre-warm: activate the session + build & prepareToRecord a recorder AHEAD of time, so the
     // first hold-to-record fires `record()` with ~no latency. Call on chat open + after each send.
     func prepare() {
@@ -170,6 +196,7 @@ final class AudioRecorder {
                 let session = AVAudioSession.sharedInstance()
                 try? session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
                 try? session.setActive(true)
+                Self.allowHapticsWhileRecording(session)
                 let url = FileManager.default.temporaryDirectory
                     .appendingPathComponent("voice-\(UUID().uuidString).m4a")
                 guard let r = try? AVAudioRecorder(url: url, settings: self.settings) else { return }
@@ -195,6 +222,9 @@ final class AudioRecorder {
                 try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
                 try? s.setActive(true)
             }
+            // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
+            // session configured on some other path does not carry this flag for this one.
+            Self.allowHapticsWhileRecording(s)
             r.record(); beginMetering()   // already warmed → instant
             return
         }
@@ -216,6 +246,7 @@ final class AudioRecorder {
                 let session = AVAudioSession.sharedInstance()
                 try? session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
                 try? session.setActive(true)
+                Self.allowHapticsWhileRecording(session)
                 let url = FileManager.default.temporaryDirectory
                     .appendingPathComponent("voice-\(UUID().uuidString).m4a")
                 guard let r = try? AVAudioRecorder(url: url, settings: self.settings) else { return }
@@ -411,6 +442,9 @@ final class AudioRecorder {
                 try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
                 try? s.setActive(true)
             }
+            // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
+            // session configured on some other path does not carry this flag for this one.
+            Self.allowHapticsWhileRecording(s)
             r.record()
         } else {
             let url = FileManager.default.temporaryDirectory

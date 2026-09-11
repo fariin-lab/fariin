@@ -6242,8 +6242,16 @@ struct ThreadView: View {
             guard holdBeganAt == began, holdStarted, !recordLocked else { return }
             withAnimation(.easeOut(duration: 0.15)) { holdRevealed = true }
         }
-        recorder.requestAndStart()
+        // ⚠️ BEFORE `requestAndStart()`, NOT AFTER — and the order is the fix, not a tidy-up.
+        //
+        // The opt-in that keeps haptics alive during a take is applied as the session is configured,
+        // which happens INSIDE the call below. On the very first recording of a launch there is no
+        // configured session yet, so a tap fired after that line is racing the mic going live and
+        // loses often enough to read as "sometimes". Fired here it is unconditional: the session is
+        // not recording yet, so nothing can mute it. Every later tap is covered by the opt-in.
+        // See `AudioRecorder.allowHapticsWhileRecording`.
         impact(.medium)
+        recorder.requestAndStart()
     }
 
     private func updateHoldRecording(_ t: CGSize) {
