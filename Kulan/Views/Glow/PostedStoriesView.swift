@@ -501,13 +501,27 @@ enum StoryTileGrid {
     /// Smaller than the story cards' own 34, because a tile is about a third of the width and a
     /// 34pt arc on something this narrow eats the picture. 16 is his concept's corner measured the
     /// same way as the gap above.
-    /// ⛔ 12, DOWN FROM 16 — owner, 2026-09-11: "it is using the wrong rounded corners". Measured
-    /// the same way as the gap above: in his concept the arc is about a tenth of a tile's width,
-    /// and with the tiles now ~135 wide that is 13, where 16 was read off a wider tile. The tiles
-    /// grew when the gaps shrank, so holding 16 would have made them rounder relative to the
-    /// picture, not merely unchanged.
+    /// ⛔ 24 — AS ROUND AS A GLOWING CARD, MEASURED RATHER THAN GUESSED. Owner, 2026-09-11, after
+    /// seeing 12 on his phone: "make the card more rounded, use the iOS 26 corners, give it rounded
+    /// corners like you gave the Glowing story."
+    ///
+    /// ⚠️ THE ANSWER IS A RATIO, NOT A NUMBER, because the two cards are not the same width. A
+    /// Glowing card is 34 on a two-column card of 187 (`GlowStoryCardView`, margin 20 and gutter
+    /// 16 on a 430pt screen) — 0.182 of its own width. These tiles are three across at 135, so the
+    /// same roundness is 135 × 0.182 = 24.6. Copying the literal 34 would have put an arc a quarter
+    /// of the tile wide on something half the size and eaten the picture, which is the trap the
+    /// note this replaces was written about in the other direction.
+    ///
+    /// ⚠️ TWO PASSES GOT THIS WRONG BEFORE, AND BOTH WERE MEASURED OFF A CONCEPT IMAGE: 16 read off
+    /// a wider tile, then 12 when the tiles were widened and the gaps closed. What settles it is not
+    /// another reading of the picture but the card he pointed AT — this page and the Glowing grid
+    /// now round by the same fraction of their own width, so they read as one family at two sizes.
+    ///
+    /// ⚠️ `.continuous` EVERYWHERE THIS IS USED, which is the iOS 26 part of his ask and was already
+    /// true: every clip that reads this number passes `style: .continuous`, so the arc is Apple's
+    /// squircle rather than a circular quarter-turn. Do not swap one for a plain `cornerRadius`.
     ///
     /// ⚠️ THE PROFILE'S CARD FOLLOWS THIS. `PostedTile.corner` reads it, so a story keeps its shape
     /// when he taps See All — which was the point of putting the number here in the first place.
-    static let corner: CGFloat = 12
+    static let corner: CGFloat = 24
 }
