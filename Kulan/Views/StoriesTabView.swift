@@ -251,7 +251,8 @@ struct StoriesTabView: View {
                                onOpen: { g in openStoryFromRow(g) },
                                onMessage: { g in openStoryChat(g) },
                                onProfile: { g in profileGroup = g },
-                               onOpenUploading: { openUploadingStory() })
+                               onOpenUploading: { openUploadingStory() },
+                               onPostedStories: { g in path.append(GlowRoute.postedStories(g.name)) })
                     } else {
                         friendsGrid()
                     }
@@ -573,6 +574,10 @@ struct StoriesTabView: View {
         case notifications
         case storyPrivacy
         case profile(String, String, String)   // uid, name, photo
+        /// MY posted stories, the page the profile's "See All" opens — owner, 2026-09-11: "when I
+        /// long press my story and click Posted Stories it just opens the story; make it open my
+        /// owner page posted stories, I already have that page."
+        case postedStories(String)             // my display name for the title
     }
 
     @ViewBuilder func glowDestination(_ r: GlowRoute) -> some View {
@@ -660,6 +665,12 @@ struct StoriesTabView: View {
             // which `ContactInfoView` already has, along with his Glow button.
             ContactInfoView(cid: storyCid(uid), name: name,
                             photoUrl: photo.isEmpty ? nil : photo, source: .story)
+        case .postedStories(let name):
+            // ⛔ THE PAGE THAT ALREADY EXISTS, NOT A SECOND ONE — his words, and the reason this is
+            // a route rather than anything new: the profile's "See All" pushes exactly this view
+            // with exactly these arguments, so the hold menu and the profile arrive at one screen
+            // with one filter, one select mode and one set of numbers.
+            PostedStoriesView(uid: AuthService.shared.uid ?? "", isMe: true, title: name)
         }
     }
 
@@ -831,8 +842,18 @@ struct StoriesTabView: View {
     /// My own card's menu, the strip's again: the one action a card of my own stories offers that a
     /// tap does not, plus the compose the ⊕ on it already performs.
     private func myStoryActions(_ mine: StoryGroup) -> [CMAction] {
+        // ⛔ "Posted Stories" OPENS THE PAGE, NOT THE VIEWER — owner, 2026-09-11: "when I click
+        // Posted Stories it just opens the story; open my owner page posted stories, I already
+        // have that page." It called `openStoryFromRow`, which is the story DOOR — the same thing
+        // a plain tap on the card does, so the entry was a second name for the tap.
+        //
+        // ⚠️ `mine` IS STILL THE ARGUMENT, and only for the title. The page reads my own uid and
+        // loads its own grid; passing the group's name keeps the header saying what the profile's
+        // own "See All" makes it say.
         [CMAction(title: "Add Story", icon: "ic_stories") { composeStory() },
-         CMAction(title: "Posted Stories", icon: "circle.dashed") { openStoryFromRow(mine) }]
+         CMAction(title: "Posted Stories", icon: "circle.dashed") {
+             path.append(GlowRoute.postedStories(mine.name))
+         }]
     }
 
     /// A GLOWING CARD'S MENU. A glower is somebody else with a live story, so it is the same two

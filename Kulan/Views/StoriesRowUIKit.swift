@@ -1321,6 +1321,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
     var onMessage: (StoryGroup) -> Void = { _ in }
     var onProfile: (StoryGroup) -> Void = { _ in }
     var onOpenUploading: () -> Void = {}
+    var onPostedStories: (StoryGroup) -> Void = { _ in }
 
     private let repo = StoriesRepository.shared
     private let service = StoriesService.shared
@@ -1831,7 +1832,11 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             let key = MediaOpenRects.key(.storyRow, m.id)
             return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { [weak self] in self?.onCompose() },
-                CMAction(title: "Posted Stories", icon: "circle.dashed") { [weak self] in self?.onOpen(m) },
+                // ⛔ THE PAGE, NOT THE STORY DOOR — owner, 2026-09-11. This was `onOpen`, which is
+                // what a plain TAP on the card does, so the entry was a second name for the tap.
+                // The grid's copy of this menu is corrected in the same commit; one card, one
+                // answer, wherever the app draws it.
+                CMAction(title: "Posted Stories", icon: "circle.dashed") { [weak self] in self?.onPostedStories(m) },
             ], labelRect: myCard.labelView.flatMap { MediaOpenRects.drawnRect(of: $0) } ?? myCard.labelWindowRect,
                labelView: myCard.labelView)
         }
@@ -1940,6 +1945,9 @@ struct StoriesRow: UIViewRepresentable {
     var onMessage: (StoryGroup) -> Void = { _ in }
     var onProfile: (StoryGroup) -> Void = { _ in }
     var onOpenUploading: () -> Void = {}
+    /// My own card's hold menu → the Posted Stories PAGE. Separate from `onOpen`, which is the
+    /// story door; see the note on the action itself.
+    var onPostedStories: (StoryGroup) -> Void = { _ in }
 
     func makeUIView(context: Context) -> StoriesRowUIView {
         let v = StoriesRowUIView()
@@ -1957,6 +1965,7 @@ struct StoriesRow: UIViewRepresentable {
         v.onMessage = onMessage
         v.onProfile = onProfile
         v.onOpenUploading = onOpenUploading
+        v.onPostedStories = onPostedStories
         v.freezeOrder = freezeOrder      // last: its observer re-lays the row out
     }
 
