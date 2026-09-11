@@ -1125,6 +1125,16 @@ struct StoryViewer: View {
     @State private var sheetAnimator = SheetProgressAnimator()
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
+    /// ⛔ THE REPOST IN PROGRESS — his spec, 2026-09-11. Set when the footer's repost mark is tapped
+    /// and the original's picture has been fetched; presenting it opens the story composer on that
+    /// picture, with the credit line attached. Nil the rest of the time.
+    @State private var repostDraft: StoryRepostDraft?
+    /// "…" → Share Story. The story's own address, handed to the system sheet — never the storage
+    /// file, which carries a permanent download token. See `KulanApp.storyLink`.
+    @State private var shareURL: StoryLinkPayload?
+    /// True while that picture is being fetched, so a second tap cannot start a second fetch and the
+    /// mark does not look dead on a slow connection.
+    @State private var repostLoading = false
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
     /// The story whose viewers are being changed — "…" → Edit viewers. It is the story itself
     /// rather than a flag because the sheet edits THAT story: same id, same posting time, same
@@ -1649,6 +1659,11 @@ struct StoryViewer: View {
                         // own story — see `Story.isPublicStory`. A one-time story is never public
                         // whatever its label says, so it is excluded here rather than in the menu.
                         isPublicStory: s.audienceLabel == "everyone" && !s.oneTime,
+                        // The one answer behind Share Story, Copy Story Link and Repost Story — see
+                        // `StoryShareRights`. Repost needs a still, so it is refused for a clip;
+                        // the other two are fine on either, and the menu shows all three together
+                        // rather than a partial set nobody can explain.
+                        canPassOn: StoryShareRights.allows(s) && !s.isVideo,
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an
@@ -1675,13 +1690,25 @@ struct StoryViewer: View {
                             // the state he is asking for. My own story keeps the bare `.plain()`:
                             // it has the owner bar instead, and loving your own story is not a
                             // thing.
+                            // ⛔ AND WHETHER THIS ONE MAY BE PASSED ON — his spec, 2026-09-11.
+                            // Answered ONCE, here, by `StoryShareRights`: audience must be Everyone,
+                            // the author must not have blocked me, and the two "do not copy this"
+                            // flags refuse it outright. The package draws the mark and knows none of
+                            // that, which is the right division — see `StoryInteractionConfig`.
+                            //
+                            // ⚠️ PHOTOS ONLY FOR NOW. The repost opens the story composer on the
+                            // original's picture, and that composer takes a `UIImage`; a video
+                            // repost would quietly post its poster frame, which is a worse answer
+                            // than no button. Reposting a clip is its own piece of work.
                             storyType: g.isMine
                                 ? .plain()
                                 : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
-                                    ? .message(config: StoryInteractionConfig(showLikeButton: true),
+                                    ? .message(config: StoryInteractionConfig(showLikeButton: true,
+                                                                              showRepostButton: !s.isVideo && StoryShareRights.allows(s)),
                                                emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
-                                    : .plain(config: StoryInteractionConfig(showLikeButton: true)),
+                                    : .plain(config: StoryInteractionConfig(showLikeButton: true,
+                                                                            showRepostButton: !s.isVideo && StoryShareRights.allows(s))),
                             mediaType: s.isVideo ? .video : .image
                         )
                     )
@@ -1721,6 +1748,22 @@ struct StoryViewer: View {
     private func sheetsAndMenus(_ v: some View) -> some View {
         v
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
+        .sheet(item: $shareURL) { p in ActivityView(items: [p.url]) }
+        // ⛔ REPOST — his spec, 2026-09-11, and the reference's own flow: the mark opens the
+        // COMPOSER, it does not post. The reposter adds their own text, drawing and stickers here
+        // and picks their own audience on the sheet after, which is also what makes the repost their
+        // own story with its own twenty-four hours rather than a window onto somebody else's.
+        //
+        // ⚠️ FULL SCREEN, NOT A SHEET. The story composer is a full-screen editor everywhere else it
+        // is opened from, and half of it is a card sized to the screen.
+        .fullScreenCover(item: $repostDraft) { d in
+            StoryEditorView(source: d.image, repostOf: d.info,
+                            onPosted: { flashSentToast("Reposted") })
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyRepostTapped"))) { note in
+            guard let id = note.object as? String else { return }
+            beginRepost(storyId: id)
+        }
         .sheet(item: $forwardImg) { p in StoryForwardSheet(image: p.image, onSent: { flashSentToast() }) }
         // EDIT VIEWERS. The audience sheet exactly as it is drawn for a post — his condition — with
         // Update in place of Post Story and no way to make a new audience from here. It dismisses
@@ -1852,6 +1895,24 @@ struct StoryViewer: View {
             guard let info = note.userInfo, let id = info["id"] as? String else { return }
             audienceOverride.removeValue(forKey: id)
             flashSentToast((info["message"] as? String) ?? "Couldn't update who can see this")
+        }
+        // ⛔ "…" → REPOST STORY / SHARE STORY / COPY STORY LINK — his spec, 2026-09-11. The same
+        // three the footer's repost mark belongs to, and they are re-checked here on LIVE state
+        // rather than trusted from the menu, because the menu is the part a modified client
+        // replaces — the same reasoning Edit viewers above carries.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionRepost"))) { _ in
+            guard let s = currentStory else { return }
+            beginRepost(storyId: s.id)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShareLink"))) { _ in
+            guard let s = currentStory, StoryShareRights.allows(s),
+                  let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
+            shareURL = StoryLinkPayload(url: url)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionCopyLink"))) { _ in
+            guard let s = currentStory, StoryShareRights.allows(s) else { return }
+            UIPasteboard.general.string = KulanApp.storyLink(id: s.id)
+            flashSentToast("Link copied")
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
@@ -2863,6 +2924,21 @@ struct StoryViewer: View {
         // — which is a fact about the author's own audience settings and is nobody else's business
         // on a screen they did not post to. The header falls back to its old stacked name-over-time
         // shape when there is nothing here; see `UserView`.
+        // ⛔ A REPOST SAYS WHOSE IT WAS, AND IT SAYS IT TO EVERYONE — his spec, 2026-09-11. This is
+        // the one line in this header that is NOT gated on `isMine`, and the difference is what the
+        // two lines are: the audience label below is a fact about the author's own settings and is
+        // nobody else's business, while a credit line is the whole point of a repost. A repost with
+        // the attribution hidden from everyone but the reposter is just somebody else's picture on
+        // your profile.
+        //
+        // ⚠️ THE STORED NAME, NEVER A LOOKUP. It is written into the story at repost time precisely
+        // so it survives the account being deleted, the original expiring, or the original's author
+        // blocking this viewer since — see `StoryRepost`. "Reposted" alone is the last resort for a
+        // repost written before a name could be resolved; it is honest and it is never blank.
+        if let r = s.repostOf {
+            return StoryAudienceBadge(systemImage: "arrow.2.squarepath",
+                                      text: r.authorName.isEmpty ? "Reposted" : r.authorName)
+        }
         guard isMine else { return nil }
         // ⚠️ WHAT HE JUST CHOSE BEATS WHAT THE SNAPSHOT SAYS. `StoryViewer` is handed
         // `let groups: [StoryGroup]` when it is presented and never re-fed for anything but an id
@@ -4346,6 +4422,46 @@ struct StoryViewer: View {
         }
     }
 
+    /// ⛔ THE REPOST, FROM THE TAP TO THE COMPOSER — his spec, 2026-09-11.
+    ///
+    /// ⚠️ THE PICTURE IS FETCHED AND HANDED OVER, NOT REFERENCED, and that is the decision the whole
+    /// feature turns on. A repost is a NEW story of the reposter's own carrying a COPY of the media,
+    /// so it keeps working when the original is deleted or expires — there is nothing to cascade
+    /// through. Pointing at the original's file would have been less work and would make every
+    /// repost a live dependency on a document its own author does not control.
+    ///
+    /// ⚠️ THE RIGHTS ARE CHECKED AGAIN HERE. The button is already gated by the same answer, but a
+    /// notification can arrive a beat after the story it names has changed underneath it — and this
+    /// is the call that actually copies somebody's picture, so it asks rather than assumes.
+    private func beginRepost(storyId: String) {
+        guard !repostLoading, repostDraft == nil else { return }
+        // The story is found across every group the viewer was given, not only the one on screen:
+        // the footer belongs to whichever page is up, and pages change under a swipe.
+        guard let story = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
+              StoryShareRights.allows(story), !story.isVideo else { return }
+        let authorName = groups.first(where: { $0.authorUid == story.authorUid })?.name ?? ""
+        repostLoading = true
+        Task {
+            // The viewer has almost always cached this already — it is the picture on screen — so
+            // this is usually instant and falls back to a fetch only when it is not.
+            let image = await DiskImageCache.shared.image(for: story.previewUrl)
+            await MainActor.run {
+                repostLoading = false
+                guard let image else {
+                    flashSentToast("Could not load that story")
+                    return
+                }
+                repostDraft = StoryRepostDraft(
+                    image: image,
+                    info: StoryRepost(authorUid: story.authorUid,
+                                      // Stored, not looked up later: an account can be deleted and a
+                                      // story can go, and the credit line has to survive both.
+                                      authorName: authorName,
+                                      storyId: story.id))
+            }
+        }
+    }
+
     private func flashSentToast(_ text: String = "Sent") {
         toastText = text
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { sentToast = true }
@@ -5500,6 +5616,19 @@ struct MyStoriesCarousel: View {
 struct StoryImagePayload: Identifiable {
     let id = UUID()
     let image: UIImage
+}
+
+/// A story's link on its way to the system share sheet.
+struct StoryLinkPayload: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// A repost waiting for the composer: the original's picture, and where it came from.
+struct StoryRepostDraft: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let info: StoryRepost
 }
 
 // Forward a story image to one or more chats. sendImage re-encrypts per chat (and auto-fetches

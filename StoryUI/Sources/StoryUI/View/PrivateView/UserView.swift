@@ -26,6 +26,8 @@ struct UserView: View {
     var canEditAudience: Bool = false
     /// Was it posted to Everyone. Decides whether Share is offered — see `Story.isPublicStory`.
     var isPublicStory: Bool = false
+    /// See `Story.canPassOn` — the host's one answer about Share, Copy Link and Repost.
+    var canPassOn: Bool = false
 
     @Binding var isPresented: Bool
 
@@ -93,6 +95,21 @@ struct UserView: View {
                 })
             }
         } else {
+            // ⛔ THE THREE WAYS TO PASS SOMEBODY ELSE'S STORY ON — his spec, 2026-09-11. They appear
+            // together or not at all, and `canPassOn` is one answer from the host rather than three
+            // conditions written here: the audience must be Everyone, and an author who has blocked
+            // this viewer removes all three completely.
+            if canPassOn {
+                out.append(.init(title: "Repost Story", systemImage: "arrow.2.squarepath") {
+                    NotificationCenter.default.post(name: .init("storyActionRepost"), object: nil)
+                })
+                out.append(.init(title: "Share Story", systemImage: "square.and.arrow.up") {
+                    NotificationCenter.default.post(name: .init("storyActionShareLink"), object: nil)
+                })
+                out.append(.init(title: "Copy Story Link", systemImage: "link") {
+                    NotificationCenter.default.post(name: .init("storyActionCopyLink"), object: nil)
+                })
+            }
             out.append(.init(title: "Hide Stories", systemImage: "eye.slash") {
                 NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
             })

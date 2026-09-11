@@ -144,6 +144,15 @@ final class KeyboardWatcher: ObservableObject {
 
 struct StoryEditorView: View {
     let source: UIImage
+    /// ⛔ SET WHEN THIS COMPOSER WAS OPENED BY REPOST — his spec, 2026-09-11, and the reference's own
+    /// flow: the repost button does NOT post anything, it opens this editor on the original's
+    /// picture so the reposter can add their own text, drawing and stickers first, and pick their
+    /// own audience on the sheet after. One tap that silently put somebody else's picture on your
+    /// profile would be a different, worse feature.
+    ///
+    /// All this carries is the credit line — see `StoryRepost`. The caption, the stickers, the
+    /// audience and the twenty-four hours are the reposter's own, decided here like any other post.
+    var repostOf: StoryRepost? = nil
     var onPosted: () -> Void = {}
     /// A WHOLE POST ARRIVING FROM THE VIDEO EDITOR. When a picture joins a video-first post, that
     /// screen cannot hold it (its model is a list of clips, each of which IS a video), so it hands
@@ -1495,6 +1504,7 @@ struct StoryEditorView: View {
             // flows get the same compact fitted sheet.
             ShareStorySheet(image: s.data, caption: s.caption, video: s.video, extras: pendingExtras,
                             stickers: s.stickers,
+                            repostOf: repostOf,
                             onPosted: { onPosted(); dismiss() })
         }
         .toolbar(.hidden, for: .navigationBar)

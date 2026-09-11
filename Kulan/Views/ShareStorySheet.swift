@@ -199,6 +199,12 @@ struct ShareStorySheet: View {
     ///   • The button says Update and writes to the existing story — no upload, no second story.
     ///   • The tick starts on the audience the story ACTUALLY went to, not on the store's default.
     var editing: Story? = nil
+    /// ⛔ SET WHEN THIS POST IS A REPOST — see `StoryRepost`. It rides all the way from the story
+    /// viewer's repost button, through the editor, to the document, and it is the ONLY thing that
+    /// makes this post different from any other: the reposter picks their own audience here, their
+    /// own caption, their own stickers, and the story gets its own 24 hours. All this carries is the
+    /// credit line.
+    var repostOf: StoryRepost? = nil
     var onPosted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -798,7 +804,11 @@ struct ShareStorySheet: View {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
-                tag: tag, captureProtected: captureProtected)
+                tag: tag, captureProtected: captureProtected,
+                // ⚠️ THE FIRST ITEM ONLY, AND THAT IS CORRECT RATHER THAN AN OVERSIGHT. A repost
+                // comes from one story and produces one story; the `extras` loop below exists for a
+                // multi-pick from the photo library, which the repost path cannot reach.
+                repostOf: repostOf)
         }
         // The rest, in order, behind the first. The background posters already CHAIN rather than
         // cancel each other, so this queues instead of racing — which is what keeps a multi-item

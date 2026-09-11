@@ -145,6 +145,8 @@ struct Story: Identifiable, Hashable, Codable {
     /// MY OWN STORIES ONLY. Nobody else may read that field (it is the author's audience list), so
     /// for everybody else's stories this stays at -1, which means "not known" and never "nobody".
     var recipientsLeft: Int = -1
+    /// ⛔ THE STORY THIS ONE WAS REPOSTED FROM, or nil for an ordinary post — see `StoryRepost`.
+    var repostOf: StoryRepost? = nil
 
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
@@ -156,6 +158,53 @@ struct Story: Identifiable, Hashable, Codable {
     // still had no picture at the end — his 2026-08-09 spinner-over-black screenshot. An empty url
     // draws a placeholder immediately, which is honest and free.
     var previewUrl: String { isVideo ? thumbUrl : mediaUrl }
+}
+
+/// ⛔ WHERE A REPOSTED STORY CAME FROM — owner, 2026-09-11: "repost story, how does it work, make
+/// it like [the reference app] exactly, go take experience, read please."
+///
+/// ⚠️ A REPOST IS A NEW STORY WITH A COPY OF THE PICTURE, NOT A POINTER AT THE ORIGINAL, and that
+/// single decision settles most of the rest. The reference builds the repost by uploading the media
+/// again alongside a small header naming the source, so:
+///
+///   • the repost runs on the REPOSTER's own clock and expires on its own schedule, not the
+///     original's;
+///   • it has its own audience, chosen by the reposter, independent of the original's;
+///   • deleting or expiring the original leaves every repost intact and playable — there is no
+///     cascade, because there is nothing to cascade through. Only the back-LINK goes dead, and the
+///     attribution falls back to a plain name.
+///
+/// A pointer would have been less work and is the wrong shape: it makes every repost a live
+/// dependency on a document its author does not control, and a story that vanishes mid-view is a
+/// worse experience than one whose credit line no longer opens.
+///
+/// ⚠️ `authorName` IS STORED, NOT LOOKED UP. The reference carries a bare name string for exactly
+/// the case where the source cannot be resolved — a deleted account, a story long gone, somebody who
+/// blocked the viewer since. Without it the credit line on an old repost reads as blank, which looks
+/// like a bug and quietly strips the attribution the feature exists to give.
+///
+/// ⚠️ `modified` SAYS THE PICTURE WAS CHANGED. The reposter may draw, crop, add text or stickers, and
+/// a viewer deserves to know whether what they are looking at is what was posted. True whenever the
+/// composer altered the media, false for a clean pass-through.
+struct StoryRepost: Equatable, Hashable {
+    var authorUid: String
+    var authorName: String
+    var storyId: String
+    var modified: Bool = false
+
+    var asData: [String: Any] {
+        ["authorUid": authorUid, "authorName": authorName, "storyId": storyId, "modified": modified]
+    }
+
+    static func from(_ raw: Any?) -> StoryRepost? {
+        guard let m = raw as? [String: Any],
+              let uid = m["authorUid"] as? String, !uid.isEmpty,
+              let sid = m["storyId"] as? String, !sid.isEmpty else { return nil }
+        return StoryRepost(authorUid: uid,
+                           authorName: m["authorName"] as? String ?? "",
+                           storyId: sid,
+                           modified: m["modified"] as? Bool ?? false)
+    }
 }
 
 /// ⛔ MAY THIS PERSON PASS THIS STORY ON — owner's spec, 2026-09-11:
@@ -192,7 +241,12 @@ enum StoryShareRights {
     /// Has this author blocked me? Read from the conversation between us, which is where a block
     /// lives: `isBlockedByMe(them)` means "them blocked the other party", i.e. them blocked me.
     /// No conversation means no block — two people who have never spoken cannot have one.
-    @MainActor static func authorHasBlockedMe(_ authorUid: String) -> Bool {
+    /// ⚠️ NOT `@MainActor`-ISOLATED, AND `ConversationsRepository` IS WHY IT DOES NOT NEED TO BE.
+    /// That repository is a plain `@Observable final class`, so reading `conversations` carries no
+    /// isolation requirement — and this has to be callable from a SwiftUI computed property that is
+    /// not itself isolated (`StoryViewer.models`, which builds every story the viewer draws). An
+    /// isolated version could only be reached with an `await`, and a view body cannot wait.
+    static func authorHasBlockedMe(_ authorUid: String) -> Bool {
         guard !authorUid.isEmpty, authorUid != me else { return false }
         let cid = ChatService.convId(me, authorUid)
         guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
@@ -201,7 +255,7 @@ enum StoryShareRights {
     }
 
     /// The one question. True = Share, Copy Story Link and Repost may all be offered.
-    @MainActor static func allows(_ s: Story) -> Bool {
+    static func allows(_ s: Story) -> Bool {
         // The author's own copy, and the two flags that say "not this one" even then. A one-time
         // story I posted is still one-time for the people who got it, and passing it on would hand
         // it to somebody who is not in that count at all.
@@ -639,7 +693,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil) {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -714,7 +768,7 @@ final class StoriesService {
             var failure: String?
             var cancelled = false
             do {
-                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected)
+                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf)
                 StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
             }
             catch is CancellationError {
@@ -1055,6 +1109,9 @@ final class StoriesService {
                                    type: String, caption: String, duration: Double,
                                    expiresAt: Date, allowsReplies: Bool,
                                    captureProtected: Bool = false,
+                                   // The credit line has to reach the mirror too, or a stranger
+                                   // finding a repost on a profile reads it as an original.
+                                   repostOf: StoryRepost? = nil,
                                    createdAt: Date? = nil) async {
         try? await db.collection("users").document(me)
             .collection("publicStories").document(storyId)
@@ -1069,6 +1126,7 @@ final class StoriesService {
                 // nothing while a friend opening the very same story got a picture. See
                 // `blurThumbBase64`.
                 "blurThumb": blurThumb,
+                "repostOf": repostOf?.asData ?? FieldValue.delete(),
                 // ⚠️ THE KEY MUST BE ON THE RULE'S `hasOnly` LIST OR THIS WHOLE WRITE FAILS, and it
                 // fails silently — `try?` above swallows it and the story simply stops appearing on
                 // its author's public profile. That is exactly what `blurThumb` cost once already;
@@ -1211,7 +1269,8 @@ final class StoriesService {
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                    excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
-                   captureProtected: Bool = false) async throws {
+                   captureProtected: Bool = false,
+                   repostOf: StoryRepost? = nil) async throws {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -1309,6 +1368,10 @@ final class StoriesService {
                 "audienceLabel": tag.label,
                 "oneTime": tag.oneTime,
                 "captureProtected": captureProtected,
+                // ⛔ WHERE THIS ONE CAME FROM, on a repost only — see `StoryRepost`. Left OUT of an
+                // ordinary post rather than written as an empty map, so "not a repost" and "a repost
+                // with nothing in it" can never be confused by the parser.
+                "repostOf": repostOf?.asData ?? FieldValue.delete(),
                 // Public ("Everyone") stories are viewable by anyone who finds your profile — the
                 // read rules gate on this flag. Contacts still get it in their tray via
                 // recipientUids below.
@@ -1336,7 +1399,8 @@ final class StoriesService {
                                         type: "image", caption: caption, duration: 0,
                                         expiresAt: expiresAt,
                                         allowsReplies: allowsReplies,
-                                        captureProtected: captureProtected)
+                                        captureProtected: captureProtected,
+                                        repostOf: repostOf)
             }
             // Warm the cache the My Story card reads from (DiskImageCache), so the final card shows the
             // image instantly as the "Uploading…" placeholder morphs into it — no blank-then-fetch.
@@ -2394,7 +2458,9 @@ final class StoriesRepository {
                          // Only my own story hands this over — see the property.
                          recipientsLeft: author == me
                             ? ((data["recipientUids"] as? [String])?.count ?? -1)
-                            : -1)
+                            : -1,
+                         // Absent on every story that is not a repost, which is nearly all of them.
+                         repostOf: StoryRepost.from(data["repostOf"]))
         }
     }
 

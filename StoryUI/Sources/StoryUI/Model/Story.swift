@@ -115,6 +115,13 @@ public struct Story: Identifiable, Hashable {
     /// Friends or to a named list was chosen to be narrow, and handing it out of the app is the one
     /// move that undoes that choice for good.
     public var isPublicStory: Bool = false
+    /// ⛔ MAY THIS VIEWER PASS THE STORY ON — his spec, 2026-09-11: Share, Copy Story Link and
+    /// Repost, shown together or not at all.
+    ///
+    /// ⚠️ THE HOST ANSWERS THIS, NOT THIS PACKAGE. It depends on the story's audience, on two flags
+    /// that say "do not copy this", and on whether its author has blocked the viewer — none of which
+    /// belongs here. See `StoryShareRights` in the app.
+    public var canPassOn: Bool = false
 
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
@@ -131,6 +138,7 @@ public struct Story: Identifiable, Hashable {
                 isCaptureProtected: Bool = false,
                 canEditAudience: Bool = false,
                 isPublicStory: Bool = false,
+                canPassOn: Bool = false,
                 config: StoryConfiguration) {
 
         self.id = id
@@ -149,6 +157,7 @@ public struct Story: Identifiable, Hashable {
         self.isCaptureProtected = isCaptureProtected
         self.canEditAudience = canEditAudience
         self.isPublicStory = isPublicStory
+        self.canPassOn = canPassOn
         // (Removed `Constant.storySecond = duration` — mutating a global per-instance leaked the
         //  last story's duration into the default for any story built without an explicit one.)
     }

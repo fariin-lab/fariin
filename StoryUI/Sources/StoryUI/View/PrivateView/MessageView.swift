@@ -58,6 +58,31 @@ private extension MessageView {
     }
     
     
+    /// ⛔ REPOST — his spec, 2026-09-11. It carries no state of its own and performs nothing here:
+    /// one tap posts nothing, it asks the app to open its story composer on this picture so the
+    /// reposter can add their own words and pick their own audience first.
+    ///
+    /// ⚠️ A NOTIFICATION RATHER THAN THE USER CLOSURE, and it is the lesser of two evils. That
+    /// closure is `(Story, String, Emoji?, Bool)` and is public API of this package with several call
+    /// sites in the app; widening it for one button would touch every one of them and every future
+    /// action would widen it again. `focusStoryReply` a few lines above already crosses this
+    /// boundary the same way, so this is the established route rather than a new one.
+    var repostButton: some View {
+        Button {
+            NotificationCenter.default.post(name: .init("storyRepostTapped"), object: story.id)
+        } label: {
+            // The two-looping-arrows mark, and it is the system's own — `arrow.2.squarepath` is what
+            // iOS draws for "post this again", so it needs no drawing of ours.
+            Image(systemName: "arrow.2.squarepath")
+                .font(.title2)
+                .foregroundColor(.white)
+                .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
+                .frame(width: 44, height: 44)      // the heart's target, so the two sit evenly
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     var likeButton: some View  {
         Button {
             likeButtonTapped.toggle()
@@ -84,6 +109,10 @@ private extension MessageView {
     func buttonViewBuilder(_ config: StoryInteractionConfig?) -> some View {
         if let config {
             HStack(spacing: 16) {
+                // Left of the heart, which is the order in the footer he is matching.
+                if config.showRepostButton {
+                    repostButton
+                }
                 if config.showLikeButton {
                     likeButton
                 }
