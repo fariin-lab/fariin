@@ -348,7 +348,9 @@ service cloud.firestore {
         // both, and a shared 1h length would have let the daily counter be reopened every hour —
         // which is not a daily limit at all.
         function windowLength() {
-          return name == 'storiesDaily' ? duration.value(24, 'h') : duration.value(1, 'h');
+          // `requests` is the day's knocks on strangers (owner's spec, 2026-09-11 §25), read by
+          // the message rule the way `storiesDaily` is read by the story rule.
+          return (name == 'storiesDaily' || name == 'requests') ? duration.value(24, 'h') : duration.value(1, 'h');
         }
         // ⛔ `storiesActive` IS THE SERVER'S AND NO CLIENT MAY TOUCH IT. It is not a window counter
         // like the two below — it is how many of this account's stories are alive right now, kept by
@@ -833,6 +835,13 @@ service cloud.firestore {
           && convData().get('accepted', false) == false
           && convData().get('lastSender', '') == '';
       }
+      // A DAY'S KNOCKS — owner's spec, 2026-09-11 §25 ("request creation limits"). The counter is
+      // `users/{me}/limits/requests`, written by the app on every first message to a stranger and
+      // guarded by the `limits` rule (a window only reopens once spent, a count only goes up by
+      // one). Read here, on the knock itself, the way the story rules read theirs.
+      function requestBudget() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/requests).data;
+      }
       // The other half of a 1:1 id, for the message rule, where `request.resource.data.users` does
       // not exist. THE ID IS THE MEMBERSHIP (see the read rule below).
       function otherHalf() {
@@ -1072,7 +1081,14 @@ service cloud.firestore {
         && request.auth.uid in resource.data.users
         && resource.data.get('type', '') != 'group'
         && resource.data.get('startedBy', '') != ''
-        && resource.data.get('accepted', false) == false;
+        && resource.data.get('accepted', false) == false
+        // ⛔ AND ONLY BY THE PERSON WHO WAS ASKED — owner's spec, 2026-09-11 §14 and §28. Declining
+        // is the recipient's answer, and the app has never offered the requester a delete. The
+        // hole this closes: the requester could delete their own unanswered request and open a
+        // fresh one at the same id — a second message by another name — and, since the block
+        // lives on this document, delete a block along with it and knock on the person who had
+        // blocked them. `startedBy` is the one who has to ask (Remove Friend sets it too).
+        && request.auth.uid != resource.data.get('startedBy', '');
 
       // Messages: only the two members. Blocking is SILENT — a blocked person's
       // message still writes (it looks "sent" to them), but the blocker's client
@@ -1153,6 +1169,17 @@ service cloud.firestore {
                          'poll', 'contact'
                        ])
                     && acceptsFromStrangers(otherHalf())
+                    // ...and not more knocks today than `requests_per_day_default` (20, or the
+                    // number in `config/limits`). A person does not open twenty new chats with
+                    // strangers in a day; a script does. FAILS OPEN when the counter was never
+                    // written, on exactly the terms the story limits set: an app that has never
+                    // written one must not be an app that cannot send. What it stops is the case
+                    // worth stopping, a client that IS counting and keeps going.
+                    && (
+                         !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/requests)
+                         || requestBudget().get('windowStart', request.time) < request.time - duration.value(24, 'h')
+                         || requestBudget().get('count', 0) < appLimit('requests_per_day_default', 20)
+                       )
                   )
              )
           // Restricted member (Telegram-style timed mute): a member whose restrictedFlags contains

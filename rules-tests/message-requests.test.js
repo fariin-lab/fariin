@@ -65,10 +65,23 @@ const declinedAt = (ms) => ([
   { function: 'get', args: [{ exactValue: declinePath }], result: { value: { data: { at: iso(ms) } } } },
 ]);
 
+// The day's-knocks counter (spec §25) and the config it reads its ceiling from.
+const budgetPath = `${D}/users/${A}/limits/requests`;
+const noBudget = [
+  { function: 'exists', args: [{ exactValue: budgetPath }], result: { value: false } },
+  { function: 'exists', args: [{ exactValue: `${D}/config/limits` }], result: { value: false } },
+];
+const budget = (count, startMs) => ([
+  { function: 'exists', args: [{ exactValue: budgetPath }], result: { value: true } },
+  { function: 'get', args: [{ exactValue: budgetPath }],
+    result: { value: { data: { windowStart: iso(startMs), count } } } },
+  { function: 'exists', args: [{ exactValue: `${D}/config/limits` }], result: { value: false } },
+]);
+
 const msgPath = `${D}/conversations/${CID}/messages/m1`;
 const convPath = `${D}/conversations/${CID}`;
-const knockMocks = (conv, privacy = 'everyone') =>
-  [...convDoc(conv), ...userDoc(A), ...userDoc(B, privacy), ...notAdmin(A), ...notAdmin(B)];
+const knockMocks = (conv, privacy = 'everyone', counter = noBudget) =>
+  [...convDoc(conv), ...userDoc(A), ...userDoc(B, privacy), ...notAdmin(A), ...notAdmin(B), ...counter];
 
 // [name, expect BEFORE, expect AFTER, uid, path, method, after-data, before-data, mocks]
 const cases = [
@@ -157,6 +170,26 @@ const cases = [
     [...userDoc(B), ...notAdmin(B)]],
   ['ATTACK  A accepts their own request',
     'DENY', 'DENY', A, convPath, 'update', { ...spent, accepted: true }, spent, [...userDoc(A), ...notAdmin(A)]],
+
+  // ── 3b. a day's knocks (§25). The counter is the app's; a missing one fails open by design ──
+  ['OK      the tenth knock of the day',
+    'ALLOW', 'ALLOW', A, msgPath, 'create', { authorId: A, text: shortCipher }, null,
+    knockMocks(fresh, 'everyone', budget(9, now - 3600e3))],
+  ['ATTACK  the twenty-first knock of the day',
+    'ALLOW', 'DENY', A, msgPath, 'create', { authorId: A, text: shortCipher }, null,
+    knockMocks(fresh, 'everyone', budget(20, now - 3600e3))],
+  ['OK      twenty knocks yesterday, a fresh day',
+    'ALLOW', 'ALLOW', A, msgPath, 'create', { authorId: A, text: shortCipher }, null,
+    knockMocks(fresh, 'everyone', budget(20, now - 25 * 3600e3))],
+  ['OK      an accepted chat never touches the counter',
+    'ALLOW', 'ALLOW', A, msgPath, 'create', { authorId: A, text: shortCipher }, null,
+    knockMocks(open, 'everyone', budget(20, now - 3600e3))],
+
+  // ── 3c. only the person who was asked may delete the request (§14, §28) ──
+  ['OK      B deletes A\'s request',
+    'ALLOW', 'ALLOW', B, convPath, 'delete', null, spent, [...userDoc(B), ...notAdmin(B)]],
+  ['ATTACK  A deletes their own request, to knock again fresh or shed a block',
+    'ALLOW', 'DENY', A, convPath, 'delete', null, spent, [...userDoc(A), ...notAdmin(A)]],
 
   // ── 4. the pin documents are nobody's ──
   ['ATTACK  read somebody\'s pin hash',

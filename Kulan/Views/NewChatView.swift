@@ -40,7 +40,11 @@ struct NewChatView: View {
     /// the same faces twice on one screen.
     private var frequentThreshold: Int { 6 }
     private var frequent: [Conversation] {
-        let all = convRepo.conversations.filter { !$0.isCleared(me) && !$0.isGroup }
+        // ...and not somebody whose request I have not answered (owner, 2026-09-11): they are not
+        // yet "people you've chatted with", which is what this list promises.
+        let all = convRepo.conversations.filter {
+            !$0.isCleared(me) && !$0.isGroup && MessageRequests.stance($0, myUid: me) != .incoming
+        }
         guard all.count >= frequentThreshold else { return [] }
         return Array(all.sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }.prefix(3))
     }
@@ -53,7 +57,11 @@ struct NewChatView: View {
     private var sections: [(letter: String, convs: [Conversation])] {
         // 1:1 people only — a group here rendered as a person (first member's name/photo)
         // and opened the group mislabeled.
-        let all = convRepo.conversations.filter { !$0.isCleared(me) && !$0.isGroup }
+        // ...and not somebody whose request I have not answered (owner, 2026-09-11): they are not
+        // yet "people you've chatted with", which is what this list promises.
+        let all = convRepo.conversations.filter {
+            !$0.isCleared(me) && !$0.isGroup && MessageRequests.stance($0, myUid: me) != .incoming
+        }
         let grouped = Dictionary(grouping: all) { c -> String in
             let n = c.name(for: me).trimmingCharacters(in: .whitespaces).uppercased()
             guard let f = n.first, f.isLetter else { return "#" }

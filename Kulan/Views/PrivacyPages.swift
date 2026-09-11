@@ -76,8 +76,15 @@ enum PrivacyPrefs {
     static func isContact(_ uid: String) -> Bool {
         let me = Auth.auth().currentUser?.uid ?? ""
         guard !me.isEmpty, !uid.isEmpty else { return false }
+        // ⛔ AN ACCEPTED CHAT, NOT "ANY MESSAGE" — owner's spec, 2026-09-11 §3, one meaning of
+        // friend everywhere. This read "a message exists", and a stranger's unanswered request IS
+        // a message: so the person who had knocked once already counted as my friend for my photo,
+        // my bio, my last seen and, worst, my calls set to My Friends — they could ring me before I
+        // had answered them. Now it is the same test `MessageRequests.isFriend` and the rules make.
         return ConversationsRepository.shared.conversations.contains {
-            !$0.isGroup && $0.users.contains(uid) && !$0.lastMessageCipher.isEmpty
+            guard !$0.isGroup, $0.users.contains(uid) else { return false }
+            if !$0.startedBy.isEmpty { return $0.accepted }
+            return !$0.lastMessageCipher.isEmpty
         }
     }
 }

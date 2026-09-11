@@ -640,6 +640,20 @@ enum ChatService {
         let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
         let convRef = db.collection("conversations").document(cid)
 
+        // A KNOCK COUNTS AGAINST THE DAY — owner's spec, 2026-09-11 §25. The one message to a
+        // stranger bumps `users/{me}/limits/requests` before it goes, and the message rule reads
+        // that counter. The local mirror answers first; a chat born a moment ago that the listener
+        // has not delivered yet is read from the server, because that brand-new chat is exactly
+        // the case this counts. See `MessageRequests.countKnock` for why it is best effort.
+        var knocking = await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }
+                .map { MessageRequests.stance($0) == .firstMessage }
+        }
+        if knocking == nil, let d = (try? await convRef.getDocument())?.data() {
+            knocking = MessageRequests.stance(Conversation(id: cid, data: d)) == .firstMessage
+        }
+        if knocking == true { await MessageRequests.countKnock() }
+
         // Brand-new chat? The "Disappearing Messages for new chats" default applies only to chats
         // born here. This asked the LOCAL mirror, which is EMPTY until the first conversations
         // snapshot lands — so a send into an EXISTING chat during that window (cold start, opened

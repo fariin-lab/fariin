@@ -322,7 +322,9 @@ struct ChatSearchPage: View {
         var rows: [SearchPageRow] = []
         // A conversation lookup for the whole list, once, rather than a scan per entry.
         var byId: [String: Conversation] = [:]
-        for c in repo.conversations { byId[c.id] = c }
+        // A pending request is not a chat (owner, 2026-09-11) — the same filter the chat list
+        // applies, so a request remembered here from before it was hidden cannot resurface.
+        for c in repo.conversations where MessageRequests.stance(c) != .incoming { byId[c.id] = c }
 
         for e in recents.entries {
             switch e.kind {

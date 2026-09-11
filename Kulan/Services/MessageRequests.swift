@@ -114,6 +114,32 @@ enum MessageRequests {
         ], merge: true)
     }
 
+    /// ONE KNOCK, COUNTED — owner's spec, 2026-09-11 §25. `users/{me}/limits/requests` is the day
+    /// counter the message rule reads before it lets a first message through to a stranger; the
+    /// `limits` rule is what gives it teeth (a window only reopens once spent, a count only goes up
+    /// by one), so the client that owns it cannot lower it.
+    ///
+    /// BEST EFFORT, on purpose: a counter that cannot be written must not stop a real person's one
+    /// message (the rule fails open on a missing counter, on the same terms as the story limits).
+    /// What it stops is a client that IS counting and keeps going. The existing `windowStart` is
+    /// written back as the same `Timestamp` object, never through a `Date`, because the rule
+    /// compares it for equality and a round trip through seconds would lose the nanoseconds.
+    static func countKnock() async {
+        let me = ChatService.uid
+        guard !me.isEmpty else { return }
+        let ref = Firestore.firestore().collection("users").document(me)
+            .collection("limits").document("requests")
+        let snap = try? await ref.getDocument()
+        let data = snap?.data() ?? [:]
+        let start = data["windowStart"] as? Timestamp
+        let count = (data["count"] as? Int) ?? 0
+        if snap?.exists == true, let start, Date().timeIntervalSince(start.dateValue()) < 24 * 3600 {
+            try? await ref.setData(["windowStart": start, "count": count + 1])
+        } else {
+            try? await ref.setData(["windowStart": FieldValue.serverTimestamp(), "count": 1])
+        }
+    }
+
     /// Are we friends, in the one sense this app has (spec §3): an open 1:1 conversation. Accepted
     /// if it is from the request era, or with a message in it if it predates requests. The same
     /// test `ThreadView.hasChatHistory` makes, and the same one the rules make.
