@@ -820,6 +820,35 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             return
         }
 
+        // ⛔ NOTHING MUTATES THE TABLE WHILE HIS FINGER IS ON IT — owner, 2026-09-11, fifth report,
+        // and this time with instructions: "still chat list has scroll bug, this time no guess, deep
+        // research and compare [the reference app]."
+        //
+        // ⚠️ THE PREVIOUS FOUR FIXES ALL AIMED AT THE SEARCH FIELD'S INSET AND THIS IS A DIFFERENT
+        // CAUSE ENTIRELY. `updateUIViewController` runs on EVERY SwiftUI re-render of the page — a
+        // message arriving in another chat, a tick going from one to two, a typing flag, a theme
+        // read — and this file's own note two hundred lines down says so. Each of those reaches
+        // `apply`, and `apply` opens a `beginUpdates`/`endUpdates` block holding deletes, inserts
+        // and a `moveRow`, or calls `setEditing(false)`, or hands every visible cell a fresh
+        // configuration. A table doing any of that mid-drag moves content under the finger: that is
+        // exactly "it is not following my finger, it is doing small jumping", and unlike an inset
+        // change it happens on any scroll in any direction, which is why hiding the search field
+        // could never have been the whole answer.
+        //
+        // Nothing in this file guarded on the finger — `isDragging`, `isTracking` and
+        // `isDecelerating` appeared nowhere in it before this line.
+        //
+        // The newest state is KEPT, not dropped, and replayed the moment scrolling stops. Only the
+        // last one matters: the states are whole snapshots rather than deltas, so a burst of six
+        // renders during a flick collapses into one transaction at the end.
+        if tableView.isDragging || tableView.isTracking || tableView.isDecelerating {
+            deferredState = (new, animated)
+            // `state` has already advanced to `new` above, and the replay needs the diff against
+            // what is actually ON SCREEN — so it is rewound here and the replay does the comparing.
+            state = old
+            return
+        }
+
         let changes = ChatListRowChanges.between(old, new)
         // A heading appears or disappears when the pinned section fills or empties. It is not a row
         // change, and it is not a section reload either — see `syncHeaderTitles`.
@@ -1423,6 +1452,33 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// The other way a touch dies without a lift: it becomes a scroll. Same fact-changing fix, same
     /// reasoning as the swipe above — and free, because a drag that started from no highlight clears
     /// nothing.
+    /// The state that arrived while a finger was down — see the guard in `apply`. Whole snapshots,
+    /// so a later one simply replaces an earlier one and the list never replays a backlog.
+    private var deferredState: (ChatListRenderState, Bool)?
+
+    /// Scrolling has genuinely stopped: put the newest state on screen.
+    ///
+    /// ⚠️ ALL THREE END POINTS, because a scroll can finish three ways and only covering one leaves
+    /// the list stale until the next unrelated render. A drag released with no throw ends at
+    /// `didEndDragging(decelerate: false)`; a flick ends at `didEndDecelerating`; a programmatic
+    /// scroll ends at `didEndScrollingAnimation`.
+    private func flushDeferredState() {
+        guard let (pending, animated) = deferredState else { return }
+        deferredState = nil
+        // Never animate the catch-up. The rows moved while he was scrolling and the reason for the
+        // move is already off screen; a spring here would draw attention to a rearrangement he did
+        // not ask to watch.
+        apply(state: pending, animated: animated && !tableView.isDecelerating)
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        guard !decelerate else { return }   // the flick is still running; wait for it
+        flushDeferredState()
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { flushDeferredState() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { flushDeferredState() }
+
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         guard let table = scrollView as? UITableView else { return }
         clearStuckHighlights(in: table)
