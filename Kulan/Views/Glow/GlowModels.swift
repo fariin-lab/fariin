@@ -248,14 +248,42 @@ struct PostedStory: Identifiable, Equatable {
     /// not that nobody watched — the badge stays absent rather than claiming zero.
     func loadViewCounts(isMe: Bool) async {
         guard isMe, case .loaded(let rows) = state, !rows.isEmpty else { return }
-        var updated = rows
-        for (i, row) in rows.enumerated() {
-            if let s = await StoriesService.shared.fetchViewSummary(storyId: row.id) {
-                updated[i].views = s.count
-            } else if let viewers = await StoriesService.shared.fetchViewers(storyId: row.id) {
-                updated[i].views = viewers.count
+        // ⛔ ALL AT ONCE — owner, 2026-09-11: "in my profile the views count comes late when I enter
+        // my profile". Two things made it late and this fixes both.
+        //
+        // ⚠️ THE ROUND TRIPS WERE SERIAL. One summary read per story, awaited before the next was
+        // even asked for, and a story whose summary is missing costs a SECOND read for its viewer
+        // list — so five stories was five to ten network round trips end to end. A task group asks
+        // for all of them together and the wait becomes the slowest one instead of the total.
+        //
+        // ⚠️ AND NOTHING APPEARED UNTIL EVERY ONE HAD LANDED, which is what made it read as a flip
+        // rather than as loading. `state` was written once, after the loop; the tiles draw no badge
+        // at all while `views` is nil (deliberately — see `PostedStory.views`, a confident zero is
+        // the worse lie), so the whole row sat blank and then filled in one go. With the reads
+        // running together there is one publish either way, but it now arrives in the time of a
+        // single read.
+        //
+        // ⚠️ THE FALLBACK STAYS PER STORY. `fetchViewSummary` is the counter document and
+        // `fetchViewers` is the receipts behind it; asking for the second only when the first
+        // answers nil is the rule `fetchViewSummary`'s own note sets out, and it belongs inside each
+        // task rather than in a second pass over the whole list.
+        var counts = [Int?](repeating: nil, count: rows.count)
+        await withTaskGroup(of: (Int, Int?).self) { group in
+            for (i, row) in rows.enumerated() {
+                group.addTask {
+                    if let s = await StoriesService.shared.fetchViewSummary(storyId: row.id) {
+                        return (i, s.count)
+                    }
+                    if let viewers = await StoriesService.shared.fetchViewers(storyId: row.id) {
+                        return (i, viewers.count)
+                    }
+                    return (i, nil)
+                }
             }
+            for await (i, n) in group { counts[i] = n }
         }
+        var updated = rows
+        for (i, n) in counts.enumerated() where n != nil { updated[i].views = n }
         state = .loaded(updated)
     }
 
