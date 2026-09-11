@@ -1716,8 +1716,13 @@ struct ChatsView: View {
             // fields on the conversation — and until today the only way to reach one was to notice it
             // in the list. Which the "Automatically Archive New Chats From Unknown Users" setting
             // could quietly hide in the archive. See `MessageRequestsView`.
+            // ⛔ HIS OWN GLYPH — owner, 2026-09-11, who sent the vector: a speech bubble carrying a
+            // question mark, with the small circle at its shoulder. `person.crop.circle
+            // .badge.questionmark` was Apple's and drew a PERSON, which named who is asking rather
+            // than what they are asking for — and it sat beside two of his own drawings in the same
+            // menu. Template SVG in the catalogue, so the tint still reaches it.
             Button { path.append(RequestsRoute.requests) } label: {
-                Label { Text(requestsMenuTitle) } icon: { MenuIcon(system: "person.crop.circle.badge.questionmark") }
+                Label { Text(requestsMenuTitle) } icon: { MenuIcon("ic_message_request") }
             }
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
@@ -2514,7 +2519,7 @@ struct ChatsView: View {
             // filter menu is where someone already looking for Archive will find it.
             .toolbarTitleMenu {
                 Button { path.append(RequestsRoute.requests) } label: {
-                    Label { Text(requestsMenuTitle) } icon: { MenuIcon(system: "person.crop.circle.badge.questionmark") }
+                    Label { Text(requestsMenuTitle) } icon: { MenuIcon("ic_message_request") }
                 }
                 // ⛔ CHAT PIN, HERE — owner, 2026-09-11, with the reference app's title menu
                 // screenshot and an arrow on its "Number" entry: the private number that opens
