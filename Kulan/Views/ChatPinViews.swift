@@ -354,6 +354,10 @@ struct ChatPinPage: View {
     /// it; the spinner is left for the one case with nothing to draw, and `refreshStatus` gives that
     /// case a deadline so it cannot last for ever.
     @State private var checking = !ChatPin.hasCachedStatus
+    /// The what-is-a-Chat-Key sheet, shown before the keypad. See `ChatKeyIntroSheet`.
+    @State private var explaining = false
+    /// Raised by the explainer's "Got it" and acted on once that sheet is really gone.
+    @State private var continueToKeypad = false
     @State private var setting = false
     @State private var confirmRemove = false
     @State private var removing = false
@@ -429,7 +433,15 @@ struct ChatPinPage: View {
                 } else if checking {
                     HStack { Text("Chat Key"); Spacer(); ProgressView() }
                 } else {
-                    Button { setting = true } label: {
+                    // ⛔ THE EXPLAINER STANDS BETWEEN THIS TAP AND THE KEYPAD — owner, 2026-09-11:
+                    // "when I click Set a Chat Key, show a sheet like this explaining what a Chat
+                    // Key is." Nothing on this page said what one was except the footer's single
+                    // sentence, which is under the button rather than in front of it.
+                    //
+                    // ⚠️ ONLY ON "Set", NEVER ON "Change". This row is on screen for an account that
+                    // has no key; somebody changing one has already been through this. That is also
+                    // what makes a seen-flag unnecessary — the door is rare by construction.
+                    Button { explaining = true } label: {
                         Text("Set a Chat Key").frame(maxWidth: .infinity)
                     }
                 }
@@ -467,6 +479,12 @@ struct ChatPinPage: View {
         // still offered to "Change" a key that no longer existed. `onAppear` is the re-entry.
         .task { await refresh() }
         .onAppear { Task { await refresh() } }
+        .sheet(isPresented: $explaining, onDismiss: {
+            // Only when "Got it" was pressed; the ✕ leaves this false and nothing follows.
+            if continueToKeypad { continueToKeypad = false; setting = true }
+        }) {
+            ChatKeyIntroSheet { continueToKeypad = true }
+        }
         .sheet(isPresented: $setting) {
             ChatPinSetSheet {
                 isSet = true

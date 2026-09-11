@@ -294,7 +294,15 @@ struct MessagesPrivacyPage: View {
     /// sentence. Choosing Everyone is unconditional and always has been.
     private func choose(_ a: Audience) {
         if a == .contacts, !ChatPin.isSet {
-            settingKey = true
+            // ⛔ THE EXPLAINER FIRST — owner, 2026-09-11: "also when the user selects 'People who
+            // know my key', show that sheet." This row commits somebody to a mode named after a
+            // thing the page never defines, and the guard below already sends them to a keypad they
+            // did not ask for; saying what the key IS is the missing half of that.
+            //
+            // ⚠️ IT REPLACES NOTHING. "Got it" still opens the key sheet, and that sheet's success
+            // is still the only thing that writes the mode — the rule this whole branch exists for.
+            // Closing the explainer leaves the selection exactly where it was.
+            explainingKey = true
             return
         }
         privMessages = a.rawValue
@@ -310,6 +318,11 @@ struct MessagesPrivacyPage: View {
     /// ⚠️ ONLY ON A REAL ANSWER. `refreshStatus` returns nil when it could not ask, and treating
     /// "I don't know" as "no key" would switch a correctly configured account to Everyone because
     /// the network blinked — which is a privacy setting changing itself in the open direction.
+    /// The what-is-a-Chat-Key sheet, shown before the keypad. See `ChatKeyIntroSheet`.
+    @State private var explainingKey = false
+    /// Raised by the explainer's "Got it" and acted on once that sheet is really gone.
+    @State private var continueToKeySheet = false
+
     private func healIfKeyless() async {
         guard let set = await ChatPin.refreshStatus(), !set,
               privMessages == Audience.contacts.rawValue else { return }
@@ -392,6 +405,11 @@ struct MessagesPrivacyPage: View {
         .navigationBarTitleDisplayMode(.inline)
         // The mode is written by the sheet's SUCCESS and by nothing else — see `choose`. Dismissing
         // it without saving leaves the selection where it was.
+        .sheet(isPresented: $explainingKey, onDismiss: {
+            if continueToKeySheet { continueToKeySheet = false; settingKey = true }
+        }) {
+            ChatKeyIntroSheet { continueToKeySheet = true }
+        }
         .sheet(isPresented: $settingKey) {
             ChatPinSetSheet {
                 privMessages = Audience.contacts.rawValue
