@@ -273,7 +273,27 @@ struct RootView: View {
         // others can never message them: "hasn't set up encryption yet").
         try? await Crypto.shared.ensureReady()
         await ProfileStore.shared.loadMine()
-        await Crypto.shared.publishPublicKey()
+        // ⛔ PUBLISHING IS NOT ON THE BOOT PATH — owner, 2026-09-11: "when I create a new account,
+        // then open the app, the chat app freezes for seconds, and if I touch anywhere nothing
+        // works". Also why the Stories tab had no My Story card and the chat list was blank: on
+        // this branch NOTHING has started listening yet, so there is no data and nothing to answer
+        // a touch — the app is simply still on the boot path.
+        //
+        // ⚠️ THE RETURNING-USER BRANCH ALREADY LEARNED THIS AND THIS ONE NEVER DID. Look at the
+        // cached path a few lines up: it starts the listeners, sets `phase = .main`, and only THEN
+        // opens a `Task` for `loadMine` + `publishPublicKey` + `drainAll`, under a comment that
+        // calls them "background refresh + key self-heal, off the boot path" and warns about "a
+        // ten-second white screen for everybody else". The first-run path awaited both of those
+        // network calls IN FRONT of the door, which is the white screen that comment is about,
+        // arriving for the one person who has never seen the app before.
+        //
+        // ⚠️ `loadMine` HAS TO STAY, and that is the whole reason this is a move rather than a
+        // deletion: `ready` below is "does this account have a handle", which is read straight out
+        // of the profile it fetches. It decides onboarding against main, so the door genuinely
+        // cannot open before it answers. Publishing the public key decides nothing here — it is
+        // fire-and-forget by `initKeys`'s own description — so it costs a whole round trip in front
+        // of a screen for nothing.
+        Task { await Crypto.shared.publishPublicKey() }
         if let due = ProfileStore.shared.me?.deletionScheduledFor, due > Date() {
             phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
             return
