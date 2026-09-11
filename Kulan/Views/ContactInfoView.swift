@@ -139,7 +139,6 @@ struct ContactInfoView: View {
     /// the sheet is his third; the remove confirm is §23.
     @State private var showPinPrompt = false
     @State private var showPinEntry = false
-    @State private var showUnfriend = false
     @State private var showShare = false
     /// What the share sheet said it did, shown briefly after it closes. Empty = nothing to say.
     @State private var shareToast = ""
@@ -460,16 +459,11 @@ struct ContactInfoView: View {
                 // symbols left on a page that is otherwise drawn in the app's own set. Both are
                 // template SVGs in the catalogue, so `infoRow` picks them up by the "ic_" prefix
                 // and the red tint still reaches them.
-                // FRIEND OR NOT, ONE ROW EACH — owner's spec, 2026-09-11. A friend (an open 1:1,
-                // see `MessageRequests.isFriend`) can be removed (§23); anybody else can be reached
-                // with their Chat PIN (§5). Both sit here, above Block, because this card is the
-                // one place on the page that is always visible and always about the relationship.
-                if isFriend {
-                    infoRow("Remove Friend", "person.crop.circle.badge.minus", chevron: false) { showUnfriend = true }
-                } else {
-                    infoRow("Use Chat Key", "circle.grid.3x3.fill", chevron: false) { showPinEntry = true }
-                }
-                rowDivider
+                // ⛔ NO "Use Chat Key" AND NO "Remove Friend" ROWS HERE — owner, 2026-09-11, with
+                // both ringed: "remove 2 things in profile". They were added that morning above
+                // Block; he took them out the same evening. The key is still offered where it is
+                // needed — the Message button's prompt on a keyed account, and the two bars inside
+                // the conversation — and `MessageRequests.unfriend` stays in the service, unwired.
                 infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
             }
             rowDivider
@@ -1098,15 +1092,6 @@ struct ContactInfoView: View {
                        actions: [
                         .cancel("Not Now"),
                         .plain("Use Chat Key") { showPinEntry = true },
-                       ])
-            // Remove Friend (spec §23). What it does and what it does not do, in one breath: the
-            // chat stays, they lose the open door, and the two ways back in are named.
-            .darkAlert("Remove \(shownName) from friends?",
-                       message: "They’ll need to send you a new message request, or use your Chat Key, to message you again. Your chat and its messages stay.",
-                       isPresented: $showUnfriend,
-                       actions: [
-                        .cancel(),
-                        .destructive("Remove") { Task { try? await MessageRequests.unfriend(cid) } },
                        ])
             // On success the conversation is accepted server-side already; opening it is all that
             // is left, and the thread shows a live composer the moment its snapshot lands.

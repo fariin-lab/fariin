@@ -36,7 +36,8 @@ enum Audience: String, CaseIterable {
     func label(for key: String) -> String {
         switch (key, self) {
         case ("calls", .contacts), ("calls", .nobody): return "Nobody"
-        case ("messages", .contacts): return "People Who Know My Chat Key"
+        // Sentence case, his mockup's own words (2026-09-11, "make it like this").
+        case ("messages", .contacts): return "People who know my key"
         default: return label
         }
     }
@@ -154,8 +155,9 @@ struct AudiencePage: View {
                             Text(a.label(for: key)).foregroundStyle(.primary)
                             Spacer()
                             if selection == a {
+                                // Green, like the switches on these pages — his mockup, 2026-09-11.
                                 Image(systemName: "checkmark").fontWeight(.semibold)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(.green)
                             }
                         }
                         .contentShape(Rectangle())
@@ -288,14 +290,16 @@ struct MessagesPrivacyPage: View {
                             Text(a.label(for: "messages")).foregroundStyle(.primary)
                             Spacer()
                             if privMessages == a.rawValue {
-                                Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                                // Green, like the switches below — his mockup, 2026-09-11.
+                                Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.green)
                             }
                         }
                         .contentShape(Rectangle())
                     }
                 }
             } header: {
-                Text("Who can message you")
+                // His mockup's heading, 2026-09-11: the setting is about being found by name.
+                Text("Who can contact me by username")
             } footer: {
                 // The two modes in the owner's own mental model (spec, "Final Goal"): Everyone can
                 // knock once with a short text; My Friends closes even that door.
@@ -312,7 +316,9 @@ struct MessagesPrivacyPage: View {
                     HStack {
                         Text("Chat Key")
                         Spacer()
-                        Text(ChatPin.isSet ? "On" : "Off").foregroundStyle(.secondary)
+                        // The digits themselves when this phone knows them — his mockup shows the
+                        // key on the row; "On" only when it was set from another phone.
+                        Text(ChatPin.mine ?? (ChatPin.isSet ? "On" : "Off")).foregroundStyle(.secondary)
                     }
                 }
             } footer: {
@@ -321,7 +327,7 @@ struct MessagesPrivacyPage: View {
                 if privMessages == Audience.contacts.rawValue && !ChatPin.isSet {
                     Text("You haven’t set a Chat Key yet, so nobody new can message you until you do. People already in your chats are not affected.")
                 } else {
-                    Text("Anyone who knows your Chat Key can message and call you directly, whatever you choose here or under Calls.")
+                    Text("Anyone who knows your Chat Key can message and call you directly, whatever you choose above.")
                 }
             }
 

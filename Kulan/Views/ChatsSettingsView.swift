@@ -29,7 +29,7 @@ struct ChatsSettingsView: View {
                     HStack {
                         Text("Chat Key")
                         Spacer()
-                        Text(ChatPin.isSet ? "On" : "Off").foregroundStyle(.secondary)
+                        Text(ChatPin.mine ?? (ChatPin.isSet ? "On" : "Off")).foregroundStyle(.secondary)
                     }
                 }
             } footer: {
