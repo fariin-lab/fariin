@@ -454,8 +454,10 @@ struct ShareStorySheet: View {
     /// sheet". One source, two lists. See `StoryAudienceRow.insets`.
     private static let audienceRowInsets = StoryAudienceRow<EmptyView>.insets
 
-    /// The home indicator's strip. `postButton` is a bottom safe-area inset, so it sits ABOVE this
-    /// and the sheet needs the room for both.
+    /// The home indicator's strip. `postButton` is an edge-attached BAR now (`floatingBottomBar`)
+    /// rather than a plain inset, and a bar still sits above the indicator — so the sheet's height
+    /// budget needs the room for both exactly as before. The detent measures from the bottom of the
+    /// screen and has to cover the bar, which is why this term stays even though nothing pads by it.
     private static var bottomSafeInset: CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
@@ -552,7 +554,20 @@ struct ShareStorySheet: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) { postButton }
+            // ⛔ A SYSTEM BAR, NOT A PADDED ROW AT THE BOTTOM — owner, 2026-09-11, quoting his own
+            // rule back at me with this button ringed: "content inside the safe area is APP
+            // CONTENT; system chrome / edge-attached UI is a SYSTEM BAR, system-positioned".
+            //
+            // It was already a `safeAreaInset`, which is the right PLACE but not the right THING:
+            // an inset reserves a strip and the view fills it, so this button was carrying its own
+            // `systemGroupedBackground` behind itself — a hand-drawn plate standing in for a bar.
+            // `floatingBottomBar` is the app's own wrapper over `safeAreaBar` (iOS 26) with the
+            // inset as its fallback, and a real bar brings its own material, its own height and its
+            // own clearance over the home indicator. The hand-drawn background goes with it.
+            //
+            // Same change, same reasoning and the same sentence from him as the wallpaper sheet's
+            // Apply buttons on 2026-09-02 — that note is worth reading beside this one.
+            .floatingBottomBar { postButton }
             .navigationTitle("Share Story")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -662,30 +677,32 @@ struct ShareStorySheet: View {
                 if isPreparing { ProgressView().tint(Color(.systemBackground)) }
                 else { Text(editing == nil ? "Post Story" : "Update").font(.headline) }
             }
-            // ⛔ THE APP'S ACCENT, NOT `.blue` — 2026-09-11 consistency pass, and his standing rule
-            // since 2026-09-02: "follow my app color is black and white". This capsule is the last
-            // and loudest blue on the whole story surface — the Glow intro sheet's identical
-            // full-width CTA already uses the accent, and the audience ticks above this button were
-            // moved off blue long ago.
+            // ⛔ BLUE, AND IT REVERSES THIS MORNING'S PASS — owner, 2026-09-11, with the button
+            // ringed: "posted story button make it blue".
             //
-            // ⚠️ THE LABEL IS THE ACCENT'S EXACT INVERSE, NOT A HARDCODED `.white`. `GlowStyle.accent`
-            // is `Color.primary`, which is WHITE AT NIGHT — so white-on-accent is white-on-white in
-            // dark mode, the exact trap the note on `GlowStyle.accent` was written about, and the
-            // pair has to move together.
+            // What was here was `GlowStyle.accent` on his 2026-09-02 rule that the app is black and
+            // white, and the note argued this capsule was the last loud blue on the story surface.
+            // He has looked at the finished sheet and decided the primary action is the one place
+            // that should be loud. His newer word, and the older note is kept above this one as
+            // history rather than deleted.
             //
-            // `Color(.systemBackground)` is `Color.primary` flipped — white by day, black by night —
-            // so it needs no colour scheme read into this view. `GlowStyle.onAccent` would do the
-            // same job but takes the scheme as an argument, which would mean a new `@Environment`
-            // on a struct that has none. `StoryAudienceRow.badgeGlyph` solves the identical problem
-            // the identical way.
-            .foregroundStyle(Color(.systemBackground))
+            // ⚠️ `Color.blue` LITERALLY, WHICH IS NOT A FRESH CHOICE. The audience tick a few rows
+            // above this button is `.blue` for a reason already written down in
+            // `StoryAudienceViews`: the app's accent resolves near-grey there. Two blues in one
+            // sheet that did not match would be worse than the grey was.
+            //
+            // ⚠️ AND THE LABEL IS A HARDCODED WHITE NOW, DELIBERATELY. It was
+            // `Color(.systemBackground)` because the accent behind it flipped with the theme —
+            // white by day, black by night — so the label had to flip with it. Blue does not flip,
+            // so a flipping label would put BLACK text on blue at night. White on blue is right in
+            // both themes and is what every system-blue capsule in iOS does.
+            .foregroundStyle(.white)
                 .frame(maxWidth: .infinity).frame(height: 52)
-                .background(GlowStyle.accent, in: Capsule())
+                .background(Color.blue, in: Capsule())
         }
         .buttonStyle(StoryPressStyle())
         .disabled(posting || isPreparing)
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(Color(.systemGroupedBackground))
     }
 
     /// One tap on an audience row. Everyone and My Friends stay exclusive — a public post and a
