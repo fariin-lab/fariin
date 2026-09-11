@@ -2434,12 +2434,17 @@ struct ChatsView: View {
             // what reads as "a border". There is no border: there is a missing background.
             //
             // A scroll-edge bar is supposed to become opaque as content goes under it, and this one
-            // never does — the list is a `UITableView` inside a representable, so the bar has no
-            // scroll view of its own to watch and stays at the edge appearance for ever. Asking for
-            // the material outright is the fix, and it is one line of SwiftUI rather than a
-            // `UINavigationBarAppearance` override — which is the thing that drew the band he
-            // reported back in build 282.
-            .toolbarBackground(.visible, for: .navigationBar)
+            // never did — the list is a `UITableView` inside a representable, so the bar had no
+            // scroll view of its own to watch and stayed at the edge appearance for ever.
+            //
+            // ⛔ THE FORCED MATERIAL IS GONE AGAIN — owner, 2026-09-11 evening, with the Calls page
+            // beside this one: "call page is working correct, top header is blur, no border ...
+            // make the chat list like the call page". `.toolbarBackground(.visible)` painted the
+            // bar opaque at rest too, which is the black band with a row cut off under it that he
+            // photographed. The bar has a scroll view to watch now — `ChatListTableController`
+            // registers its table with `setContentScrollView`, the same thing SwiftUI does for the
+            // `List` on the Calls page — so the automatic appearance does here what it does there:
+            // clear at the top, the system blur as rows go under. Nothing is set on the bar.
             // ⛔ THE TITLE OPENS A MENU — owner, 2026-09-09: "Message Requests put when users click
             // Chats, open context menu inside chats". He photographed the header with a chevron
             // beside the word, which is what a title menu draws; there was none in the code, so

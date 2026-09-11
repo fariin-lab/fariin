@@ -612,6 +612,49 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         }
     }
 
+    // ⛔ THE BARS WATCH THIS TABLE — owner, 2026-09-11, with the Calls page held beside this one:
+    // "call page is working correct, top header is blur, no border, bottom bar is using the iOS 26
+    // blur ... make the chat list like the call page". And, the same hour, "when I do a small
+    // scroll the chat list is jumping, at the time it hides the search bar".
+    //
+    // Both are one missing registration. A navigation bar decides its scroll-edge look, a tab bar
+    // decides its floating-pill blur, and a search field decides when to fold away by WATCHING A
+    // SCROLL VIEW — the one the page registers with `setContentScrollView(_:for:)`. SwiftUI does
+    // that for its own `List`, which is why the Calls page gets all three for free. This table
+    // lives in a representable, so nothing registered it: the header could not turn its blur on
+    // (the previous fix forced the bar opaque instead, which is the black band he photographed),
+    // the pill had nothing to blur, and the search field folded on a heuristic of its own with the
+    // inset snapping under the table — the jump.
+    //
+    // The page the navigation controller consults is the one directly beneath it: the hosting
+    // controller SwiftUI made for this screen. Walk up to it and register there; the tab bar
+    // controller asks the navigation controller, which asks that same page. Registered on this
+    // controller too, in case the page answers by forwarding to its child. Done at both moments
+    // the parent chain can complete — `didMove(toParent:)` fires before the page is in the
+    // stack, `viewWillAppear` after — and it is idempotent, so twice costs nothing.
+    //
+    // ⚠️ THIS IS NOT AN OFFSET CORRECTION. See the note above `ChatListCell` for why that shape
+    // was tried, shipped and reverted; this gives UIKit the scroll view and lets it do what it does
+    // for every other list, instead of doing part of UIKit's job a second time.
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        registerAsContentScrollView()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        registerAsContentScrollView()
+    }
+
+    private func registerAsContentScrollView() {
+        setContentScrollView(tableView, for: .all)
+        var page: UIViewController = self
+        while let up = page.parent, !(up is UINavigationController), !(up is UITabBarController) {
+            page = up
+        }
+        if page !== self { page.setContentScrollView(tableView, for: .all) }
+    }
+
     /// ⛔ THEIR TRANSACTION, AND THE REASON THIS FILE EXISTS. One `beginUpdates`/`endUpdates` block
     /// holding deletes, inserts and — the whole point — `moveRow` for a row that changed section.
     ///
