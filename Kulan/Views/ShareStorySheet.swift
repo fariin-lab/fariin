@@ -263,6 +263,30 @@ struct ShareStorySheet: View {
     /// the note on `StoryAudience.recipients`; this sheet is the one place that knows both sets.
     private var glowIds: Set<String> { GlowService.shared.glowRelationship }
 
+    /// ⛔ WHO A GLOWERS STORY IS ACTUALLY ADDRESSED TO. The one answer, used by BOTH the post path
+    /// and the audience edit, because they had drifted and the drift was the feature's worst bug —
+    /// see the note at the edit's own call site.
+    ///
+    /// ⚠️ `realGlowRelationship`, NEVER `glowRelationship`. The screen-facing set carries demo
+    /// people so he can see the feature working while testing; this one is what gets written into
+    /// `recipientUids`, which the rules pin immutable at create. A demo uid in there is a real
+    /// document naming somebody who does not exist, forever, with no way to edit it out. That is
+    /// trap two of the two this feature has — see the Glow notes.
+    ///
+    /// ⛔ AND THE EXCEPT-LIST IS SUBTRACTED HERE, which is the audit's second finding. The Glowers
+    /// page writes the people you have hidden from your glow into this audience's own `members`
+    /// with `mode == .except` (`setHiddenFromGlow`), and the post path read the relationship
+    /// straight out and never looked at them — so hiding somebody from your glow did nothing at all
+    /// to the next Glowers post. The page said it worked; the story went to them anyway.
+    ///
+    /// ⚠️ `.only` NEVER REACHES THIS AUDIENCE (`GlowersPrivacyView` offers no such mode), so the
+    /// `.except` test is the whole of it; written as a test rather than an unconditional subtract so
+    /// that if a later mode is added this fails loudly instead of quietly subtracting the wrong set.
+    private func glowersRecipients(_ a: StoryAudience) -> Set<String> {
+        let hidden: Set<String> = a.mode == .except ? Set(a.members) : []
+        return GlowService.shared.realGlowRelationship.subtracting(hidden)
+    }
+
     /// The audience the sheet currently has ticked, and the one door that writes it. See
     /// `editSelection` for why editing does not touch the store.
     private var chosenId: String { editing == nil ? store.selectedId : (editSelection ?? store.selectedId) }
@@ -635,12 +659,28 @@ struct ShareStorySheet: View {
             // UPDATE, NOT POST — his word, and the honest one: nothing is uploaded and no second
             // story is made, the one already up simply changes who can see it.
             Group {
-                if isPreparing { ProgressView().tint(.white) }
+                if isPreparing { ProgressView().tint(Color(.systemBackground)) }
                 else { Text(editing == nil ? "Post Story" : "Update").font(.headline) }
             }
-            .foregroundStyle(.white)
+            // ⛔ THE APP'S ACCENT, NOT `.blue` — 2026-09-11 consistency pass, and his standing rule
+            // since 2026-09-02: "follow my app color is black and white". This capsule is the last
+            // and loudest blue on the whole story surface — the Glow intro sheet's identical
+            // full-width CTA already uses the accent, and the audience ticks above this button were
+            // moved off blue long ago.
+            //
+            // ⚠️ THE LABEL IS THE ACCENT'S EXACT INVERSE, NOT A HARDCODED `.white`. `GlowStyle.accent`
+            // is `Color.primary`, which is WHITE AT NIGHT — so white-on-accent is white-on-white in
+            // dark mode, the exact trap the note on `GlowStyle.accent` was written about, and the
+            // pair has to move together.
+            //
+            // `Color(.systemBackground)` is `Color.primary` flipped — white by day, black by night —
+            // so it needs no colour scheme read into this view. `GlowStyle.onAccent` would do the
+            // same job but takes the scheme as an argument, which would mean a new `@Environment`
+            // on a struct that has none. `StoryAudienceRow.badgeGlyph` solves the identical problem
+            // the identical way.
+            .foregroundStyle(Color(.systemBackground))
                 .frame(maxWidth: .infinity).frame(height: 52)
-                .background(.blue, in: Capsule())
+                .background(GlowStyle.accent, in: Capsule())
         }
         .buttonStyle(StoryPressStyle())
         .disabled(posting || isPreparing)
@@ -716,7 +756,7 @@ struct ShareStorySheet: View {
             // it carries a matching exception so glow-only people survive that intersection —
             // without it this resolves to nobody for exactly the people Glow exists for. The two
             // halves have to stay together; the note there says so too.
-            if a.kind == .glowers { return GlowService.shared.realGlowRelationship }
+            if a.kind == .glowers { return glowersRecipients(a) }
             return []
         }()
         let replies = a.allowReplies
@@ -816,6 +856,13 @@ struct ShareStorySheet: View {
             if multi { return lists.reduce(into: Set<String>()) { $0.formUnion(Set($1.members)) } }
             if a.kind == .custom { return Set(a.members) }
             if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
+            // ⛔ THE BRANCH THAT WAS MISSING — the audit's first finding, and the worst bug in the
+            // feature. The `tag` block below has said `.glowers` all along, so an edit to Glowers
+            // shipped `included == []` with a Glowers label: `resolveAudience`'s bottom line handed
+            // back the WHOLE POOL, the header still read "glowers", and `recipientUids` was pinned
+            // immutable on the way out. Editing a story to a narrower audience made it wider, and
+            // nothing said so. Same helper as the post path so the two cannot drift again.
+            if a.kind == .glowers { return glowersRecipients(a) }
             return []
         }()
         // The strictest list wins when several are combined, the same direction every other privacy

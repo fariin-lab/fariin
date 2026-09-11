@@ -559,7 +559,14 @@ struct ContactInfoView: View {
     @ViewBuilder private var moreMenuItems: some View {
         // Glow first: it is the one entry here about the PERSON rather than about the chat, and it
         // is the second of his two doors to the same action — see `glowActionButton`.
-        if !isSelf { glowMenuItem; Divider() }
+        // ⛔ `!blocked` TOO — 2026-09-11 audit. The BUTTON door is already inside `if !isSelf &&
+        // !blocked` (see the action row), and this one, which is the same action, was gated on
+        // `!isSelf` alone. So the ••• menu went on offering "Glow Story" for somebody this account
+        // has blocked, and taking it put a real glow edge in the database — which is a story
+        // audience, i.e. a way to start broadcasting to a person you had deliberately cut off. Two
+        // doors to one action have to answer the same question; the note on `glowActionButton` says
+        // as much and only one of them was doing it.
+        if !isSelf && !blocked { glowMenuItem; Divider() }
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
         // Wallpaper pops back to the CHAT and posts to its ThreadView — from a story-opened profile
@@ -1809,8 +1816,18 @@ struct ContactInfoView: View {
                     Label { Text("Remove Glowing") } icon: { GlowStyle.mark(20, filled: true) }
                 }
             } label: {
-                // The ticked mark, which is what his mockup shows on an already-glowing profile.
-                PosterActionIcon(icon: "checkmark.seal.fill", onPhoto: hasPhotoHeader)
+                // ⛔ THE GLOW MARK, FILLED — NOT `checkmark.seal.fill`, 2026-09-11 audit.
+                //
+                // ⚠️ THAT SYMBOL IS THE VERIFIED BADGE. `VerifiedMark` draws a sealed tick on this
+                // very page, inches from this button, to mean "this account is official" — so a
+                // profile you were merely glowing showed the verified glyph on its action row, and
+                // the one thing a messenger must never be ambiguous about is which accounts are
+                // verified. It was a stand-in from before the feature had its own drawing.
+                //
+                // `ic_glow_fill` is that drawing, it already exists, and the filled weight is what a
+                // live glow wears everywhere else in the app — including the Remove row directly
+                // below this one, which was already using it. The two now match.
+                PosterActionIcon(icon: GlowStyle.iconFill, onPhoto: hasPhotoHeader)
             }
             .tint(.primary)
         } else {

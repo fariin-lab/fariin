@@ -80,6 +80,31 @@ struct StoryAudienceTag {
     /// `ShareStorySheet` both fell through to `.friends` by `default`, which is why this had to be
     /// added at both of them rather than only in the type.
     static let glowers = StoryAudienceTag(label: "glowers")
+
+    /// ⛔ WHETHER AN EMPTY `included` MEANS NOBODY, OR MEANS "NO EXPLICIT LIST" — and getting this
+    /// wrong is the worst bug this feature can have.
+    ///
+    /// `resolveAudience` ends in three lines: a non-empty `included` wins, then a non-empty
+    /// `excluded`, then the whole pool. So an audience whose ENTIRE definition is its `included`
+    /// set, arriving empty, falls through to the pool — the author's whole chat list. A story the
+    /// sheet labelled Glowers is then delivered to every person he has ever chatted with, his own
+    /// header still says "glowers", and `recipientUids` is pinned immutable by the update rule, so
+    /// there is no repair and nothing tells him. Three separate routes reached that state:
+    ///
+    ///   · an account with no glows yet (the list is legitimately empty),
+    ///   · a cold launch where the two glow listeners have not landed (`GlowService.hasLoaded` was
+    ///     false and NOTHING read it),
+    ///   · editing a posted story's audience to Glowers, where the branch was simply missing.
+    ///
+    /// The fix is to stop inferring intent from emptiness. The tag already travels with every post
+    /// through every entry point — the sheet, the background poster, the outbox retry and the
+    /// audience edit — so it is the one thing that knows what was MEANT, and it says so here.
+    ///
+    /// ⚠️ FALSE FOR `custom` AND `friends`, deliberately, and not because their lists cannot be
+    /// empty. `custom` and My Friends' two narrowing modes are collected by a picker that refuses an
+    /// empty selection (`requireAtLeastOne`), and `friends`/`everyone` legitimately mean "the pool".
+    /// Marking those true would turn a working audience into a refusal.
+    var emptyMeansNobody: Bool { label == "glowers" }
 }
 
 struct Story: Identifiable, Hashable, Codable {
@@ -716,6 +741,28 @@ final class StoriesService {
     ///
     /// So a permission failure discards the ticket. The post did not happen and is not coming back.
     static func isPermanentPostFailure(_ error: Error) -> Bool {
+        // ⛔ OUR OWN REFUSALS ARE ANSWERED FIRST, because they are not `NSError`s and would
+        // otherwise fall out of the bottom of this function as "try again later" — which for a
+        // ticketed post means the outbox keeps it and every launch replays a post the app has
+        // already decided against, re-showing the same alert forever. That is the failure the
+        // comment at the call site warns about, arrived at from the other direction.
+        //
+        // ⚠️ ONLY THE ONE THAT CANNOT COME RIGHT ON ITS OWN. The split is whether WAITING could
+        // change the answer:
+        //   · `glowAudienceEmpty` — you have no Glows. Retrying tonight does not fix it; picking a
+        //     different audience does. Permanent, ticket torn up.
+        //   · `glowAudienceUnknown` — the glow listeners had not landed. That is a connection, and
+        //     the next launch is exactly the retry the outbox exists for. NOT permanent.
+        //   · `audienceUnavailable` — the same shape, and it keeps the behaviour it shipped with.
+        //   · `signedOut` — the ticket carries `ownerUid`, so the next sign-in is the retry.
+        // Anything not named here keeps its ticket, which is the safe direction: a kept ticket is
+        // at worst one repeated alert, a torn-up one is a lost post.
+        // Pattern-matched rather than compared: `PostRefusal` declares no `Equatable` conformance,
+        // and `if case` needs none.
+        if let refusal = error as? PostRefusal {
+            if case .glowAudienceEmpty = refusal { return true }
+            return false
+        }
         let ns = error as NSError
         // The gRPC status codes, by number rather than through the SDK's enum: these are the wire
         // values and they do not move, where the Swift enum has been renamed and re-nested more than
@@ -732,6 +779,18 @@ final class StoriesService {
     /// The one rule a story create can realistically break is the hourly cap, so that is what it is
     /// reported as.
     static func friendlyPostError(_ error: Error) -> String {
+        // ⛔ OUR OWN REFUSALS ALREADY CARRY THEIR OWN SENTENCE, and they have to be answered before
+        // the guard below or one of them comes out wearing somebody else's.
+        //
+        // The guard reads "not permanent → its own description", which was true of every
+        // `PostRefusal` until `glowAudienceEmpty` became permanent — and a permanent one now falls
+        // THROUGH into the block beneath, which exists to explain a RULES refusal and reports the
+        // daily or hourly story ceiling. So "you have no Glows yet" would have been announced as
+        // "you've posted 30 stories today". The two changes have to travel together; see
+        // `isPermanentPostFailure`.
+        if let refusal = error as? PostRefusal {
+            return refusal.errorDescription ?? refusal.localizedDescription
+        }
         guard isPermanentPostFailure(error) else { return error.localizedDescription }
         // ⚠️ WHICH CEILING REFUSED IT — the day's or the hour's. A rules refusal is opaque:
         // permission-denied says no and never why. But the counters are ours to read, and the app
@@ -764,6 +823,14 @@ final class StoriesService {
         case notMine
         /// A one-time story's audience is spent as it is watched; see `updateStoryAudience`.
         case oneTimeAudienceFrozen
+        /// A Glowers post whose glow relationship is empty. Refused rather than broadcast — see
+        /// `StoryAudienceTag.emptyMeansNobody`.
+        case glowAudienceEmpty
+        /// A Glowers post attempted before the glow listeners have landed. Distinct from the case
+        /// above because the two need different words: one is "you have nobody yet", the other is
+        /// "we do not know yet", and telling somebody they have no glows when the answer simply has
+        /// not arrived is a lie the app would tell on every cold launch.
+        case glowAudienceUnknown
         /// ⚠️ NOBODY IS SIGNED IN, AND THIS HAS TO BE A REFUSAL RATHER THAN A QUIET RETURN. The post
         /// paths used to `return` here, and a plain return IS SUCCESS to the caller: the background
         /// poster took its success branch, tore up the outbox ticket, and left `uploadError` nil. A
@@ -780,6 +847,10 @@ final class StoriesService {
                 "You're not signed in to the account that posted this story."
             case .oneTimeAudienceFrozen:
                 "A one-time story keeps the audience it was sent to."
+            case .glowAudienceEmpty:
+                "You don't have any Glows yet, so this story would reach nobody. Pick another audience."
+            case .glowAudienceUnknown:
+                "Couldn't load your Glows, so this story would reach nobody. Check your connection and try again."
             case .signedOut:
                 "You're signed out, so this story wasn't posted. Sign in and try again."
             }
@@ -791,7 +862,24 @@ final class StoriesService {
     /// which is the upload-time half of the leak the sheet had: hiding somebody from the crowd also
     /// removed them from a My Friends post they belonged in.
     private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>,
-                                 applyHiddenFrom: Bool) async throws -> (Set<String>, String) {
+                                 applyHiddenFrom: Bool,
+                                 tag: StoryAudienceTag) async throws -> (Set<String>, String) {
+        // ⛔ AN AUDIENCE THAT IS ITS OWN LIST MUST NOT FALL THROUGH TO THE POOL. The three lines at
+        // the bottom of this function read a non-empty `included` first, a non-empty `excluded`
+        // second, and otherwise hand back everybody — so a Glowers post that resolved to nothing was
+        // delivered to the author's entire chat list while still labelled Glowers, with
+        // `recipientUids` pinned immutable afterwards. The whole reasoning, and the three routes
+        // that reached it, are on `StoryAudienceTag.emptyMeansNobody`.
+        //
+        // ⚠️ TWO REFUSALS, NOT ONE, AND THE ORDER MATTERS. "We have not loaded your glows yet" is
+        // not "you have no glows", and the loaded flag is the only thing that can tell them apart.
+        // Asked first, so a cold launch never tells somebody their glow list is empty when the
+        // answer simply has not arrived — which is the case `GlowService.hasLoaded` was written for
+        // and which, until now, had ZERO callers anywhere in the app.
+        if tag.emptyMeansNobody && included.isEmpty {
+            let loaded = await MainActor.run { GlowService.shared.hasLoaded }
+            throw loaded ? PostRefusal.glowAudienceEmpty : PostRefusal.glowAudienceUnknown
+        }
         // BLOCKING IS SYMMETRIC FOR BROADCAST CONTENT, and it was not.
         //
         // This filtered `isBlockedByMe` — chats where I blocked THEM — and never asked the other
@@ -1127,7 +1215,7 @@ final class StoriesService {
         // What the old order bought was one main-actor hop of overlap on the warm path (the wait loop
         // does not run when the list is already there), which is not worth an orphaned file.
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
-                                                     applyHiddenFrom: everyone)
+                                                     applyHiddenFrom: everyone, tag: tag)
 
         async let uploadedJPEG: Void = {
             try Task.checkCancellation()
@@ -1401,7 +1489,7 @@ final class StoriesService {
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
-                                                     applyHiddenFrom: everyone)
+                                                     applyHiddenFrom: everyone, tag: tag)
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         let cover = Self.blurThumbBase64(prepared.thumbnail)
         // ONE DEADLINE, EVALUATED ONCE — see the photo path for what two of them cost.
@@ -1555,7 +1643,7 @@ final class StoriesService {
         // that refuses it on the server whatever this does.
         guard !story.oneTime else { throw PostRefusal.oneTimeAudienceFrozen }
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
-                                                     applyHiddenFrom: everyone)
+                                                     applyHiddenFrom: everyone, tag: tag)
         // ⛔ AN EDIT MUST NOT QUIETLY AIM A LIVE STORY AT NOBODY. The post path refuses this case
         // (`resolveAudience` throws when the chat list has not loaded); this one can still resolve to
         // an empty set from a list whose members have all been blocked or have left. Posting to
@@ -2644,7 +2732,28 @@ final class StoriesRepository {
 
     /// True for a person who only exists on this device, so nothing tries to write a view receipt,
     /// a watermark or a reply for them.
-    static func isDemoAuthor(_ uid: String) -> Bool { uid.hasPrefix("demo_") }
+    /// ⛔ BOTH DEMO FAMILIES, AND THE SECOND ONE WAS MISSING — 2026-09-11 audit, carried over from
+    /// the 2026-09-05 read-only pass.
+    ///
+    /// There are two sets of people who exist only on this device, and they were given different
+    /// prefixes: the story row's demo cast is `demo_` (`demoGroups`) and the Glow cast is
+    /// `glowdemo_` (`GlowDemo.cast`). This test knew only the first, so
+    /// `"glowdemo_hodan".hasPrefix("demo_")` is FALSE and every Glow demo author walked straight
+    /// through the one guard that exists to stop them.
+    ///
+    /// ⚠️ WHAT THAT COST. `markViewed` returns early for a demo author precisely because their
+    /// story ids match no document — so for a Glow demo person it went on to write a view receipt
+    /// and advance a per-author watermark, against the REAL database, under the real account, for a
+    /// story that does not exist. Writes that can only fail, and a watermark polluted with a uid no
+    /// real person will ever have.
+    ///
+    /// ⚠️ THE TWO PREFIXES ARE NOT FOLDED INTO ONE. `glowdemo_` does not start with `demo_`, so a
+    /// single test cannot cover both, and renaming either cast is a data change on devices that
+    /// already have one. `GlowDemo.isDemoPerson` is the Glow half's own copy of this question and
+    /// must stay in step with the second clause here.
+    static func isDemoAuthor(_ uid: String) -> Bool {
+        uid.hasPrefix("demo_") || uid.hasPrefix("glowdemo_")
+    }
 
     /// Re-publish the row after the demo switch is flipped, so it takes effect without a relaunch.
     /// The first flip ON is also the encode, which is why it runs off the main actor.
