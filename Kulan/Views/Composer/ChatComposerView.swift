@@ -27,7 +27,7 @@ final class ChatComposerView: UIView {
         static let fieldFont = UIFont.systemFont(ofSize: 17)
         static let maxLines = 6
         static let inPillSpacing: CGFloat = 3    // field · GIF · mic (owner 2026-08-22: 3, down from 4)
-        static let micTrailing: CGFloat = 4      // last icon 4pt from the bar edge
+        static let micTrailing: CGFloat = 4      // the pill's last icon (the GIF) 4pt from its edge
         static let strip: CGFloat = 14           // the locked strip's and hold row's side padding
         static let stripSpacing: CGFloat = 8
         static let holdSpacing: CGFloat = 10
@@ -151,6 +151,19 @@ final class ChatComposerView: UIView {
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
     private let micButton = UIView()
     private let micGlyph = UIImageView(image: UIImage(named: "ic_mic")?.withRenderingMode(.alwaysTemplate))
+    /// ⛔ THE MIC IS ITS OWN BUTTON, NOT SOMETHING INSIDE THE FIELD — owner, 2026-09-11: "make the
+    /// voice recording button a separate standalone button, not part of the text input field. Make
+    /// it work and look like the + button — as an independent button next to the input field."
+    ///
+    /// The same glass capsule the "+" is built from, in the trailing slot opposite it. It shares
+    /// that slot with `sendButton`: no text, the mic stands there; type, and the mic fades as the
+    /// arrow grows into the same centre.
+    ///
+    /// ⚠️ THE CAPSULE TAKES NO TOUCHES. `micButton` is still the invisible sibling that owns the
+    /// hold gesture, for the reason it always was: the recogniser needs a view that is never hidden
+    /// or faded mid-hold, and this capsule is hidden the moment the big disc takes over. Moving the
+    /// picture does not move the gesture.
+    private let micGlass = ChatComposerView.glassPlate()
 
     private let holdRow = UIView()
     private let holdMic = ChatComposerView.redMic()
@@ -234,13 +247,16 @@ final class ChatComposerView: UIView {
         // mic was a bare sibling drawn OVER the pill, so it never sat on the pill's material: the
         // chat behind showed through around it while the GIF icon a few points away rode the glass.
         //
-        // ⚠️ IT CANNOT SIMPLY MOVE BACK IN — that is the bug the note above records, and it was his
-        // too ("the blur is following me", build 681). So the two halves are split. The GLYPH goes
-        // into the pill's content view, where it picks up the material and reads as part of the
-        // composer. The BUTTON stays a sibling: an empty, invisible view over the same slot that owns
-        // the hold gesture, so the touch still never belongs to the glass and the pill still cannot
-        // chase the finger. Nothing about the gesture changes; only where the picture is drawn.
-        pill.contentView.addSubview(micGlyph)
+        // ⚠️ SUPERSEDED 2026-09-11, AND THE SPLIT IS WHY THE MOVE WAS CHEAP. The note above was
+        // about making the mic read as part of the pill; his decision since is the opposite — the
+        // mic is a standalone button beside the field, so belonging to the pill is no longer the
+        // goal and the material comes from its own capsule instead. Both halves survive unchanged in
+        // shape: the GLYPH is parented to `micGlass` rather than to the pill, and the BUTTON is
+        // still the empty, invisible sibling over the same slot that owns the hold gesture, so the
+        // touch never belongs to the glass and no glass can chase the finger. What is recorded above
+        // still holds for anything that tries to put a live control inside the pill.
+        container.contentView.addSubview(micGlass)
+        micGlass.addSubview(micGlyph)
         container.contentView.addSubview(micButton)
         textView.delegate = self
         // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
@@ -364,6 +380,20 @@ final class ChatComposerView: UIView {
         cfg.image = bakeColor ? UIImage(systemName: symbol)?.withTintColor(color, renderingMode: .alwaysOriginal)
                               : UIImage(systemName: symbol)
         let b = UIButton(configuration: cfg)
+        return b
+    }
+
+    /// The "+" button's material with no content of its own, for a control that draws its own glyph.
+    /// Used by the mic, whose picture is one of his assets rather than an SF Symbol — handing it to
+    /// the configuration would mean scaling a vector to a point size the factory above expresses in
+    /// symbol terms, so the glyph stays the image view it has always been and this just puts the
+    /// same glass behind it.
+    private static func glassPlate() -> UIButton {
+        var cfg: UIButton.Configuration = .glass()
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = .zero
+        let b = UIButton(configuration: cfg)
+        b.isUserInteractionEnabled = false   // the hold gesture lives on `micButton` above it
         return b
     }
 
@@ -587,7 +617,8 @@ final class ChatComposerView: UIView {
         // voice path consults `editingMessage`; the honest fix is not to offer the mic at all.
         // ...and never on a text-only request (`textOnly`): a voice note is not text.
         micButton.alpha = (s.hasText || s.recordLocked || s.editing || s.textOnly) ? 0 : 1
-        micGlyph.alpha = (s.hasText || s.recordLocked || s.recordingHeld || s.textOnly) ? 0 : 1
+        // The capsule and its glyph fade as one — the glyph is its subview now.
+        micGlass.alpha = (s.hasText || s.recordLocked || s.recordingHeld || s.textOnly) ? 0 : 1
         for (_, v) in bannerViews { v.alpha = s.recordingActive ? 0 : 1 }
     }
 
@@ -786,7 +817,18 @@ final class ChatComposerView: UIView {
         // A text-only request has no "+", so the pill starts at the edge — the same left the bar
         // already takes while a recording holds the row.
         let left: CGFloat = s.textOnly ? 0 : (s.recordingActive ? (s.reviewing ? slot : 0) : slot)
-        let right: CGFloat = (s.hasText || s.recordLocked) ? width - slot : width
+        // ⛔ THE TRAILING SLOT IS NOW ALWAYS RESERVED, not only when there is something to send.
+        // The mic moved out of the pill and stands in that slot, so the pill stops at the same place
+        // whether the mic or the send arrow is showing — which is also why typing no longer resizes
+        // the field: the two swap inside one slot that was already there.
+        //
+        // The two exceptions are the ones with nothing in that slot: a text-only request has no mic
+        // at all, and a hold in flight gives the whole pill to the "slide to cancel" row with the
+        // mic invisible over its end.
+        let right: CGFloat
+        if s.textOnly { right = width }
+        else if s.recordingActive && !s.recordLocked { right = width }
+        else { right = width - slot }
         return (left, max(left, right))
     }
 
@@ -794,7 +836,8 @@ final class ChatComposerView: UIView {
     /// GIF and no mic to make room for), else what the GIF and mic leave.
     private func textWidth(pillWidth: CGFloat) -> CGFloat {
         (shown.hasText || shown.textOnly) ? pillWidth
-                      : pillWidth - M.micTrailing - M.button - M.inPillSpacing - M.button - M.inPillSpacing
+                      // ONE button inside the pill now, not two: the GIF. The mic left.
+                      : pillWidth - M.micTrailing - M.button - M.inPillSpacing
     }
 
     private var maxTextHeight: CGFloat {
@@ -862,19 +905,17 @@ final class ChatComposerView: UIView {
         let tw = textWidth(pillWidth: pw)
         let fh = min(H, fieldHeight(textWidth: tw))
         fieldRow.frame = CGRect(x: 0, y: H - fh, width: pw, height: fh)
-        // The mic is the pill's sibling (see `build`), so its frame is in the container's space:
-        // over the pill's last slot, bottom-aligned with the row.
-        let micX = pw - M.micTrailing - M.button
-        micButton.frame = CGRect(x: span.left + micX, y: H - M.button, width: M.button, height: M.button)
-        // ⚠️ THE GLYPH IS IN THE PILL'S SPACE NOW, NOT THE BUTTON'S — it moved into the glass so it
-        // would sit on the composer's surface (see `build`). Its slot is the same one, expressed
-        // against the pill's origin instead of the button's: the button starts at `span.left + micX`
-        // in the container, and the pill starts at `span.left`, so the same point inside the pill is
-        // simply `micX`. Centred in that slot exactly as it was centred in the button.
-        micGlyph.frame = CGRect(x: micX + (M.button - 22) / 2,
-                                y: H - M.button + (M.button - 24) / 2,
-                                width: 22, height: 24)
-        gifButton.frame = CGRect(x: micX - M.inPillSpacing - M.button, y: fh - M.button,
+        // The mic: the trailing slot, the "+" button's mirror, sharing its centre with send. Bounds
+        // and centre rather than frame, for the reason written above the buttons — this one is
+        // scaled while the big disc grows out of it.
+        micGlass.bounds = buttonBounds
+        micGlass.center = CGPoint(x: W - M.button / 2, y: buttonMidY)
+        // Inside the capsule now, so its slot is the capsule's own bounds.
+        micGlyph.frame = CGRect(x: (M.button - 22) / 2, y: (M.button - 24) / 2, width: 22, height: 24)
+        // The invisible gesture view over the same slot, in the container's space.
+        micButton.frame = CGRect(x: W - M.button, y: rowY, width: M.button, height: M.button)
+        // The GIF is the pill's last slot now that the mic has left it.
+        gifButton.frame = CGRect(x: pw - M.micTrailing - M.button, y: fh - M.button,
                                  width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
@@ -933,16 +974,16 @@ final class ChatComposerView: UIView {
         // `recordLocked` goes true (the send arrow appears outside it), so the mic slot slides ~48pt
         // left and the puck, anchored to it, went with it — mid-recording, under the finger.
         //
-        // The slot is the same arithmetic with the moving parts removed. Unlocked and with no text,
-        // `pillSpan.right` is the full width, so the mic lands at `W - micTrailing - button` and its
-        // centre is `W - micTrailing - button/2`. Stating it that way makes the anchor independent of
-        // the lock state, of whether there is text, and of the outer insets — none of which should
-        // move a puck that is already under a finger.
+        // ⚠️ 2026-09-11: THE MIC IS A STANDALONE BUTTON NOW AND ITS SLOT MOVED — it no longer lives
+        // at the pill's trailing end but in the trailing slot itself, the "+" button's mirror, so
+        // the centre is `W - button/2`. The jump this paragraph was written to prevent cannot happen
+        // any more for a second reason on top of the first: that slot is fixed, and `pillSpan` no
+        // longer moves the pill's right edge when the recording locks.
         //
         // The Y is still the mic's line rather than the padded box's bottom, which is the part that
         // was actually wrong: the halo is 78 against a 40pt button, so hanging it off the box floated
         // it ~24pt high over the message above.
-        let discCenter = CGPoint(x: W - M.micTrailing - M.button / 2, y: H - M.button / 2)
+        let discCenter = CGPoint(x: W - M.button / 2, y: H - M.button / 2)
         overlayGroup.bounds = CGRect(x: 0, y: 0, width: M.halo, height: M.halo)
         overlayGroup.center = discCenter
         discGroup.bounds = overlayGroup.bounds
