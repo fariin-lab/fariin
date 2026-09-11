@@ -147,7 +147,11 @@ struct SettingsView: View {
                         SettingsRowLabel("Chats", "ic_settings_chats")
                     }
                     NavigationLink { StorySettingsView() } label: {
-                        SettingsRowLabel("Stories", "ic_stories")
+                        // ⛔ HIS NEW MARK, OUTLINE WEIGHT — owner, 2026-09-11, with the SVG. It is
+                        // the same drawing the tab bar now fills, and the pair is the app's usual
+                        // rule: a settings row is a place you go, so it takes the outline; the tab
+                        // you are standing on takes the fill.
+                        SettingsRowLabel("Stories", "ic_stories_stack")
                     }
                     NavigationLink { PrivacySettingsView() } label: {
                         SettingsRowLabel("Privacy & Security", "ic_privacy")

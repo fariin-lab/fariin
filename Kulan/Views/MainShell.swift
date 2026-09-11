@@ -203,7 +203,15 @@ struct MainShell: View {
         // always Is Filled not outline". The outline asset is no longer reached from here; selection
         // is carried by the colour and by the bar's own pill, which is what he is looking at when he
         // says the filled one is how it looked before.
-        Label { Text("Stories") } icon: { MenuIcon("ic_stories_fill", size: 25) }
+        // ⛔ HIS NEW MARK — owner, 2026-09-11, with the SVG: the two stacked cards, filled, for
+        // this tab. `ic_stories_fill` (the card with the plus knocked out) is left in the catalogue
+        // rather than overwritten, because the PLUS in it is what makes it mean "add a story" and
+        // the Add Story actions still want exactly that.
+        //
+        // ⚠️ THE NOTE ABOVE ABOUT THE PLUS BEING KNOCKED OUT NO LONGER DESCRIBES THIS ICON. It
+        // describes `ic_stories_fill`, which this line used to draw; it is kept because that asset
+        // is still live on the Add Story menu items and the reasoning is still true of it.
+        Label { Text("Stories") } icon: { MenuIcon("ic_stories_stack_fill", size: 25) }
             .foregroundStyle(tab == 0 ? Color.primary : Color.secondary)
     }
 

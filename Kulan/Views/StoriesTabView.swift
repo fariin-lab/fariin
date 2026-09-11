@@ -691,8 +691,29 @@ struct StoriesTabView: View {
     /// at all, which is written up against the attach sheet's album button for the same reason.
     @ViewBuilder private var addStoryButton: some View {
         Button { composeStory() } label: {
-            Image("ic_stories").renderingMode(.template).resizable().scaledToFit()
+            // ⛔ HIS NEW MARK, AND THE PLUS IS NOT DECORATION — owner, 2026-09-11: "when you use
+            // this inside the circle add a + icon, that means add". The same stacked-cards drawing
+            // the tab bar now wears, plus the sign that turns "stories" into "add a story". Without
+            // it this button and the tab beside it are the same picture meaning two different
+            // things, which is the one thing the note above was already protecting against.
+            //
+            // ⚠️ THE PLUS IS AN OVERLAY, NOT A SECOND ASSET. Knocking it out of the artwork would
+            // mean a third SVG to keep in step with the other two by hand, and a hole in a template
+            // image has to be real geometry rather than a white shape — the trap written up on
+            // `ic_stories_fill`. A `plus` laid on the corner takes the same template tint, so it
+            // cannot drift in colour, and it needs no background disc of its own: the glass behind
+            // this button is not a colour this file knows.
+            //
+            // ⚠️ BOTTOM-TRAILING AND OUTSIDE THE MARK'S OWN BOX. The offset pushes it clear of the
+            // lower card's corner so the two shapes read as separate rather than as one smudge, and
+            // `.heavy` keeps it legible at eleven points against a filled drawing.
+            Image("ic_stories_stack_fill").renderingMode(.template).resizable().scaledToFit()
                 .frame(width: 22, height: 22)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .heavy))
+                        .offset(x: 4, y: 3)
+                }
         }
     }
 
