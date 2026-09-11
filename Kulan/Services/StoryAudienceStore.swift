@@ -85,7 +85,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     static let everyone = StoryAudience(id: everyoneId, kind: .everyone, name: "Everyone",
                                         mode: .all, members: [], allowReplies: true,
                                         createdAt: sortsFirst)
-    static let defaultMyFriends = StoryAudience(id: myFriendsId, kind: .myFriends, name: "My Friends",
+    static let defaultMyFriends = StoryAudience(id: myFriendsId, kind: .myFriends, name: "My Chats",
                                                 mode: .all, members: [], allowReplies: true,
                                                 createdAt: sortsFirst)
     /// ⚠️ ITS PEOPLE ARE THE LIVE RELATIONSHIP; ITS `members` ARE WHO TO LEAVE OUT OF IT.
@@ -103,10 +103,13 @@ struct StoryAudience: Identifiable, Codable, Equatable {
                                                mode: .all, members: [], allowReplies: true,
                                                createdAt: sortsFirst)
 
+    /// ⚠️ THE LABEL IS "MY CHATS"; THE KIND IS STILL `myFriends` AND ITS STORED VALUE IS UNCHANGED
+    /// (owner, 2026-09-11 — a text rename only). The kind's raw value is written into every posted
+    /// story's audience field and read by other clients, so it is not the label's to move.
     var title: String {
         switch kind {
         case .everyone: return "Everyone"
-        case .myFriends: return "My Friends"
+        case .myFriends: return "My Chats"
         case .glowers: return "Glowers"
         case .custom: return name
         case .hidden: return ""

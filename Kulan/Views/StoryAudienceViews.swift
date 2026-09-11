@@ -755,7 +755,7 @@ struct MyFriendsPrivacyView: View {
                 Text("Let people who can view your story reply.")
             }
         }
-        .navigationTitle("My Friends")
+        .navigationTitle("My Chats")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { contacts = StoryContact.all() }
         .sheet(item: $picking) { target in

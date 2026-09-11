@@ -324,7 +324,7 @@ struct ChatPinPage: View {
             } footer: {
                 // "make it can call and message who know the pin" — owner, 2026-09-11. A pin makes
                 // the chat accepted, and an accepted chat is what "friend" means for calls too.
-                Text("Friends and anyone who knows your Chat PIN can message and call you directly, even when Messages or Calls is set to My Friends. Share it only with people you want to hear from.")
+                Text("Friends and anyone who knows your Chat PIN can message and call you directly, even when Messages or Calls is set to My Chats. Share it only with people you want to hear from.")
             }
 
             if isSet {

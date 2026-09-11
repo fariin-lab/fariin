@@ -5602,7 +5602,7 @@ func storyAudienceTitle(for s: Story) -> String {
             ? StoriesService.shared.uploadingAudienceName(for: s.id)
             : (StoryPrefs.audienceName(storyId: s.id) ?? "")
         return name.isEmpty ? "Custom" : name
-    default: return "My Friends"
+    default: return "My Chats"
     }
 }
 

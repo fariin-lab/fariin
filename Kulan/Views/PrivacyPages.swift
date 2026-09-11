@@ -3,12 +3,17 @@ import FirebaseAuth
 import FirebaseFirestore
 
 // The privacy audience system (user's reference, 2026-07-24). Each privacy item opens a
-// page with Everyone / My Friends / No One.
+// page with Everyone / My Chats / No One.
 //
-// "MY FRIENDS", NOT "MY CONTACTS" (renamed 2026-07-29). The word contacts promises the phone book,
-// and Fariin has never read it — there are no phone numbers in this app at all. What it actually
-// means is "people I share a chat with", and calling those friends is both true and the only
-// reading a user can arrive at without being told. Choices are
+// "MY CHATS", NOT "MY CONTACTS" AND NO LONGER "MY FRIENDS" (contacts → friends 2026-07-29,
+// friends → chats 2026-09-11, both the owner's call). The word contacts promises the phone book,
+// and Fariin has never read it — there are no phone numbers in this app at all. What the setting
+// actually means is "people I share a chat with", and that is now what it says.
+//
+// ⚠️ THE CASE IS STILL `contacts` AND THE STORED VALUE IS STILL "contacts". Only the label moved.
+// The raw value is written to users/{me}.privacy and read by every other client, including ones
+// that predate this rename, so renaming the case would silently re-open a closed door on their
+// phones. Same reason the story side keeps `myFriends`. Choices are
 // mirrored locally AND published to users/{me}.privacy so OTHER clients can honor them
 // (their app hides your photo/bio/presence from non-qualified viewers; calls from
 // non-qualified callers are declined by your device).
@@ -18,7 +23,7 @@ enum Audience: String, CaseIterable {
     var label: String {
         switch self {
         case .everyone: return "Everyone"
-        case .contacts: return "My Friends"
+        case .contacts: return "My Chats"
         case .nobody:   return "No One"
         }
     }
@@ -261,7 +266,7 @@ struct MessagesPrivacyPage: View {
             } footer: {
                 // The two modes in the owner's own mental model (spec, "Final Goal"): Everyone can
                 // knock once with a short text; My Friends closes even that door.
-                Text("Everyone: anyone can send you one short message request. My Friends: only friends and people with your Chat PIN can message you. Chats you already have keep working.")
+                Text("Everyone: anyone can send you one short message request. My Chats: only friends and people with your Chat PIN can message you. Chats you already have keep working.")
             }
 
             // CHAT PIN — owner's spec, 2026-09-11. The private invitation that goes past both modes,

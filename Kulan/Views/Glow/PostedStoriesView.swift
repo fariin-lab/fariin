@@ -37,7 +37,7 @@ struct PostedStoriesView: View {
         var title: String {
             switch self {
             case .all: return "All posted stories"
-            case .friends: return "My Friends"
+            case .friends: return "My Chats"
             case .glowers: return "Glowers"
             case .custom: return "All Custom"
             }
@@ -47,7 +47,7 @@ struct PostedStoriesView: View {
         var explain: String {
             switch self {
             case .all: return "Every story you have posted that is still live"
-            case .friends: return "Stories visible to your friends"
+            case .friends: return "Stories visible to everyone you chat with"
             case .custom: return "Stories shared with a custom audience"
             case .glowers: return "Stories shared with your Glowers"
             }
