@@ -132,10 +132,16 @@ struct GlowPeopleListView: View {
                                 // black lift on a light track by day, a faint white one at night.
                                 // A hardcoded white pill would be invisible every morning — the
                                 // trap written up on `GlowStyle.accent`.
-                                Capsule()
-                                    .fill(Color.primary.opacity(0.14))
-                                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.16), lineWidth: 0.5))
-                                    .shadow(color: .black.opacity(0.14), radius: 3, y: 1)
+                                // ⛔ REAL GLASS, NOT A HAND-MIXED PILL — owner, 2026-09-11: "the top
+                                // bar looks custom, make it real Apple liquid glass, not custom".
+                                // This was a `Color.primary.opacity(0.14)` fill with its own
+                                // hairline and its own drop shadow: three numbers picked by eye,
+                                // which is exactly what reads as somebody's idea of a segmented
+                                // control rather than the system's. `Theme.liquidGlass` is the one
+                                // the whole app already uses and the one the track behind it uses,
+                                // so the raised half and the groove it sits in are now the same
+                                // material at two depths.
+                                Color.clear.liquidGlass(Capsule())
                             }
                         }
                         .contentShape(Capsule())
@@ -304,7 +310,7 @@ private struct GlowPersonRow: View {
                     // this row is already 62 / 15 semibold / 14 secondary — 62 is well past the 48
                     // an avatar defaults to and is a number he gave himself on 2026-09-02. Nothing
                     // here differed, so nothing here moved; the header is where that report lands.
-                    AvatarView(name: person.name, photoUrl: person.photoUrl, size: 62)
+                    AvatarView(name: person.name, photoUrl: person.photoUrl, size: GlowStyle.rowAvatar)
                     // ⛔ THE HANDLE IS THE TITLE LINE AND THE NAME IS UNDER IT — owner, 2026-09-11,
                     // "make it exactly like this… name size, username". His reference puts the
                     // username in the strong line and the real name in grey beneath it, which is the
@@ -455,6 +461,17 @@ enum GlowStyle {
     /// attach sheet's album button.
     static let icon = "ic_glow"
     static let iconFill = "ic_glow_fill"
+
+    /// ⛔ THE CHAT LIST'S OWN AVATAR SIZE — owner, 2026-09-11: "profile avatar looks too big… use the
+    /// size you used in the chat list", for both the Glowers list and the notifications page.
+    ///
+    /// Both were 62, a number chosen for this feature alone on 2026-09-02 and never compared against
+    /// the list the rest of the app scrolls every day. 56 is what a chat row draws (`ChatRow`), so a
+    /// person is now the same size wherever the app lists people one per row.
+    ///
+    /// ⚠️ IT IS THE PLAIN ROW'S 56, NOT THE RINGED ROW'S 58. That pair is a story ring overhanging
+    /// its slot by two points and means nothing here — see the note on `ChatRow.ringedSide`.
+    static let rowAvatar: CGFloat = 56
 
     /// The Glow mark at a stated size.
     ///

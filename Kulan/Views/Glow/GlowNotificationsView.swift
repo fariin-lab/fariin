@@ -207,7 +207,7 @@ private struct GlowEventRow: View {
             Button { showProfile = true } label: {
                 HStack(spacing: 12) {
                     // 62, his number.
-                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: 62)
+                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: GlowStyle.rowAvatar)
                     sentence
                     Spacer(minLength: 6)
                 }
