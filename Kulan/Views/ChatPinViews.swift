@@ -198,12 +198,15 @@ struct ChatPinEntrySheet: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                // 26 puts the title's middle on the X's middle (the X is 48 tall at a 12 inset, so
-                // its centre is 36), which makes the two read as one header row rather than a
-                // title that happens to have a button beside it.
+                // The header row is the X's own band — 48 tall at a 12 inset — so the title is
+                // centred on the button and the divider below cannot reach it. At the title's own
+                // 22 the divider came to rest at 60, exactly the circle's bottom edge, and a rule
+                // tangent to the X reads as a mistake. Same row as the Choose sheet; see the longer
+                // note there, which is where he reported it.
                 Text("Enter Chat Key")
                     .font(.headline)
-                    .padding(.top, 26)
+                    .frame(height: 48)
+                    .padding(.top, 12)
                 Divider()
                     .padding(.top, 12)
                     .padding(.horizontal, 20)
@@ -288,12 +291,12 @@ struct ChatPinEntrySheet: View {
     /// the button's own 12.
     ///
     /// The sum, top to bottom, so the next change to this sheet can correct it instead of guessing:
-    /// title 26 + 21 · divider 12 + 1 · sentence 14 + 20 · plate 14 + 84 · message 6 + 20 ·
-    /// keypad 4 + (4 × 60) = 462, then the anchored button's 12 + 54 + 8.
+    /// header 12 + 48 · divider 12 + 1 · sentence 14 + 20 · plate 14 + 83 · message 6 + 20 ·
+    /// keypad 4 + (4 × 60) = 473, then the anchored button's 12 + 54 + 8.
     ///
     /// ⚠️ A sentence that wraps to two lines, or big Dynamic Type, simply scrolls — the content is
     /// in a `ScrollView` and `.large` is still in the list, so nothing is ever cut off.
-    private static var sheetHeight: CGFloat { 462 + 74 + WallpaperPickerSheet.bottomInset }
+    private static var sheetHeight: CGFloat { 473 + 74 + WallpaperPickerSheet.bottomInset }
 
     /// Read through `now` so the view re-evaluates as the countdown ticks.
     private var isLocked: Bool {
@@ -541,9 +544,20 @@ struct ChatPinSetSheet: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
+                // ⛔ THE TITLE OCCUPIES THE X'S OWN BAND — owner, 2026-09-11: "X button and text
+                // they are ovoloping". The X is an overlay, so it takes no room in this stack: the
+                // title was 22 tall at a 26 inset and the sentence under it began at 56, while the
+                // button — 48 tall at a 12 inset — reaches 60. The sentence is full width, so its
+                // first line ran straight under it.
+                //
+                // A 48-tall row at the same 12 inset makes the header exactly as tall as the
+                // button beside it, so the title stays centred on the X and everything after it
+                // starts below 60 by construction rather than by a number that happens to clear.
+                // The entry sheet's header is the same row, for the same reason.
                 Text("Choose a Chat Key")
                     .font(.headline)
-                    .padding(.top, 26)
+                    .frame(height: 48)
+                    .padding(.top, 12)
                 Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits. Anyone who knows it can message and call you directly.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -597,10 +611,23 @@ struct ChatPinSetSheet: View {
                 .padding(.top, 12)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .presentationDetents([.fraction(0.72), .large])
+        .presentationDetents([.height(Self.sheetHeight), .large])
         .presentationDragIndicator(.visible)
         .onChange(of: pin) { _, _ in failure = "" }
     }
+
+    /// ⛔ AS TALL AS WHAT IS IN IT — owner, 2026-09-11, the band above Save circled a second time.
+    /// The note on the anchored button above explains where that band came from; `.fraction(0.72)`
+    /// was the half of it that was never fixed. Anchoring Save moved it to the right edge, but a
+    /// share of the SCREEN still left the space, and a taller phone left more of it.
+    ///
+    /// The sum, top to bottom: header 12 + 48 · sentence 8 + 40 · plate 18 + 83 · message 6 + 20 ·
+    /// keypad 4 + (4 × 60) = 479, then the anchored button's 12 + 54 + 8.
+    ///
+    /// ⚠️ The sentence is TWO lines on every current phone and that is what the 40 is. A narrow one
+    /// that takes three, or big Dynamic Type, scrolls instead — the content is in a `ScrollView` and
+    /// `.large` is still in the list.
+    private static var sheetHeight: CGFloat { 479 + 74 + WallpaperPickerSheet.bottomInset }
 
     private func save() {
         guard ChatPin.isValid(pin), !busy else { return }
