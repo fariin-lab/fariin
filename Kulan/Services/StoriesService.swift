@@ -1117,9 +1117,11 @@ final class StoriesService {
                                    // finding a repost on a profile reads it as an original.
                                    repostOf: StoryRepost? = nil,
                                    createdAt: Date? = nil) async {
-        try? await db.collection("users").document(me)
-            .collection("publicStories").document(storyId)
-            .setData([
+        // Built as a variable for the same reason the story document is: a repost adds one key and
+        // an ordinary post must not carry it AT ALL. `FieldValue.delete()` is not a way to leave a
+        // key out of a `setData` — it throws, and the throw is an Objective-C exception from inside
+        // Firestore's validation that `try?` cannot catch. See the note on the story write.
+        var mirror: [String: Any] = [
                 "authorUid": me,
                 "createdAt": createdAt.map { Timestamp(date: $0) } ?? FieldValue.serverTimestamp(),
                 "expiresAt": Timestamp(date: expiresAt),
@@ -1130,7 +1132,6 @@ final class StoriesService {
                 // nothing while a friend opening the very same story got a picture. See
                 // `blurThumbBase64`.
                 "blurThumb": blurThumb,
-                "repostOf": repostOf?.asData ?? FieldValue.delete(),
                 // ⚠️ THE KEY MUST BE ON THE RULE'S `hasOnly` LIST OR THIS WHOLE WRITE FAILS, and it
                 // fails silently — `try?` above swallows it and the story simply stops appearing on
                 // its author's public profile. That is exactly what `blurThumb` cost once already;
@@ -1144,7 +1145,11 @@ final class StoriesService {
                 // fails silently or publishes the story to strangers with the author's protection
                 // stripped off it, which is the worse of the two.
                 "captureProtected": captureProtected,
-            ])
+        ]
+        if let repostOf { mirror["repostOf"] = repostOf.asData }
+        try? await db.collection("users").document(me)
+            .collection("publicStories").document(storyId)
+            .setData(mirror)
     }
 
     /// ⛔ COUNT THIS POST AGAINST THE HOUR'S ALLOWANCE. See the rate limit in `firestore.rules`.
@@ -1353,7 +1358,18 @@ final class StoriesService {
         // The audience sheet already warns when you HAVE contacts but narrowed the audience to none, so
         // reaching here with empty recipients means "own story only", which is valid — don't block it.
         do {
-            try await docRef.setData([
+            // ⛔ BUILT AS A VARIABLE SO A REPOST CAN ADD ONE KEY — and `FieldValue.delete()` is NOT
+            // how you leave a key out. That was the first version of this and it crashed the app on
+            // every single story post, shipped in build 744:
+            //
+            //     FIRInvalidArgumentException — FieldValue.delete() can only be used with
+            //     updateData() and setData() with merge:true
+            //
+            // This is a plain `setData` (a create), so Firestore validates the dictionary by
+            // enumerating it and throws an Objective-C exception from inside the bridge, which is
+            // not catchable by `try` and aborts the process. An absent key is an absent key; there
+            // is no sentinel for it here.
+            var payload: [String: Any] = [
                 "authorUid": me,
                 "createdAt": FieldValue.serverTimestamp(),
                 "expiresAt": Timestamp(date: expiresAt),
@@ -1372,10 +1388,6 @@ final class StoriesService {
                 "audienceLabel": tag.label,
                 "oneTime": tag.oneTime,
                 "captureProtected": captureProtected,
-                // ⛔ WHERE THIS ONE CAME FROM, on a repost only — see `StoryRepost`. Left OUT of an
-                // ordinary post rather than written as an empty map, so "not a repost" and "a repost
-                // with nothing in it" can never be confused by the parser.
-                "repostOf": repostOf?.asData ?? FieldValue.delete(),
                 // Public ("Everyone") stories are viewable by anyone who finds your profile — the
                 // read rules gate on this flag. Contacts still get it in their tray via
                 // recipientUids below.
@@ -1386,7 +1398,10 @@ final class StoriesService {
             // `array-contains` query, the read rule and the Cloud Function all key on it, and a
             // rename would have to land in three places at the same instant.
             "recipientUids": StoryAudienceToken.tokens(recipients),
-            ])
+            ]
+            // A repost carries where it came from; an ordinary post carries no such key at all.
+            if let repostOf { payload["repostOf"] = repostOf.asData }
+            try await docRef.setData(payload)
             StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
             // Both halves were in flight together; wait for the photo to land before asking for its

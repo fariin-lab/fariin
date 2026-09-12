@@ -334,7 +334,12 @@ service cloud.firestore {
               || (request.resource.data.keys().hasOnly(
                     ['authorUid', 'createdAt', 'expiresAt', 'mediaUrl', 'thumbUrl',
                      'type', 'caption', 'duration', 'allowsReplies', 'blurThumb', 'stickers',
-                     'captureProtected'])
+                     'captureProtected',
+                     // The repost credit line. Without it here the whole mirror write is REFUSED
+                     // and `try?` swallows the refusal, so a reposted public story would simply
+                     // stop appearing on its author's profile — the exact failure `blurThumb` and
+                     // `captureProtected` each cost once already.
+                     'repostOf'])
                   && request.resource.data.authorUid == uid
                   && !isBanned()));
       }
