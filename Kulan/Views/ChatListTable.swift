@@ -916,10 +916,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// answered half the report. `UINavigationBarAppearance.shadowColor` is the only thing that
     /// separates them.
     ///
-    /// ⚠️ AN OVERRIDE IS THE RIGHT TOOL HERE AND THE WRONG ONE ON THE CONVERSATION SCREEN, and the
-    /// old warning about build 282 is about that screen, not this one: `ChatNavigationItem` nils
-    /// per-item appearances there on purpose, so anything set here would be fought over. Nothing
-    /// touches this page's item except this method.
+    /// ⚠️ AN OVERRIDE IS THE RIGHT TOOL ON BOTH SCREENS NOW, and the old warning about build 282 is
+    /// answered rather than avoided: that band was the bar's SHADOW, which the two lines below
+    /// clear. `ChatNavigationItem` used to nil its per-item appearances and inherit the system
+    /// default instead — until 2026-09-16, when that turned out to be the cause of the conversation
+    /// header's late blur (the default's `scrollEdge` is transparent, and neither screen has a
+    /// tracked scroll view to decide by). It now applies this same material, for the same reason
+    /// this method gives below. Nothing else touches this page's item.
     ///
     /// ⚠️ BOTH APPEARANCES CARRY THE SAME MATERIAL, deliberately. The bar picks `scrollEdge` when
     /// its tracked scroll view is at the top and `standard` otherwise — and this page has no tracked

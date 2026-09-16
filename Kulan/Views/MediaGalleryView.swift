@@ -1027,10 +1027,11 @@ struct MediaGalleryView: View {
 /// is using border" and it is the wrong tool — but NOT for the reason first written here, which was
 /// wrong and is corrected rather than deleted so the mistake is not made again.
 ///
-/// ⚠️ THE CLAIM WAS THAT `ChatNavigationItem.clearBarAppearance` NILS THE CHAT LIST'S APPEARANCE. It
-/// does not: `ChatNavigationItem` is `ThreadView`'s and `OfficialChatView`'s, and has never touched
-/// the chat list. Reasoning from it cost two rounds of telling him his report was the system's
-/// chrome when it was not.
+/// ⚠️ THE CLAIM WAS THAT `ChatNavigationItem`'s APPEARANCE WORK REACHES THE CHAT LIST. It does not:
+/// `ChatNavigationItem` is `ThreadView`'s and `OfficialChatView`'s, and has never touched the chat
+/// list. Reasoning from it cost two rounds of telling him his report was the system's chrome when it
+/// was not. (It nilled the per-item appearances when this was written; since 2026-09-16 it applies
+/// the same material the chat list does, which changes nothing about whose item it touches.)
 ///
 /// What his report actually was: the chat list's bar sits in its transparent SCROLL-EDGE appearance
 /// and never leaves it, because the list is a `UITableView` inside a representable and the bar has
