@@ -148,6 +148,35 @@ private struct ChatPinSubmitButton: View {
     }
 }
 
+/// The blue capsule on `ChatPinSetSheet` — his 2026-09-16 design, where the action reads "Continue"
+/// and is painted in the accent rather than in the label colour.
+///
+/// ⚠️ SEPARATE FROM `ChatPinSubmitButton` ON PURPOSE. That one is black-on-white, it says "Save" or
+/// "Unlock", and `ChatPinEntrySheet` still uses it. He asked about one sheet; repainting the shared
+/// button would have changed the other one silently.
+private struct ChatKeyContinueButton: View {
+    let enabled: Bool
+    let busy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Text("Continue").font(.body.weight(.semibold)).opacity(busy ? 0 : 1)
+                if busy { ProgressView().tint(.white) }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        // Grey while there is nothing to submit, the same two states the other capsule has.
+        .background(enabled ? Color.accentColor : Color(.systemGray3), in: Capsule())
+        .disabled(!enabled || busy)
+    }
+}
+
 // MARK: - Somebody else's pin
 
 /// "Enter @handle's Chat Key to contact them." Verified on the server; on success the conversation
@@ -546,6 +575,7 @@ struct ChatPinSetSheet: View {
     @State private var pin = ""
     @State private var busy = false
     @State private var failure = ""
+    @FocusState private var focused: Bool
     // ⛔ NO CONFIRM STEP — owner, 2026-09-11: "revert U6, I don't want the Chat Key to be entered
     // twice. Keep the original flow: the user enters the Chat Key once and saves it directly."
     //
@@ -583,9 +613,46 @@ struct ChatPinSetSheet: View {
                     .padding(.top, 8)
                     .padding(.horizontal, 24)
 
-                ChatPinDigitsBox(pin: pin)
+                // ⛔ ONE PLAIN FIELD AND THE SYSTEM NUMBER KEYS — owner, 2026-09-16, with the design
+                // he wants drawn out: "redesign plz make it like this designer exactly … also use
+                // keyboard numbers".
+                //
+                // ⚠️ THIS REVERSES THE 2026-09-11 SHEET, which is the one that shipped in build 745
+                // on the morning he asked. The digits plate and `ChatPinKeypad` were built for this
+                // screen that day; his new design uses neither. Both are LEFT IN THE FILE, not
+                // deleted: `ChatPinEntrySheet` still draws both, and that sheet was not in his ask.
+                //
+                // The digits never echo, so the field is secure and stays empty-looking until the
+                // keyboard fills it; the count below is what tells him the typing is landing.
+                SecureField("", text: $pin)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .multilineTextAlignment(.center)
+                    .font(.system(size: 26, weight: .regular, design: .rounded))
+                    .monospacedDigit()
+                    .focused($focused)
+                    .disabled(busy)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 64)
+                    .background(Color(.secondarySystemFill),
+                                in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .padding(.horizontal, 20)
-                    .padding(.top, 18)
+                    .padding(.top, 24)
+                    // ⚠️ A `numberPad` HAS NO RETURN KEY AND NO WAY TO REFUSE A PASTE, so the field
+                    // is the wrong place to trust. Non-digits are stripped and the length is capped
+                    // here, which is also what stops a paste from carrying the key past its maximum.
+                    .onChange(of: pin) { _, new in
+                        let digits = String(new.filter(\.isNumber).prefix(ChatPin.maxDigits))
+                        if digits != new { pin = digits }
+                    }
+
+                // His line, in his two weights: the sentence grey, the requirement itself solid.
+                (Text("PIN must be at least ").foregroundColor(Color(.secondaryLabel))
+                 + Text("\(ChatPin.minDigits) to \(ChatPin.maxDigits) digits").foregroundColor(Color(.label)))
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 12)
+                    .padding(.horizontal, 24)
 
                 Text(failure)
                     .font(.footnote)
@@ -594,12 +661,10 @@ struct ChatPinSetSheet: View {
                     .frame(height: 20)
                     .padding(.top, 6)
                     .opacity(failure.isEmpty ? 0 : 1)
-
-                ChatPinKeypad(pin: $pin, disabled: busy)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
             }
         }
+        // The keys are the point of the screen, so they are up when it opens rather than after a tap.
+        .onAppear { focused = true }
         // ⛔ SAVE IS ANCHORED TO THE SHEET, NOT PARKED AFTER THE KEYPAD — owner, 2026-09-11: "the
         // Save button position is wrong", with the dead band under it circled.
         //
@@ -614,7 +679,11 @@ struct ChatPinSetSheet: View {
         // detent instead of moving with the content. That is his own distinction — the keypad is app
         // content inside the safe area, the action is edge-attached.
         .safeAreaInset(edge: .bottom) {
-            ChatPinSubmitButton(title: "Save", enabled: ChatPin.isValid(pin), busy: busy) { save() }
+            // ⛔ BLUE, AND IT SAYS CONTINUE — his 2026-09-16 design. `ChatPinSubmitButton` is the
+            // black-on-white capsule from his third screenshot of 09-11 and it is SHARED with
+            // `ChatPinEntrySheet`, which he did not ask about, so this sheet carries its own button
+            // rather than repainting both.
+            ChatKeyContinueButton(enabled: ChatPin.isValid(pin), busy: busy) { save() }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 // ⚠️ 8, NOT THE OLD 16. A `safeAreaInset` already sits above the home indicator, so
@@ -629,23 +698,21 @@ struct ChatPinSetSheet: View {
                 .padding(.top, 12)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .presentationDetents([.height(Self.sheetHeight), .large])
+        // ⛔ ONE TALL DETENT NOW, AND THE 09-11 ARITHMETIC IS GONE WITH THE KEYPAD IT MEASURED.
+        // `sheetHeight` summed a header, a plate and four rows of our own keys; none of those are on
+        // this screen any more, and a sheet that hugs 200pt of content would put Continue in the
+        // middle of the phone. His design is a full page with the keys under it — that is `.large`,
+        // and the anchored button rides above the keyboard on its own.
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .onChange(of: pin) { _, _ in failure = "" }
     }
 
-    /// ⛔ AS TALL AS WHAT IS IN IT — owner, 2026-09-11, the band above Save circled a second time.
-    /// The note on the anchored button above explains where that band came from; `.fraction(0.72)`
-    /// was the half of it that was never fixed. Anchoring Save moved it to the right edge, but a
-    /// share of the SCREEN still left the space, and a taller phone left more of it.
-    ///
-    /// The sum, top to bottom: header 12 + 48 · sentence 8 + 40 · plate 18 + 83 · message 6 + 20 ·
-    /// keypad 4 + (4 × 60) = 479, then the anchored button's 12 + 54 + 8.
-    ///
-    /// ⚠️ The sentence is TWO lines on every current phone and that is what the 40 is. A narrow one
-    /// that takes three, or big Dynamic Type, scrolls instead — the content is in a `ScrollView` and
-    /// `.large` is still in the list.
-    private static var sheetHeight: CGFloat { 479 + 74 + WallpaperPickerSheet.bottomInset }
+    // ⛔ `sheetHeight` IS DELETED HERE, 2026-09-16, and its arithmetic went with the keypad. It read
+    // `479 + 74 + WallpaperPickerSheet.bottomInset` — a header, the sentence, the digits plate, the
+    // failure line and four rows of our own keys — and every term after the sentence is off this
+    // screen now. `ChatPinEntrySheet` keeps its own, which still measures a plate and a keypad that
+    // are still there.
 
     private func save() {
         guard ChatPin.isValid(pin), !busy else { return }

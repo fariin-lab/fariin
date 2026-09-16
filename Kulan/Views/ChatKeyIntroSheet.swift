@@ -32,8 +32,7 @@ struct ChatKeyIntroSheet: View {
     private var accent: Color { Theme.defaultBubble(dark) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
+        ScrollView {
                 VStack(spacing: 0) {
                     hero
                     Text("What is a Chat Key?")
@@ -73,8 +72,18 @@ struct ChatKeyIntroSheet: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 16)
-            }
-
+        }
+        // ⛔ "GOT IT" IS EDGE-ATTACHED, NOT THE LAST ROW OF A STACK — owner, 2026-09-16, quoting the
+        // distinction back at me: content inside the safe area is app content; system chrome and
+        // edge-attached UI is system-positioned. It was the second child of a `VStack`, so it took
+        // its place from the content above it and the three points scrolled UNDERNEATH nothing —
+        // the button simply sat wherever the stack ended, over the text at the `.medium` detent.
+        //
+        // A `safeAreaInset` is the system-positioned place for a sheet's one action: pinned to the
+        // bottom edge, clear of the home indicator on its own, and the scroll view above it insets
+        // itself so the last point can always be scrolled clear of it. Same decision, same reason, as
+        // Save on `ChatPinSetSheet`.
+        .safeAreaInset(edge: .bottom) {
             Button {
                 // ⚠️ THE FLAG IS RAISED HERE AND ACTED ON IN `onDismiss`, NOT HERE — the trap this
                 // codebase has been caught by twice. Setting the presenter's other sheet flag while
@@ -92,6 +101,11 @@ struct ChatKeyIntroSheet: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 24)
+            .padding(.top, 12)
+            // ⚠️ 8, NOT A FULL GUTTER. A `safeAreaInset` already rests above the home indicator, so a
+            // larger number here stacks on top of that band and lifts the button off the edge — the
+            // same arithmetic mistake the Save button on the other sheet records.
+            .padding(.bottom, 8)
         }
         .overlay(alignment: .topLeading) {
             // His mock-up's ✕, in the corner it is drawn in. The drag indicator stays off for the
@@ -107,9 +121,16 @@ struct ChatKeyIntroSheet: View {
             .buttonStyle(.plain)
             .padding(16)
         }
-        // Edge-attached chrome is rested by the system — the rule he has sent four times.
-        .safeAreaPadding(.bottom)
-        .presentationDetents([.medium, .large])
+        // ⚠️ `.safeAreaPadding(.bottom)` IS GONE FROM HERE. It was resting the button when the button
+        // was a child of the stack; the `safeAreaInset` above rests itself, and leaving both in would
+        // count the home-indicator band twice.
+        //
+        // ⛔ ONE TALL DETENT — owner, 2026-09-16: "I can see text very well plz open sheet very well
+        // to see text, open up to like image 2", with the half-height sheet and the full one side by
+        // side. `.medium` is what he photographed: three points and a paragraph do not fit in half a
+        // phone, so the sheet opened already clipped and the reassurance the screen exists to give was
+        // the part cut off. It opens at the height his second shot shows, and still scrolls.
+        .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
     }
 
