@@ -324,7 +324,6 @@ final class StoryAvatarUIView: UIView {
         guard animated, changed else {
             imageView.isHidden = image == nil
             glyph.isHidden = image != nil
-            gradient.isHidden = image != nil
             return
         }
         // `.animation(.easeOut(duration: 0.25), value: image != nil)`
@@ -332,7 +331,6 @@ final class StoryAvatarUIView: UIView {
                           options: [.transitionCrossDissolve, .curveEaseOut]) {
             self.imageView.isHidden = image == nil
             self.glyph.isHidden = image != nil
-            self.gradient.isHidden = image != nil
         }
     }
 

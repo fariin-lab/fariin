@@ -222,7 +222,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// record itself, so it is here before any download starts. Blurred, because it is 30 pixels and
     /// pretending otherwise looks like a broken image; the sharp photo crossfades over it.
     ///
-    /// Nil falls back to the letter, which is right for an account that genuinely has no photograph
+    /// Nil falls back to the silhouette, which is right for an account that genuinely has no photograph
     /// and for one whose picture predates the cover.
     var placeholder: UIImage? = nil
     /// The SQUARE the photo's spacer reserves, in global coordinates. What the nav bar watches.

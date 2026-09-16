@@ -487,7 +487,7 @@ struct AvatarView: View {
     let name: String
     var photoUrl: String?
     var size: CGFloat = 48
-    /// Reports whether a REAL photo is on screen, as opposed to the letter fallback. A non-empty
+    /// Reports whether a REAL photo is on screen, as opposed to the silhouette fallback. A non-empty
     /// photoUrl is NOT the same thing: a removed or stale url still loads nothing, and a caller that
     /// trusted the string made the avatar "openable" into an empty circle (owner's screenshot).
     var onPhotoResolved: ((Bool) -> Void)?
