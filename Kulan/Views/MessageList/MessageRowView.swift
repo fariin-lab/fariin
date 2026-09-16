@@ -401,7 +401,10 @@ final class CallBubbleView: UIView {
 
     func configure(_ plan: CallPlan, dark: Bool) {
         let size = plan.bubble.size
-        let path = BubbleShape.path(size, .uniform(16))
+        // ⛔ APPLE'S CONTINUOUS CORNER — owner, 2026-09-16: "message bubble corners, call bubble
+        // corners, voice message bubble corners ... use apple rounded corners looks smooth". See
+        // `BubbleShape.path` for the extent cap that makes this mode safe to use at last.
+        let path = BubbleShape.path(size, .uniform(16), continuous: true)
         fill.apply(plan.fill, path: path, bounds: CGRect(origin: .zero, size: size))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -678,8 +681,10 @@ final class MessageRowView: UIView {
         bubbleBox.bounds = CGRect(origin: .zero, size: b.bubble.size)
         bubbleBox.center = CGPoint(x: b.bubble.midX, y: b.bubble.midY)
         let local = CGRect(origin: .zero, size: b.bubble.size)
+        // Continuous corners on every bubble — his 2026-09-16 ask. A capsule has no corners to
+        // curve, so it is untouched.
         let path = b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
-                               : BubbleShape.path(b.bubble.size, b.radii)
+                               : BubbleShape.path(b.bubble.size, b.radii, continuous: true)
         fill.apply(b.fill, path: path, bounds: local)
 
         CATransaction.begin()
@@ -991,8 +996,10 @@ final class MessageRowView: UIView {
     /// shape deliberately keeps sharp.
     private func bubbleMask(_ b: BubblePlan) -> CAShapeLayer {
         let mask = CAShapeLayer()
+        // ⚠️ THE SAME SHAPE AS THE FILL ABOVE, and it has to stay that way: this masks the rim, so
+        // a mismatch draws a stroke that does not follow the bubble it belongs to.
         mask.path = (b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
-                                 : BubbleShape.path(b.bubble.size, b.radii)).cgPath
+                                 : BubbleShape.path(b.bubble.size, b.radii, continuous: true)).cgPath
         return mask
     }
 

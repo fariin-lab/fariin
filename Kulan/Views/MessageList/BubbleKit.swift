@@ -191,8 +191,23 @@ enum BubbleShape {
     /// ⚠️ AND THE HISTORY SAID SO FIRST. The UIKit text bubble that shipped for weeks before this
     /// migration used `addArc`, and nobody ever reported its corners. The squircle was introduced
     /// by this rewrite on the theory that it matched SwiftUI's `.continuous` more closely; the
-    /// theory was wrong and the proven shape was already there. `continuous` is kept as an opt-in
-    /// for a caller that can prove it wants one — nothing passes it today.
+    /// theory was wrong and the proven shape was already there.
+    ///
+    /// ⛔ **2026-09-16: `continuous` IS ON FOR EVERY BUBBLE, and everything above is now history.**
+    /// He asked for Apple's corners by name — "message bubble corners, call bubble corners, voice
+    /// message bubble corners ... use apple rounded corners looks smooth". The three callers in
+    /// `MessageRowView` all pass `continuous: true`; a capsule is the only shape left on the arc
+    /// path, because it has no corners to curve.
+    ///
+    /// ⚠️ **WHAT MAKES IT SAFE THIS TIME IS THE EXTENT CAP, NOT A TUNED NUMBER.** Both faults above
+    /// came from one defect — the reach was squeezed while the control points kept dividing by the
+    /// full extent — and it is fixed at that cause below. If he reports over-rounding a second time,
+    /// `saturation` is the dial, and the arc path is still one argument away.
+    ///
+    /// ⚠️ Apple's OWN continuous corner (`CALayer.cornerCurve`) is not available here and that is
+    /// not an oversight: every bubble surface in this file is path-masked — the shape fill, the
+    /// gradient's mask and the wallpaper blur slice all take a `CGPath` — and `cornerCurve` only
+    /// exists on a layer's own `cornerRadius`. Using it would mean re-masking all three.
     static func path(_ size: CGSize, _ r: BubbleRadii, continuous: Bool = false) -> UIBezierPath {
         let w = size.width, h = size.height
         // A radius can never exceed half the shorter side, or opposite corners overlap and the
@@ -214,21 +229,51 @@ enum BubbleShape {
             p.close()
             return p
         }
-        // Continuous corners. `reach` is how far along each edge the curve starts; it is clamped so
-        // two corners on one edge can never claim more than that edge has.
-        func reach(_ radius: CGFloat, _ other: CGFloat, _ edge: CGFloat) -> CGFloat {
-            let want = radius * 1.528
-            let otherWant = other * 1.528
-            guard want + otherWant > edge, want + otherWant > 0 else { return want }
-            return edge * want / (want + otherWant)
+        // ⛔ THE RADIUS IS CAPPED BY THE CURVE'S EXTENT, NOT ONLY BY OVERLAP — 2026-09-16, and this
+        // is the whole of why continuous corners were switched off after being built.
+        //
+        // ⚠️ BOTH FAULTS RECORDED ABOVE HAVE ONE CAUSE, which is why they are fixable rather than a
+        // matter of taste. `reach` used to SQUEEZE the curve's span when two corners would overflow
+        // an edge, and the control points were then derived from the squeezed span (`c` divides by
+        // the same 1.528 the squeeze had already eaten). So:
+        //
+        //   · a partial squeeze flattened the cubic over a longer relative distance — the corner
+        //     "reads far rounder than its radius", the 16pt call bubble that looked like 24;
+        //   · a total squeeze left NO straight section on the edge at all, which is not a rounded
+        //     rectangle any more. That is the one-line bubble collapsing into a capsule.
+        //
+        // The cap above (`min(w, h) / 2`) only ever prevented opposite corners from crossing. A
+        // continuous corner reaches 1.528·r along each edge, so a 37pt-tall bubble asking for 18
+        // wants 27.5pt of reach from each end of a 37pt edge. It was always going to saturate.
+        //
+        // Capping the RADIUS by what the edge can actually carry means the squeeze never has to
+        // happen: reach is exactly 1.528·r, the control points keep the true squircle ratio, and a
+        // straight section always survives. A short bubble simply gets a smaller corner, which is
+        // what the system does to `cornerRadius` in the same situation.
+        let extent: CGFloat = 1.528
+        /// How much of one edge the two corners on it may claim between them. Below 1 on purpose —
+        /// at exactly 1 the straight section is zero length and the capsule is back.
+        let saturation: CGFloat = 0.92
+        func fit(_ r: CGFloat, _ other: CGFloat, _ edge: CGFloat) -> CGFloat {
+            let budget = edge * saturation / extent      // total reach allowed, in radius units
+            guard r + other > budget, r + other > 0 else { return r }
+            return budget * r / (r + other)              // shared in proportion to what each asked for
         }
-        let tlTop = reach(tl, tr, w), trTop = reach(tr, tl, w)
-        let trRight = reach(tr, br, h), brRight = reach(br, tr, h)
-        let brBottom = reach(br, bl, w), blBottom = reach(bl, br, w)
-        let blLeft = reach(bl, tl, h), tlLeft = reach(tl, bl, h)
+        // Each corner is capped against BOTH edges it sits on — a corner that fits the top may still
+        // be too big for a short side.
+        let ctl = min(tl, fit(tl, tr, w), fit(tl, bl, h))
+        let ctr = min(tr, fit(tr, tl, w), fit(tr, br, h))
+        let cbr = min(br, fit(br, bl, w), fit(br, tr, h))
+        let cbl = min(bl, fit(bl, br, w), fit(bl, tl, h))
+
+        let tlTop = ctl * extent, trTop = ctr * extent
+        let trRight = ctr * extent, brRight = cbr * extent
+        let brBottom = cbr * extent, blBottom = cbl * extent
+        let blLeft = cbl * extent, tlLeft = ctl * extent
         // Control points sit at 0.667·r from the corner along each edge — the cubic that makes the
-        // curvature continuous rather than jumping from straight to circular.
-        func c(_ v: CGFloat) -> CGFloat { v * 0.667 / 1.528 }
+        // curvature continuous rather than jumping from straight to circular. Safe to derive from the
+        // reach again now, because the reach is once more exactly `extent · r`.
+        func c(_ v: CGFloat) -> CGFloat { v * 0.667 / extent }
 
         p.move(to: CGPoint(x: tlTop, y: 0))
         p.addLine(to: CGPoint(x: w - trTop, y: 0))
