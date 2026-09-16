@@ -884,6 +884,23 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func reassertNavChrome() {
         guard let item = searchHostItem() else { return }
         if item.hidesSearchBarWhenScrolling { item.hidesSearchBarWhenScrolling = false }
+        // ⛔ THE CANCEL BUTTON IS SHOWN EXACTLY WHILE THE CONTROLLER IS ACTIVE — his report,
+        // 2026-09-16: tap the search field, tap the ✕, come back, and the ✕ is still sitting beside
+        // an idle "Search" placeholder.
+        //
+        // ⚠️ IT IS A LEFTOVER VIEW, NOT A LEFTOVER SEARCH. His screenshot has Edit, the Chats title
+        // and both header buttons all drawn, which is the bar at REST — an active search hides them.
+        // So the controller did deactivate and only its cancel button was left behind. `.searchable`
+        // owns that button (SwiftUI installs the controller; `automaticallyShowsCancelButton` is
+        // UIKit's), and the one thing this app owns is the navigation item it was installed on.
+        //
+        // Stated as the invariant rather than as a repair for one path: shown while active, gone
+        // otherwise. Guarded, so it writes nothing on the passes where the two already agree —
+        // including every pass of a live search, where UIKit put the button there on purpose.
+        if let bar = item.searchController?.searchBar {
+            let shouldShow = item.searchController?.isActive ?? false
+            if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
+        }
         guard chromedItem !== item else { return }
         chromedItem = item
         configureNavBar(item)
