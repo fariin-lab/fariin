@@ -2817,6 +2817,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // as the coordinate to put them back at. That is the split written here: a reader at the
         // newest is restored to the bound (where they belong however the content changed), and
         // everyone else is restored to the row they were reading.
+        // ⛔ CONSUMED, AND THAT IS THE FIX FOR HIS SECOND REPORT — 2026-09-16. This anchor is written
+        // in `viewWillDisappear` and was never cleared anywhere, so it outlived the return it was
+        // captured for.
+        //
+        // ⚠️ A `fullScreenCover` DOES NOT FIRE `viewWillDisappear`, which is what made a stale one
+        // reachable. Opening an image captures NO new anchor, so the one left over from the last time
+        // he actually left the chat — a profile push, a pop — was still sitting here; closing the
+        // cover fires `viewDidAppear`, the restore runs, finds it, and puts him back at a position
+        // from an earlier visit. That is his "it goes back to the previous position", and it is not
+        // the keyboard: it is an older place entirely.
+        //
+        // It answers exactly one return trip. Cleared the moment it is read, whether or not its row
+        // is still in the list, so nothing downstream can find it a second time.
+        defer { anchorOnDisappear = nil }
         if let anchor = anchorOnDisappear,
            let ip = dataSource.indexPath(for: anchor.rowId),
            let attr = collectionView.layoutAttributesForItem(at: ip) {

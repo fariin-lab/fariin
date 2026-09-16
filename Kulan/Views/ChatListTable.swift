@@ -901,10 +901,49 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             let shouldShow = item.searchController?.isActive ?? false
             if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
         }
-        guard chromedItem !== item else { return }
+        // ⛔ THE APPEARANCES ARE RE-ASSERTED ON EVERY PASS TOO — his report, 2026-09-16, the header
+        // border again AFTER `10d68265` shipped in build 747.
+        //
+        // ⚠️ THEY USED TO SIT BEHIND `chromedItem !== item`, so `configureNavBar` ran ONCE per
+        // navigation item and never again. This file already knows why that is not enough: SwiftUI
+        // rebuilds the navigation item freely and resets what is on it, which is the whole reason
+        // `hidesSearchBarWhenScrolling` is re-stated above on every render. The appearances have
+        // exactly the same problem and were left behind the guard — so the moment SwiftUI replaced
+        // them, the transparent scroll-edge went with it and nothing ever put it back. What he is
+        // seeing is the SYSTEM default's scroll-edge, restored over ours.
+        //
+        // ⚠️ COMPARED BY IDENTITY, NOT BY VALUE. The two appearance objects are built once and
+        // held, so this is a pointer check on the common path and assigns only when something else
+        // has genuinely swapped them out. `UINavigationBarAppearance` is an NSObject and whether `==`
+        // compares its values or its identity is not something to bet a 40-minute build on — that
+        // caution was already written here, and `===` sidesteps it entirely.
+        if item.standardAppearance !== Self.scrolledAppearance
+            || item.scrollEdgeAppearance !== Self.atTopAppearance
+            || item.compactAppearance !== Self.scrolledAppearance {
+            configureNavBar(item)
+        }
         chromedItem = item
-        configureNavBar(item)
     }
+
+    /// The bar under content: the system's own material, with no hairline.
+    ///
+    /// Built once and held so `reassertNavChrome` can compare by identity — see its note.
+    private static let scrolledAppearance: UINavigationBarAppearance = {
+        let a = UINavigationBarAppearance()
+        a.configureWithDefaultBackground()   // Apple's material, not a description of one
+        a.shadowColor = .clear
+        a.shadowImage = UIImage()
+        return a
+    }()
+
+    /// The bar at the top of the list: nothing behind it, which is what the Calls page shows at rest.
+    private static let atTopAppearance: UINavigationBarAppearance = {
+        let a = UINavigationBarAppearance()
+        a.configureWithTransparentBackground()
+        a.shadowColor = .clear
+        a.shadowImage = UIImage()
+        return a
+    }()
 
     /// ⛔ THE BLUR STAYS, THE LINE UNDER IT GOES — owner, 2026-09-11, after the background was
     /// hidden outright: "now chat list bottom you removed border correctly. Please fix the header:
@@ -929,43 +968,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// that the bar had no tracked scroll view to choose by. He reported the same thing again, so
     /// that trade is off: an always-drawn background is what he has been calling a border.
     private func configureNavBar(_ item: UINavigationItem) {
-        // ⛔ TWO DIFFERENT APPEARANCES AGAIN, AND THAT IS THE 2026-09-16 CORRECTION. `ec0c76cd` gave
-        // both the same material on 09-11 and he reported the same thing a second time, naming the
-        // same target both times: "use ios 26 apple blur plz, native like call list page header".
-        //
-        // ⚠️ THE TARGET HE KEEPS NAMING IS THE ANSWER. The Calls page is a SwiftUI `List`, so SwiftUI
-        // registers it and its bar gets Apple's real behaviour: CLEAR while the list is at the top,
-        // glass once content is under it. Giving this page one material for both states means it
-        // always draws a background — so at rest Calls is clear and Chats is not, and that tonal
-        // step where the bar ends is the "border" he has now ringed three times. There is no stroke
-        // in our code and never was (the 09-11 audit was right about that); what he is seeing is a
-        // background that should not be there yet.
-        //
-        // So: transparent at the scroll edge, Apple's own material under content, and no shadow in
-        // either — `shadowColor` is the hairline, and it is the one thing `toolbarBackground` cannot
-        // reach, which is why this override exists at all.
-        let scrolled = UINavigationBarAppearance()
-        scrolled.configureWithDefaultBackground()   // Apple's material, not a description of one
-        scrolled.shadowColor = .clear
-        scrolled.shadowImage = UIImage()
-
-        let atTop = UINavigationBarAppearance()
-        atTop.configureWithTransparentBackground()
-        atTop.shadowColor = .clear
-        atTop.shadowImage = UIImage()
-
-        // ⚠️ THIS NOW DEPENDS ON THE BAR KNOWING WHICH STATE IT IS IN, which the 09-11 note called a
-        // decision it cannot make. `registerAsContentScrollView()` is what answers it, and it runs at
-        // both moments the parent chain can complete. If that registration ever stops reaching the
-        // bar the symptom is a header stuck CLEAR while the list scrolls under it — that, and not a
-        // line, is what to look for if he reports this again.
-        //
-        // ⚠️ SET UNCONDITIONALLY, no "has it changed" guard. `UINavigationBarAppearance` is an
-        // NSObject and whether `==` compares its VALUES or its identity is not something to bet a
-        // 40-minute build on.
-        item.standardAppearance = scrolled
-        item.compactAppearance = scrolled
-        item.scrollEdgeAppearance = atTop
+        item.standardAppearance = Self.scrolledAppearance
+        item.compactAppearance = Self.scrolledAppearance
+        item.scrollEdgeAppearance = Self.atTopAppearance
     }
 
     private func registerAsContentScrollView() {
