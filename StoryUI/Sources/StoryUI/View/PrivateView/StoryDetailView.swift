@@ -2472,6 +2472,14 @@ private extension StoryDetailView {
     /// See `StoryViewModel.lastIndex` for why the memory lives there and why it is not persisted.
     func resumeIndex() -> Int {
         let count = model.stories.count
+        // ⛔ AN EXPLICIT REQUEST WINS OVER BOTH MEMORIES. A grid that opens one tile is naming the
+        // item, not resuming a bucket — see `StoryViewModel.requestedStoryId`. Spent on read, so it
+        // steers exactly one bucket exactly once.
+        if let wanted = viewModel.requestedStoryId,
+           let i = model.stories.firstIndex(where: { $0.id == wanted }) {
+            viewModel.requestedStoryId = nil
+            return min(max(0, i), max(0, count - 1))
+        }
         if let saved = viewModel.lastIndex[model.id] {
             return min(max(0, saved), max(0, count - 1))
         }

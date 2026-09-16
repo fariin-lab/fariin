@@ -1539,14 +1539,15 @@ struct StoryViewer: View {
     // the last item, auto-dismissed the whole viewer (taking the sheet with it).
     private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil }
 
-    init(group: StoryGroup, ownSwipeDismiss: Bool = false,
+    init(group: StoryGroup, startStoryId: String? = nil, ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
          deliveredToMe: Bool = false, heroStageOpen: Bool = true,
          onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
-        self.init(groups: [group], startIndex: 0, ownSwipeDismiss: ownSwipeDismiss,
+        self.init(groups: [group], startIndex: 0, startStoryId: startStoryId,
+                  ownSwipeDismiss: ownSwipeDismiss,
                   heroDismiss: heroDismiss, heroSourceKey: heroSourceKey,
                   heroSourcePinned: heroSourcePinned, deliveredToMe: deliveredToMe,
                   heroStageOpen: heroStageOpen,
@@ -1554,7 +1555,8 @@ struct StoryViewer: View {
                   onClose: onClose, onProfile: onProfile,
                   onDeletedRemaining: onDeletedRemaining)
     }
-    init(groups: [StoryGroup], startIndex: Int = 0, ownSwipeDismiss: Bool = false,
+    init(groups: [StoryGroup], startIndex: Int = 0, startStoryId: String? = nil,
+         ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
          deliveredToMe: Bool = false, heroStageOpen: Bool = true,
          onHeroClose: (() -> Void)? = nil,
@@ -1568,6 +1570,7 @@ struct StoryViewer: View {
         self.heroSourceKey = heroSourceKey
         self.heroSourcePinned = heroSourcePinned
         self.deliveredToMe = deliveredToMe
+        self.startStoryId = startStoryId
         self.heroStageOpen = heroStageOpen
         self.onHeroClose = onHeroClose
         self.onClose = onClose
@@ -1579,6 +1582,9 @@ struct StoryViewer: View {
     /// open — an upload landing swaps the placeholder id for the real story's — the fresh buckets
     /// are pushed into the mounted pages in place. See the `.onChange` in the body and
     /// `StoryItemsReconcile` in the library.
+    /// The item a grid asked to open on, passed straight to the library.
+    private let startStoryId: String?
+
     private var reconcileSignature: [String] { groups.flatMap { [$0.id] + $0.stories.map(\.id) } }
 
     private var models: [StoryUIModel] {
@@ -2441,6 +2447,11 @@ struct StoryViewer: View {
         StoryView(
             stories: models,
             selectedIndex: startIndex,
+            // ⛔ WHICH ITEM, NOT ONLY WHICH PERSON — his report, 2026-09-16: a tap on any tile in
+            // All posted stories opened the first story. `selectedIndex` chooses the BUCKET; the
+            // item inside it was always first-unseen-else-first, so a grid had no way to say
+            // which one it meant. See `StoryViewModel.requestedStoryId`.
+            startStoryId: startStoryId,
             isPresented: libraryPresented,
             userClosure: { story, message, emoji, isLiked in
                 handle(storyId: story.id, message: message, emoji: emoji, isLiked: isLiked)

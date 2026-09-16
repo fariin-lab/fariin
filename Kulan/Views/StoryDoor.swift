@@ -165,6 +165,8 @@ enum StoryDoor {
         var sourceKey: String
         var pinned: Bool
         var deliveredToMe: Bool
+        /// Which story to open on. Nil is the old behaviour: first unseen, else first.
+        var startStoryId: String?
         var onProfile: (StoryGroup) -> Void
         var onClosed: () -> Void
     }
@@ -192,13 +194,17 @@ enum StoryDoor {
     static func open(_ g: StoryGroup,
                      among siblings: [StoryGroup] = [],
                      from sourceKey: String,
+                     /// Open on this story rather than on first-unseen. What a grid of individual
+                     /// stories means when one of them is tapped.
+                     startStoryId: String? = nil,
                      pinned: Bool = true,
                      deliveredToMe: Bool = false,
                      onProfile: @escaping (StoryGroup) -> Void = { _ in },
                      onClosed: @escaping () -> Void = {}) {
         guard !StoryZoomPresenter.isActive else { return }   // one viewer at a time
         let req = Request(group: g, siblings: siblings, sourceKey: sourceKey, pinned: pinned,
-                          deliveredToMe: deliveredToMe, onProfile: onProfile, onClosed: onClosed)
+                          deliveredToMe: deliveredToMe, startStoryId: startStoryId,
+                          onProfile: onProfile, onClosed: onClosed)
         request = req
         StoryDoorState.shared.openGroup = g
         // The row's order is pinned from here until the Stories tab is re-entered — see
@@ -393,7 +399,7 @@ enum StoryDoor {
             DispatchQueue.main.async { onProfile(grp) }
         }
         if let idx = req.siblings.firstIndex(where: { $0.id == req.group.id }), req.siblings.count > 1 {
-            StoryViewer(groups: req.siblings, startIndex: idx,
+            StoryViewer(groups: req.siblings, startIndex: idx, startStoryId: req.startStoryId,
                         heroDismiss: true, heroSourceKey: req.sourceKey, heroSourcePinned: req.pinned,
                         deliveredToMe: req.deliveredToMe,
                         heroStageOpen: !refeed,
@@ -401,7 +407,11 @@ enum StoryDoor {
                         onClose: close,
                         onProfile: profile)
         } else {
-            StoryViewer(group: req.group,
+            // ⚠️ THE SINGLE-BUCKET BRANCH NEEDS IT TOO, and this is where the first attempt would
+            // have quietly done nothing: `StoryDoor.open(mine, among: [mine], …)` has ONE sibling,
+            // so it lands here rather than in the pager above. A grid of one person's own stories is
+            // exactly that shape.
+            StoryViewer(group: req.group, startStoryId: req.startStoryId,
                         heroDismiss: true, heroSourceKey: req.sourceKey, heroSourcePinned: req.pinned,
                         deliveredToMe: req.deliveredToMe,
                         heroStageOpen: !refeed,

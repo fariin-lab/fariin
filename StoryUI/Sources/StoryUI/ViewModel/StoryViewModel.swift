@@ -33,6 +33,15 @@ final class StoryViewModel: ObservableObject {
     /// Deliberately NOT persisted either. It dies with the viewer, which is what makes a FRESH open
     /// of a fully-watched person replay from the start, exactly as both apps do.
     var lastIndex: [String: Int] = [:]
+
+    /// ⛔ THE ITEM A CALLER ASKED TO OPEN ON, by story id — owner, 2026-09-16: "posted stories page
+    /// when i click story always is opening first story, show me the one i click".
+    ///
+    /// ⚠️ IT IS SPENT ONCE, and that is the whole contract. A grid hands over the story that was
+    /// tapped; `resumeIndex()` honours it ahead of both the remembered position and first-unseen, and
+    /// then clears it — so paging to the next person, or leaving and coming back, behaves exactly as
+    /// it did before. Left set, it would drag every bucket to the same item.
+    var requestedStoryId: String?
     
     /// NEVER ZERO, and that floor is what stops the app dying.
     ///

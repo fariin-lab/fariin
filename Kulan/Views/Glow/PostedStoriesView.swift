@@ -333,7 +333,17 @@ struct PostedStoriesView: View {
     private func openStory(_ story: PostedStory) {
         if isMe {
             guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
+            // ⛔ AND THE STORY THAT WAS TAPPED IS THE ONE THAT PLAYS — his report, 2026-09-16:
+            // "when i click story always is opening first story, show me the one i click".
+            //
+            // ⚠️ THE EARLIER FIX ON THIS LINE WAS ABOUT THE FLIGHT, NOT THE CONTENT. `tileKey`
+            // made the viewer fly out of the right tile, and the note above still claims "the story
+            // that played was right" — it was not. Handing over the whole group says which PERSON to
+            // open, and the item inside it was then chosen by first-unseen-else-first, which on a
+            // page of already-posted stories is almost always the first tile. `startStoryId` is the
+            // missing half.
             StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
+                           startStoryId: story.id,
                            pinned: true, deliveredToMe: true)
         } else {
             let p = GlowPerson(id: uid,

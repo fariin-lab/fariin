@@ -16,6 +16,8 @@ public struct StoryView: View {
     // Private properties
     private var stories: [StoryUIModel]
     private var selectedIndex: Int
+    /// Story id to open on, ahead of first-unseen — see `StoryViewModel.requestedStoryId`.
+    private var startStoryId: String?
  
     // Public properties
     let userClosure: UserCompletionHandler?
@@ -51,6 +53,7 @@ public struct StoryView: View {
     public init(
         stories: [StoryUIModel],
         selectedIndex: Int = 0,
+        startStoryId: String? = nil,
         isPresented: Binding<Bool>,
         userClosure: UserCompletionHandler? = nil,
         onProfile: ((StoryUIUser) -> Void)? = nil,
@@ -71,6 +74,7 @@ public struct StoryView: View {
     ) {
         self.stories = stories
         self.selectedIndex = selectedIndex
+        self.startStoryId = startStoryId
         self._isPresented = isPresented
         self.userClosure = userClosure
         self.onProfile = onProfile
@@ -188,6 +192,9 @@ public struct StoryView: View {
         guard !stories.isEmpty else { return }
 
         viewModel.stories = stories
+        // Handed over before the first page resolves its own index, because `resumeIndex()` reads it
+        // during that resolution.
+        viewModel.requestedStoryId = startStoryId
 
         let index = stories.indices.contains(selectedIndex) ? selectedIndex : .zero
         let storyUser = stories[index]
