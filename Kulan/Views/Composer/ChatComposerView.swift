@@ -227,7 +227,22 @@ final class ChatComposerView: UIView {
         container.contentView.addSubview(trashButton)
         container.contentView.addSubview(pill)
         container.contentView.addSubview(sendButton)
-        plusButton.addAction(UIAction { [weak self] _ in self?.actions.attach() }, for: .touchUpInside)
+        // ⛔ THE ATTACH BUTTON TAPS BACK — his report, 2026-09-16: "when i click attach button there's
+        // not haptic". It had none, and neither does anything else on this bar.
+        //
+        // ⚠️ PRIMED ON TOUCH-DOWN, FIRED ON THE TAP, which is the rule `Haptics` was written to
+        // enforce: the Taptic Engine sleeps between uses, and a generator woken at the moment of the
+        // tap costs tens of milliseconds and arrives after the thing it is confirming — or is dropped
+        // on a busy frame. Touch-down is the moment the interaction becomes likely, so by touch-up
+        // the engine is already awake. `Haptics.impact` re-arms itself afterwards.
+        //
+        // `.light` because this opens a sheet rather than committing anything. The heavier styles in
+        // this app are for things that cannot be taken back.
+        plusButton.addAction(UIAction { _ in Haptics.prepare(.light) }, for: .touchDown)
+        plusButton.addAction(UIAction { [weak self] _ in
+            Haptics.impact(.light)
+            self?.actions.attach()
+        }, for: .touchUpInside)
         trashButton.addAction(UIAction { [weak self] _ in self?.actions.cancelRecording() }, for: .touchUpInside)
         sendButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
