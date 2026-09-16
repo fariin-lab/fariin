@@ -733,7 +733,22 @@ struct ThreadView: View {
             // a cached chat flips didInitialLoad instantly, so this never flashes).
             .overlay {
                 if !repo.didInitialLoad, repo.skeletonArmed {
-                    ThreadSkeleton().allowsHitTesting(false)
+                    // ⛔ IT MUST NOT RUN UP UNDER THE HEADER — his report, 2026-09-16: "skeleton
+                    // messages is looks wrong, entering inside the top", with the first placeholder
+                    // bubble sitting behind the avatar and name.
+                    //
+                    // ⚠️ AN OVERLAY TAKES THE FRAME OF WHAT IT IS ON, and this list is full-bleed by
+                    // design — it runs under the bar so the glass has something to blur, which is the
+                    // whole point of the note above. The skeleton inherited that frame and started
+                    // drawing at the physical top of the screen, where the real messages never do:
+                    // they are held off it by the list's own content inset.
+                    //
+                    // `safeAreaPadding` asks the system for that same distance rather than naming a
+                    // number, so it stays right on every device and through a rotation. It costs
+                    // nothing when there is no inset to apply.
+                    ThreadSkeleton()
+                        .safeAreaPadding(.top)
+                        .allowsHitTesting(false)
                 }
             }
             // A chat with nothing in it yet says what it is. Every standard messenger does this: two of
