@@ -1141,6 +1141,9 @@ struct PrivacySettingsView: View {
     // more: a profile takes its colour from that person's photograph for everyone, always, and there
     // is no second design left to choose between (owner, 2026-08-19).
     @State private var showDefaultDisappear = false
+    /// Read only, for the Stories row's trailing value — the same shared store the Stories page edits,
+    /// so the row follows a change made over there without this page knowing anything about it.
+    @State private var storyAudiences = StoryAudienceStore.shared
 
     private var profileLayoutStyle: ProfileLayoutStyle {
         ProfileLayoutStyle.resolved(profileLayout)
@@ -1152,6 +1155,62 @@ struct PrivacySettingsView: View {
 
     var body: some View {
         List {
+            // ⛔ THE AUDIENCE CARD IS FIRST — owner, 2026-09-16, with the page drawn out: who can see
+            // what comes above the three single-row cards, not under them. His order inside it is his
+            // too, and it is not the order the rows were written in: Groups sits between Bio and
+            // Messages, and Calls comes after Messages rather than before it.
+            Section {
+                // NO PHONE NUMBER ROW. Fariin does not use phone numbers — accounts are Apple/Google/
+                // email and people are found by @handle — so a privacy control for who can see a
+                // number nobody has was answering a question the app never asks.
+                //
+                // ⚠️ TWO TITLES ARE HIS SPELLING, NOT OURS: "Last seen & online" and "Profile photo"
+                // (we said "Last Seen & Online" and "Profile Picture"). The storage keys are
+                // untouched — `lastSeen` and `photo` — so nobody's setting moves.
+                audienceRow("Last seen & online", key: "lastSeen", value: privLastSeen,
+                            footerText: "Who can see when you're online and when you were last active.")
+                audienceRow("Profile photo", key: "photo", value: privPhoto,
+                            footerText: "Who can see your profile photo when they find you on Fariin.")
+                audienceRow("Bio", key: "bio", value: privBio,
+                            footerText: "Who can see the few words about you.")
+                if Flags.groupsEnabled {
+                    audienceRow("Groups", key: "groups", value: privGroups,
+                                footerText: "Who can add you to groups.")
+                }
+                // Shows its value like every other row here. It was the one row with a bare title, so
+                // it read as broken next to five rows that each state their setting (user: "messages
+                // when i select everyone or same one i am not seeing").
+                NavigationLink { MessagesPrivacyPage() } label: {
+                    HStack {
+                        Text("Messages")
+                        Spacer()
+                        Text((Audience(rawValue: privMessages) ?? .everyone).label(for: "messages")).foregroundStyle(.secondary)
+                    }
+                }
+                audienceRow("Calls", key: "calls", value: privCalls,
+                            // ⛔ TWO CHOICES — owner, 2026-09-11: "Everyone should mean everyone,
+                            // including people who send message requests"; Nobody is nobody NEW.
+                            // People in your chats can always call; a block always wins.
+                            footerText: "Who can call you. Everyone: anyone you haven’t blocked, including people who sent you a message request. Nobody: only people already in your chats. Anyone who used your Chat Key is in your chats.")
+                // ⛔ STORIES, AND IT IS A DOOR RATHER THAN A PICKER — owner, 2026-09-16: "add Stories
+                // like next call, when user click is going stories page".
+                //
+                // ⚠️ IT CANNOT BE AN `audienceRow`. Every other row here stores one `Audience` case
+                // under a `priv.*` key; the story audience is a `StoryAudience` in
+                // `StoryAudienceStore` — it can be Everyone, Glowers, My Friends or a NAMED custom
+                // list, it owns per-person hide lists, and its editors are the four screens that
+                // became `StoryPeoplePicker`. So the row reports `selected.title` and opens the
+                // Stories page that already owns all of it, rather than forking a second source of
+                // truth for the same setting.
+                NavigationLink { StorySettingsView() } label: {
+                    HStack {
+                        Text("Stories")
+                        Spacer()
+                        Text(storyAudiences.selected.title).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section {
                 NavigationLink { BlockedUsersView() } label: {
                     HStack {
@@ -1204,36 +1263,6 @@ struct PrivacySettingsView: View {
                 }
             }
 
-            Section {
-                // NO PHONE NUMBER ROW. Fariin does not use phone numbers — accounts are Apple/Google/
-                // email and people are found by @handle — so a privacy control for who can see a
-                // number nobody has was answering a question the app never asks.
-                audienceRow("Last Seen & Online", key: "lastSeen", value: privLastSeen,
-                            footerText: "Who can see when you're online and when you were last active.")
-                audienceRow("Profile Picture", key: "photo", value: privPhoto,
-                            footerText: "Who can see your profile photo when they find you on Fariin.")
-                audienceRow("Bio", key: "bio", value: privBio,
-                            footerText: "Who can see the few words about you.")
-                audienceRow("Calls", key: "calls", value: privCalls,
-                            // ⛔ TWO CHOICES — owner, 2026-09-11: "Everyone should mean everyone,
-                            // including people who send message requests"; Nobody is nobody NEW.
-                            // People in your chats can always call; a block always wins.
-                            footerText: "Who can call you. Everyone: anyone you haven’t blocked, including people who sent you a message request. Nobody: only people already in your chats. Anyone who used your Chat Key is in your chats.")
-                // Shows its value like every other row here. It was the one row with a bare title, so
-                // it read as broken next to five rows that each state their setting (user: "messages
-                // when i select everyone or same one i am not seeing").
-                NavigationLink { MessagesPrivacyPage() } label: {
-                    HStack {
-                        Text("Messages")
-                        Spacer()
-                        Text((Audience(rawValue: privMessages) ?? .everyone).label(for: "messages")).foregroundStyle(.secondary)
-                    }
-                }
-                if Flags.groupsEnabled {
-                    audienceRow("Groups", key: "groups", value: privGroups,
-                                footerText: "Who can add you to groups.")
-                }
-            }
         }
         .navigationTitle("Privacy & Security")
         .navigationBarTitleDisplayMode(.inline)
