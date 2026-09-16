@@ -60,6 +60,18 @@ struct StoriesTabView: View {
     ///
     /// Bumped by the hide alert's destructive button, read by `visibleFriends`.
     @State private var prefsTick = 0
+    /// The first-run skeleton's floor — see `showsFirstRunSkeleton`. Flipped once, by a timer started
+    /// when the tab first appears, so a load that never reports either outcome cannot hold the page.
+    ///
+    /// ⚠️ `@State`, SO IT RESETS WITH THE VIEW, and that is correct here rather than sloppy: it only
+    /// matters at all while `GlowStoriesCache.hasEverLoaded` is false, which is once per account per
+    /// device. The moment the skeleton comes down for any reason that flag is written and this one
+    /// stops being read.
+    @State private var skeletonExpired = false
+    /// Two seconds. Long enough that a normal load finishes first and the floor is never seen, short
+    /// enough that a stuck one is not mistaken for a slow one. The skeleton draws no animation, so a
+    /// second longer buys nothing but a longer stare at grey.
+    private static let skeletonFloor: Duration = .seconds(2)
 
     /// ⛔ 17, NOT 22 — owner, 2026-09-02, with "Glowing" ringed: "the text Glowing looks big".
     ///
@@ -211,6 +223,13 @@ struct StoriesTabView: View {
         // the next visit, which is exactly what he ruled out.
         .onChange(of: showsFirstRunSkeleton, initial: true) { _, showing in
             if !showing { GlowStoriesCache.hasEverLoaded = true }
+        }
+        // The floor's clock. Started once, on the first appearance, and only while the skeleton is
+        // still in play — a `task` on a view that is already past it would be a timer for nothing.
+        .task {
+            guard !GlowStoriesCache.hasEverLoaded, !skeletonExpired else { return }
+            try? await Task.sleep(for: Self.skeletonFloor)
+            skeletonExpired = true
         }
     }
 
@@ -420,6 +439,28 @@ struct StoriesTabView: View {
     /// the data on a slow connection.
     private var showsFirstRunSkeleton: Bool {
         guard !GlowStoriesCache.hasEverLoaded else { return false }
+        // ⛔ IT COMES DOWN ON FAILURE AND ON A CLOCK — his report, 2026-09-16: "fix story skeleton
+        // loading never", with four grey cards that never resolved and a real page holding one
+        // Add Story tile.
+        //
+        // ⚠️ THE TWO FLAGS BELOW HAVE NO FAILURE STATE BETWEEN THEM, WHICH IS THE BUG.
+        // `GlowService` sets `hasFailed` on a listener error and deliberately leaves `hasLoaded`
+        // FALSE — its own comment says an empty set that means "refused" must not be read as "no
+        // people", and that is right. But this condition only ever asked `hasLoaded`, so a refused
+        // listener, a rules denial or an offline start left it false for ever with nothing able to
+        // notice. The skeleton is not a loading state in that case, it is a dead end.
+        //
+        // Failure answers the question this screen is actually asking. "Do I know the shape of this
+        // page" is answered by a refusal as much as by data: we know we are not going to find out,
+        // so draw the page and let the sections show their own empty or error states.
+        if glow.hasFailed { return false }
+        // ⚠️ AND A FLOOR UNDER BOTH, because the failure path above only covers the errors somebody
+        // reported. A listener that never calls back at all — dropped socket, a `rebuild()` that
+        // returned early on a guard, a server that never answers — reports neither loaded nor
+        // failed, and this screen would wait on it for the life of the process. Nothing about a
+        // first-run skeleton is worth more than a couple of seconds; after that an honest empty page
+        // beats a grey one that is lying about still working.
+        if skeletonExpired { return false }
         // ⛔ IT WAITS FOR THE LAYOUT, NOT FOR THE CONTENT — owner, 2026-09-11, minutes after the
         // first build of it: "skeleton loading in story is taking more time, fix."
         //
@@ -461,17 +502,39 @@ struct StoriesTabView: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
                                     GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
                           spacing: GlowStoryCardView.gutter) {
-                    ForEach(0..<4, id: \.self) { _ in
+                    // ⛔ THE FIRST TILE IS HIS, AND IT IS REAL — his report, 2026-09-16: "fix story
+                    // showing skeleton instead of showing my profile image", with the grey grid and
+                    // the page it resolves into side by side.
+                    //
+                    // ⚠️ A SKELETON SHOULD ONLY STAND IN FOR WHAT IS NOT KNOWN YET, and this one was
+                    // covering something we hold locally. The Add Story card is always first, always
+                    // ours, and its face is `ProfileStore.me.photoUrl` — no listener, no round trip.
+                    // Greying it out was inventing uncertainty about the one tile on the page that
+                    // has none, and it is why his four grey cards resolved into a single real one.
+                    //
+                    // Same card as the grid below builds, not a copy: same face, ring, badge, corner
+                    // and aspect, so nothing about it moves or redraws when the load lands.
+                    Button { composeStory() } label: {
+                        GlowStoryCardView(thumbUrl: "",
+                                          name: "Add Story",
+                                          authorPhoto: profile.me?.photoUrl,
+                                          isMine: true,
+                                          isAdd: true)
+                    }
+                    .buttonStyle(.plain)
+                    // ⚠️ THREE, NOT FOUR. The grid is two columns, so three placeholders beside a
+                    // real tile fill the same two rows the four used to.
+                    ForEach(0..<3, id: \.self) { _ in
                         RoundedRectangle(cornerRadius: GlowStoryCardView.corner, style: .continuous)
                             .fill(Color(.systemGray6))
                             .aspectRatio(GlowStoryCardView.aspect, contentMode: .fit)
+                            // The placeholders are not content; the real card above them is.
+                            .allowsHitTesting(false)
                     }
                 }
                 .padding(.horizontal, GlowStoryCardView.margin)
             }
         }
-        // It is a placeholder, not content: nothing here answers to a tap or a drag.
-        .allowsHitTesting(false)
     }
 
     private var hasGlowGrid: Bool {
