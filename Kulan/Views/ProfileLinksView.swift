@@ -276,6 +276,9 @@ struct ProfileLinkChips: View {
     /// Passed in rather than read from `\.profilePalette`, because only one of the two pages that
     /// draw these publishes that environment, and a pill that follows the colour on one profile and
     /// not the other is worse than one that follows it on neither.
+    /// ⚠️ ACCEPTED AND NO LONGER USED, on purpose — see the fill below. Kept so the three call sites
+    /// (both headers in `ContactInfoView`, the Glow profile) do not have to change and so the palette
+    /// is one line away if he asks for colour back; a struct property costs nothing unread.
     var tint: Color?
     @Environment(\.openURL) private var openURL
 
@@ -288,21 +291,32 @@ struct ProfileLinkChips: View {
                     Button {
                         if let u = link.openURL { openURL(u) }
                     } label: {
-                        HStack(spacing: 5) {
+                        // ⛔ SMALLER — owner, 2026-09-16: "make small badge". One step down on both
+                        // the glyph and the label, and the gutters tightened to match, so the pill
+                        // shrinks around its text instead of just losing its type size.
+                        HStack(spacing: 4) {
                             Image(systemName: "link")
-                                .font(.caption.weight(.semibold))
+                                .font(.caption2.weight(.semibold))
                             Text(link.title)
-                                .font(.subheadline.weight(.medium))
+                                .font(.caption.weight(.medium))
                                 .lineLimit(1)
                         }
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 6)
-                        // The palette's card fill where there is one, the frosted fallback where
-                        // there is not — an account with no photograph has no colour to follow.
-                        .background {
-                            if let tint { Capsule().fill(tint) }
-                            else { Capsule().fill(.ultraThinMaterial) }
-                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        // ⛔ THE PALETTE TINT IS OFF — owner, 2026-09-16, TWO reports in one sitting
+                        // that are the same fill seen against two backgrounds. Over his snow photo
+                        // the extracted card colour came out pale grey and he read it as a drop
+                        // shadow under the pill ("link profile badge has shadow, remove the
+                        // shadow"); on an account with NO photo the palette falls back to the letter
+                        // gradient, which is blue, and he got two blue capsules under a blue letter
+                        // avatar ("when user dont have profile picture badge links looks like blue").
+                        //
+                        // ⚠️ THIS REVERSES HIS OWN 2026-09-11 "colour the link pills" (`003ca014`),
+                        // five days old and one build in his hands. The frosted fill was already the
+                        // no-palette fallback in that same commit, so this is not a new design — it
+                        // is the one branch of it, taken always, which is the only way the pill reads
+                        // the same on a photograph, on a letter avatar and in both themes.
+                        .background { Capsule().fill(.ultraThinMaterial) }
                     }
                     .buttonStyle(.plain)
                 }
