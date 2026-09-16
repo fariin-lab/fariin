@@ -254,6 +254,22 @@ enum BubbleShape {
         // happen: reach is exactly 1.528·r, the control points keep the true squircle ratio, and a
         // straight section always survives. A short bubble simply gets a smaller corner, which is
         // what the system does to `cornerRadius` in the same situation.
+        // ⛔ THE RADIUS COMES DOWN WHEN THE SHAPE CHANGES — his report, 2026-09-16, with iMessage
+        // beside our build 748: "bubble corners looks too much rounded, make it like imessage".
+        //
+        // ⚠️ A CONTINUOUS CORNER AT RADIUS R READS ROUNDER THAN A CIRCULAR ONE AT THE SAME R, and
+        // that is arithmetic rather than taste: a circular corner turns within R of the vertex, a
+        // continuous one begins turning 1.528·R away from it. Switching the shape on while keeping
+        // the 18 that was tuned for circular corners therefore added weight to every bubble in the
+        // app — which is exactly the complaint, and the same one the first attempt at this drew.
+        //
+        // So the radius is scaled to hold the VISUAL weight he already approved at 18 circular. The
+        // shape is Apple's; the read stays his.
+        //
+        // ⚠️ THIS IS THE DIAL. If he says too round again, lower it; too square, raise it toward 1.
+        // Nothing else in the corner maths needs touching, and the arc path is still one argument
+        // away (`continuous: false`) if he ever wants the old shape back outright.
+        let continuousRadiusScale: CGFloat = 0.78
         let extent: CGFloat = 1.528
         /// How much of one edge the two corners on it may claim between them. Below 1 on purpose —
         /// at exactly 1 the straight section is zero length and the capsule is back.
@@ -265,10 +281,14 @@ enum BubbleShape {
         }
         // Each corner is capped against BOTH edges it sits on — a corner that fits the top may still
         // be too big for a short side.
-        let ctl = min(tl, fit(tl, tr, w), fit(tl, bl, h))
-        let ctr = min(tr, fit(tr, tl, w), fit(tr, br, h))
-        let cbr = min(br, fit(br, bl, w), fit(br, tr, h))
-        let cbl = min(bl, fit(bl, br, w), fit(bl, tl, h))
+        // Scaled FIRST, then capped against the edges, so a short bubble is still protected by the
+        // extent cap and never saturates.
+        let stl = tl * continuousRadiusScale, str = tr * continuousRadiusScale
+        let sbr = br * continuousRadiusScale, sbl = bl * continuousRadiusScale
+        let ctl = min(stl, fit(stl, str, w), fit(stl, sbl, h))
+        let ctr = min(str, fit(str, stl, w), fit(str, sbr, h))
+        let cbr = min(sbr, fit(sbr, sbl, w), fit(sbr, str, h))
+        let cbl = min(sbl, fit(sbl, sbr, w), fit(sbl, stl, h))
 
         let tlTop = ctl * extent, trTop = ctr * extent
         let trRight = ctr * extent, brRight = cbr * extent
