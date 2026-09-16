@@ -24,6 +24,24 @@
 	<array>
 		<string>applinks:fariin.com</string>
 		<string>applinks:www.fariin.com</string>
+		<!-- PASSKEYS, 2026-09-16. `webcredentials` is what lets iOS create and offer a passkey
+		     for this app, and it is a SEPARATE service from `applinks` on the same domain: the
+		     Associated Domains capability covers both, so no new capability is needed in the
+		     portal - the App ID already has it, which is what makes the applinks entries above
+		     work today.
+
+		     It does NOT ship alone either. fariin.com/.well-known/apple-app-site-association
+		     must carry a `webcredentials` block naming
+		     47FUM8F4KJ.com.kulan.messenger.native, or iOS silently offers no passkey at all
+		     and the Passkeys screen has nothing to show. That block is added in the fariin-web
+		     repo in the same change; deploying one without the other gives a feature that
+		     fails quietly, which is the worst shape this can take.
+
+		     www is listed for the same reason applinks lists it: fariin.com and
+		     www.fariin.com are different origins to iOS. The relying-party id the app asks
+		     for is `fariin.com`, so a passkey made on either host works. -->
+		<string>webcredentials:fariin.com</string>
+		<string>webcredentials:www.fariin.com</string>
 	</array>
 	<!-- Lets AgeCheck.swift ask Apple for an age BAND (child / teen / adult) without ever asking
 	     anybody for a birthday. Apple holds the real age on the Apple ID, and for children in a

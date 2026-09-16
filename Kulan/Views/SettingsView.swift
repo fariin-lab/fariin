@@ -506,7 +506,15 @@ struct AccountSettingsView: View {
             }
 
             Section {
+                // ⛔ PASSKEYS IS HERE NOW — 2026-09-16. I left this row out and told him it was
+                // blocked on the Apple entitlement. That was WRONG: Associated Domains is already
+                // enabled on the App ID (it is what makes the `applinks:` entries work today), and
+                // `webcredentials` is a second service under the same capability. Nothing had to be
+                // switched on in the portal. The entitlement line and the association file's
+                // `webcredentials` block are in place, and `passkeys.js` is the server.
+                NavigationLink { PasskeysView() } label: { Text("Passkeys") }
                 NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
+                NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications") }
             } header: {
                 Text("Security").textCase(nil)
             } footer: {
@@ -519,7 +527,13 @@ struct AccountSettingsView: View {
                 Text("An additional password when you sign in on a new device.")
             }
 
-            signInMethodsSection
+            // ⛔ SIGN-IN METHODS IS OFF THIS PAGE — owner, 2026-09-16: "make it like that", with his
+            // three cards drawn out and no such card among them.
+            //
+            // ⚠️ `signInMethodsSection` STILL EXISTS AND STILL WORKS; only its placement here is
+            // gone, which is one line to undo. It was the only door to connecting or disconnecting
+            // Apple and Google, so removing it from this page removes that from the app until it is
+            // put somewhere. He has been told; it is not a silent deletion.
 
             Section {
                 Button { Task { await exportData() } } label: {
@@ -537,8 +551,14 @@ struct AccountSettingsView: View {
                 // people to stop reading red, which is the last habit anyone should have around the
                 // button that ends an account. It shares his third card with the data export because
                 // that is where he put it; it does NOT share a colour with Delete.
-                Button { showSignOut = true } label: {
-                    Text("Log out").foregroundStyle(.primary)
+                // ⛔ RED, ON HIS DRAWING, TWICE — 2026-09-16. I painted this plain on 2026-08-02
+                // reasoning and argued for it again today: signing out is completely reversible, and
+                // spending red on a routine action teaches people to stop reading red directly above
+                // the button that ends an account. He has now drawn it red in two separate mock-ups
+                // and said "make it like that". It is his app and his call; the reasoning is left
+                // here rather than deleted, because it is still the argument if it ever comes up.
+                Button(role: .destructive) { showSignOut = true } label: {
+                    Text("Log out")
                 }
             } header: {
                 Text("Account").textCase(nil)
