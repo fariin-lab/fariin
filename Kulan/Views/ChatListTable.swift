@@ -924,28 +924,48 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// tracked scroll view to decide by). It now applies this same material, for the same reason
     /// this method gives below. Nothing else touches this page's item.
     ///
-    /// ⚠️ BOTH APPEARANCES CARRY THE SAME MATERIAL, deliberately. The bar picks `scrollEdge` when
-    /// its tracked scroll view is at the top and `standard` otherwise — and this page has no tracked
-    /// scroll view to pick by, because the list is a `UITableView` inside a representable and
-    /// `setContentScrollView` did not reach SwiftUI's bar (tried, shipped, reported still wrong).
-    /// Giving the two appearances the same background means the bar looks right whichever it
-    /// chooses, instead of depending on a decision it cannot make. The search field is pinned under
-    /// it now, so there is no bare-topped state for a clear bar to serve anyway.
+    /// ⚠️ THE TWO APPEARANCES DIFFER, AND THAT IS THE POINT — see the note inside the method. They
+    /// were deliberately identical between 2026-09-11 (`ec0c76cd`) and 2026-09-16, on the grounds
+    /// that the bar had no tracked scroll view to choose by. He reported the same thing again, so
+    /// that trade is off: an always-drawn background is what he has been calling a border.
     private func configureNavBar(_ item: UINavigationItem) {
-        let a = UINavigationBarAppearance()
-        // The system's own blur — `configureWithDefaultBackground` is what every unmodified bar in
-        // iOS uses, so this asks for Apple's material rather than describing one.
-        a.configureWithDefaultBackground()
-        // The border, and the whole of what he asked to remove.
-        a.shadowColor = .clear
-        a.shadowImage = UIImage()
+        // ⛔ TWO DIFFERENT APPEARANCES AGAIN, AND THAT IS THE 2026-09-16 CORRECTION. `ec0c76cd` gave
+        // both the same material on 09-11 and he reported the same thing a second time, naming the
+        // same target both times: "use ios 26 apple blur plz, native like call list page header".
+        //
+        // ⚠️ THE TARGET HE KEEPS NAMING IS THE ANSWER. The Calls page is a SwiftUI `List`, so SwiftUI
+        // registers it and its bar gets Apple's real behaviour: CLEAR while the list is at the top,
+        // glass once content is under it. Giving this page one material for both states means it
+        // always draws a background — so at rest Calls is clear and Chats is not, and that tonal
+        // step where the bar ends is the "border" he has now ringed three times. There is no stroke
+        // in our code and never was (the 09-11 audit was right about that); what he is seeing is a
+        // background that should not be there yet.
+        //
+        // So: transparent at the scroll edge, Apple's own material under content, and no shadow in
+        // either — `shadowColor` is the hairline, and it is the one thing `toolbarBackground` cannot
+        // reach, which is why this override exists at all.
+        let scrolled = UINavigationBarAppearance()
+        scrolled.configureWithDefaultBackground()   // Apple's material, not a description of one
+        scrolled.shadowColor = .clear
+        scrolled.shadowImage = UIImage()
+
+        let atTop = UINavigationBarAppearance()
+        atTop.configureWithTransparentBackground()
+        atTop.shadowColor = .clear
+        atTop.shadowImage = UIImage()
+
+        // ⚠️ THIS NOW DEPENDS ON THE BAR KNOWING WHICH STATE IT IS IN, which the 09-11 note called a
+        // decision it cannot make. `registerAsContentScrollView()` is what answers it, and it runs at
+        // both moments the parent chain can complete. If that registration ever stops reaching the
+        // bar the symptom is a header stuck CLEAR while the list scrolls under it — that, and not a
+        // line, is what to look for if he reports this again.
+        //
         // ⚠️ SET UNCONDITIONALLY, no "has it changed" guard. `UINavigationBarAppearance` is an
         // NSObject and whether `==` compares its VALUES or its identity is not something to bet a
-        // 40-minute build on. This runs on appear only, and assigning three properties is cheaper
-        // than the comparison would have been anyway.
-        item.standardAppearance = a
-        item.scrollEdgeAppearance = a
-        item.compactAppearance = a
+        // 40-minute build on.
+        item.standardAppearance = scrolled
+        item.compactAppearance = scrolled
+        item.scrollEdgeAppearance = atTop
     }
 
     private func registerAsContentScrollView() {
