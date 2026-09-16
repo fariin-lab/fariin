@@ -36,8 +36,31 @@ service cloud.firestore {
         'fB55R4wHmThmcMFEYAutJImyDaO2'    // DemoA
       ];
     }
+    // ⛔ TWO-STEP IS ENFORCED HERE, INSIDE `signedIn()`, AND THAT IS THE WHOLE FEATURE — owner,
+    // 2026-09-16: "make sure the backend logic, security, authentication … are properly implemented".
+    //
+    // ⚠️ A PASSWORD PROMPT THE APP DRAWS IS A CURTAIN, NOT A LOCK. A device that finished the
+    // ordinary Firebase sign-in already holds a token; anybody holding that token can talk to
+    // Firestore with a client we did not write, and a screen in our app stops none of it. So the
+    // additional password has to be a fact about the TOKEN, and the only place a token can be
+    // refused is here.
+    //
+    // `setAdditionalPassword` mints the claim `twoStep: { required: true, ok: false }` and revokes
+    // every refresh token, so each device comes back with a token that this function refuses;
+    // `verifyAdditionalPassword` re-mints it as `ok: true`. Turning the feature off deletes the
+    // claim entirely.
+    //
+    // ⚠️ ABSENT MEANS ALLOWED, DELIBERATELY. Every account that has never touched two-step carries
+    // no claim at all, so `required` defaults false and nothing changes for them — which is what
+    // makes this safe to deploy to a live app. Only a token that says it is required, and does not
+    // say it passed, is turned away.
+    function twoStepSatisfied() {
+      return !request.auth.token.get('twoStep', {}).get('required', false)
+             || request.auth.token.get('twoStep', {}).get('ok', false);
+    }
+
     function signedIn() {
-      return request.auth != null && (!isAnonymous() || isSeededTestAccount());
+      return request.auth != null && (!isAnonymous() || isSeededTestAccount()) && twoStepSatisfied();
     }
 
     // ── OFFICIAL CHANNEL PERMISSIONS ──
@@ -501,6 +524,33 @@ service cloud.firestore {
       allow read, write: if false;
     }
     match /pinAttempts/{uid} {
+      allow read, write: if false;
+    }
+
+    // ── ACCOUNT SECURITY — owner, 2026-09-16 (functions-account in the backend repo) ──
+    //
+    // The email-change code, the password-reset code and the two-step recovery code all live in
+    // `accountCodes/{uid}_{purpose}`; the additional password's hash in `twoStep/{uid}`; its attempt
+    // counter in `accountAttempts/{uid}_{purpose}`; and the website's one-time reset ticket in
+    // `resetTickets/{ticket}`. Every one of them is the server's alone, for the reason the Chat PIN
+    // records: a rule can only compare what a client hands it against a document the client can
+    // read, and these hold the secret itself.
+    //
+    // ⛔ REFUSED EXPLICITLY, INCLUDING READ, AND THE READ HALF IS THE IMPORTANT ONE. A person who can
+    // read their own `accountCodes` document can read the SALT and the HASH of a live six-digit code
+    // and brute-force it offline in milliseconds — six digits is a million guesses — which would
+    // turn "prove you hold that inbox" into "prove you are signed in", and the whole mechanism with
+    // it. A counter the limited party can read or clear is not a limit, same as `usernameChecks`.
+    match /accountCodes/{doc} {
+      allow read, write: if false;
+    }
+    match /accountAttempts/{doc} {
+      allow read, write: if false;
+    }
+    match /twoStep/{uid} {
+      allow read, write: if false;
+    }
+    match /resetTickets/{ticket} {
       allow read, write: if false;
     }
 
