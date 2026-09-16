@@ -666,6 +666,13 @@ struct GlowProfileView: View {
     ///   3. ⚠️ THE RAIL NO LONGER SCROLLS. Three tiles are sized to fill the card's width, the way
     ///      the picture shows them, so a fourth story is reached through See All rather than by
     ///      dragging sideways.
+    /// Is there anything behind "See All". True only once the load has actually produced a story —
+    /// `.loading` and `.failed` both have no rows, and a link into an empty page is wrong in both.
+    private var hasPostedStories: Bool {
+        if case .loaded(let rows) = stories.state { return !rows.isEmpty }
+        return false
+    }
+
     private var postedStoriesCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -678,18 +685,32 @@ struct GlowProfileView: View {
                     .font(.headline)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
-                NavigationLink {
-                    PostedStoriesView(uid: uid, isMe: isMe,
-                                      title: profile?.name ?? initialName)
-                } label: {
-                    HStack(spacing: 3) {
-                        Text("See All").font(.subheadline.weight(.semibold))
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
+                // ⛔ NOT OVER AN EMPTY CARD — his report, 2026-09-16: "when posted stories is empty
+                // dont show seeall text", with the shot of "You have no live stories." sitting under
+                // a live See All.
+                //
+                // ⚠️ THIS NARROWS POINT 2 ABOVE, IT DOES NOT REVERT IT. His 09-09 concept put See All
+                // beside the heading permanently, overturning an older "more than 3 stories" rule,
+                // and that still stands for every card that HAS stories. The only case removed is the
+                // one his concept never drew: a card with nothing behind the link at all.
+                //
+                // Gated on `hasStories` rather than on `rows.isEmpty` at the call site, because the
+                // loading and failed states have no rows either and a link to an empty page is just
+                // as wrong there.
+                if hasPostedStories {
+                    NavigationLink {
+                        PostedStoriesView(uid: uid, isMe: isMe,
+                                          title: profile?.name ?? initialName)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("See All").font(.subheadline.weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(.primary)
                     }
-                    .foregroundStyle(.primary)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, PostedCard.pad)
             .padding(.top, PostedCard.pad)
