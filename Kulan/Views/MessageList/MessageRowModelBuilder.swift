@@ -286,7 +286,7 @@ enum MessageRowModelBuilder {
         // A tombstone is a placeholder, never a reactable message. Empty here is STRUCTURAL: every
         // badge, overhang and tap surface derives from this one value, so a deleted row cannot
         // render or respond to reactions no matter what the data still says.
-        let reactions: [ReactionChip] = msg.deleted ? [] : reactionChips(msg, me: ctx.me)
+        let reactions: [ReactionChip] = msg.deleted ? [] : reactionChips(msg, ctx: ctx)
 
         return BubbleRow(
             isMe: isMe,
@@ -532,12 +532,24 @@ enum MessageRowModelBuilder {
         }
     }
 
-    private static func reactionChips(_ msg: Message, me: String) -> [ReactionChip] {
+    /// ⚠️ GROUPED BY UID, NOT BY VALUE. The old version grouped `msg.reactions.values`, which throws
+    /// the uid away in the same expression that counts it — so the chip could say how many but never
+    /// who. `msg.reactions` is uid → emoji, and the reactor is the key.
+    private static func reactionChips(_ msg: Message, ctx: MessageRowContext) -> [ReactionChip] {
         guard !msg.reactions.isEmpty else { return [] }
-        let mine = msg.reactions[me]
-        return Dictionary(grouping: msg.reactions.values, by: { $0 })
-            .map { ReactionChip(emoji: $0.key, count: $0.value.count, mine: mine == $0.key) }
-            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
+        let mine = msg.reactions[ctx.me]
+        var byEmoji: [String: [String]] = [:]
+        for (uid, emoji) in msg.reactions { byEmoji[emoji, default: []].append(uid) }
+        return byEmoji.map { emoji, uids in
+            // Sorted so the face a chip shows is stable between rebuilds — an avatar that swaps
+            // between two reactors on every repaint is worse than no avatar.
+            let first = uids.sorted().first
+            let face = (uids.count == 1 ? first : nil).map {
+                ReactionFace(uid: $0, name: ctx.nameFor($0), photoUrl: ctx.avatarFor($0))
+            }
+            return ReactionChip(emoji: emoji, count: uids.count, mine: mine == emoji, face: face)
+        }
+        .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
     }
 
     private static func replyThumb(_ o: Message?) -> QuoteChrome.Thumb {

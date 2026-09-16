@@ -26,6 +26,10 @@ enum BubbleMetrics {
     static let avatarGap: CGFloat = 6
     static let senderNameGap: CGFloat = 3      // VStack spacing above the bubble
     static let reactionOverhang: CGFloat = 13  // how far the badge hangs below the bubble
+    /// The reactor's face inside a reaction pill. Sized off the emoji beside it (14pt) rather than
+    /// picked: a circle much larger turns the pill into a row of avatars, and much smaller reads as
+    /// a dot. See `MessageRowLayout.decorations`.
+    static let reactionFace: CGFloat = 18
     /// The failed-send badge outside the bubble, and its gap from it. The reference app's own
     /// numbers: a 24pt box and `messageStackSpacing` = 8.
     static let failBadge: CGFloat = 24

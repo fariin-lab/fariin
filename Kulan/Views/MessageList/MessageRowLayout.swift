@@ -225,6 +225,8 @@ struct BubblePlan {
     var reactions: [CGRect]             // one per chip, row coordinates
     var reactionAttrs: [NSAttributedString]
     var reactionMine: [Bool]
+    /// One per chip, aligned with `reactions`. Nil where the chip shows a count instead of a face.
+    var reactionFaces: [ReactionFace?] = []
     /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
     var failBadge: CGRect?
 }
@@ -745,44 +747,116 @@ enum MessageRowLayout {
         var y = startY
         // Reactions hang OFF the bubble's edge, overlapping the corner they belong to — a badge
         // floating in the gap between two bubbles belongs to neither.
-                if !b.reactions.isEmpty {
+        if !b.reactions.isEmpty {
+            // ⛔ REACTIONS LIVE INSIDE THE BUBBLE NOW — owner, 2026-09-16, with the reference app's
+            // bubble: a row of pills beneath the text, each holding the emoji and the reactor's face,
+            // and the timestamp sitting at the end of that same row.
+            //
+            // ⚠️ MEDIA AND ALBUMS KEEP THE OLD OVERHANG. Their content fills the bubble edge to edge
+            // — a strip inside it would eat the picture, and their timestamp is already a capsule
+            // floating ON the image rather than a line of text to share. Everything else (text, voice,
+            // call, cards) has a meta line, and that line is where these belong.
+            let inside = plan.mediaPlan == nil && plan.albumPlan == nil
+
             let shown = Array(b.reactions.prefix(3))
             let extra = b.reactions.count - shown.count
-            var chips: [(NSAttributedString, Bool)] = shown.map { chip in
+            var chips: [(NSAttributedString, Bool, ReactionFace?)] = shown.map { chip in
                 let s = NSMutableAttributedString(string: chip.emoji, attributes: [
                     .font: UIFont.systemFont(ofSize: 14)])
+                // The count appears only where there is no single face to show — see `ReactionChip`.
                 if chip.count > 1 {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
                         .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
                         .foregroundColor: chip.mine ? BubblePalette.accent : UIColor.secondaryLabel]))
                 }
-                return (s, chip.mine)
+                return (s, chip.mine, inside ? chip.face : nil)
             }
             if extra > 0 {
                 chips.append((NSAttributedString(string: "+\(extra)", attributes: [
                     .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
-                    .foregroundColor: UIColor.secondaryLabel]), false))
+                    .foregroundColor: UIColor.secondaryLabel]), false, nil))
             }
             var widths: [CGFloat] = []
             var height: CGFloat = 0
-            for (attr, _) in chips {
+            for (attr, _, face) in chips {
                 let s = BubbleText.size(attr, width: .greatestFiniteMagnitude)
-                widths.append(s.width + 12)                   // .padding(.horizontal, 6)
-                height = max(height, s.height + 6)            // .padding(.vertical, 3)
+                // A face adds its own circle and the gap before it.
+                let faceW = face == nil ? 0 : BubbleMetrics.reactionFace + 4
+                widths.append(s.width + 12 + faceW)           // .padding(.horizontal, 6)
+                height = max(height, max(s.height + 6, face == nil ? 0 : BubbleMetrics.reactionFace + 6))
             }
             let total = widths.reduce(0, +) + CGFloat(max(0, chips.count - 1)) * 4
-            // Offset x ±10 from the bubble's own edge, y +13 below its bottom.
-            var cx = b.isMe ? (bubbleRect.maxX - 10 - total) : (bubbleRect.minX + 10)
-            let cy = bubbleRect.maxY + BubbleMetrics.reactionOverhang - height
-            for (i, w) in widths.enumerated() {
-                plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
-                plan.reactionAttrs.append(chips[i].0)
-                plan.reactionMine.append(chips[i].1)
-                cx += w + 4
+
+            if inside {
+                // ⚠️ THE BUBBLE GROWS DOWNWARD, WHICH IS WHY THIS IS SAFE TO DO HERE. Everything above
+                // is positioned from the bubble's TOP and was laid out before `decorations` ran, so
+                // extending the bottom edge moves none of it. Growing upward, or widening from the
+                // leading edge, would.
+                let padH: CGFloat = 10
+                let gapAbove: CGFloat = 2
+                let stripH = height + gapAbove
+
+                var grown = plan.bubble
+                grown.size.height += stripH
+
+                // The meta joins this row, so it has to carry both. Widen only if it must, and never
+                // past the column the bubble was measured against.
+                let metaOnRow = !plan.metaOnOwnLine
+                let need = padH + total + (metaOnRow ? 8 + plan.meta.width : 0) + padH
+                if need > grown.width {
+                    let want = min(need, columnW)
+                    let delta = want - grown.width
+                    grown.size.width += delta
+                    // A bubble of mine is right-aligned: it grows leftwards, away from its own edge.
+                    if b.isMe { grown.origin.x -= delta }
+                }
+                plan.bubble = grown
+
+                // The meta joins this row at its trailing end — but ONLY if it was sharing the last
+                // line of text.
+                //
+                // ⚠️ A META THAT ALREADY HAD ITS OWN LINE IS LEFT WHERE IT IS, and that is not
+                // tidiness. `BubbleText` reserves the space the meta occupies while it measures: an
+                // inline meta is a trailing gap on the last line, and an own-line meta is a whole
+                // EXTRA LINE inside the bubble. Moving the second kind down here would leave that
+                // reserved line empty and open a band of nothing above the reactions. Re-measuring
+                // the text without it is the only way to reclaim it, and that belongs in
+                // `BubbleText`, not here.
+                //
+                // Meta is in BUBBLE coordinates; the chips are in ROW coordinates.
+                if !plan.metaOnOwnLine {
+                    plan.metaOnOwnLine = true
+                    plan.meta.origin.x = grown.width - padH - plan.meta.width
+                    plan.meta.origin.y = grown.height - stripH + gapAbove + (height - plan.meta.height) / 2
+                }
+
+                var cx = grown.minX + padH
+                let cy = grown.maxY - height - ((stripH - height) / 2)
+                for (i, w) in widths.enumerated() {
+                    plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
+                    plan.reactionAttrs.append(chips[i].0)
+                    plan.reactionMine.append(chips[i].1)
+                    plan.reactionFaces.append(chips[i].2)
+                    cx += w + 4
+                }
+                // The bubble is taller now, so the row's bottom is its bottom. No overhang is
+                // reserved, because nothing hangs any more.
+                y = max(y, grown.maxY)
+            } else {
+                // Media keeps the badge hanging off the corner it belongs to.
+                var cx = b.isMe ? (bubbleRect.maxX - 10 - total) : (bubbleRect.minX + 10)
+                let cy = bubbleRect.maxY + BubbleMetrics.reactionOverhang - height
+                for (i, w) in widths.enumerated() {
+                    plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
+                    plan.reactionAttrs.append(chips[i].0)
+                    plan.reactionMine.append(chips[i].1)
+                    plan.reactionFaces.append(nil)
+                    cx += w + 4
+                }
+                // Reserve the overhang so the badge cannot collide with the next bubble. Reserve less
+                // than it hangs and they touch; reserve more and there is a gap nothing draws into.
+                y += BubbleMetrics.reactionOverhang
             }
-            // Reserve the overhang so the badge cannot collide with the next bubble. Reserve less
-            // than it hangs and they touch; reserve more and there is a gap nothing draws into.
-            y += BubbleMetrics.reactionOverhang
         }
 
         // ⛔ THE FAILED BADGE SITS OUTSIDE THE BUBBLE, ON THE TRAILING EDGE — his order, 2026-08-26:

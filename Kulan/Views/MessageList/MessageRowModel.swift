@@ -11,10 +11,25 @@ import UIKit
 // without asking the renderer.
 
 /// One reaction capsule under a bubble.
+/// One reactor's face, resolved when the row is built. `ctx.nameFor` / `ctx.avatarFor` are
+/// synchronous, so this costs nothing and the chip never has to load anything itself.
+struct ReactionFace: Equatable {
+    var uid: String
+    var name: String
+    var photoUrl: String?
+}
+
+/// ⛔ A CHIP CARRIES WHO REACTED, NOT ONLY HOW MANY — owner, 2026-09-16, with the reference app's
+/// bubble: each reaction is a pill holding the emoji and the reactor's avatar, inside the bubble.
+///
+/// ⚠️ `face` IS NIL WHEN MORE THAN ONE PERSON USED THE SAME EMOJI. Their pill shows a count there
+/// instead, and so does ours: stacking faces at this size turns two avatars into a smudge, and the
+/// number is the thing worth reading once it is more than one.
 struct ReactionChip: Equatable {
     var emoji: String
     var count: Int
     var mine: Bool
+    var face: ReactionFace?
 }
 
 /// The sender's name and avatar above/beside a bubble in a group.

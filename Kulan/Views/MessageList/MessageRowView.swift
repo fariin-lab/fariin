@@ -108,9 +108,16 @@ final class BubbleQuoteView: UIView {
 
 // ── A reaction capsule ──
 
+/// ⛔ A PILL HOLDS THE EMOJI AND WHO SENT IT — owner, 2026-09-16, with the reference app's bubble.
+/// The face is only drawn when one person used that emoji; past one, the layout hands over a count
+/// instead and `face` is nil. See `ReactionChip`.
 final class ReactionChipView: UIView {
     private let label = UILabel()
     private let ring = CAShapeLayer()
+    /// Built on the first chip that actually needs one. Most reactions in a 1:1 chat have a face, but
+    /// the media path never does, and a view per chip that is never shown is a view per chip wasted.
+    private var faceView: RowAvatarView?
+    private var hasFace = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -122,15 +129,36 @@ final class ReactionChipView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ attr: NSAttributedString, mine: Bool) {
+    func configure(_ attr: NSAttributedString, mine: Bool, face: ReactionFace?) {
         label.attributedText = attr
         backgroundColor = mine ? BubblePalette.accent.withAlphaComponent(0.18) : BubblePalette.receivedFill
         ring.strokeColor = mine ? BubblePalette.accent.withAlphaComponent(0.9).cgColor : UIColor.clear.cgColor
+        hasFace = face != nil
+        if let face {
+            let v = faceView ?? {
+                let a = RowAvatarView()
+                addSubview(a); faceView = a; return a
+            }()
+            v.isHidden = false
+            v.configure(name: face.name, photoUrl: face.photoUrl)
+        } else {
+            faceView?.isHidden = true
+        }
+        setNeedsLayout()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        label.frame = bounds
+        // The emoji keeps the left of the pill and the face sits at its trailing end, which is the
+        // order in his screenshot. With no face the label owns the whole pill, as it always did.
+        if hasFace, let faceView {
+            let d = BubbleMetrics.reactionFace
+            let inset = (bounds.height - d) / 2
+            faceView.frame = CGRect(x: bounds.width - inset - d, y: inset, width: d, height: d)
+            label.frame = CGRect(x: 0, y: 0, width: faceView.frame.minX - 2, height: bounds.height)
+        } else {
+            label.frame = bounds
+        }
         layer.cornerRadius = bounds.height / 2
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -1105,7 +1133,8 @@ final class MessageRowView: UIView {
             // Row coordinates → the bubble box's coordinates, because the chips are its subviews so
             // that they ride the reply swipe with it.
             v.frame = b.reactions[i].offsetBy(dx: -b.bubble.minX, dy: -b.bubble.minY)
-            v.configure(b.reactionAttrs[i], mine: b.reactionMine[i])
+            v.configure(b.reactionAttrs[i], mine: b.reactionMine[i],
+                        face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil)
         }
     }
 
