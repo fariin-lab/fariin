@@ -2820,7 +2820,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let anchor = anchorOnDisappear,
            let ip = dataSource.indexPath(for: anchor.rowId),
            let attr = collectionView.layoutAttributesForItem(at: ip) {
-            let want = clampOffset(attr.frame.minY - collectionView.adjustedContentInset.top - anchor.offsetFromTop)
+            // ⚠️ NO INSET HERE — `viewportAnchor()` measures this pair against the content offset
+            // alone, for the reason written on it. Subtracting the inset again would re-introduce the
+            // keyboard-height error it exists to remove.
+            let want = clampOffset(attr.frame.minY - anchor.offsetFromTop)
             applyRestoredOffset(want)
             return
         }
@@ -3549,14 +3552,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         isViewCompletelyAppeared = false   // theirs, same method
     }
 
-    /// The topmost row of the viewport and how far its top sits below the viewport's top edge — the
-    /// same pair `reportReadingPosition` measures, and the same pair `.initialPosition` lands.
+    /// The topmost row of the viewport and where it sits — but measured against the CONTENT OFFSET
+    /// alone, not against the viewport edge.
+    ///
+    /// ⛔ THE INSET MUST NOT APPEAR IN THIS PAIR — his report, 2026-09-16: open the keyboard, open an
+    /// image, scroll the image down to close it, and the chat comes back to where it sat while the
+    /// keyboard was still up.
+    ///
+    /// ⚠️ THE IMAGE VIEWER IS NOT INVOLVED. This list is inverted, so `adjustedContentInset.top` is
+    /// visually the BOTTOM edge and the keyboard grows it by its own height (see the Keyboard note
+    /// above). `reportReadingPosition` measures its pair against `contentOffset.y + inset.top`
+    /// because it answers a different question — "where should this chat open next time", a place in
+    /// the conversation. This pair answers "put this screen back exactly as it was", and it is
+    /// captured in `viewWillDisappear`, which fires while the keyboard is STILL UP: opening an image
+    /// dismisses the keyboard immediately afterwards. Replaying an inset-relative pair into a
+    /// viewport whose inset has since collapsed re-derives the offset a keyboard-height away, which
+    /// is exactly the distance he reported. Any screen that takes the keyboard with it on the way out
+    /// does this — a profile push, a pushed media page — the image viewer is just where he met it.
+    ///
+    /// Measured this way the pair carries no geometry with it: the restore puts the row back at the
+    /// same CONTENT position, `updateInsets()` owns the keyboard on the way back in as it does on
+    /// every other path, and a reader in history is not moved at all — which is the rule the keyboard
+    /// note states. When nothing moved while we were away the restore resolves to the offset already
+    /// on screen and `applyRestoredOffset` declines it.
     private func viewportAnchor() -> ChatReadingPosition? {
         guard let ip = viewportIndexPaths().first,
               let id = dataSource.itemIdentifier(for: ip),
               let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
-        let viewportTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
-        return ChatReadingPosition(rowId: id, offsetFromTop: attr.frame.minY - viewportTop)
+        return ChatReadingPosition(rowId: id, offsetFromTop: attr.frame.minY - collectionView.contentOffset.y)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
