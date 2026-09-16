@@ -464,65 +464,59 @@ struct AccountSettingsView: View {
     /// `showConnectEmail`, which asks for an address as well — see `reallyConnect`.
     @State private var showSetPassword = false
 
+    /// The address a password on this account would sign you in with, or nil when it cannot have one.
+    ///
+    /// ⚠️ `passwordAddress` IS THE PROVEN ONE and is nil for an account whose only address is
+    /// Apple's private relay — a password there is real and unusable, because the sign-in screen
+    /// asks for an address the person has never seen. That test lives in `AuthService`; this row
+    /// just respects it, and hides rather than offering a screen that can only end badly.
+    private var passwordRowAddress: String? {
+        if let proven = AuthService.shared.passwordAddress { return proven }
+        return AuthService.shared.hasTypableAddress ? Auth.auth().currentUser?.email : nil
+    }
+
     var body: some View {
         List {
-            // No avatar header and no profile fields here (username/name/bio/photo all live in
-            // Edit Profile, reached from the Settings header). Account is ONLY data + session
-            // actions — a settings page, not profile management (user direction 2026-07-22).
-            // ⚠️ EXPORT MY DATA USED TO BE THE FIRST THING ON THIS PAGE. It is now below Sign-in
-            // Methods, because both references put it there and they are right: one mainstream messenger's
-            // account settings screen lists "Request account data" second from LAST, immediately
-            // before Delete, and another mainstream messenger files "Request account info" in the same low position. It is
-            // a button most people press once in their life or never, and it was standing in front of
-            // everything they actually opened this page for.
+            // ⛔ HIS THREE CARDS — owner, 2026-09-16, written out row by row: Email address and
+            // Password together, then the security pages, then the account's own data with Log out,
+            // and "Delete account put inside the Right side button".
+            //
+            // No avatar header and no profile fields here (username/name/bio/photo all live in Edit
+            // Profile, reached from the Settings header). Account is data + session actions only — a
+            // settings page, not profile management (user direction 2026-07-22).
 
-            // ABOVE Sign-in Methods, and filed under the word people actually look for.
-            //
-            // A password could already be added before this row existed, but only through Sign-in
-            // Methods › Email › Connect, which asks for an address we already know and is named
-            // after a thing nobody searching for "password" would open. Owner's instruction: put it
-            // where they look.
-            //
-            // The row hides itself for an account that cannot have a password at all — one signed
-            // in with no email address anywhere on it. Offering a screen that can only fail is
-            // worse than not offering it.
-            //
-            // ⚠️ AND FOR APPLE'S HIDDEN ADDRESS, for the same reason one step further on. Hide My
-            // Email leaves the account on `…@privaterelay.appleid.com`; a password there is real,
-            // and unusable, because the sign-in screen asks for an address the person has never
-            // seen. `hasTypableAddress` is that test. Connecting Google gives the account an
-            // address they know and this row comes back on its own.
-            //
-            // Someone who set a password BEFORE this rule still sees Change Password, or they could
-            // never alter or remove the one they have.
-            // ⚠️ CHANGE ONLY. SETTING A PASSWORD LIVES UNDER SIGN-IN METHODS, AND ONLY THERE.
-            //
-            // This row used to read "Set a Password" when there wasn't one, three lines above a
-            // "Password — Connect" row doing the same job. His 2026-08-10 screenshot has both circled
-            // with "same thing why?". They were: two entry points to one outcome, side by side, and
-            // the app looked confused about its own account model.
-            //
-            // A password is a way to sign in, so it belongs in the list of ways to sign in, beside
-            // Apple and Google, where you can also see whether it is set. What does NOT belong there
-            // is CHANGING one, because that list only offers Connect and Remove. So this section
-            // survives for exactly that job and appears only once a password exists.
-            if let address = AuthService.shared.passwordAddress,
-               AuthService.shared.isConnected(.email) {
-                Section {
+            Section {
+                // Both of these change how you get INTO the account, which is why his card puts them
+                // together and why each is a page rather than a row with a value: neither can be
+                // shown here without printing the thing it protects.
+                NavigationLink { ChangeEmailView() } label: { Text("Email address") }
+
+                // ⚠️ THE ROW IS THE SAME PAGE EITHER WAY. `PasswordView` decides its own shape from
+                // `isFirstPassword` — no Current row and no Forgot for an account that has none — so
+                // this is one destination and not two rows pretending to be different features, which
+                // is the confusion his 2026-08-10 screenshot circled.
+                if let address = passwordRowAddress {
                     NavigationLink {
-                        PasswordView(address: address, isFirstPassword: false)
-                    } label: {
-                        Label("Change Password", systemImage: "key.fill")
-                    }
-                } footer: {
-                    // NO ADDRESS HERE EITHER, same instruction, same reasoning as the footer inside
-                    // PasswordView. This row went through two wordings the owner rejected on a real
-                    // phone, both of which recited his own email back at him mid-sentence. The
-                    // caption's job is to say what the row does, not to read out data he can see two
-                    // rows below under Sign-in Methods.
-                    // One branch now: the section itself only exists when a password is set.
-                    Text("Change the password you sign in with.")
+                        PasswordView(address: address,
+                                     isFirstPassword: !AuthService.shared.isConnected(.email))
+                    } label: { Text("Password") }
                 }
+            } header: {
+                Text("Sign-in").textCase(nil)
+            }
+
+            Section {
+                NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
+            } header: {
+                Text("Security").textCase(nil)
+            } footer: {
+                // ⛔ PASSKEYS IS NOT HERE YET AND IS NOT FAKED. His card asks for it, and it cannot
+                // work until the app carries Apple's Associated Domains entitlement and fariin.com
+                // serves an `apple-app-site-association` file — without both, the system refuses to
+                // create or offer a passkey at all. A row that opened a page saying so would be a
+                // dead end in his settings, so the row arrives with the capability. Told to him
+                // plainly rather than quietly dropped.
+                Text("An additional password when you sign in on a new device.")
             }
 
             signInMethodsSection
@@ -530,44 +524,44 @@ struct AccountSettingsView: View {
             Section {
                 Button { Task { await exportData() } } label: {
                     HStack {
-                        Label("Export My Data", systemImage: "square.and.arrow.up")
+                        Text("Your Account Data").foregroundStyle(.primary)
                         Spacer()
                         if exporting { ProgressView() }
                     }
                 }
-                .tint(.primary)
                 .disabled(exporting)
+
+                // ⚠️ SIGN OUT IS NOT DESTRUCTIVE AND MUST NOT BE PAINTED AS THOUGH IT WERE. It is
+                // completely reversible — you sign back in and everything is there. Red is the app
+                // promising something cannot be undone, and spending it on a routine action teaches
+                // people to stop reading red, which is the last habit anyone should have around the
+                // button that ends an account. It shares his third card with the data export because
+                // that is where he put it; it does NOT share a colour with Delete.
+                Button { showSignOut = true } label: {
+                    Text("Log out").foregroundStyle(.primary)
+                }
+            } header: {
+                Text("Account").textCase(nil)
             } footer: {
                 Text("Saves your profile and all chats to a text file you can share or keep.")
             }
-
-            // ⚠️ SIGN OUT IS NOT DESTRUCTIVE AND MUST NOT BE PAINTED AS THOUGH IT WERE.
-            //
-            // It carried `role: .destructive`, so it drew red, in the SAME card as Delete Account and
-            // one row above it. Signing out is completely reversible — you sign back in and everything
-            // is there. Red is the app promising that something cannot be undone, and spending it on a
-            // routine action teaches people to stop reading red, which is the last habit anyone should
-            // have directly above a button that ends their account.
-            //
-            // One of those two does not even put sign out on this screen, and in both references Delete sits
-            // ALONE at the bottom of its own group. Two sections now, so there is real space between
-            // the reversible thing and the permanent one.
-            Section {
-                Button { showSignOut = true } label: {
-                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+        }
+        .listStyle(.insetGrouped)
+        // ⛔ DELETE LIVES IN THE "…" BUTTON NOW — his instruction. It was a red row at the bottom
+        // of the page, one tap from everything else; behind the menu it takes a deliberate second
+        // move, which is the right amount of friction for the only action here that cannot be undone.
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(role: .destructive) { showDelete = true } label: {
+                        Label("Delete Account", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
                 }
-                .tint(.primary)
-            }
-
-            Section {
-                Button(role: .destructive) { showDelete = true } label: {
-                    Label("Delete Account", systemImage: "trash")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
+                .accessibilityLabel("More")
             }
         }
-        .listStyle(.insetGrouped)   // clean rounded cards (matches the reference)
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showConnectEmail) {
