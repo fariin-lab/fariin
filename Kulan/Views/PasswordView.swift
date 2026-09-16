@@ -61,12 +61,21 @@ struct PasswordView: View {
     @State private var password = ""
     @State private var confirm = ""
     @State private var currentPassword = ""
+    // One reveal flag per row — his design puts an eye on each, and a single shared flag would show
+    // all three at once, which is exactly what somebody looking over your shoulder wants.
+    @State private var showCurrent = false
+    @State private var showNew = false
+    @State private var showConfirm = false
+    @State private var forgotSent = false
     @State private var busy = false
     @State private var error: String?
     @State private var done = false
     @FocusState private var focused: Bool
 
-    private var longEnough: Bool { password.count >= 6 }
+    /// ⛔ EIGHT, HIS NUMBER — 2026-09-16: "Use at least 8 characters" is the footnote he drew on the
+    /// page, and `functions-account` refuses anything shorter on the reset path. Six was Firebase's
+    /// own floor and is no longer the one that decides.
+    private var longEnough: Bool { password.count >= 8 }
     private var matches: Bool { !confirm.isEmpty && confirm == password }
     private var canSave: Bool { longEnough && matches && !busy }
 
@@ -81,8 +90,13 @@ struct PasswordView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle(isFirstPassword ? "Set Password" : "Change Password")
+        // ⛔ "Password" — his page title, 2026-09-16, the same word on both variants. The screen used
+        // to rename itself Set/Change depending on whether one existed; the card below already says
+        // which it is by whether there is a Current row.
+        .navigationTitle("Password")
         .navigationBarTitleDisplayMode(.inline)
+        // His ask, for the same reason as the email page.
+        .toolbar(.hidden, for: .tabBar)
         .task { await proveItIsYou() }
         .alert("Password saved", isPresented: $done) {
             Button("Done") { dismiss() }
@@ -95,55 +109,124 @@ struct PasswordView: View {
 
     // MARK: - The three states before the form
 
+    // ⛔ HIS PAGE, 2026-09-16 — one card holding Current / New / Confirm with an eye on each row, the
+    // requirement as a footnote under it, "Forgot password?" in a card of its own, and Save in the
+    // navigation bar rather than as a row in the form.
+    //
+    // ⚠️ THE SHAPE IS CONDITIONAL AND THAT IS THE POINT OF HIS ASK: "if user before doesn't have
+    // password show only new password and dont show also forget password current password". An
+    // account with no password has nothing to prove and nothing to recover, so both of those rows
+    // would be asking about something that does not exist.
+    //
+    // ⚠️ THE FACE ID GATE ABOVE THIS IS UNTOUCHED. He asked about the layout; the gate is why this
+    // screen can show the fields at all, and removing it was not part of that.
     @ViewBuilder private var form: some View {
         Form {
             Section {
-                SecureField("At least 6 characters", text: $password)
-                    .textContentType(.newPassword)
-                    .focused($focused)
-                SecureField("Type it again", text: $confirm)
-                    .textContentType(.newPassword)
-            } header: {
-                Text(isFirstPassword ? "New password" : "Choose a new password")
+                if !isFirstPassword {
+                    revealRow("Current password", text: $currentPassword,
+                              reveal: $showCurrent, content: .password)
+                }
+                revealRow("New password", text: $password,
+                          reveal: $showNew, content: .newPassword, focus: true)
+                revealRow("Confirm new password", text: $confirm,
+                          reveal: $showConfirm, content: .newPassword)
             } footer: {
-                // THE ADDRESS IS NOT NAMED HERE, on the owner's instruction (2026-08-09): "noo need
-                // to mention what email i'll use just let user sing up it coul sing up email or
-                // google account email what even they want."
-                //
-                // It used to read "You'll sign in with <address> and this password." His objection
-                // is a fair one: a caption that recites your own email back at you is noise on a
-                // screen with two boxes and a button, and it reads as the app being uncertain about
-                // something it should simply handle.
-                //
-                // ⚠️ WHAT THIS COSTS, so nobody puts it back without knowing: for an Apple account
-                // using Hide My Email the login becomes something like
-                // f6dj84y9z2@privaterelay.appleid.com, which nobody could guess or remember. Those
-                // people now set a password without being shown the address it belongs to. The
-                // "a password was added" email names it, so the information exists, it is just no
-                // longer on this screen. If somebody ever reports "I set a password and cannot log
-                // in", this is the first place to look.
-                Text(isFirstPassword
-                     ? "The way you sign in now keeps working too."
-                     : "Your old password stops working.")
+                // His sentence. The second half is a promise the server actually keeps:
+                // `confirmPasswordReset` and Firebase's own update both revoke every refresh token.
+                Text("Use at least 8 characters. After changing, all other devices will need to sign in again.")
+            }
+
+            // Only where there is a password to have forgotten — his rule.
+            if !isFirstPassword {
+                Section {
+                    Button("Forgot password?") { Task { await forgot() } }
+                        .disabled(busy)
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            if !password.isEmpty && !longEnough {
+                Section { Text("At least 8 characters.").font(.footnote).foregroundStyle(.secondary) }
+            } else if !confirm.isEmpty && !matches {
+                Section { Text("Those two do not match.").font(.footnote).foregroundStyle(.secondary) }
             }
 
             if let error {
-                Section { Text(error).foregroundStyle(.red) }
-            }
-
-            Section {
-                Button(isFirstPassword ? "Set Password" : "Change Password") { save() }
-                    .disabled(!canSave)
-                    .fontWeight(.semibold)
-            } footer: {
-                if !password.isEmpty && !longEnough {
-                    Text("At least 6 characters.")
-                } else if !confirm.isEmpty && !matches {
-                    Text("Those two do not match.")
-                }
+                Section { Text(error).foregroundStyle(.red).font(.footnote) }
             }
         }
         .onAppear { focused = true }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") { save() }
+                    .disabled(!canSave)
+                    .fontWeight(.semibold)
+            }
+        }
+        .alert("Check your email", isPresented: $forgotSent) {
+            Button("OK") { }
+        } message: {
+            Text("We sent a code to your email address. Enter it there, or use the link in the message to set a new password on the web.")
+        }
+    }
+
+    /// One row of the card: a secure field with an eye that turns it into a plain one.
+    ///
+    /// ⚠️ TWO FIELDS RATHER THAN A TOGGLED `isSecureTextEntry`. Swapping that flag on a live
+    /// `UITextField` is what makes iOS clear the text on the next keystroke; two fields sharing one
+    /// binding keep what has been typed, which is the whole reason somebody taps the eye.
+    @ViewBuilder private func revealRow(_ title: String, text: Binding<String>,
+                                        reveal: Binding<Bool>,
+                                        content: UITextContentType,
+                                        focus: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            Group {
+                if reveal.wrappedValue {
+                    TextField(title, text: text)
+                        .textContentType(content)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } else {
+                    SecureField(title, text: text)
+                        .textContentType(content)
+                }
+            }
+            // ⚠️ ONLY THE ROW THAT ASKED FOR IT. `focused` is a Bool `@FocusState`, so
+            // `.focused($focused)` binds a view to its true state; attaching it to every row would
+            // make three views claim the same flag and the last one laid out would win.
+            .modifier(FocusIf(active: focus, flag: $focused))
+
+            Button {
+                reveal.wrappedValue.toggle()
+            } label: {
+                Image(systemName: reveal.wrappedValue ? "eye.slash" : "eye")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reveal.wrappedValue ? "Hide \(title)" : "Show \(title)")
+        }
+    }
+
+    /// "Forgot password?" — his flow: a code to the address already on the account, and the same mail
+    /// carries a link to fariin.com for somebody reading it on a laptop. Both doors, one code; see
+    /// `startPasswordReset` in `functions-account`.
+    private func forgot() async {
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
+        busy = true
+        error = nil
+        defer { busy = false }
+        do {
+            try await AccountCall.run("startPasswordReset")
+            forgotSent = true
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     @ViewBuilder private var refusedState: some View {
@@ -274,6 +357,18 @@ struct PasswordView: View {
         busy = true; error = nil
         Task {
             do {
+                // ⛔ THE CURRENT PASSWORD IS SPENT HERE, not left as decoration. His card asks for it,
+                // so it has to be the thing that proves who is typing — otherwise the row is a box
+                // that does nothing and Firebase decides on its own whether to demand a fresh login,
+                // which is the `.needsReauth` detour below.
+                //
+                // ⚠️ BEST EFFORT, AND DELIBERATELY SO. A wrong current password is NOT reported here:
+                // `setPassword` is still the authority, and it refuses with `requiresRecentLogin` if
+                // this did not satisfy Firebase. Failing loudly at this step would give two different
+                // errors for one wrong entry.
+                if !isFirstPassword, !currentPassword.isEmpty {
+                    try? await AuthService.shared.reauthEmail(password: currentPassword)
+                }
                 try await AuthService.shared.setPassword(password, isFirst: isFirstPassword)
                 await MainActor.run { busy = false; done = true }
             } catch let e as NSError where e.code == AuthErrorCode.requiresRecentLogin.rawValue {
@@ -288,5 +383,16 @@ struct PasswordView: View {
                 }
             }
         }
+    }
+}
+
+/// Applies `.focused` to exactly one field. A Bool `@FocusState` has one true state, so the
+/// modifier has to be attached conditionally rather than to every row.
+private struct FocusIf: ViewModifier {
+    let active: Bool
+    @FocusState.Binding var flag: Bool
+
+    func body(content: Content) -> some View {
+        if active { content.focused($flag) } else { content }
     }
 }
