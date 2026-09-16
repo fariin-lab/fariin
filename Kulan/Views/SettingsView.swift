@@ -1765,27 +1765,10 @@ struct EditProfileView: View {
                         .onChange(of: lastName) { _, v in if v.count > 40 { lastName = String(v.prefix(40)) } }
                 }
 
-                Section {
-                    // ⛔ A SHEET, NOT A PUSH (owner, 2026-08-20: "that page and keyboard is coming
-                    // right side… it must come bottom"). A push arrives from the trailing edge, and
-                    // because the field takes focus as it arrives, iOS carries the KEYBOARD in on
-                    // that same horizontal transition — so the keys slid in from the right corner
-                    // instead of rising. Presenting from the bottom makes both move the one way.
-                    //
-                    // The row keeps its own chevron: it is a `Button` now, and `NavigationLink` was
-                    // what used to draw that for free.
-                    Button { editingUsername = true } label: {
-                        HStack {
-                            Text("Username").foregroundStyle(.primary)
-                            Spacer()
-                            Text(handle.isEmpty ? "Set" : "@\(handle)").foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                }
+                // ⛔ USERNAME HAS MOVED DOWN, INTO THE LINKS CARD — owner, 2026-09-16: "username and
+                // link make it one group card like this image". It used to be its own card between
+                // the name and the bio. Both rows push a screen of their own and neither belongs to
+                // this sheet's Save, so one card holding the two is also the honest grouping.
 
                 Section {
                     // ⛔ THE COUNTER LIVES IN THE CARD (owner 2026-08-22: "count characters bio put
@@ -1861,6 +1844,29 @@ struct EditProfileView: View {
                 // `ProfileLinksView` — so closing Edit Profile with X does not undo a link, and the
                 // unsaved-changes prompt below deliberately does not count them.
                 Section {
+                    // ⛔ A SHEET, NOT A PUSH (owner, 2026-08-20: "that page and keyboard is coming
+                    // right side… it must come bottom"). A push arrives from the trailing edge, and
+                    // because the field takes focus as it arrives, iOS carries the KEYBOARD in on
+                    // that same horizontal transition — so the keys slid in from the right corner
+                    // instead of rising. Presenting from the bottom makes both move the one way.
+                    //
+                    // ⚠️ THAT REASONING IS ABOUT USERNAME ONLY and does not spread to its new
+                    // neighbour: Links opens a LIST with nothing focused, so it stays a push. Two
+                    // rows in one card, two different presentations, each for its own reason.
+                    //
+                    // The row keeps its own chevron: it is a `Button` now, and `NavigationLink` was
+                    // what used to draw that for free.
+                    Button { editingUsername = true } label: {
+                        HStack {
+                            Text("Username").foregroundStyle(.primary)
+                            Spacer()
+                            Text(handle.isEmpty ? "Set" : "@\(handle)").foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
                     NavigationLink {
                         ProfileLinksView()
                     } label: {
