@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 import Network
 import Observation
+import FirebaseAuth
+import FirebaseFirestore
 
 // ⛔ THE TITLE SAYS WHETHER WE ARE CONNECTED — owner, 2026-09-16, with the reference app's header
 // ringed in pen: a small spinner where the title is, and the word "Connecting".
@@ -17,14 +19,29 @@ import Observation
 //
 //   · `NWPathMonitor`  — is there a route off this device at all. Definitive, and the one case where
 //                        "Waiting for network" is a true statement rather than a guess.
-//   · Firestore's own `metadata.isFromCache` — the listeners the app ALREADY runs report whether the
-//                        answer came from the server or from disk. Cache while the path is up is
-//                        exactly "we are online and the server has not answered yet", which is what
-//                        "Connecting" means.
+//   · Firestore's `metadata.isFromCache`, from ONE listener that asks for metadata changes — see
+//                        the correction below. Cache while the path is up is exactly "we are online
+//                        and the server has not answered yet", which is what "Connecting" means.
 //
-// ⚠️ NO NEW LISTENER AND NO EXTRA READS. `noteSnapshot(fromCache:)` is called from the listeners
-// that already test that flag (stories, conversations). Adding a document to watch purely to ask
-// "are we up" would be a read per reconnect, per user, for a label.
+// ⛔ THE FIRST VERSION OF THIS SHIPPED IN 747 AND STUCK ON "Connecting" — his screenshot, a fully
+// loaded chat list under a spinner that never cleared. The mistake is worth keeping written down.
+//
+// It fed off `noteSnapshot(fromCache:)` calls from the listeners the app ALREADY runs, on the
+// reasoning that a new listener would be a read per reconnect for a label. **But a Firestore
+// listener does not deliver metadata-only changes unless it was created with
+// `includeMetadataChanges: true`.** Those listeners use the default. So the app heard "from cache"
+// during launch and then NEVER heard "from the server", because when the server confirms data that
+// has not changed, no callback is delivered at all. On a quiet chat list nothing could ever clear
+// the label.
+//
+// ⚠️ THE SIGNAL HAS TO BE ONE THAT REPORTS THE CONNECTION, not one that reports data. This now
+// watches a single document with `includeMetadataChanges: true`, which is the documented way to be
+// told when Firestore's view of the server changes. It is one document, it is the user's own, and
+// the app is signed in to it anyway — the cost is a listener, not a read per reconnect.
+//
+// ⚠️ `noteSnapshot(fromCache:)` IS KEPT and the existing callers still feed it. It can only ever
+// produce good news now (a server snapshot proves reachability), and good news needs no metadata
+// change to be true.
 //
 // ⚠️ AND IT NEVER SAYS "CONNECTING" ON THE FIRST FRAME. A cold launch legitimately serves from cache
 // for a moment, and a header that flashes "Connecting" every time the app opens is noise that
@@ -63,6 +80,9 @@ final class ConnectionStatus {
     private var hasRoute = true          // optimistic until the first path update, as `NetworkState` is
     private var lastServerAnswer = Date()
     private var pending: Task<Void, Never>?
+    private var probe: ListenerRegistration?
+    private var probeUid: String?
+    private var authHandle: AuthStateDidChangeListenerHandle?
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -70,6 +90,31 @@ final class ConnectionStatus {
             Task { @MainActor in self?.routeChanged(up) }
         }
         monitor.start(queue: DispatchQueue(label: "ConnectionStatus"))
+        // The probe follows the signed-in account, and stops with it: a listener left on the previous
+        // user's document is both a leak and a permission error waiting to happen.
+        authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor in self?.watch(uid: user?.uid) }
+        }
+    }
+
+    /// ⛔ THE ONE LISTENER THAT CAN ACTUALLY ANSWER THE QUESTION. `includeMetadataChanges: true` is
+    /// the whole point of it: without that flag Firestore stays silent when the only thing that
+    /// changed is whether the answer came from the server, which is precisely what this needs to
+    /// know. That silence is the 747 bug.
+    ///
+    /// ⚠️ THE DOCUMENT IS THE USER'S OWN, so it needs no rule of its own and costs one listener on
+    /// something the app is already entitled to read.
+    private func watch(uid: String?) {
+        guard uid != probeUid else { return }
+        probe?.remove()
+        probe = nil
+        probeUid = uid
+        guard let uid else { return }
+        probe = Firestore.firestore().collection("users").document(uid)
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, _ in
+                guard let snap else { return }
+                Task { @MainActor in self?.noteSnapshot(fromCache: snap.metadata.isFromCache) }
+            }
     }
 
     /// Called by the snapshot listeners the app already runs — one line each, where they already read
