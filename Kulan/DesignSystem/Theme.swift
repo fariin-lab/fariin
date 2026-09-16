@@ -190,6 +190,43 @@ enum AvatarPalette {
         for ch in clean.unicodeScalars { h = (h &* 31 &+ Int(ch.value)) & 0x7fffffff }
         return gradients[h % gradients.count]
     }
+
+    // ── ⛔ ONE PLACEHOLDER FOR EVERYBODY — owner, 2026-09-16 ──────────────────────────────────────
+    //
+    // "remove feature profile text name color and make one type… when user doesn't have profile
+    // picture make it like image 2, like for apple", with Apple's grey person silhouette.
+    //
+    // So a person with no photograph is no longer a coloured letter. The gradients above STAY and are
+    // still live: `ProfilePalette` derives a profile page's colour from them when there is no photo
+    // to sample, and that is a different job from drawing a face. Deleting them would take the
+    // page's colour with them.
+    //
+    // ⚠️ DECLARED ONCE, IN BOTH TOOLKITS, because nine places draw this fallback — the chat list, the
+    // message list, the chat header, the stories row, the call PiP placeholder, the profile poster,
+    // the contact page, the photo sheet and `AvatarView`. A "one type" that is spelled out nine times
+    // is nine types waiting to drift, which is exactly how the letter version ended up with a
+    // different corner and weight in half of them.
+    //
+    // ⚠️ `secondarySystemFill` RATHER THAN A HEX, so it answers dark mode and the accessibility
+    // contrast settings on its own. His reference is a desaturated grey disc in dark mode, which is
+    // what this resolves to.
+    static let placeholderFill = Color(uiColor: .secondarySystemFill)
+    static let placeholderFillUI = UIColor.secondarySystemFill
+    /// Apple's own glyph, so it is the silhouette the phone already draws everywhere else rather than
+    /// our drawing of one.
+    static let placeholderSymbol = "person.fill"
+    /// The glyph's share of the circle. Apple's own `person.crop.circle.fill` sits at roughly this
+    /// proportion, and it is the number every call site below points at instead of guessing.
+    static let placeholderGlyphScale: CGFloat = 0.52
+
+    /// The silhouette as an image, for the UIKit avatars. Rendered once per size and cached by
+    /// `UIImage`'s own symbol configuration, so this is not a per-cell cost.
+    static func placeholderImage(size: CGFloat) -> UIImage? {
+        UIImage(systemName: placeholderSymbol)?
+            .withConfiguration(UIImage.SymbolConfiguration(pointSize: size * placeholderGlyphScale,
+                                                           weight: .medium))
+            .withTintColor(.white, renderingMode: .alwaysOriginal)
+    }
 }
 
 extension View {
@@ -479,10 +516,8 @@ struct AvatarView: View {
     }
 
     private var hasPhoto: Bool { (photoUrl?.isEmpty == false) }
-    private var initial: String {
-        let c = name.trimmingCharacters(in: .whitespaces).first
-        return c.map { String($0).uppercased() } ?? "?"
-    }
+    // `initial` is gone with the letter fallback (2026-09-16). `name` stays: callers pass it, and it
+    // is still what the accessibility label and the profile page's colour are derived from.
 
     var body: some View {
         Group {
@@ -522,9 +557,15 @@ struct AvatarView: View {
         ProfilePhotoIndex.noteLoad(s, ok: false)
     }
 
+    /// ⛔ ONE SILHOUETTE, NOT A COLOURED LETTER — owner, 2026-09-16. See `AvatarPalette.placeholderFill`
+    /// for the ruling and for why the gradients are kept rather than deleted.
     private var fallback: some View {
-        LinearGradient(colors: AvatarPalette.gradient(for: name), startPoint: .topLeading, endPoint: .bottomTrailing)
-            .overlay(Text(initial).font(.system(size: size * 0.42, weight: .bold)).foregroundColor(.white))
+        AvatarPalette.placeholderFill
+            .overlay(
+                Image(systemName: AvatarPalette.placeholderSymbol)
+                    .font(.system(size: size * AvatarPalette.placeholderGlyphScale, weight: .medium))
+                    .foregroundStyle(.white)
+            )
     }
 }
 

@@ -197,24 +197,25 @@ final class RowImageView: UIImageView {
     }
 }
 
-/// A circular avatar with the same coloured-letter fallback the SwiftUI `AvatarView` draws, so a
-/// group cluster's face does not change appearance when its row changes render path.
+/// A circular avatar with the same silhouette fallback the SwiftUI `AvatarView` draws, so a group
+/// cluster's face does not change appearance when its row changes render path.
+///
+/// ⛔ THE COLOURED LETTER IS GONE — owner, 2026-09-16, "make one type". The gradient layer and its
+/// label went with it; the fill and the glyph both come from `AvatarPalette` so this view cannot
+/// drift from the other eight places that draw the same fallback.
 final class RowAvatarView: UIView {
     private let imageView = UIImageView()
-    private let gradient = CAGradientLayer()
-    private let letter = UILabel()
+    private let glyph = UIImageView()
+    private var glyphSize: CGFloat = 0
     private var token = 0
     private var currentUrl: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        gradient.startPoint = CGPoint(x: 0, y: 0)
-        gradient.endPoint = CGPoint(x: 1, y: 1)
-        layer.addSublayer(gradient)
-        letter.textAlignment = .center
-        letter.textColor = .white
-        addSubview(letter)
+        backgroundColor = AvatarPalette.placeholderFillUI
+        glyph.contentMode = .center
+        addSubview(glyph)
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         addSubview(imageView)
@@ -222,9 +223,9 @@ final class RowAvatarView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(name: String, photoUrl: String?) {
-        let initial = name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
-        letter.text = initial
-        gradient.colors = AvatarPalette.gradient(for: name).map { UIColor($0).cgColor }
+        // `name` is still taken so the call sites and the accessibility label do not change; it no
+        // longer decides anything about how the fallback looks, which is the whole point of the rule.
+        accessibilityLabel = name
 
         token += 1
         let mine = token
@@ -269,12 +270,14 @@ final class RowAvatarView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         layer.cornerRadius = bounds.height / 2
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        gradient.frame = bounds
-        CATransaction.commit()
-        letter.frame = bounds
-        letter.font = .systemFont(ofSize: bounds.height * 0.42, weight: .bold)
+        glyph.frame = bounds
+        // ⚠️ RE-RENDERED ONLY WHEN THE SIZE ACTUALLY CHANGES, and tracked with its own number rather
+        // than read back off the image: a symbol's rendered height is its GLYPH's, not the view's, so
+        // comparing the two would re-render on every layout pass of every cell in the chat.
+        if glyphSize != bounds.height {
+            glyphSize = bounds.height
+            glyph.image = AvatarPalette.placeholderImage(size: bounds.height)
+        }
         imageView.frame = bounds
     }
 }

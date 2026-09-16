@@ -335,12 +335,9 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// behind the name and behind the buttons — instead of handing over to a copy of itself.
     private var photoHeight: CGFloat { photoSide * PosterGeometry.aspect }
 
-    /// Their initial, for the no-bitmap state. Same rule as `AvatarView`, so the letter you see in a
-    /// list and the letter you see here are always the same one.
-    private var initial: String {
-        let c = name.trimmingCharacters(in: .whitespaces).first
-        return c.map { String($0).uppercased() } ?? "?"
-    }
+    // `initial` is gone with the letter placeholder (2026-09-16, "make one type"). The no-bitmap
+    // state draws `AvatarPalette`'s silhouette now, the same one `AvatarView` draws, so the rule it
+    // used to keep — the letter here matches the letter in a list — is kept by there being no letter.
 
     /// White on a dark photo, near-black on a bright one. Not a fixed colour, and not a box.
     private var onPhotoText: Color {
@@ -448,14 +445,18 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
                 // two colours — the same pair `AvatarView` fills their circle with, so it is the same
                 // person either way — is a legitimate thing to look at, so the header can simply hold
                 // its shape until the picture arrives.
-                LinearGradient(colors: AvatarPalette.gradient(for: name),
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                // ⛔ THE SILHOUETTE, NOT THEIR LETTER ON THEIR COLOURS — owner, 2026-09-16, "make one
+                // type". The paragraph above still explains why this placeholder exists at all and
+                // that reasoning is unchanged: the header holds its shape until the picture arrives
+                // rather than rearranging the page. Only what it draws has changed, and it now draws
+                // what every other faceless avatar in the app draws.
+                AvatarPalette.placeholderFill
                     .overlay {
-                        Text(initial)
-                            .font(.system(size: photoSide * 0.34, weight: .semibold, design: .rounded))
+                        Image(systemName: AvatarPalette.placeholderSymbol)
+                            .font(.system(size: photoSide * 0.34, weight: .medium))
                             .foregroundStyle(.white.opacity(0.92))
-                            // The letter sits where a face would, not in the middle of a frame whose
-                            // lower third is behind the name.
+                            // It sits where a face would, not in the middle of a frame whose lower
+                            // third is behind the name.
                             .offset(y: -photoHeight * 0.12)
                     }
             }

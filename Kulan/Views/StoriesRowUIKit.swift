@@ -262,13 +262,16 @@ final class StoryRingUIView: UIView {
 /// cross-fade.
 ///
 /// THE SYNCHRONOUS DISK SEED IS DELIBERATE and is carried over verbatim: memory alone starts empty
-/// on every launch, so on a cold start every avatar fell through to its coloured letter and faded to
-/// the real photo a frame later — the flash of letters the owner photographed. An avatar is a few
+/// on every launch, so on a cold start every avatar fell through to its silhouette and faded to
+/// the real photo a frame later — the flash the owner photographed. An avatar is a few
 /// KB and the read is gated on the cache's in-memory index, so a miss never touches the filesystem.
 final class StoryAvatarUIView: UIView {
     private let imageView = UIImageView()
-    private let gradient = CAGradientLayer()
-    private let letter = UILabel()
+    // ⛔ ONE SILHOUETTE, NOT A COLOURED LETTER — owner, 2026-09-16, "make one type". The gradient and
+    // the label are gone; fill and glyph come from `AvatarPalette`, the one place that decides how a
+    // faceless account looks.
+    private let glyph = UIImageView()
+    private var glyphSize: CGFloat = 0
     private var loadTask: Task<Void, Never>?
     private var name = ""
     private var photoUrl: String?
@@ -279,13 +282,9 @@ final class StoryAvatarUIView: UIView {
         isUserInteractionEnabled = false
         clipsToBounds = true
 
-        layer.addSublayer(gradient)
-        gradient.startPoint = CGPoint(x: 0, y: 0)      // .topLeading
-        gradient.endPoint = CGPoint(x: 1, y: 1)        // .bottomTrailing
-
-        letter.textColor = .white
-        letter.textAlignment = .center
-        addSubview(letter)
+        backgroundColor = AvatarPalette.placeholderFillUI
+        glyph.contentMode = .center
+        addSubview(glyph)
 
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
@@ -300,9 +299,7 @@ final class StoryAvatarUIView: UIView {
         self.name = name
         self.photoUrl = photoUrl
         self.diameter = size
-        letter.font = .systemFont(ofSize: size * 0.42, weight: .bold)
-        letter.text = String(name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?")
-        gradient.colors = AvatarPalette.gradient(for: name).map { UIColor($0).cgColor }
+        // The fallback no longer depends on the name; it is the same silhouette for everyone.
         setNeedsLayout()
         guard !sameSubject else { return }
 
@@ -326,7 +323,7 @@ final class StoryAvatarUIView: UIView {
         imageView.image = image
         guard animated, changed else {
             imageView.isHidden = image == nil
-            letter.isHidden = image != nil
+            glyph.isHidden = image != nil
             gradient.isHidden = image != nil
             return
         }
@@ -334,7 +331,7 @@ final class StoryAvatarUIView: UIView {
         UIView.transition(with: self, duration: 0.25,
                           options: [.transitionCrossDissolve, .curveEaseOut]) {
             self.imageView.isHidden = image == nil
-            self.letter.isHidden = image != nil
+            self.glyph.isHidden = image != nil
             self.gradient.isHidden = image != nil
         }
     }
@@ -361,11 +358,13 @@ final class StoryAvatarUIView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        gradient.frame = bounds
-        CATransaction.commit()
-        letter.frame = bounds
+        glyph.frame = bounds
+        // Re-rendered only on a real size change — see `RowAvatarView` for why the size is tracked
+        // rather than read back off the image.
+        if glyphSize != bounds.height {
+            glyphSize = bounds.height
+            glyph.image = AvatarPalette.placeholderImage(size: bounds.height)
+        }
         imageView.frame = bounds
         layer.cornerRadius = bounds.width / 2
     }

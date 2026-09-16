@@ -286,16 +286,18 @@ struct ChatHeaderModel: Equatable {
 }
 
 /// The header's avatar as a UIKit view: their `ConversationAvatarView` stood in for by the same
-/// circle `AvatarView` draws in SwiftUI — cached photo when there is one, the name's gradient and
-/// initial when there is not — so a person's avatar is the same picture in the header as in the list.
+/// circle `AvatarView` draws in SwiftUI — cached photo when there is one, `AvatarPalette`'s shared
+/// silhouette when there is not — so a person's avatar is the same picture in the header as in the list.
 ///
 /// Loading follows `AvatarView` exactly: memory/disk seed synchronously for the first frame (the
 /// letter-flash fix), then the async cache, then the network, stored on the way back.
 final class HeaderAvatarView: UIView {
     private let size: CGFloat
     private let imageView = UIImageView()
-    private let gradient = CAGradientLayer()
-    private let initialLabel = UILabel()
+    // ⛔ ONE SILHOUETTE, NOT A COLOURED LETTER — owner, 2026-09-16, "make one type". The gradient
+    // layer and the initial label are gone; the fill and the glyph both come from `AvatarPalette`,
+    // which is the only place that decides how a faceless account looks.
+    private let glyph = UIImageView()
     private var loadedFor: String?
     private var loadTask: Task<Void, Never>?
 
@@ -310,14 +312,10 @@ final class HeaderAvatarView: UIView {
         layer.cornerRadius = size / 2
         layer.masksToBounds = true
 
-        gradient.startPoint = CGPoint(x: 0, y: 0)
-        gradient.endPoint = CGPoint(x: 1, y: 1)
-        layer.addSublayer(gradient)
-
-        initialLabel.textColor = .white
-        initialLabel.font = .systemFont(ofSize: size * 0.42, weight: .bold)
-        initialLabel.textAlignment = .center
-        addSubview(initialLabel)
+        backgroundColor = AvatarPalette.placeholderFillUI
+        glyph.contentMode = .center
+        glyph.image = AvatarPalette.placeholderImage(size: size)
+        addSubview(glyph)
 
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
@@ -328,16 +326,14 @@ final class HeaderAvatarView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        gradient.frame = bounds
-        initialLabel.frame = bounds
+        glyph.frame = bounds
         imageView.frame = bounds
     }
 
     func configure(name: String, photoUrl: String?, asset: UIImage?) {
-        let colors = AvatarPalette.gradient(for: name).map { UIColor($0).cgColor }
-        gradient.colors = colors
-        let first = name.trimmingCharacters(in: .whitespaces).first
-        initialLabel.text = first.map { String($0).uppercased() } ?? "?"
+        // The fallback no longer depends on the name; it is the same silhouette for everyone. The
+        // name is still taken for the accessibility label.
+        accessibilityLabel = name
 
         if let asset {
             loadTask?.cancel(); loadTask = nil; loadedFor = nil

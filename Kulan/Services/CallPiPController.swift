@@ -205,9 +205,12 @@ final class PiPVideoView: UIView {
         let image = photoUrl.flatMap { $0.isEmpty ? nil : DiskImageCache.shared.memoryImage($0) }
         photoView.image = image
         photoView.isHidden = image == nil
+        // ⛔ ONE SILHOUETTE, NOT A COLOURED INITIAL — owner, 2026-09-16, "make one type".
+        // `AvatarPalette` is the single place that decides how a faceless account looks, so the
+        // camera-off placeholder in a call matches the same person's face everywhere else.
         initialLabel.isHidden = image != nil
-        initialLabel.text = String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
-        initialLabel.backgroundColor = UIColor(AvatarPalette.gradient(for: name).first ?? .gray)
+        initialLabel.text = nil
+        initialLabel.backgroundColor = AvatarPalette.placeholderFillUI
         placeholderView.backgroundColor = UIColor(white: 0.10, alpha: 1)
         setNeedsLayout()
     }
@@ -229,7 +232,15 @@ final class PiPVideoView: UIView {
         photoView.layer.cornerRadius = d / 2
         initialLabel.frame = circle
         initialLabel.layer.cornerRadius = d / 2
-        initialLabel.font = .systemFont(ofSize: max(12, d * 0.42), weight: .semibold)
+        // ⚠️ THE GLYPH IS AN ATTACHMENT, because this placeholder has always been a `UILabel` acting
+        // as a coloured disc and a label cannot hold an image any other way. Sized here rather than
+        // in `configure` for the reason the font was: `d` is only known once the window has a size.
+        if !initialLabel.isHidden, let g = AvatarPalette.placeholderImage(size: d) {
+            let a = NSTextAttachment()
+            a.image = g
+            a.bounds = CGRect(x: 0, y: -g.size.height * 0.28, width: g.size.width, height: g.size.height)
+            initialLabel.attributedText = NSAttributedString(attachment: a)
+        }
         // At 90/270 the decoded buffer is landscape but must be shown portrait, so the child is sized
         // with its axes swapped and then rotated into place — the layer keeps filling its own bounds,
         // which still match the buffer's shape, so aspect-fill stays correct.
