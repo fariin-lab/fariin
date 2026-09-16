@@ -2613,6 +2613,8 @@ final class StoriesRepository {
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else { if let error { print("stories listen error:", error) }; return }
                 if !snap.metadata.isFromCache { self.othersFromServer = true }
+                // One line, no extra read — see `ConnectionStatus`.
+                Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache) }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.othersFromServer) { return }
                 self.othersByToken = self.parse(snap.documents)
                 self.mergeOthers()
@@ -2632,6 +2634,7 @@ final class StoriesRepository {
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else { if let error { print("my stories listen error:", error) }; return }
                 if !snap.metadata.isFromCache { self.mineFromServer = true }
+                Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache) }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.mineFromServer) { return }
                 self.mineStories = self.parse(snap.documents)
                 Task { await self.rebuild() }

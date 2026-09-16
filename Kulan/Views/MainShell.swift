@@ -980,6 +980,9 @@ struct ChatsView: View {
     private var storiesRepo = StoriesRepository.shared   // @Observable: drives the chat-list story rings
     private var officialChannel = OfficialChannelStore.shared   // @Observable: the one synthetic row in the list
     private var call = CallService.shared                // @Observable: the live 1:1 call, for the row below
+    /// @Observable, like its neighbours here: reading `state` in the toolbar is what subscribes this
+    /// screen to it, so the title follows the connection with no notification plumbing.
+    private var connection = ConnectionStatus.shared
     @ObservedObject private var groupCall = GroupCallService.shared   // ObservableObject, so it needs the wrapper
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
@@ -1793,6 +1796,16 @@ struct ChatsView: View {
                     .disabled(selection.isEmpty)
             }
         } else if #available(iOS 26.0, *) {
+            // ⛔ THE TITLE BECOMES THE CONNECTION — owner, 2026-09-16, with the reference app's header
+            // ringed: a small spinner where the title sits, and the word "Connecting".
+            //
+            // ⚠️ ADDED ONLY WHEN THERE IS SOMETHING TO SAY, and that is what keeps it safe. A
+            // `.principal` item REPLACES `navigationTitle`, so one that is always present but
+            // sometimes empty would take the Chats title and its menu away for the ordinary case.
+            // Present only while `label` is non-nil, the normal header is untouched code.
+            if let status = connection.state.label {
+                ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
+            }
             // Edit keeps its native Liquid Glass capsule (no sharedBackgroundVisibility opt-out).
             ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -1800,6 +1813,9 @@ struct ChatsView: View {
                 composeButton.modifier(SwipeFade(on: showHeaderIcons))
             }
         } else {
+            if let status = connection.state.label {
+                ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
+            }
             ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 filterMenu.modifier(SwipeFade(on: showHeaderIcons))
