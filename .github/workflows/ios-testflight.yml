@@ -74,11 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            ONE FIX IN THIS BUILD, AND IT IS THE ONE YOU REPORTED TWICE.
+            FIVE FROM YOUR LIST TODAY. The skeleton fix you asked about again was already in 750, so check that one here too.
 
-            THE CHAT LOADING SKELETON NO LONGER RUNS UP UNDER THE HEADER. Open a chat that has to load, and the grey placeholder bubbles should start below the name and the back arrow, not behind them.
+            THE LINE UNDER THE HEADER IS GONE, and this is the fourth try so please look hard at it. It was never the header. It was the SEARCH BAR drawing its own background with its own line along the top edge, which is why three fixes to the header all missed. Your answer about where the line sat is what found it.
 
-            Worth knowing why it took two goes. The first attempt asked the system for the safe area height, which sounds right and is the normal way to do it. But that part of the chat is drawn deliberately ignoring the safe area, so the number the system hands back there is zero. It was asking for a value the screen had already been told to forget, which is why nothing moved and your second screenshot looked identical to the first. It now measures the window instead, which is the one place the real number survives on a screen like that.
+            THE ADD STORY CARD WEARS YOUR PROFILE PICTURE. It was always being handed your photo, which is where the little round face at the bottom comes from, and it was throwing it away and painting grey behind it. With no photo set it still shows the plain grey card.
 
-            If it is still wrong, the useful photo is a chat caught mid load, before the messages arrive.
+            NO MORE "CONNECTING" ON GOOD WIFI. The phone reports a network change for things that are not problems at all, a wifi roam or waking from lock, and the app used to announce Connecting two and a half seconds later purely because nothing had arrived in that window. On an app that synced minutes ago nothing is going to arrive, because there is nothing to send. It now actually asks the server and only says Connecting if that fails.
+
+            WALLPAPER PREVIEW IS A SHEET, with a Preview title and the X in the corner, instead of taking over the whole screen. I did not add a Set button, because yours says Apply For All Chats and that means something Set does not. Tell me if you would rather have Set.
+
+            REACTIONS. I read the reference app's source for this one. Four things were wrong together: on your own message the pill now sits on the RIGHT where theirs does, instead of tucked into the far bottom corner; the pill is taller and roomier and the emoji is bigger, all their measurements; the colour comes from the bubble it sits on, so it stops looking pasted onto your chat colour; and the bright ring around it is gone, because they show "you reacted" with a stronger fill and no outline.
+
+            STILL NOT FIXED, ON PURPOSE: closing a photo does not return it to its bubble. Two fixes have already been shipped for that and it came back, so I want to measure it on your phone rather than guess a third time.
         run: fastlane beta
