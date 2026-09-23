@@ -851,22 +851,23 @@ enum MessageRowLayout {
                     plan.meta.origin.y = grown.height - stripH + gapAbove + (height - plan.meta.height) / 2
                 }
 
-                // ⛔ MINE ALIGNS RIGHT, THEIRS ALIGNS LEFT — the reference's own rule, read out of
-                // their source: `alignment = isIncoming ? .left : .right`. Ours started every strip
-                // at the bubble's leading edge whichever side it was on, so on one of my own
-                // messages the pills sat in the far corner from the message, tucked into the
-                // bottom-left curve. That is the "tucking angle" in his report.
+                // ⛔ THE SAME SIDE ON BOTH — owner, 2026-09-23, shown the two side by side and asked
+                // directly. **THIS DELIBERATELY DOES NOT FOLLOW THE REFERENCE APP**, whose rule is one
+                // line in their source: `alignment = isIncoming ? .left : .right`. I ported that rule
+                // and he does not want it. He wants the pills in one place on every row, with the
+                // time at the trailing end of each.
                 //
-                // ⚠️ THE META KEEPS ITS OWN END OF THE ROW. It was moved to the trailing edge just
-                // above, so on my bubble the pills run from the leading side of the space LEFT by
-                // it rather than from the bubble edge — otherwise the two would land on each other.
-                // ⚠️ `metaOnRow` WAS CAPTURED BEFORE THE META WAS MOVED, which is the only reason it
-                // can still answer this. `plan.metaOnOwnLine` is true by now in BOTH cases — the
-                // block above sets it — so reading it here would push the pills clear of a meta
-                // that is not on this row at all.
-                let stripRight = metaOnRow ? grown.minX + plan.meta.minX - 8 : grown.maxX - padH
+                // ⚠️ SO DO NOT "RESTORE" THE SIDE SPLIT BY READING THEIR SOURCE AGAIN. It is not an
+                // oversight and it is not a port that was left half done; it is his choice against a
+                // faithful copy, and this comment exists so that whoever finds that line next does
+                // not helpfully undo it.
+                //
+                // ⚠️ AND THE "TUCKING ANGLE" IN HIS FIRST REPORT WAS NEVER THIS. Moving the side did
+                // not answer it. The real cause was the pill sitting ONE POINT off the bubble’s bottom
+                // edge, which `gapBelow` above now fixes. Two faults in one screenshot, and the
+                // alignment change was my wrong guess at the first of them.
                 plan.reactionsOnMyBubble = b.isMe
-                var cx = b.isMe ? stripRight - total : grown.minX + padH
+                var cx = grown.minX + padH
                 // Sat on `gapBelow` rather than centred in the band. Centring split the two gaps
                 // evenly, which is how a deliberate 2 above and 10 below became 6 and 6.
                 let cy = grown.maxY - gapBelow - height
