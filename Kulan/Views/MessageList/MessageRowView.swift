@@ -129,10 +129,34 @@ final class ReactionChipView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ attr: NSAttributedString, mine: Bool, face: ReactionFace?) {
+    /// ⛔ THE PILL TAKES THE COLOUR OF THE BUBBLE IT SITS ON — the reference app's own rule, read out
+    /// of their source for his 2026-09-23 report. They pick the whole palette by side first
+    /// (`case .incoming` / `case .outgoing`, each pulling `reactionInactiveBackground` and
+    /// `reactionActiveBackground` from that side's bubble colours) and only then ask whether I
+    /// reacted.
+    ///
+    /// ⚠️ OURS ASKED ONLY THE SECOND QUESTION, which is the whole bug. `onMyBubble` did not exist:
+    /// an un-reacted pill was `receivedFill` wherever it sat. On a received bubble that is the
+    /// bubble's own fill, so the pill was invisible; on one of MY bubbles, which is the chat colour
+    /// he has set, a pale grey pill sat on top of it looking like it had been pasted there. His
+    /// screenshot is the second case.
+    ///
+    /// ⚠️ WHITE AT ALPHA ON MY OWN BUBBLE, NOT A NAMED COLOUR, because the sent bubble is whatever
+    /// chat colour he picked and a fixed grey cannot sit on all of them. The text on that bubble is
+    /// already white for the same reason.
+    ///
+    /// ⚠️ AND THE RING IS GONE. The reference marks "I reacted" with a STRONGER FILL and draws no
+    /// stroke at all; ours drew a `.label` outline, which on a wallpapered chat (forced dark, so
+    /// `.label` is white) is the bright hoop around the pill in his screenshot. Selected is now the
+    /// heavier of the two fills on each side, which is their rule and one less thing on screen.
+    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?) {
         label.attributedText = attr
-        backgroundColor = mine ? BubblePalette.accent.withAlphaComponent(0.18) : BubblePalette.receivedFill
-        ring.strokeColor = mine ? BubblePalette.accent.withAlphaComponent(0.9).cgColor : UIColor.clear.cgColor
+        if onMyBubble {
+            backgroundColor = UIColor.white.withAlphaComponent(mine ? 0.45 : 0.22)
+        } else {
+            backgroundColor = BubblePalette.accent.withAlphaComponent(mine ? 0.18 : 0.08)
+        }
+        ring.strokeColor = UIColor.clear.cgColor
         hasFace = face != nil
         if let face {
             let v = faceView ?? {
@@ -1134,6 +1158,7 @@ final class MessageRowView: UIView {
             // that they ride the reply swipe with it.
             v.frame = b.reactions[i].offsetBy(dx: -b.bubble.minX, dy: -b.bubble.minY)
             v.configure(b.reactionAttrs[i], mine: b.reactionMine[i],
+                        onMyBubble: b.reactionsOnMyBubble,
                         face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil)
         }
     }

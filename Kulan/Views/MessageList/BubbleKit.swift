@@ -26,10 +26,30 @@ enum BubbleMetrics {
     static let avatarGap: CGFloat = 6
     static let senderNameGap: CGFloat = 3      // VStack spacing above the bubble
     static let reactionOverhang: CGFloat = 13  // how far the badge hangs below the bubble
-    /// The reactor's face inside a reaction pill. Sized off the emoji beside it (14pt) rather than
-    /// picked: a circle much larger turns the pill into a row of avatars, and much smaller reads as
-    /// a dot. See `MessageRowLayout.decorations`.
+    /// The reactor's face inside a reaction pill. Sized off the emoji beside it rather than picked:
+    /// a circle much larger turns the pill into a row of avatars, and much smaller reads as a dot.
+    /// See `MessageRowLayout.decorations`.
     static let reactionFace: CGFloat = 18
+    /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
+    /// [the reference] react badge then make it like it, size and color".
+    ///
+    /// Their `ReactionButtonListComponent` lays every chip out from four numbers, and ours had
+    /// arrived at three of them by eye: a FIXED 30pt height (ours derived one from the text, landing
+    /// near 24), 11pt of inset on each side (ours had 6), a 20×20 box for the emoji (ours drew 14pt
+    /// type) and 2pt between chips (ours had 4). The pill reading small and tight is all four of
+    /// those at once, which is why it could not be nudged into shape.
+    ///
+    /// ⚠️ THE HEIGHT IS FIXED, NOT MEASURED, and that is the point of it. A pill whose height comes
+    /// from its own contents is a different height on an emoji-only chip than on one carrying a
+    /// count, and a row of pills that disagree is exactly the ragged edge he ringed.
+    static let reactionChipHeight: CGFloat = 30
+    /// Each side. Their `sideInsets`.
+    static let reactionChipInset: CGFloat = 11
+    /// Between two pills. Their `spacing`.
+    static let reactionChipGap: CGFloat = 2
+    /// The emoji's box. Theirs is a 20×20 image; ours is type, and 17pt renders to almost exactly
+    /// 20 points tall, so the glyph fills the same square rather than floating in it.
+    static let reactionEmojiFont: CGFloat = 17
     /// The failed-send badge outside the bubble, and its gap from it. The reference app's own
     /// numbers: a 24pt box and `messageStackSpacing` = 8.
     static let failBadge: CGFloat = 24

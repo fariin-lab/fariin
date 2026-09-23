@@ -227,6 +227,12 @@ struct BubblePlan {
     var reactionMine: [Bool]
     /// One per chip, aligned with `reactions`. Nil where the chip shows a count instead of a face.
     var reactionFaces: [ReactionFace?] = []
+    /// ⛔ WHICH SIDE'S BUBBLE THESE PILLS SIT ON, carried so the cell can colour them — the
+    /// reference app picks a reaction's palette by side before it asks anything else, and the cell
+    /// has a `BubblePlan`, not the `BubbleRow` that knows `isMe`. See `ReactionChipView.configure`.
+    ///
+    /// ⚠️ DEFAULTED so the three plans built without decorations keep their memberwise inits.
+    var reactionsOnMyBubble: Bool = false
     /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
     var failBadge: CGRect?
 }
@@ -762,7 +768,7 @@ enum MessageRowLayout {
             let extra = b.reactions.count - shown.count
             var chips: [(NSAttributedString, Bool, ReactionFace?)] = shown.map { chip in
                 let s = NSMutableAttributedString(string: chip.emoji, attributes: [
-                    .font: UIFont.systemFont(ofSize: 14)])
+                    .font: UIFont.systemFont(ofSize: BubbleMetrics.reactionEmojiFont)])
                 // The count appears only where there is no single face to show — see `ReactionChip`.
                 if chip.count > 1 {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
@@ -777,15 +783,18 @@ enum MessageRowLayout {
                     .foregroundColor: UIColor.secondaryLabel]), false, nil))
             }
             var widths: [CGFloat] = []
-            var height: CGFloat = 0
+            // ⛔ A FIXED HEIGHT, THEIR NUMBER — see `BubbleMetrics.reactionChipHeight`. It used to be
+            // derived from whichever was taller, the text or the face, which made an emoji-only pill
+            // and a pill with a count two different heights in the same row.
+            let height: CGFloat = BubbleMetrics.reactionChipHeight
             for (attr, _, face) in chips {
                 let s = BubbleText.size(attr, width: .greatestFiniteMagnitude)
                 // A face adds its own circle and the gap before it.
                 let faceW = face == nil ? 0 : BubbleMetrics.reactionFace + 4
-                widths.append(s.width + 12 + faceW)           // .padding(.horizontal, 6)
-                height = max(height, max(s.height + 6, face == nil ? 0 : BubbleMetrics.reactionFace + 6))
+                widths.append(s.width + BubbleMetrics.reactionChipInset * 2 + faceW)
             }
-            let total = widths.reduce(0, +) + CGFloat(max(0, chips.count - 1)) * 4
+            let total = widths.reduce(0, +)
+                + CGFloat(max(0, chips.count - 1)) * BubbleMetrics.reactionChipGap
 
             if inside {
                 // ⚠️ THE BUBBLE GROWS DOWNWARD, WHICH IS WHY THIS IS SAFE TO DO HERE. Everything above
@@ -830,20 +839,43 @@ enum MessageRowLayout {
                     plan.meta.origin.y = grown.height - stripH + gapAbove + (height - plan.meta.height) / 2
                 }
 
-                var cx = grown.minX + padH
+                // ⛔ MINE ALIGNS RIGHT, THEIRS ALIGNS LEFT — the reference's own rule, read out of
+                // their source: `alignment = isIncoming ? .left : .right`. Ours started every strip
+                // at the bubble's leading edge whichever side it was on, so on one of my own
+                // messages the pills sat in the far corner from the message, tucked into the
+                // bottom-left curve. That is the "tucking angle" in his report.
+                //
+                // ⚠️ THE META KEEPS ITS OWN END OF THE ROW. It was moved to the trailing edge just
+                // above, so on my bubble the pills run from the leading side of the space LEFT by
+                // it rather than from the bubble edge — otherwise the two would land on each other.
+                // ⚠️ `metaOnRow` WAS CAPTURED BEFORE THE META WAS MOVED, which is the only reason it
+                // can still answer this. `plan.metaOnOwnLine` is true by now in BOTH cases — the
+                // block above sets it — so reading it here would push the pills clear of a meta
+                // that is not on this row at all.
+                let stripRight = metaOnRow ? grown.minX + plan.meta.minX - 8 : grown.maxX - padH
+                plan.reactionsOnMyBubble = b.isMe
+                var cx = b.isMe ? stripRight - total : grown.minX + padH
                 let cy = grown.maxY - height - ((stripH - height) / 2)
                 for (i, w) in widths.enumerated() {
                     plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
                     plan.reactionAttrs.append(chips[i].0)
                     plan.reactionMine.append(chips[i].1)
                     plan.reactionFaces.append(chips[i].2)
-                    cx += w + 4
+                    cx += w + BubbleMetrics.reactionChipGap
                 }
                 // The bubble is taller now, so the row's bottom is its bottom. No overhang is
                 // reserved, because nothing hangs any more.
                 y = max(y, grown.maxY)
             } else {
-                // Media keeps the badge hanging off the corner it belongs to.
+                // Media keeps the badge hanging off the corner it belongs to, and this branch already
+                // chose its side correctly. Only the gap changes here.
+                //
+                // ⛔ `reactionsOnMyBubble` STAYS FALSE HERE, DELIBERATELY. It is not an oversight and
+                // it is not the same question as the side. This badge hangs OUTSIDE the bubble, on
+                // the wallpaper, so it has no bubble colour to take — and the reference agrees: the
+                // path that draws reactions off a bubble passes `type: .freeform`, which picks a
+                // static fill chosen to read on a wallpaper rather than either side's palette. The
+                // white-at-alpha treatment would be nearly invisible out here.
                 var cx = b.isMe ? (bubbleRect.maxX - 10 - total) : (bubbleRect.minX + 10)
                 let cy = bubbleRect.maxY + BubbleMetrics.reactionOverhang - height
                 for (i, w) in widths.enumerated() {
@@ -851,7 +883,7 @@ enum MessageRowLayout {
                     plan.reactionAttrs.append(chips[i].0)
                     plan.reactionMine.append(chips[i].1)
                     plan.reactionFaces.append(nil)
-                    cx += w + 4
+                    cx += w + BubbleMetrics.reactionChipGap
                 }
                 // Reserve the overhang so the badge cannot collide with the next bubble. Reserve less
                 // than it hangs and they touch; reserve more and there is a gap nothing draws into.
