@@ -606,7 +606,31 @@ private struct AddStoryFace: View {
                 // overflowing here is safe and is what keeps a portrait photo from letterboxing.
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                Color.primary.opacity(0.08)
+                // ⛔ THE SILHOUETTE, NOT A BLANK GREY PANEL — owner, 2026-09-23, on an account with
+                // no profile picture: "when my no profile picture, story is using skeleton loading,
+                // use the no-profile image".
+                //
+                // ⚠️ A FLAT FILL READS AS LOADING, AND THAT IS THE WHOLE REPORT. An empty grey
+                // rectangle is what every skeleton in this app looks like, so a card that will
+                // never have a photo was indistinguishable from one that is still fetching — he
+                // sat waiting for it to resolve. The same silhouette every avatar already falls
+                // back to says "there is no picture here" instead, and says it in the app's own
+                // existing vocabulary rather than a new one.
+                //
+                // ⚠️ SIZED OFF THE CARD, not a constant. `AvatarView` scales this glyph by its own
+                // diameter; a card is several times wider than an avatar, so a typed point size
+                // would draw a tiny mark floating in a big rectangle. The width carries it, using
+                // the same `placeholderGlyphScale` proportion.
+                AvatarPalette.placeholderFill
+                    .overlay {
+                        GeometryReader { geo in
+                            Image(systemName: AvatarPalette.placeholderSymbol)
+                                .font(.system(size: geo.size.width * AvatarPalette.placeholderGlyphScale,
+                                              weight: .medium))
+                                .foregroundStyle(.white.opacity(0.55))
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
+                    }
             }
         }
         .animation(.easeOut(duration: 0.25), value: image != nil)
