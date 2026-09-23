@@ -74,9 +74,25 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            ONE CHANGE: YOUR PROFILE PHOTO FOLDS INTO A CIRCLE.
+            EIGHT FIXES. Please read the last two lines, they matter more than the rest.
 
-            Open My Profile and it starts on the big photo, same as before. Scroll up a little and the photo springs into a circle, then the circle scrolls away with the page. Scroll back to the top, or pull down, and it springs back to the big photo.
+            THE PROFILE PHOTO SCROLL IS NOW THEIRS, NOT AN IMITATION. I read the reference app's source. Their whole rule is: one point of upward scroll collapses it, thirty-two points of PULLING DOWN past the top expands it again, over a 0.35 second spring. Ours used 24 and 4, a narrow band around the same point in the same direction, which is exactly why the picture could sit in the middle arguing with your finger. Expanding also now needs a real finger on the glass, so a hard flick that bounces past the top no longer springs the photo open with nobody touching it. And it works on other people's profiles too.
 
-            Only on your own profile, and only when you have a photo. Tell me if it should happen on other people's profiles too.
+            THE CHAT LIST HEADER HAS ITS BLUR BACK, and that one was my fault. Removing the line last build also removed the surface the blur was drawn on. The line is still gone.
+
+            THE CHAT HEADER BLUR ARRIVES WITH THE PUSH instead of a beat after it.
+
+            THE REACTION PILL no longer touches the bottom of the bubble, and sits on the same side on every message, which is what you asked for over the reference app's own split.
+
+            TAPPING AN EMPTY AVATAR no longer opens an empty picture. With no photo it opens the editor.
+
+            GLOWING STORY RINGS go grey after you watch, like the Friends ones always did.
+
+            NO PROFILE PICTURE now shows the person silhouette instead of a blank grey card that looked like it was still loading.
+
+            SETTINGS, HELP CENTER now opens the new help site at fariin.com/help. 31 articles, searchable.
+
+            ⚠️ STILL BROKEN AND NOT A BUG IN THE APP: your photo will not upload, passkeys and two-step say "Not found", and profile pictures are missing. All three are the same thing: BILLING IS OFF on the Firebase project, so its storage quota is full. Nothing I can change in the app fixes any of them.
+
+            ⚠️ AND STILL NOT FIXED: closing a photo does not return it to its bubble. I found where it goes wrong but not yet why, and three guesses have already failed, so I am not shipping a fourth.
         run: fastlane beta
