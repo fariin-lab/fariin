@@ -74,15 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PIN AND UNPIN IS THE ONE TO TEST. A pin used to move one row and quietly delete and re-insert every row underneath it, so half the list flickered while the pinned chat flew. It now moves exactly one row, the way the reference app does. The pin icon should also arrive with the row instead of fading in after it lands.
+            ONE FIX IN THIS BUILD, AND IT IS THE ONE YOU REPORTED TWICE.
 
-            SCROLL DOWN TO CLOSE A STORY. This returned to the right card from the friends strip and did nothing at all on the pushed pages. The all friends page is a proven fix. The two Glowing screens have a safeguard rather than a proven fix, so if the close is still dead there, say so.
+            THE CHAT LOADING SKELETON NO LONGER RUNS UP UNDER THE HEADER. Open a chat that has to load, and the grey placeholder bubbles should start below the name and the back arrow, not behind them.
 
-            SEARCH IS ITS OWN PAGE NOW. Tapping the field no longer leaves the chat list underneath. Empty, it shows what you have opened from search before. Typed, it shows chats, then groups, then people. A username still has to be typed in full, on purpose.
+            Worth knowing why it took two goes. The first attempt asked the system for the safe area height, which sounds right and is the normal way to do it. But that part of the chat is drawn deliberately ignoring the safe area, so the number the system hands back there is zero. It was asking for a value the screen had already been told to forget, which is why nothing moved and your second screenshot looked identical to the first. It now measures the window instead, which is the one place the real number survives on a screen like that.
 
-            YOUR PROFILE. A joined date under the bio, room for the Glowers line so it stops truncating, and one corner radius across both cards. Posted stories now show real view counts, with the spacing and shape from the concept.
-
-            ALSO: the long press preview keeps its corners, recent emoji sit four across, tab icons are always filled, and a blocked person's page offers Delete Chat.
-
-            NOTE: there is a small black debug band at the top of the Stories tab, deliberately. If the long press on a Glowing card still does nothing, hold one and send a photo of those three lines. It comes out next build.
+            If it is still wrong, the useful photo is a chat caught mid load, before the messages arrive.
         run: fastlane beta
