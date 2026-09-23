@@ -803,7 +803,19 @@ enum MessageRowLayout {
                 // leading edge, would.
                 let padH: CGFloat = 10
                 let gapAbove: CGFloat = 2
-                let stripH = height + gapAbove
+                // ⛔ AND A GAP BELOW IT, WHICH THERE WAS NOT — owner, 2026-09-23: "react badge is
+                // touching bubble bottom angle".
+                //
+                // ⚠️ THE OLD ARITHMETIC LEFT EXACTLY ONE POINT. The strip grew the bubble by
+                // `height + 2` and then centred the pill inside that band, so the pill's bottom
+                // landed 1pt above the bubble's own bottom edge — flush against it to the eye, and
+                // worse against a rounded corner, which curves in exactly where the pill ends.
+                //
+                // ⚠️ `vPad`, NOT A NEW NUMBER. That is the bubble's own vertical text inset, so the
+                // pills now sit the same distance off the bottom edge as the words sit off the top.
+                // The bubble gets its padding back instead of the strip eating it.
+                let gapBelow = BubbleMetrics.vPad
+                let stripH = gapAbove + height + gapBelow
 
                 var grown = plan.bubble
                 grown.size.height += stripH
@@ -855,7 +867,9 @@ enum MessageRowLayout {
                 let stripRight = metaOnRow ? grown.minX + plan.meta.minX - 8 : grown.maxX - padH
                 plan.reactionsOnMyBubble = b.isMe
                 var cx = b.isMe ? stripRight - total : grown.minX + padH
-                let cy = grown.maxY - height - ((stripH - height) / 2)
+                // Sat on `gapBelow` rather than centred in the band. Centring split the two gaps
+                // evenly, which is how a deliberate 2 above and 10 below became 6 and 6.
+                let cy = grown.maxY - gapBelow - height
                 for (i, w) in widths.enumerated() {
                     plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
                     plan.reactionAttrs.append(chips[i].0)
