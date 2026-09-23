@@ -1359,11 +1359,18 @@ struct AboutView: View {
     var body: some View {
         List {
             Section {
-                // /support, NOT the site root. The root has been a holding page since the landing
-                // page was pulled, so "Support Center" opened a page reading "Working on it." — the
-                // one link somebody taps when they are already stuck. The real page exists and has
-                // for a while.
-                outLink("Support Center", URL(string: "https://fariin.com/support")!)
+                // ⛔ /help, NOT /support — owner, 2026-09-23, the day the Help Centre went up.
+                //
+                // /support is one page: a short list of answers and an address to write to. /help is
+                // the Help Centre — 24 articles across seven topics, searchable, each one its own
+                // link. This is the item somebody taps when they are already stuck, so it should
+                // land on the place that can actually answer them rather than on the place that
+                // asks them to send an email.
+                //
+                // ⚠️ NOT the site root, which is the older note here and still true: the root was a
+                // holding page reading "Working on it." for a while, and this link pointed at it.
+                // /support still exists and is still linked from inside /help.
+                outLink("Help Center", URL(string: "https://fariin.com/help")!)
                 outLink("Report a Problem", reportURL)
             } header: {
                 Text("Help")
