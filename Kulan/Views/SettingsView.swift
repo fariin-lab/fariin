@@ -57,6 +57,9 @@ struct SettingsView: View {
     @State private var showEdit = false
     @State private var showQR = false
     @State private var showPhoto = false          // tap the avatar → full-screen photo morph
+    /// Whether a REAL photograph is on the avatar, as reported by the avatar itself rather than
+    /// inferred from the url. See the `onPhotoResolved` note on `profileHeader`.
+    @State private var meHasPhoto = false
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     @State private var avatarFrame: CGRect = .zero   // the circle's global rect — the morph's start and end
 
@@ -297,7 +300,18 @@ struct SettingsView: View {
             // on the screen and the only picture on it, and at 96 it was smaller than the app icon
             // in the tab bar below it. The reference app's own settings avatar is 100; the extra goes to the
             // same place his screenshot points, which is the gap between the circle and the name.
-            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 120)
+            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 120,
+                       // ⛔ ASK THE AVATAR WHAT IT ACTUALLY DREW — owner, 2026-09-23, with the empty
+                       // circle ringed: "when I don't have any profile pics I still can click to
+                       // open empty image".
+                       //
+                       // ⚠️ THIS CALL SITE IS THE ONE `AvatarView.onPhotoResolved` WAS WRITTEN FOR,
+                       // and its own comment names this bug in the past tense: "a caller that
+                       // trusted the string made the avatar openable into an empty circle". The tap
+                       // below trusted `photoUrl` being non-empty, which is not the same question —
+                       // a url whose file is gone, or has not loaded, is a non-empty string and a
+                       // silhouette on screen. The viewer then opened on nothing.
+                       onPhotoResolved: { meHasPhoto = $0 })
                 // The morph's source rect, and the hidden-while-open swap, same as ContactInfoView's
                 // hero: the viewer flies out of this circle and back into it.
                 .background(GeometryReader { g in
@@ -306,8 +320,9 @@ struct SettingsView: View {
                 .opacity(showPhoto ? 0 : 1)
                 .contentShape(Circle())
                 .onTapGesture {
-                    if let url = profile.me?.photoUrl, !url.isEmpty { showPhoto = true }
-                    else { showEdit = true }
+                    // No picture is not a dead tap: it opens the editor, which is where you go to
+                    // put one there. That half was already right and is unchanged.
+                    if meHasPhoto { showPhoto = true } else { showEdit = true }
                 }
             VStack(spacing: 8) {
                 // ⚠️ THE BADGE WAS NEVER DRAWN ON MY OWN NAME (owner 2026-08-11: "iam not seeing

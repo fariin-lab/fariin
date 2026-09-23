@@ -938,7 +938,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // compares its values or its identity is not something to bet a 40-minute build on — that
         // caution was already written here, and `===` sidesteps it entirely.
         if item.standardAppearance !== Self.scrolledAppearance
-            || item.scrollEdgeAppearance !== Self.atTopAppearance
+            || item.scrollEdgeAppearance !== Self.scrolledAppearance
             || item.compactAppearance !== Self.scrolledAppearance {
             configureNavBar(item)
         }
@@ -956,14 +956,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         return a
     }()
 
-    /// The bar at the top of the list: nothing behind it, which is what the Calls page shows at rest.
-    private static let atTopAppearance: UINavigationBarAppearance = {
-        let a = UINavigationBarAppearance()
-        a.configureWithTransparentBackground()
-        a.shadowColor = .clear
-        a.shadowImage = UIImage()
-        return a
-    }()
+    // ⛔ `atTopAppearance` IS DELETED, NOT COMMENTED OUT — 2026-09-23. It was a transparent
+    // scroll-edge appearance, added on 09-16 to answer the "border" report, and it is what left the
+    // bar with nothing behind it at rest once the search bar's own background was cleared. That is
+    // the "no blur" in his fifth screenshot. `configureNavBar` carries the full history; a dead
+    // appearance sitting here is the kind of thing somebody re-wires in good faith.
 
     /// ⛔ THE BLUR STAYS, THE LINE UNDER IT GOES — owner, 2026-09-11, after the background was
     /// hidden outright: "now chat list bottom you removed border correctly. Please fix the header:
@@ -983,14 +980,32 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// tracked scroll view to decide by). It now applies this same material, for the same reason
     /// this method gives below. Nothing else touches this page's item.
     ///
-    /// ⚠️ THE TWO APPEARANCES DIFFER, AND THAT IS THE POINT — see the note inside the method. They
-    /// were deliberately identical between 2026-09-11 (`ec0c76cd`) and 2026-09-16, on the grounds
-    /// that the bar had no tracked scroll view to choose by. He reported the same thing again, so
-    /// that trade is off: an always-drawn background is what he has been calling a border.
+    /// ⛔ ALL THREE CARRY THE MATERIAL AGAIN — owner, 2026-09-23, FIFTH report, and this one names
+    /// the symptom my own previous fix created: "now I am not seeing blur, make it like the call
+    /// list page header".
+    ///
+    /// ⚠️ THE HISTORY MATTERS HERE, BECAUSE THIS LINE HAS BEEN BOTH WAYS AND BOTH WERE REPORTED.
+    ///   · `ec0c76cd` → `10d68265` (09-16): identical material on all three. He called the
+    ///     always-drawn background a border, so `scrollEdge` was made transparent.
+    ///   · 09-23, earlier today: the LINE he was ringing turned out to be the search bar's own
+    ///     hairline, cleared with `backgroundImage = UIImage()`. Correct, and it is still in.
+    ///   · But those two together left this page with NOTHING behind the bar at rest: the search
+    ///     bar no longer draws its own surface, and `scrollEdge` was transparent. That is the "no
+    ///     blur" in his screenshot, and it is my regression, not a new fault.
+    ///
+    /// ⚠️ SO THE OLD TRADE IS BACK ON, AND THE REASON IT FAILED IS GONE. The 09-16 note reasoned
+    /// that an always-drawn background creates a tonal step where the bar ends. That step existed
+    /// because TWO surfaces were stacked there — the bar's material AND the search bar's own
+    /// background — and the second one is now cleared. One material, with no hairline under it and
+    /// no second surface inside it, is what the Calls page he keeps naming actually shows.
+    ///
+    /// ⚠️ IF A STEP COMES BACK, IT IS NOT THIS LINE. It would be the bar's SHADOW, which
+    /// `scrolledAppearance` clears on two lines, or the search bar's background returning because
+    /// SwiftUI re-installed the controller — `reassertNavChrome` re-states both on every pass.
     private func configureNavBar(_ item: UINavigationItem) {
         item.standardAppearance = Self.scrolledAppearance
         item.compactAppearance = Self.scrolledAppearance
-        item.scrollEdgeAppearance = Self.atTopAppearance
+        item.scrollEdgeAppearance = Self.scrolledAppearance
     }
 
     private func registerAsContentScrollView() {
