@@ -21,3 +21,9 @@ xcuserdata/
 *.mobileprovision
 *.cer
 .firebase/
+
+# Research scratch — reference-app source read while porting a screen. It is somebody
+# else's code, this repository is public, and a single `git add -A` would publish it.
+# Keep it out of the index rather than relying on remembering. Delete the file itself
+# whenever you are done with it; nothing in the app links against it.
+/si.swift

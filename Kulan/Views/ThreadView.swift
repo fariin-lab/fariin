@@ -583,6 +583,20 @@ struct ThreadView: View {
     /// this whole screen. For the 0.35s of a push transition the screen is not yet at the window's
     /// origin and every slice is offset by the slide; at radius 20 under an 80% wash that is not a
     /// thing anyone can see, and theirs has the same moment.
+    /// Where the loading skeleton starts: the status bar plus the navigation bar, read off the
+    /// WINDOW because this screen ignores the safe area (see the skeleton's note).
+    ///
+    /// ⚠️ 44 IS THE INLINE BAR'S OWN HEIGHT, and it is a constant rather than a measurement because
+    /// the bar is not in this view's hierarchy to measure. The chat header is always inline — it is
+    /// `ChatNavigationItem`'s `titleView`, never a large title — so there is no second value it
+    /// could take.
+    private static var skeletonTopInset: CGFloat {
+        let top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }
+            .max() ?? 59
+        return top + 44
+    }
+
     private var wallpaperBlur: WallpaperBlurState? {
         WallpaperBlur.state(for: cid, dark: dark, frame: WallpaperBlur.windowFrame)
     }
@@ -743,11 +757,18 @@ struct ThreadView: View {
                     // drawing at the physical top of the screen, where the real messages never do:
                     // they are held off it by the list's own content inset.
                     //
-                    // `safeAreaPadding` asks the system for that same distance rather than naming a
-                    // number, so it stays right on every device and through a rotation. It costs
-                    // nothing when there is no inset to apply.
+                    // ⛔ `safeAreaPadding` WAS THE FIX AND IT ADDED NOTHING — his report, 2026-09-16,
+                    // the same screenshot again after 747 shipped. That modifier pads by the
+                    // CURRENT safe-area inset, and this overlay sits inside
+                    // `.ignoresSafeArea(.container, edges: [.top, .bottom])` — where that inset is
+                    // ZERO by definition. It was asking the system for a number the system had
+                    // already been told to forget.
+                    //
+                    // The window is the reference frame here, for the same reason the wallpaper
+                    // takes it a few lines down: this screen is drawn ignoring the safe area, so the
+                    // only place the real inset still exists is the window.
                     ThreadSkeleton()
-                        .safeAreaPadding(.top)
+                        .padding(.top, Self.skeletonTopInset)
                         .allowsHitTesting(false)
                 }
             }
