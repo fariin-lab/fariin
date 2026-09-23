@@ -66,9 +66,23 @@ struct GlowProfileView: View {
     /// them, so a slow drag never leaves a half-rounded square on screen. See `heroThresholds`.
     @State private var heroCircle = false
 
-    /// Mine only, and only with a photograph: he asked for My Profile, and a letter hero is already
-    /// the small thing.
-    private var canCircle: Bool { isMe && hasHeroPhoto }
+    /// ⛔ STANDS IN FOR THEIR `scrollView.isDragging && scrollView.isTracking`, which the expand arm
+    /// of `heroThresholds` requires and the collapse arm does not.
+    ///
+    /// ⚠️ `.interacting` IS THE FINGER, and that is the distinction that matters here. SwiftUI's
+    /// other phases — `.decelerating`, `.animating` — are the scroll continuing under its own
+    /// momentum, which is exactly the case UIKit's two flags exclude. Without this, flicking up
+    /// hard enough to rubber-band past the top springs the photograph open on the way back, with
+    /// nobody touching the screen.
+    @State private var heroDragging = false
+
+    /// ⛔ EVERY PROFILE, NOT JUST MINE — owner, 2026-09-23: "apply the same behavior to other
+    /// profiles as well, it should work consistently on both". It was `isMe && hasHeroPhoto`.
+    ///
+    /// The photograph is still the condition, and that matches the reference app exactly: their own
+    /// rule reads `peer.smallProfileImage != nil` before it will expand anything. A letter hero is
+    /// already the small thing and has nothing to collapse into.
+    private var canCircle: Bool { hasHeroPhoto }
 
     /// The circle's diameter, measured off his own screenshot of the circle state: 430px across a
     /// 924px-wide shot of the screen.
@@ -77,11 +91,29 @@ struct GlowProfileView: View {
     /// The header's height while it is a circle: the bar, the circle, and the gap to the name.
     private static var circleSlotHeight: CGFloat { barBottom + circleDiameter + 16 }
 
-    /// Fold after this much upward scroll, unfold at or under the other. The gap between the two
-    /// is what stops a finger resting near the top from flicking the picture back and forth.
-    private static let heroThresholds: (fold: CGFloat, unfold: CGFloat) = (24, 4)
+    /// ⛔ THE REFERENCE APP'S OWN TWO NUMBERS, READ OUT OF THEIR SOURCE — owner, 2026-09-23: study
+    /// their profile behaviour and reproduce its scroll logic, threshold and gesture handling
+    /// rather than approximating it.
+    ///
+    /// Their `scrollViewDidScroll` is four lines of decision and these are they:
+    ///
+    ///     if offsetY <= -32.0 && scrollView.isDragging && scrollView.isTracking { expand }
+    ///     else if offsetY >= 1.0                                               { collapse }
+    ///
+    /// ⚠️ THE TWO SIDES ARE WILDLY ASYMMETRIC AND THAT IS THE ENTIRE FEEL. Collapsing needs ONE
+    /// POINT of upward scroll — effectively "the moment you scroll at all" — while expanding needs
+    /// thirty-two points of OVERSCROLL PAST THE TOP, which is a deliberate pull-down you cannot do
+    /// by accident. Ours had 24 and 4, a narrow hysteresis band around the same point in the same
+    /// direction, which is why the picture could sit in the middle arguing with the finger.
+    ///
+    /// ⚠️ AND EXPANDING DEMANDS A LIVE FINGER. Their `isDragging && isTracking` means momentum
+    /// alone can never expand it: a hard upward flick that rubber-bands past the top settles back
+    /// without the photograph springing open behind it. Collapsing carries no such condition.
+    private static let heroThresholds: (collapseAt: CGFloat, expandAt: CGFloat) = (1, -32)
 
-    private static let heroSpring = Animation.spring(response: 0.42, dampingFraction: 0.86)
+    /// ⛔ 0.35 SECONDS, SPRING — theirs, verbatim: `.animated(duration: 0.35, curve: .spring)`, the
+    /// transition they hand to `updateIsAvatarExpanded`. Ours was 0.42 at 0.86 damping.
+    private static let heroSpring = Animation.spring(duration: 0.35)
 
     /// The bottom of the navigation bar in screen coordinates — the status strip plus the bar's own
     /// 44pt. Read from the window, because a view whose ancestor has given up the top safe area
@@ -185,14 +217,34 @@ struct GlowProfileView: View {
             // The photograph starts at y = 0 and is `photoHeight` tall, so its bottom edge on
             // screen is that height less however far the page has been scrolled. Tied to where the
             // PICTURE is, never to a scroll threshold: the two part company on a wide screen.
+            // Kept in step with the finger for `heroDragging` — see that property.
+            .onScrollPhaseChange { _, phase in
+                heroDragging = (phase == .interacting)
+            }
             .onScrollGeometryChange(for: CGFloat.self) { g in
                 g.contentOffset.y + g.contentInsets.top
             } action: { _, scrolled in
                 if canCircle {
-                    if !heroCircle && scrolled > Self.heroThresholds.fold {
+                    // ⛔ THEIR DECISION, IN THEIR ORDER. See `heroThresholds` for the two numbers
+                    // and why they are asymmetric. The expand arm carries their `isDragging &&
+                    // isTracking`, which `heroDragging` stands in for — without it a hard flick
+                    // that rubber-bands past the top would spring the photograph open behind the
+                    // finger, which theirs cannot do.
+                    //
+                    // ⚠️ THE STATE FLIPS MID-DRAG, WHICH IS WHAT "CONTINUES AFTER YOU LET GO"
+                    // ACTUALLY IS. He asked for a snap that completes once a threshold is passed;
+                    // there is no separate snap to write, because by the time the finger lifts the
+                    // boolean has already changed and the spring is already running. And because
+                    // it is a boolean, there is no halfway state for it to stop in.
+                    if !heroCircle, scrolled >= Self.heroThresholds.collapseAt {
                         withAnimation(Self.heroSpring) { heroCircle = true }
-                    } else if heroCircle && scrolled <= Self.heroThresholds.unfold {
+                        // Theirs: `hapticFeedback.tap()` on the way in.
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } else if heroCircle, scrolled <= Self.heroThresholds.expandAt, heroDragging {
                         withAnimation(Self.heroSpring) { heroCircle = false }
+                        // Theirs: `hapticFeedback.impact()` on the way out — the heavier of the two,
+                        // because opening the picture is the deliberate gesture of the pair.
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     }
                 }
                 // ⚠️ FALSE OUTRIGHT WITH NO PHOTOGRAPH. This flag exists to hide the bar's material
