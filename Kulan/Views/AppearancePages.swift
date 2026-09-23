@@ -180,7 +180,10 @@ struct ChatWallpaperPage: View {
                 }
             }
         }
-        .fullScreenCover(item: $previewing) { w in
+        // ⛔ A SHEET, NOT A FULL-SCREEN COVER — owner, 2026-09-23: "when i want to select wallpaper
+        // now is opening full page plz make it sheet". See `WallpaperPreviewScreen` for the header
+        // that came with it.
+        .sheet(item: $previewing) { w in
             WallpaperPreviewScreen(wallpaper: w)
         }
     }
@@ -269,7 +272,9 @@ struct WallpaperColorPage: View {
         .navigationTitle("Wallpaper Color")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .fullScreenCover(item: $previewing) { WallpaperPreviewScreen(wallpaper: $0) }
+        // A sheet here too, for the same 2026-09-23 report — the two pages present the identical
+        // screen and it must not open two different ways.
+        .sheet(item: $previewing) { WallpaperPreviewScreen(wallpaper: $0) }
     }
 
     private func hexIsDark(_ hex: UInt) -> Bool {
@@ -326,18 +331,32 @@ struct WallpaperPreviewScreen: View {
                 )
 
             VStack {
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark").font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
-                            .background(.regularMaterial, in: Circle())
+                // ⛔ A REAL HEADER ROW, NOT A ✕ FLOATING ON THE PICTURE — owner, 2026-09-23, with
+                // his reference beside ours. Theirs is a sheet with a titled bar: ✕ on the left, the
+                // word centred, and the wallpaper starting below it.
+                //
+                // ⚠️ THE TITLE IS CENTRED BY A `ZStack`, NOT BY `Spacer`s AROUND IT. A centred
+                // `HStack` puts the title in the middle of what is LEFT after the ✕, which is
+                // off-centre by half a button and is visible against a sheet's own rounded frame.
+                // The ✕ is laid over a full-width centred label instead, so the word sits on the
+                // screen's centre line whatever else shares the row.
+                ZStack {
+                    Text("Preview")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    HStack {
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 32, height: 32)
+                                .background(.regularMaterial, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
-                    Spacer()
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)   // clear the top edge (status bar hidden below)
+                .padding(.top, 14)
 
                 Spacer()
 
@@ -383,7 +402,11 @@ struct WallpaperPreviewScreen: View {
                 .padding(.bottom, 12)
             }
         }
-        .statusBarHidden()   // full-screen preview: no clock overlapping the X (user report)
+        // ⚠️ `.statusBarHidden()` IS GONE WITH THE FULL-SCREEN COVER, and the report it was added for
+        // goes with it. It existed because a cover reaches the physical top of the screen and the
+        // clock landed on the ✕. A sheet starts below the status bar, so there is nothing to
+        // overlap — and hiding the clock from inside a sheet would blank it for the page behind as
+        // well, which is a worse bug than the one it was fixing.
     }
 
     @ViewBuilder private var background: some View {

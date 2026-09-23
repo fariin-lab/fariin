@@ -900,6 +900,26 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if let bar = item.searchController?.searchBar {
             let shouldShow = item.searchController?.isActive ?? false
             if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
+            // ⛔ THE LINE HE KEEPS RINGING IS THE SEARCH BAR'S, NOT THE NAVIGATION BAR'S — owner,
+            // 2026-09-23, FOURTH report, and this time he placed it: between the button row and the
+            // Search field, not under the whole header.
+            //
+            // ⚠️ THAT IS WHY THREE FIXES MISSED IT. `ec0c76cd`, `10d68265` and `9876825a` all went
+            // after `UINavigationBarAppearance` — its background, then its `shadowColor`, then
+            // re-asserting both on every pass. All three were right about the navigation bar and all
+            // three left this alone, because a `UISearchBar` installed in the bar's bottom section
+            // draws its OWN background with its OWN hairline along the top edge. The nav bar's
+            // shadow was already cleared; this one never was, so a line survived every attempt.
+            //
+            // ⚠️ `backgroundImage`, NOT `searchBarStyle = .minimal`. Both remove the hairline, but
+            // `.minimal` also restyles the text field itself, and the field's look is his — it is
+            // the rounded grey capsule in every screenshot he has sent. An empty image removes the
+            // bar's background and its hairline and touches nothing else.
+            //
+            // ⚠️ RE-ASSERTED ON EVERY PASS, like everything else in this method, and for the reason
+            // written above `hidesSearchBarWhenScrolling`: SwiftUI rebuilds and re-installs the
+            // search controller freely, and a fresh one arrives with the system's background back.
+            if bar.backgroundImage == nil { bar.backgroundImage = UIImage() }
         }
         // ⛔ THE APPEARANCES ARE RE-ASSERTED ON EVERY PASS TOO — his report, 2026-09-16, the header
         // border again AFTER `10d68265` shipped in build 747.
