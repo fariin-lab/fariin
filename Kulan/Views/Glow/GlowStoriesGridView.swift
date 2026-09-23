@@ -17,6 +17,9 @@ struct GlowStoriesGridView: View {
     /// The face tapped on a card — pushes that person's profile. `GlowPerson` is Identifiable, so
     /// this doubles as the presentation trigger.
     @State private var profileTarget: GlowPerson?
+    /// Bumped when a story becomes seen, purely to re-run this body so the cards' initialisers
+    /// re-read `StoryPrefs`. See the `.onReceive` below for why it is a counter and not an `.id()`.
+    @State private var seenTick = 0
     /// The long press's Send Message, pushed the same way the face is. The tab's own grids append to
     /// a `NavigationPath` they own; this page has no path of its own, so it follows the pattern it
     /// already uses for profiles rather than reaching for the tab's.
@@ -131,6 +134,21 @@ struct GlowStoriesGridView: View {
                 .padding(.top, 8)
                 // The hold, on this page's own scroller — see `pressTarget`.
                 .glowCardLongPress { pressTarget(at: $0) }
+            }
+            // ⛔ REBUILD THE CARDS WHEN A STORY BECOMES SEEN — owner, 2026-09-23: the Glowing rings
+            // never went grey after watching, while the Friends strip's did.
+            //
+            // `GlowStoryCardView(card:)` reads `StoryPrefs.isStorySeen` in its initialiser, so the
+            // ring is decided when the card is BUILT. Nothing here had any reason to build it again
+            // after the viewer closed, so it kept the answer from before the story was watched. See
+            // `Notification.Name.storySeenChanged` for why the flag has to announce itself at all.
+            //
+            // ⚠️ A COUNTER, NOT AN `.id()`. Bumping state re-runs this body, which re-runs each
+            // card's initialiser and re-reads the flag — which is all that is wanted. Putting an
+            // `.id()` on the grid would throw the views away and take the scroll position with them,
+            // every time a ring changed colour.
+            .onReceive(NotificationCenter.default.publisher(for: .storySeenChanged)) { _ in
+                seenTick &+= 1
             }
         }
     }

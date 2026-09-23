@@ -773,6 +773,25 @@ struct StoryRowPlacement: Equatable {
     // visible. The reference app does not set `zPosition` anywhere; order is insertion order.
 }
 
+extension Notification.Name {
+    /// ⛔ A STORY BECAME SEEN — owner, 2026-09-23: the Glowing cards' rings never went grey after
+    /// watching, while the Friends strip's did.
+    ///
+    /// ⚠️ THE TWO SURFACES ARE DIFFERENT TECHNOLOGIES, AND THAT IS THE WHOLE BUG. `StoryPrefs` is a
+    /// plain enum over `UserDefaults`; it publishes nothing, because until now nothing needed it to.
+    /// The Friends strip is UIKit and re-reads the flag every time it reappears, so it self-corrects
+    /// and always looked right. The Glowing grid is SwiftUI: it read the flag once while building a
+    /// card and had no reason on earth to build that card again, so the ring kept the answer it was
+    /// given before the story was watched.
+    ///
+    /// ⚠️ A NOTIFICATION RATHER THAN MAKING `StoryPrefs` OBSERVABLE, deliberately. It is a static
+    /// enum read from background threads inside `StoriesRepository.rebuild()` — its own comment
+    /// records a SIGSEGV on every cold start when that access was not locked. Turning it into an
+    /// `@Observable` would put SwiftUI's dependency tracking on that same cross-thread path for a
+    /// ring colour. This posts once, on the main queue, only when a flag actually flips.
+    static let storySeenChanged = Notification.Name("fariin.storySeenChanged")
+}
+
 // Local per-author story prefs.
 enum StoryPrefs {
     // In-memory cache so we don't re-parse the UserDefaults string on every call (seenFlags is called
@@ -909,8 +928,16 @@ enum StoryPrefs {
     // Per-STORY-ITEM seen state (drives the segmented ring: each arc greys as you view that story).
     static func isStorySeen(_ id: String) -> Bool { stampedIds("seenStoryItems").contains(id) }
     static func markStorySeen(_ id: String) {
+        // The guard is what makes the announcement below cheap: it returns early when the flag is
+        // already set, so watching a story you have seen posts nothing.
         guard !id.isEmpty, !isStorySeen(id) else { return }
         mutateStamped("seenStoryItems") { $0[id] = Date().timeIntervalSince1970 }
+        // ⛔ TELL THE SWIFTUI SURFACES. See `Notification.Name.storySeenChanged` for why this is a
+        // notification and not an observable object. Hopped to the main queue because this is
+        // reachable from the viewer's own background work and every receiver is a view.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .storySeenChanged, object: id)
+        }
     }
     // My own ❤️ on a story — persists so the heart is still red on reopen.
     static func isStoryLiked(_ id: String) -> Bool { stampedIds("likedStories").contains(id) }

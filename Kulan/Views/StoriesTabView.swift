@@ -35,6 +35,9 @@ struct StoriesTabView: View {
 
     @State private var path = NavigationPath()
     @State private var profileGroup: StoryGroup?
+    /// Bumped when a story becomes seen, purely to re-run this body so the Glowing cards'
+    /// initialisers re-read `StoryPrefs`. See the `.onReceive` below.
+    @State private var seenTick = 0
     /// The Glow section's people, resolved for their cards.
     @State private var glowPeople = GlowPeopleLoader()
     /// The Glowing grid: one card per glow person, carrying their newest live story.
@@ -210,6 +213,15 @@ struct StoriesTabView: View {
         // Ask once when the page appears, so the compose button already knows the answer when it is
         // pressed rather than finding out after the picker.
         .task { await storyBudget.refreshDailyBudget() }
+        // ⛔ REBUILD THE GLOWING CARDS WHEN A STORY BECOMES SEEN — owner, 2026-09-23: their rings
+        // never went grey after watching, while the Friends strip's did. The strip is UIKit and
+        // re-reads the flag whenever it reappears, so it self-corrected and always looked right;
+        // these cards read `StoryPrefs` in their initialiser and nothing rebuilt them. See
+        // `Notification.Name.storySeenChanged`, and `GlowStoriesGridView` for the same listener on
+        // the full page.
+        .onReceive(NotificationCenter.default.publisher(for: .storySeenChanged)) { _ in
+            seenTick &+= 1
+        }
         // The Glow section's rows. Keyed on the live set, so giving or receiving a glow refreshes
         // the strip without a manual reload — and re-running for an unchanged set is a no-op inside
         // the loader, so a re-render costs nothing.
