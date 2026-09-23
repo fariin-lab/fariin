@@ -1,24 +1,43 @@
 # Fariin — App Store Review Notes
 
+> ## ⛔ DO NOT PASTE THE TEST ROUTE FROM THIS FILE. USE `AppStore/SUBMIT.md` §5.
+>
+> Checked against the source on 2026-09-23. The "How to test" section below claimed **"No email or
+> phone needed"** and **"anonymous accounts are created automatically"**. Neither is true any more.
+> `AuthService` has three doors and all three are credentials: Sign in with Apple, Google, and email
+> with password. Anonymous sessions are legacy, adopted if one already exists, never created.
+>
+> Telling a reviewer no sign-in is needed and then showing them a sign-in wall is the commonest way
+> a first submission comes back. The section is corrected below, but `SUBMIT.md` is the file kept in
+> step with the code, and it has the blanks for the account credentials you must supply.
+>
+> The rest of this file, the safeguards, deletion, privacy, encryption and permissions sections, was
+> re-checked the same day and is accurate.
+
 Paste the relevant parts into **App Store Connect → your version → App Review Information → Notes**,
 and fill the **Sign-In Information** / demo fields as described.
 
-## How to test (the reviewer needs two accounts)
+## How to test (the reviewer needs two accounts, and credentials for one)
 
-Fariin is a 1:1 messenger, so testing requires two people. Easiest path for the reviewer:
+Fariin is a 1:1 messenger with no public timeline, so testing requires two accounts. The reviewer
+cannot make their own instantly, because the app requires a real sign-in.
 
-1. Launch the app. On first launch you create a profile (name + username). No email or phone needed.
-   Tapping **Continue** requires agreeing to the Terms (zero-tolerance policy) and Privacy Policy.
-2. To message someone, tap the compose button and search a username, then send a message.
-3. A ready-made test account already exists to message:
-   - **Username: `ayaan`** (display name "Ayaan").
-   - Search `ayaan`, open the chat, and send a message to see end-to-end-encrypted delivery,
-     reactions, photos, and voice notes.
-   - (If you prefer two of your own accounts, install on a second device/simulator, create a second
-     profile, and message between them — anonymous accounts are created automatically.)
+1. **Supply an email-and-password account** in App Store Connect's Sign-In Information field. Sign
+   in with Apple and Google are also offered in the app, but neither is usable by a reviewer on a
+   shared test device, so the email door is the one to hand over.
+2. On first sign-in the app asks for a profile (a display name and a username). Tapping **Continue**
+   requires agreeing to the Terms (zero-tolerance policy) and the Privacy Policy.
+3. **Supply a second account's username** for them to message. Tap the compose button, search that
+   username, send a message, and the end-to-end-encrypted delivery, reactions, photos and voice
+   notes can all be exercised in that chat.
 
-> Note: Fariin is end-to-end encrypted. You can only message a user **after** they have opened the app
-> at least once (so their public key is published). `ayaan` has already done this.
+> Note: Fariin is end-to-end encrypted. A person can only be messaged **after** they have opened the
+> app at least once, so that their public key is published. **Both accounts you hand over must have
+> been opened once**, or the reviewer meets an error that looks like a broken app.
+
+⚠️ An earlier version of this file named a ready-made account `ayaan` for the reviewer to message.
+**Do not rely on it without checking it still exists and has opened the app.** Create the pair fresh
+and know they work.
 
 ## User-Generated Content safeguards (Guideline 1.2)
 
@@ -40,9 +59,13 @@ In-app: **Settings → Account → Delete Account** permanently deletes the acco
 ## Privacy
 
 - Privacy Policy: https://fariin.com/privacy
-- Data collected: chosen display name/username (and optional photo/bio), the messages/media you send
-  (end-to-end encrypted in chats), an anonymous sign-in ID, and a push-notification token.
-- No ads, no data selling, no third-party sharing.
+- Data collected, matching `Kulan/PrivacyInfo.xcprivacy`: the email address the account was created
+  with, the chosen display name and username (and optional photo and bio), the messages and media
+  you send (end-to-end encrypted in chats, but still transmitted, so still declared), the account
+  and per-device identifiers and the push-notification token, and a precise location **only** when
+  someone chooses to share a place in a chat or tag one on a story.
+- No ads, no data selling, no third-party sharing, no tracking. Neither Analytics nor Crashlytics is
+  compiled in.
 
 ## Encryption / export compliance
 
@@ -57,3 +80,5 @@ filed.)
 - **Microphone:** to record voice messages and for voice calls.
 - **Face ID:** optional App Lock to unlock the app.
 - **Notifications:** to alert you to new messages.
+- **Location (when in use):** only if the person chooses to share a place in a chat or tag one on a
+  story. It is never read in the background and there is no always-on permission.
