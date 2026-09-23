@@ -151,16 +151,51 @@ final class ConnectionStatus {
         pending = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.settle))
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, self.hasRoute else { return }
-                self.pending = nil
-                // Re-checked rather than assumed: a server answer may have landed while this slept,
-                // and `noteSnapshot` would have cancelled us — but a cancellation that loses the race
-                // must not be able to leave a stale "Connecting" on screen.
-                if Date().timeIntervalSince(self.lastServerAnswer) >= Self.settle {
-                    self.state = .connecting
-                }
-            }
+            await self?.settleExpired()
+        }
+    }
+
+    /// ⛔ SILENCE IS NOT EVIDENCE OF A BROKEN CONNECTION — his report, 2026-09-23: "connection says
+    /// connecting sometimes even if i have good internet", on a chat list that had plainly loaded.
+    ///
+    /// ⚠️ THIS IS THE 747 MISTAKE REACHED FROM THE OTHER END, and it is worth naming because the
+    /// fix for 747 is what made it reachable. `routeChanged` calls `armSettle()` on EVERY route-up,
+    /// and `NWPathMonitor` reports a path change for things that are not outages at all — an
+    /// interface coming or going, a wifi roam, waking from a lock. So a healthy phone arms this
+    /// timer, and 2.5 seconds later the old code declared "Connecting" **purely because no snapshot
+    /// had arrived in that window**. On an app that synced five minutes ago and is sitting on a
+    /// quiet document, no snapshot is ever going to arrive, because there is nothing to send. The
+    /// label then stayed up until something unrelated happened to talk to the server.
+    ///
+    /// The old code did test `lastServerAnswer`, which reads like a guard and is not one: on a quiet
+    /// app that value is ALWAYS older than the settle. It only ever caught a snapshot that raced the
+    /// timer.
+    ///
+    /// ⚠️ SO IT ASKS INSTEAD OF ASSUMING. One `source: .server` read of the document the probe is
+    /// already watching. It answers the actual question — can we reach the server right now — rather
+    /// than inferring it from a quiet listener. Offline, Firestore fails this immediately and
+    /// locally without a network attempt, so the cost of being wrong is nothing; online, it costs
+    /// one small read on a path blip, which is the honest price of not lying on the header.
+    ///
+    /// ⚠️ RECOVERY IS STILL THE LISTENER'S JOB, not a poll. The probe carries
+    /// `includeMetadataChanges: true`, so when a real connection returns Firestore delivers a
+    /// metadata change and `noteSnapshot` puts the state back to `.online`. Nothing here re-arms.
+    private func settleExpired() async {
+        guard hasRoute else { return }
+        pending = nil
+        // A server answer may have landed while the timer slept, and `noteSnapshot` would have
+        // cancelled us — but a cancellation that loses the race must not leave a stale label.
+        guard Date().timeIntervalSince(lastServerAnswer) >= Self.settle else { return }
+        // No probe means no account signed in yet, and nothing to ask. Say nothing rather than
+        // announcing a connection problem that is really just a launch in progress.
+        guard let uid = probeUid else { return }
+        do {
+            _ = try await Firestore.firestore().collection("users").document(uid)
+                .getDocument(source: .server)
+            lastServerAnswer = Date()
+            if hasRoute { state = .online }
+        } catch {
+            if hasRoute { state = .connecting }
         }
     }
 }

@@ -266,9 +266,11 @@ struct GlowStoryCardView: View {
             // His reference's proportion: a tall card, a touch shorter than a full 9:16 story, so
             // two columns of them leave room for a third row to peek and invite a scroll.
             .aspectRatio(Self.aspect, contentMode: .fit)
-            // The compose card has no photo to draw and must not be handed to `StoryImage` — see
-            // `isAdd`. Same fill the Glowing grid waits behind, so the two read as one family.
-            .overlay { if isAdd { Color.primary.opacity(0.08) } else { StoryImage(url: thumbUrl) } }
+            // The compose card has no STORY to draw and must not be handed to `StoryImage` — see
+            // `isAdd`. It has his face, though, which is what `AddStoryFace` puts there; with no
+            // photo it falls back to the same fill the Glowing grid waits behind, so the two still
+            // read as one family.
+            .overlay { if isAdd { AddStoryFace(photoUrl: authorPhoto) } else { StoryImage(url: thumbUrl) } }
             .overlay(alignment: .bottom) {
                 // The name has to survive a bright photograph, and a scrim is what does that
                 // without dimming the whole card — the same trick the story caption uses.
@@ -565,5 +567,59 @@ extension View {
     /// begin on a strip press and cancel it. See `StoryRowLongPress.requiresCard`.
     func glowCardLongPress(_ target: @escaping (CGPoint) -> StoryMenuTarget?) -> some View {
         background { StoryRowLongPress(target: target, requiresCard: true) }
+    }
+}
+
+/// ⛔ THE ADD STORY CARD WEARS HIS OWN PROFILE PICTURE — owner, 2026-09-23: "story when am not
+/// uploading any story is using empty skeleton, use my profile picture when i have profile picture".
+///
+/// ⚠️ THE PICTURE WAS ALREADY IN HAND AND THE CARD WAS THROWING IT AWAY. `authorPhoto` has always
+/// been passed to this card — it is what the small ringed face at the bottom right draws — so his
+/// face appeared on the card while the whole card behind it stayed a flat grey. Nothing new is
+/// fetched here: this is the same url the face beside it is loading, so by the time the card is on
+/// screen the bytes are already in the cache and the two resolve together.
+///
+/// ⚠️ NOT `StoryImage`, and the reason is written on `isAdd`: that view draws a shimmer and retries
+/// with backoff when it has no url, which is exactly the state this card is in for an account with
+/// no photo — it would shimmer for ever. This resolves once and otherwise draws the flat fill the
+/// card has always had, so "no profile picture" looks exactly like it did before.
+private struct AddStoryFace: View {
+    let photoUrl: String?
+
+    @State private var image: UIImage?
+
+    init(photoUrl: String?) {
+        self.photoUrl = photoUrl
+        // The same first-frame seed `AvatarView` takes, for the same reason it gives: memory alone
+        // starts empty on every launch, so without the disk read the card flashes grey on a cold
+        // start even when the file has been on disk for days. The read is a few KB and is gated on
+        // the cache's in-memory index, so a miss never touches the filesystem.
+        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.smallImageSync(u) {
+            _image = State(initialValue: warm)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                // The card clips once, over the whole card — see the scrim's note — so filling and
+                // overflowing here is safe and is what keeps a portrait photo from letterboxing.
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Color.primary.opacity(0.08)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: image != nil)
+        .task(id: photoUrl) { await load() }
+    }
+
+    private func load() async {
+        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else { image = nil; return }
+        if let cached = await DiskImageCache.shared.image(for: s) { image = cached; return }
+        if let (data, _) = try? await MediaSession.shared.data(from: url),
+           let ui = UIImage(data: data) {
+            DiskImageCache.shared.store(ui, data: data, for: s)
+            image = ui
+        }
     }
 }
