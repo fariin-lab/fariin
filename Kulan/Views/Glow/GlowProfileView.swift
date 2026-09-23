@@ -51,6 +51,38 @@ struct GlowProfileView: View {
     /// one frame. `ContactInfoView` seeds the same answer the same way.
     @State private var photoUnderBar = true
 
+    /// ⛔ THE BIG PHOTOGRAPH FOLDS INTO A CIRCLE ON THE WAY UP — owner, 2026-09-23, with two
+    /// screenshots of this page: "Default state: the profile photo should always appear as a
+    /// large/full image... As the user scrolls upward, the large profile image should smoothly
+    /// transition into a small circular profile image... scrolling back down... back into the
+    /// large/full profile image." Asked what the circle does as the page keeps going, he chose
+    /// "scrolls away": it rides up with the page, nothing docks in the bar.
+    ///
+    /// ⚠️ FALSE ON EVERY OPEN, and that is the rule, not a default: "the default state must always
+    /// be the large/full image whenever the profile page is opened".
+    ///
+    /// ⚠️ A SWITCH WITH A SPRING, NOT A SCRUB. The reference app does not interpolate the picture
+    /// against the offset; it decides which of the two states the page is in and animates between
+    /// them, so a slow drag never leaves a half-rounded square on screen. See `heroThresholds`.
+    @State private var heroCircle = false
+
+    /// Mine only, and only with a photograph: he asked for My Profile, and a letter hero is already
+    /// the small thing.
+    private var canCircle: Bool { isMe && hasHeroPhoto }
+
+    /// The circle's diameter, measured off his own screenshot of the circle state: 430px across a
+    /// 924px-wide shot of the screen.
+    private static var circleDiameter: CGFloat { photoHeight * 0.465 }
+
+    /// The header's height while it is a circle: the bar, the circle, and the gap to the name.
+    private static var circleSlotHeight: CGFloat { barBottom + circleDiameter + 16 }
+
+    /// Fold after this much upward scroll, unfold at or under the other. The gap between the two
+    /// is what stops a finger resting near the top from flicking the picture back and forth.
+    private static let heroThresholds: (fold: CGFloat, unfold: CGFloat) = (24, 4)
+
+    private static let heroSpring = Animation.spring(response: 0.42, dampingFraction: 0.86)
+
     /// The bottom of the navigation bar in screen coordinates — the status strip plus the bar's own
     /// 44pt. Read from the window, because a view whose ancestor has given up the top safe area
     /// cannot read it back from a `GeometryReader`: it has been consumed.
@@ -93,7 +125,10 @@ struct GlowProfileView: View {
     }
 
     /// The header's real height, whichever of the two it is.
-    private var heroHeight: CGFloat { hasHeroPhoto ? Self.photoHeight : Self.letterHeroHeight }
+    private var heroHeight: CGFloat {
+        guard hasHeroPhoto else { return Self.letterHeroHeight }
+        return heroCircle ? Self.circleSlotHeight : Self.photoHeight
+    }
 
     /// ⚠️ THE BAR'S SCHEME IS PINNED, AND ON iOS 26 IT IS `.light` — the same switch, and the same
     /// reasoning, as `ContactInfoView.barScheme`, which was settled with him on 2026-08-19. The
@@ -122,6 +157,12 @@ struct GlowProfileView: View {
                     postedStoriesCard.padding(.horizontal, 16).padding(.top, 22)
                     Color.clear.frame(height: 32)
                 }
+                // ⚠️ ROOM TO STAY FOLDED. Folding takes a couple of hundred points off the header;
+                // on a short page that leaves nothing to scroll, the offset snaps back to 0, the
+                // picture unfolds, the page is long again, and it folds — a loop. A page that can
+                // fold is always at least a screen plus a little, so the folded page can still sit
+                // above the unfold line.
+                .frame(minHeight: canCircle ? UIScreen.main.bounds.height + 60 : nil, alignment: .top)
             }
             // The space the header measures its overscroll against — see `stretch` in `header`.
             .coordinateSpace(.named("profileScroll"))
@@ -147,6 +188,13 @@ struct GlowProfileView: View {
             .onScrollGeometryChange(for: CGFloat.self) { g in
                 g.contentOffset.y + g.contentInsets.top
             } action: { _, scrolled in
+                if canCircle {
+                    if !heroCircle && scrolled > Self.heroThresholds.fold {
+                        withAnimation(Self.heroSpring) { heroCircle = true }
+                    } else if heroCircle && scrolled <= Self.heroThresholds.unfold {
+                        withAnimation(Self.heroSpring) { heroCircle = false }
+                    }
+                }
                 // ⚠️ FALSE OUTRIGHT WITH NO PHOTOGRAPH. This flag exists to hide the bar's material
                 // while a picture is passing behind it; a letter hero IS the page background, so
                 // hiding the bar there would leave the back and Edit items floating on nothing.
@@ -231,7 +279,10 @@ struct GlowProfileView: View {
                 // ⚠️ ONLY DOWNWARDS. `max(0, minY)` means the image is only ever taller than its
                 // slot, never shorter: scrolling UP must let it leave normally, or the page would
                 // drag its own header along behind it.
-                let stretch = max(0, geo.frame(in: .named("profileScroll")).minY)
+                //
+                // Not while it is a circle: pulling down there is what unfolds it.
+                let stretch = heroCircle ? 0 : max(0, geo.frame(in: .named("profileScroll")).minY)
+                let d = Self.circleDiameter
                 Group {
                     if let url = profile?.photoUrl ?? initialPhoto, !url.isEmpty {
                         StoryImage(url: url)
@@ -249,22 +300,28 @@ struct GlowProfileView: View {
                         }
                     }
                 }
-                .frame(width: w, height: heroHeight + stretch)
-                .clipped()
-                .offset(y: -stretch)
+                // ⚠️ ONE VIEW IN BOTH STATES, so the spring moves the same picture: its frame, its
+                // corner and its position all animate together, and the image never reloads.
+                .frame(width: heroCircle ? d : w, height: heroCircle ? d : heroHeight + stretch)
                 // The photograph melts into the page rather than ending on a line — the seam
                 // `ProfilePalette` exists to kill. See its note on `page`.
                 //
                 // ⚠️ ONLY UNDER A PHOTOGRAPH. The letter hero is already the page's own background,
                 // so there is no seam to hide and a fade over it would draw a band of `pageColor`
-                // across a background that is not `pageColor`.
+                // across a background that is not `pageColor`. And not on the circle: a circle
+                // has no seam either, and the fade would dim its lower half.
                 .overlay(alignment: .bottom) {
                     if hasHeroPhoto {
                         LinearGradient(colors: [pageColor.opacity(0), pageColor],
                                        startPoint: .top, endPoint: .bottom)
                             .frame(height: w * 0.42)
+                            .opacity(heroCircle ? 0 : 1)
                     }
                 }
+                // `.circular`, not `.continuous`: at half the side a continuous corner is not a
+                // true circle.
+                .clipShape(RoundedRectangle(cornerRadius: heroCircle ? d / 2 : 0, style: .circular))
+                .offset(x: heroCircle ? (w - d) / 2 : 0, y: heroCircle ? Self.barBottom : -stretch)
             }
             .frame(height: heroHeight)
         }
@@ -393,7 +450,8 @@ struct GlowProfileView: View {
         }
         // The name tucks up into the photograph's fade. With no photograph there is no fade and
         // nothing to tuck into, so the pull-up is proportional to whichever hero is actually there.
-        .padding(.top, -heroHeight * 0.10)
+        // The circle has no fade to tuck into either; its slot already carries the gap.
+        .padding(.top, heroCircle ? 0 : -heroHeight * 0.10)
     }
 
     /// GIVE OR TAKE BACK A GLOW — the one action this page has, and the only place in the app where
