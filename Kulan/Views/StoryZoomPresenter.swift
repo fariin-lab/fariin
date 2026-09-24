@@ -383,3 +383,64 @@ final class StoryZoomContainerVC: UIViewController {
         animator.startAnimation()
     }
 }
+
+// MARK: - The story composer, over the viewer
+
+/// ⛔ THE REPOST COMPOSER IS PRESENTED BY UIKIT, `.overFullScreen`, NOT AS A SWIFTUI FULL-SCREEN
+/// COVER — his 2026-09-24 "when I repost a story it is frozen".
+///
+/// A `.fullScreenCover` is a `.fullScreen` modal, and once that transition lands UIKit TAKES THE
+/// PRESENTING SCREEN OUT OF THE WINDOW. The presenting screen here is the story stage above: its
+/// hosting controller and every page under it get `viewDidDisappear`, so the viewer's own
+/// `.onDisappear` ran its teardown belt (an ungated `resumeStory`, the morph reset, the chrome
+/// restore) on a viewer that had not closed, every page's `.onAppear` ran a second time when the
+/// composer went, and nothing had paused the story in between — it kept its clock running under the
+/// composer, on a stage that was no longer on screen. The post itself always worked; the stage the
+/// composer handed back was the wreck.
+///
+/// `.overFullScreen` leaves the stage in the window: no disappearance, no belt, and the viewer's
+/// ordinary sheet pause/resume covers the composer like any other sheet over the story. The composer
+/// closes itself through SwiftUI's `dismiss`, which dismisses a modally presented hosting controller
+/// like any other presentation; `onDismissed` reports every way out — Post, Discard, the X, or the
+/// stage being torn down underneath — so the viewer can put its flag down.
+enum StoryComposerPresenter {
+    static func present<Content: View>(_ content: Content, onDismissed: @escaping () -> Void) {
+        guard let top = topController() else { onDismissed(); return }
+        let vc = StoryComposerHostVC(rootView: AnyView(content))
+        vc.onDismissed = onDismissed
+        top.present(vc, animated: true)
+    }
+
+    private static func topController() -> UIViewController? {
+        var top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
+    }
+}
+
+final class StoryComposerHostVC: UIHostingController<AnyView> {
+    var onDismissed: (() -> Void)?
+
+    override init(rootView: AnyView) {
+        super.init(rootView: rootView)
+        modalPresentationStyle = .overFullScreen
+        // The composer is black; the clock over it must be white whatever theme the app is in.
+        modalPresentationCapturesStatusBarAppearance = true
+    }
+
+    @MainActor required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Off the stack for good — not merely covered by a sheet or picker of its own. The same
+        // test `StoryZoomContainerVC` makes for the stage.
+        if isBeingDismissed || presentingViewController == nil {
+            onDismissed?()
+            onDismissed = nil
+        }
+    }
+}

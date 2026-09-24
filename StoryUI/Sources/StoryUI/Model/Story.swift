@@ -27,10 +27,31 @@ public struct StoryAudienceBadge: Hashable {
     /// the file changes.
     public let assetImage: String?
     public let text: String
-    public init(systemImage: String, assetImage: String? = nil, text: String) {
+    /// Somebody's small circle drawn between the symbol and the text — a repost's credit line wears
+    /// the ORIGINAL author's picture beside their name, the way the reference app draws it. Nil
+    /// draws nothing, which is every other badge.
+    public struct Person: Hashable {
+        public let name: String
+        public let photoURL: String?
+        public init(name: String, photoURL: String?) {
+            self.name = name
+            self.photoURL = photoURL
+        }
+    }
+    public let person: Person?
+    /// Posted (with `tapObject`) when the line is tapped. Nil leaves the line to the header block's
+    /// own tap, which opens the story author's profile as it always has. The host decides what the
+    /// tap does; the package knows nothing about it — same seam as every other host action here.
+    public let tapNotification: String?
+    public let tapObject: String?
+    public init(systemImage: String, assetImage: String? = nil, text: String,
+                person: Person? = nil, tapNotification: String? = nil, tapObject: String? = nil) {
         self.systemImage = systemImage
         self.assetImage = assetImage
         self.text = text
+        self.person = person
+        self.tapNotification = tapNotification
+        self.tapObject = tapObject
     }
 }
 

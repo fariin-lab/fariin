@@ -227,6 +227,31 @@ enum StoryDoor {
                                    coverRadius: sourceRadius(sourceKey), coverKey: sourceKey)
     }
 
+    /// ⛔ A REPOST'S CREDIT LINE OPENS THE ORIGINAL STORY — 2026-09-24. From INSIDE a viewer: the
+    /// one on screen leaves first and the original opens on the next tick, which is exactly what the
+    /// profile path above does and for the same reason — one viewer at a time, and a presenter that
+    /// is still up refuses a second (`StoryZoomPresenter.present`).
+    ///
+    /// `finish`, not the drift: the drift's teardown runs 0.2s later and dismisses whatever is above
+    /// the old stage — which would be the new one.
+    ///
+    /// The original is looked for among the stories THIS viewer can see, which is the audience test
+    /// itself: a story that expired, was deleted, or was never sent to me is not in the repository,
+    /// and the answer is false so the caller can fall back to the author's profile.
+    @discardableResult
+    static func reopen(onStory storyId: String, by authorUid: String) -> Bool {
+        let repo = StoriesRepository.shared
+        guard let group = (repo.others + [repo.mine].compactMap { $0 })
+                .first(where: { $0.authorUid == authorUid && $0.stories.contains { $0.id == storyId } })
+        else { return false }
+        StoryZoomPresenter.finish()
+        closed()
+        // No source key: there is no card on screen to fly out of, and an empty key is an open with
+        // no cover, which is what a story opened from a chat's reply quote already does.
+        DispatchQueue.main.async { StoryDoor.open(group, from: "", startStoryId: storyId) }
+        return true
+    }
+
     /// THE HOLE AND THE COVER FOLLOW THE SWIPE, so the close after paging to another person is the
     /// SAME close the tapped person gets — his 2026-08-08 report: "after swiping to the next story,
     /// scrolling down does not behave the same way." The tapped card's slot empties at the open and

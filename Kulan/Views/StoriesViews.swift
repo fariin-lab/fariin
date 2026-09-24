@@ -1152,10 +1152,13 @@ struct StoryViewer: View {
     @State private var sheetAnimator = SheetProgressAnimator()
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
-    /// ⛔ THE REPOST IN PROGRESS — his spec, 2026-09-11. Set when the footer's repost mark is tapped
-    /// and the original's picture has been fetched; presenting it opens the story composer on that
-    /// picture, with the credit line attached. Nil the rest of the time.
-    @State private var repostDraft: StoryRepostDraft?
+    /// ⛔ THE REPOST COMPOSER IS UP — his spec, 2026-09-11. Raised when the footer's repost mark is
+    /// tapped and the original's picture has been fetched, and the composer is put over the story
+    /// on that picture with the credit line attached; lowered when the composer leaves by any door.
+    /// A flag rather than the draft itself because the composer is a UIKit presentation now, not a
+    /// `fullScreenCover` — see `StoryComposerPresenter` for the freeze that decided it — and the one
+    /// thing the viewer needs to know is whether to hold the story still (`sheetUp`).
+    @State private var repostUp = false
     /// "…" → Share Story. The story's own address, handed to the system sheet — never the storage
     /// file, which carries a permanent download token. See `KulanApp.storyLink`.
     @State private var shareURL: StoryLinkPayload?
@@ -1564,7 +1567,13 @@ struct StoryViewer: View {
     // VIEWERS sheet is handled separately via `viewersProgress` (below) so the story is frozen the
     // instant the sheet starts to rise, even mid-drag — otherwise it kept playing and, on reaching
     // the last item, auto-dismissed the whole viewer (taking the sheet with it).
-    private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil }
+    // ⚠️ THE REPOST COMPOSER AND THE SHARE STORY SHEET ARE IN THIS LIST — 2026-09-24. Both arrived
+    // with the 09-11 pass-on work and neither was added here, so the story ran on under them; under
+    // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
+    private var sheetUp: Bool {
+        shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
+            || repostUp || shareURL != nil
+    }
 
     init(group: StoryGroup, startStoryId: String? = nil, ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
@@ -1798,19 +1807,21 @@ struct StoryViewer: View {
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
         .sheet(item: $shareURL) { p in ActivityView(items: [p.url]) }
         // ⛔ REPOST — his spec, 2026-09-11, and the reference's own flow: the mark opens the
-        // COMPOSER, it does not post. The reposter adds their own text, drawing and stickers here
+        // COMPOSER, it does not post. The reposter adds their own text, drawing and stickers there
         // and picks their own audience on the sheet after, which is also what makes the repost their
         // own story with its own twenty-four hours rather than a window onto somebody else's.
-        //
-        // ⚠️ FULL SCREEN, NOT A SHEET. The story composer is a full-screen editor everywhere else it
-        // is opened from, and half of it is a card sized to the screen.
-        .fullScreenCover(item: $repostDraft) { d in
-            StoryEditorView(source: d.image, repostOf: d.info,
-                            onPosted: { flashSentToast("Reposted") })
-        }
+        // The composer is presented from `beginRepost`, by UIKit and over this stage — the
+        // `fullScreenCover` that used to sit here took the stage out of the window and was the
+        // "repost is frozen" report; see `StoryComposerPresenter`.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyRepostTapped"))) { note in
             guard let id = note.object as? String else { return }
             beginRepost(storyId: id)
+        }
+        // ⛔ THE CREDIT LINE OPENS THE ORIGINAL — 2026-09-24. Posted by the header's audience line
+        // for a repost (see `audienceBadge`), with the id of the story whose credit was tapped.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyCreditTapped"))) { note in
+            guard let id = note.object as? String else { return }
+            openRepostOriginal(of: id)
         }
         .sheet(item: $forwardImg) { p in StoryForwardSheet(image: p.image, onSent: { flashSentToast() }) }
         // EDIT VIEWERS. The audience sheet exactly as it is drawn for a post — his condition — with
@@ -1950,14 +1961,11 @@ struct StoryViewer: View {
             audienceOverride.removeValue(forKey: id)
             flashSentToast((info["message"] as? String) ?? "Couldn't update who can see this")
         }
-        // ⛔ "…" → REPOST STORY / SHARE STORY / COPY STORY LINK — his spec, 2026-09-11. The same
-        // three the footer's repost mark belongs to, and they are re-checked here on LIVE state
-        // rather than trusted from the menu, because the menu is the part a modified client
-        // replaces — the same reasoning Edit viewers above carries.
-        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionRepost"))) { _ in
-            guard let s = currentStory else { return }
-            beginRepost(storyId: s.id)
-        }
+        // ⛔ "…" → SHARE STORY / COPY STORY LINK — his spec, 2026-09-11. The same rights the
+        // footer's repost mark belongs to, and they are re-checked here on LIVE state rather than
+        // trusted from the menu, because the menu is the part a modified client replaces — the same
+        // reasoning Edit viewers above carries. (Repost left this menu on 2026-09-24 — it was on the
+        // footer as well, and he saw it twice; the footer's mark is the one repost button.)
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionShareLink"))) { _ in
             guard let s = currentStory, StoryShareRights.allows(s),
                   let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
@@ -2995,8 +3003,17 @@ struct StoryViewer: View {
         // blocking this viewer since — see `StoryRepost`. "Reposted" alone is the last resort for a
         // repost written before a name could be resolved; it is honest and it is never blank.
         if let r = s.repostOf {
+            // The ORIGINAL author's small circle beside their name, and the line is a door: a tap
+            // opens that original story (`openRepostOriginal`), not the reposter's profile. The
+            // photo is a lookup because it is only decoration — the name is what is stored — and a
+            // person with no picture reachable gets the app's letter circle from their name.
+            let name = r.authorName.isEmpty ? "Reposted" : r.authorName
             return StoryAudienceBadge(systemImage: "arrow.2.squarepath",
-                                      text: r.authorName.isEmpty ? "Reposted" : r.authorName)
+                                      text: name,
+                                      person: StoryAudienceBadge.Person(name: name,
+                                                                        photoURL: authorPhoto(r.authorUid)),
+                                      tapNotification: "storyCreditTapped",
+                                      tapObject: s.id)
         }
         guard isMine else { return nil }
         // ⚠️ WHAT HE JUST CHOSE BEATS WHAT THE SNAPSHOT SAYS. `StoryViewer` is handed
@@ -4493,7 +4510,7 @@ struct StoryViewer: View {
     /// notification can arrive a beat after the story it names has changed underneath it — and this
     /// is the call that actually copies somebody's picture, so it asks rather than assumes.
     private func beginRepost(storyId: String) {
-        guard !repostLoading, repostDraft == nil else { return }
+        guard !repostLoading, !repostUp else { return }
         // The story is found across every group the viewer was given, not only the one on screen:
         // the footer belongs to whichever page is up, and pages change under a swipe.
         guard let story = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
@@ -4510,15 +4527,51 @@ struct StoryViewer: View {
                     flashSentToast("Could not load that story")
                     return
                 }
-                repostDraft = StoryRepostDraft(
+                let draft = StoryRepostDraft(
                     image: image,
                     info: StoryRepost(authorUid: story.authorUid,
                                       // Stored, not looked up later: an account can be deleted and a
                                       // story can go, and the credit line has to survive both.
                                       authorName: authorName,
                                       storyId: story.id))
+                // ⚠️ FULL SCREEN, NOT A SHEET — the composer is a full-screen editor everywhere else
+                // it opens from — and OVER THE STAGE, NOT INSTEAD OF IT: a `fullScreenCover` took
+                // this viewer out of the window and left it wrecked for when the composer came back
+                // (his "repost is frozen"). `repostUp` holds the story still for the whole visit
+                // through `sheetUp`, and comes down on every way out. See `StoryComposerPresenter`.
+                repostUp = true
+                StoryComposerPresenter.present(
+                    StoryEditorView(source: draft.image, repostOf: draft.info,
+                                    onPosted: { flashSentToast("Reposted") }),
+                    onDismissed: { repostUp = false })
             }
         }
+    }
+
+    /// The picture for a uid this viewer may not have a group for: the groups on screen first, then
+    /// everything the repository can see. Nil when nobody knows, which draws the letter circle.
+    private func authorPhoto(_ uid: String) -> String? {
+        if let g = groups.first(where: { $0.authorUid == uid }) { return g.photoUrl }
+        let repo = StoriesRepository.shared
+        return (repo.others + [repo.mine].compactMap { $0 }).first(where: { $0.authorUid == uid })?.photoUrl
+    }
+
+    /// ⛔ THE CREDIT LINE OPENS THE ORIGINAL STORY — 2026-09-24. `storyId` is the REPOST whose line
+    /// was tapped; where it came from is on the story itself (`Story.repostOf`), which is the
+    /// viewer's own source of truth rather than anything the header was handed.
+    ///
+    /// The original is opened through the door (`StoryDoor.reopen`), which leaves this viewer and
+    /// opens that one. When the original cannot be reached from here — expired, deleted, never sent
+    /// to me — the author's profile opens instead, in the same sheet the header's own tap uses, so
+    /// the tap always lands somewhere and the story underneath is held while it is up.
+    private func openRepostOriginal(of storyId: String) {
+        guard let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
+              let r = s.repostOf else { return }
+        if StoryDoor.reopen(onStory: r.storyId, by: r.authorUid) { return }
+        profileSheet = groups.first(where: { $0.authorUid == r.authorUid })
+            ?? StoryGroup(authorUid: r.authorUid, name: r.authorName,
+                          photoUrl: authorPhoto(r.authorUid), stories: [],
+                          lastViewedAt: nil, isMine: r.authorUid == me)
     }
 
     private func flashSentToast(_ text: String = "Sent") {

@@ -43,13 +43,16 @@ struct CacheAsyncImage: View {
     /// Whose circle this is — the only thing needed to draw the fallback, since the letter and the
     /// gradient are both derived from the name.
     private let name: String
-    private let size: CGFloat = 38
+    /// 38 is the header avatar, and the default; the credit line under a reposted story asks for a
+    /// small one beside the original author's name.
+    private let size: CGFloat
     /// Seeded synchronously so a cached photo is on screen in the FIRST frame, with no grey at all.
     @State private var image: UIImage?
 
-    init(urlString: String?, name: String = "") {
+    init(urlString: String?, name: String = "", size: CGFloat = 38) {
         self.urlString = urlString
         self.name = name
+        self.size = size
         _image = State(initialValue: urlString.flatMap { StoryUIImages.cachedNow?($0) })
     }
 

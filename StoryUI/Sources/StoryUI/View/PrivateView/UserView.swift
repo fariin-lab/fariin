@@ -44,6 +44,51 @@ struct UserView: View {
         }
     }
 
+    /// THE LINE UNDER THE NAME: symbol, then (for a repost) the original author's small circle, then
+    /// the text. With a `tapNotification` the line is its own tap target and posts it; without one
+    /// it stays part of the header block, whose tap opens the story author's profile as ever.
+    ///
+    /// ⚠️ THE INNER GESTURE WINS. A tap inside this line is taken by its own `onTapGesture` and never
+    /// reaches the block's, which is the point: the credit line of a repost opens the ORIGINAL story
+    /// (the host's business — see the app's `storyCreditTapped`), not the reposter's profile.
+    @ViewBuilder private func audienceLine(_ audience: StoryAudienceBadge) -> some View {
+        let line = HStack(spacing: 5) {
+            // An asset wins when there is one. Sized by FRAME rather than by font,
+            // because a drawn glyph has no text metrics to follow, and squared to
+            // the symbol's own optical size so the pill's height does not change
+            // depending on which audience a story went to.
+            if let asset = audience.assetImage {
+                Image(asset, bundle: .main)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 12, height: 12)
+            } else {
+                Image(systemName: audience.systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            // 16pt: the text is 12pt, and the circle sits on the line rather than growing it.
+            if let person = audience.person {
+                CacheAsyncImage(urlString: person.photoURL, name: person.name, size: 16)
+            }
+            Text(audience.text).font(.system(size: 12, weight: .regular))
+                .lineLimit(1)
+        }
+        // Brighter than the timestamp above it: this is information, not metadata,
+        // and at 0.7 on a bright photo it disappeared into the picture.
+        .foregroundColor(.white.opacity(0.85))
+        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+        if let tap = audience.tapNotification {
+            line
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    NotificationCenter.default.post(name: .init(tap), object: audience.tapObject)
+                }
+        } else {
+            line
+        }
+    }
+
     /// WHAT THE "…" OFFERS, in the order he drew it.
     ///
     /// SAVE AND SHARE ARE MINE-ONLY. Both take a story OFF this app permanently, and a story is a
@@ -95,14 +140,16 @@ struct UserView: View {
                 })
             }
         } else {
-            // ⛔ THE THREE WAYS TO PASS SOMEBODY ELSE'S STORY ON — his spec, 2026-09-11. They appear
-            // together or not at all, and `canPassOn` is one answer from the host rather than three
+            // ⛔ THE WAYS TO PASS SOMEBODY ELSE'S STORY ON — his spec, 2026-09-11. They appear
+            // together or not at all, and `canPassOn` is one answer from the host rather than
             // conditions written here: the audience must be Everyone, and an author who has blocked
-            // this viewer removes all three completely.
+            // this viewer removes them completely.
+            //
+            // ⚠️ REPOST IS NOT HERE ANY MORE — 2026-09-24, "Repost Story appears twice". The footer's
+            // own mark (`MessageView.repostButton`, gated by the same `canPassOn`) is the one repost
+            // button, as in the reference app; a second door to the same composer from this menu
+            // was the duplicate he saw.
             if canPassOn {
-                out.append(.init(title: "Repost Story", systemImage: "arrow.2.squarepath") {
-                    NotificationCenter.default.post(name: .init("storyActionRepost"), object: nil)
-                })
                 out.append(.init(title: "Share Story", systemImage: "square.and.arrow.up") {
                     NotificationCenter.default.post(name: .init("storyActionShareLink"), object: nil)
                 })
@@ -169,28 +216,7 @@ struct UserView: View {
                         }
                     }
                     if let audience {
-                        HStack(spacing: 5) {
-                            // An asset wins when there is one. Sized by FRAME rather than by font,
-                            // because a drawn glyph has no text metrics to follow, and squared to
-                            // the symbol's own optical size so the pill's height does not change
-                            // depending on which audience a story went to.
-                            if let asset = audience.assetImage {
-                                Image(asset, bundle: .main)
-                                    .renderingMode(.template)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 12, height: 12)
-                            } else {
-                                Image(systemName: audience.systemImage)
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            Text(audience.text).font(.system(size: 12, weight: .regular))
-                                .lineLimit(1)
-                        }
-                        // Brighter than the timestamp above it: this is information, not metadata,
-                        // and at 0.7 on a bright photo it disappeared into the picture.
-                        .foregroundColor(.white.opacity(0.85))
-                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        audienceLine(audience)
                     }
                 }
             }

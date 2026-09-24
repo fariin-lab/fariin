@@ -202,11 +202,13 @@ struct StoryRepost: Equatable, Hashable, Codable {
 
     static func from(_ raw: Any?) -> StoryRepost? {
         guard let m = raw as? [String: Any],
-              let uid = m["authorUid"] as? String, !uid.isEmpty,
-              let sid = m["storyId"] as? String, !sid.isEmpty else { return nil }
+              let uid = m["authorUid"] as? String, !uid.isEmpty else { return nil }
+        // ⚠️ THE STORY ID IS NOT REQUIRED. It is the back-link the credit line opens, and a record
+        // without one is still a repost with an author to credit; empty here means "no original to
+        // open", and the tap on that line falls back to the author's profile.
         return StoryRepost(authorUid: uid,
                            authorName: m["authorName"] as? String ?? "",
-                           storyId: sid,
+                           storyId: m["storyId"] as? String ?? "",
                            modified: m["modified"] as? Bool ?? false)
     }
 }
