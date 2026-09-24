@@ -17,7 +17,13 @@ struct CallEntry: Identifiable, Hashable {
     let date: Date
 
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
-    var missed: Bool { outcome == "missed" || outcome == "declined" }
+    /// A live row still reading "ringing" after 120s is a call nobody finalised (both phones died
+    /// or went offline mid-ring). Audit 2026-09-24: it listed here as an answered call forever. Same
+    /// 120s ageing rule the chat bubble already uses.
+    var missed: Bool {
+        outcome == "missed" || outcome == "declined"
+            || (outcome == "ringing" && Date().timeIntervalSince(date) >= 120)
+    }
     /// Red/badge-worthy only when THEY called and I didn't pick up — my own
     /// unanswered outgoing call is just "Outgoing" (standard call-history rule).
     var missedIncoming: Bool { missed && !mine }

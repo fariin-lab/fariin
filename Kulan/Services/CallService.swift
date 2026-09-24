@@ -100,6 +100,7 @@ final class CallService: NSObject {
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 everMinimized = false   // the NEXT call grows out of its own button again
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
+                micDenied = false
                 // ⚠️ RESET WITH EVERYTHING ELSE. A timeline left standing would measure the second
                 // call of a session from the first call's origin, which is worse than no measurement
                 // at all: the numbers still look like numbers.
@@ -160,6 +161,10 @@ final class CallService: NSObject {
     var calleeAccepted = false
     var connectedDate: Date?
     var endReason: EndReason = .none // last/in-progress end reason (UI reads it for the label)
+    /// The call ended because microphone access is off. Audit 2026-09-24: a denied mic hung up with
+    /// no reason at all, so the caller's screen read "Couldn't reach them" and the callee's "Call
+    /// failed", and neither said the one thing that would fix it. The call screen reads this.
+    var micDenied = false
     private var recordWritten = false
 
     // MARK: - Where the seconds actually go
@@ -1852,7 +1857,7 @@ final class CallService: NSObject {
 
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
-            guard granted else { self.hangUp(); return }   // no mic -> don't start a dead call
+            guard granted else { self.endForDeniedMic(); return }   // no mic -> don't start a dead call
             // TURN creds must be in hand BEFORE makePeerConnection reads `config` — see awaitIceServers.
             Task { @MainActor in
                 await self.awaitIceServers()
@@ -1919,6 +1924,15 @@ final class CallService: NSObject {
                     }
                 }
             }
+    }
+
+    /// Mic refused (either side). Ends as a failure, never a miss or a decline, and flags it so the
+    /// call screen can say why. Same teardown as every other end, through hangUp.
+    private func endForDeniedMic() {
+        guard state != .ended, state != .idle else { return }
+        micDenied = true
+        endReason = .failed
+        hangUp()
     }
 
     private func ensureMicPermission(_ done: @escaping (Bool) -> Void) {
@@ -2012,23 +2026,13 @@ final class CallService: NSObject {
                         // busies the other; higher uid gives up its own so the survivor can ring here.
                         if self.state == .outgoing, !caller.isEmpty, caller == self.otherUid {
                             if self.me < caller {
+                                // `glare` tells the loser this busy is a tiebreak, not a busy line
+                                // (see observeCallDoc), in case it hears this before it sees our call.
                                 self.db.collection("calls").document(doc.documentID)
-                                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+                                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue, "glare": true])
                                 return
                             }
-                            // I lose: cancel MY outgoing call, then re-arm the incoming listener once we
-                            // are actually idle. Re-arming is required, not optional — their doc does not
-                            // change when I stand down, so no further snapshot would ever arrive and I
-                            // would sit idle while their phone rings on alone.
-                            self.recheckIncomingWhenIdle = true
-                            self.endReason = .hangup
-                            // Standing down in glare is bookkeeping, not a missed call. Without
-                            // this the loser wrote a call record whose outcome reads "missed" on
-                            // the WINNER's phone — a red missed row for the person they are
-                            // connecting with a second later (audit). Same suppression the
-                            // answered-elsewhere path already uses.
-                            self.recordWritten = true
-                            self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+                            self.standDownForGlare(rearmListener: true)
                             return
                         }
                         self.db.collection("calls").document(doc.documentID)
@@ -2060,6 +2064,9 @@ final class CallService: NSObject {
                             .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
                         return
                     }
+                    // A callback inside the 1-2s `.ended` tail was dropped here, and this doc never
+                    // changes again, so the listener never rang it (audit 2026-09-24).
+                    self.closeEndedTail()
                     guard self.state == .idle else { return }
                     self.callId = doc.documentID
                     self.otherUid = caller
@@ -2105,6 +2112,30 @@ final class CallService: NSObject {
             }
     }
 
+    /// I lose a glare tiebreak: cancel MY outgoing call so theirs can ring here.
+    /// `rearmListener`: re-arm the incoming listener once we are actually idle. Required on the
+    /// listener path — their doc does not change when I stand down, so no further snapshot would
+    /// ever arrive and I would sit idle while their phone rings on alone. The push path rings the
+    /// call itself, so it passes false.
+    private func standDownForGlare(rearmListener: Bool) {
+        if rearmListener { recheckIncomingWhenIdle = true }
+        endReason = .hangup
+        // Standing down in glare is bookkeeping, not a missed call. Without this the loser wrote a
+        // call record whose outcome reads "missed" on the WINNER's phone — a red missed row for the
+        // person they are connecting with a second later (audit). Same suppression the
+        // answered-elsewhere path already uses.
+        recordWritten = true
+        finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+    }
+
+    /// Skip the cosmetic `.ended` tail so a NEW call can take over at once: end the old system call
+    /// now and reset to idle. No-op in any other state. (Audit 2026-09-24.)
+    private func closeEndedTail() {
+        guard state == .ended else { return }
+        CallKitManager.shared.reportEnded()
+        state = .idle
+    }
+
     /// Set up an incoming call from a VoIP push (app may be cold-launching) so that a
     /// subsequent CallKit answer connects. No ringing here — CallKit shows the ring.
     func prepareIncoming(callId: String, name: String, uid: String, photo: String?, video: Bool = false) {
@@ -2113,6 +2144,20 @@ final class CallService: NSObject {
         // rings first and this push arrives seconds later FOR THE SAME CALL — busying it here made
         // the call end itself after ~2s of ringing (and the repeated instant-kills got our VoIP
         // pushes throttled by Apple → "sometimes doesn't ring, sometimes late").
+        // GLARE ON THE PUSH PATH (audit 2026-09-24). The listener path breaks a simultaneous dial on
+        // the uids; this path had no tiebreak, so when the push beat the listener, the phone that
+        // should have stood down busied the winner's call instead, and both calls died.
+        if state == .outgoing, !uid.isEmpty, uid == otherUid, callId != self.callId {
+            if me < uid {
+                db.collection("calls").document(callId)
+                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue, "glare": true])
+                return
+            }
+            standDownForGlare(rearmListener: false)   // I lose: drop my call, ring theirs below
+        }
+        // The 1-2s `.ended` tail is not a live call (see observeIncoming). A callback inside it
+        // was busied here, and CallKit then rang that busied call with nothing left to end it.
+        closeEndedTail()
         guard state == .idle else {
             if callId != self.callId {
                 db.collection("calls").document(callId).updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
@@ -2317,7 +2362,7 @@ final class CallService: NSObject {
             if cameraOn { prepareLocalVideo() }
             ensureMicPermission { [weak self] granted in
                 guard let self else { return }
-                guard granted else { self.hangUp(); return }
+                guard granted else { self.endForDeniedMic(); return }
                 // ⛔ THE MICROPHONE OPENS HERE AND NOWHERE EARLIER. Until this line the track has
                 // been disabled since it was created, so the connection that has been up for the
                 // last ten seconds has been carrying silence.
@@ -2345,7 +2390,7 @@ final class CallService: NSObject {
         if cameraOn { prepareLocalVideo() }
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
-            guard granted else { self.hangUp(); return }
+            guard granted else { self.endForDeniedMic(); return }
             let ref = self.db.collection("calls").document(id)
             // FAST PATH: the incoming listener already cached the offer, so answer immediately with
             // no server round-trip. That forced getDocument(source:.server) was a big slice of the
@@ -2508,6 +2553,13 @@ final class CallService: NSObject {
             // Remote ended (hang up / decline / unreachable) — play the matching tone,
             // then tear down. Do this first and bail.
             if (d["status"] as? String) == "ended", self.state != .ended, self.state != .idle {
+                // GLARE, heard from this side first (audit 2026-09-24): the other phone won the
+                // tiebreak and busied my call before my listener saw theirs. Taken as a busy line it
+                // played the busy tone, logged a missed row, and the tail then dropped their call.
+                if (d["glare"] as? Bool) == true, self.isCaller, self.state == .outgoing {
+                    self.standDownForGlare(rearmListener: true)
+                    return
+                }
                 let reason = EndReason(rawValue: d["endReason"] as? String ?? "") ?? .hangup
                 self.remoteEnded(reason: reason)
                 return
@@ -2773,9 +2825,15 @@ final class CallService: NSObject {
         if !localUser, reason != .none {
             playEndTone(reason)
             let toneDur = (reason == .busy) ? 2.0 : 0.6   // matches loops: 1 (declined plays the short ended tone now)
+            // Audit 2026-09-24: this delayed end read activeUUID when it FIRED, so a new call that
+            // rang inside the tone window (a callback right after a drop) had its own CallKit ring
+            // ended by the old call's cleanup. Only end the system call this call owned.
+            let endingUUID = CallKitManager.shared.activeUUID
             DispatchQueue.main.asyncAfter(deadline: .now() + toneDur) {
-                self.stopTone()
-                if clearCallKit { CallKitManager.shared.reportEnded() }
+                if self.state == .ended { self.stopTone() }
+                if clearCallKit, CallKitManager.shared.activeUUID == endingUUID {
+                    CallKitManager.shared.reportEnded()
+                }
             }
         } else if clearCallKit {
             CallKitManager.shared.reportEnded()
@@ -2783,7 +2841,8 @@ final class CallService: NSObject {
 
         state = .ended
         // Keep the final state visible briefly (longer for the busy tone) before idle.
-        let idleDelay = (!localUser && reason == .busy) ? 2.0 : 1.0
+        // The mic-denied line needs time to be read; one second is gone before the eye lands on it.
+        let idleDelay = ((!localUser && reason == .busy) || micDenied) ? 2.0 : 1.0
         DispatchQueue.main.asyncAfter(deadline: .now() + idleDelay) {
             if self.state == .ended { self.state = .idle }
         }

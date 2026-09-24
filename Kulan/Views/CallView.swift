@@ -142,6 +142,9 @@ struct CallView: View {
     /// something either person did.
     private var endedText: String {
         let neverRang = !call.calleeRinging && !call.calleeAccepted
+        // Audit 2026-09-24: a refused mic used to end here as "Couldn't reach them" / "Call failed".
+        // Wording reused from the voice-message alert.
+        if call.micDenied { return "Microphone access is off" }
         switch call.endReason {
         case .busy:     return "Busy"
         // A decline reads as a ring-out (owner's order): rejections are never exposed. That rule is
