@@ -1935,7 +1935,22 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         // alert up the moment there is somewhere to put it.
         guard let host = presenter else { return }
         lastErrorShown = message
-        let a = UIAlertController(title: "Couldn't post story", message: message, preferredStyle: .alert)
+        // 2026-09-24 decision D18: when the post is still waiting in the outbox (a connection
+        // failure, not a refusal), the alert says it will be retried on its own and offers
+        // "Try Again" now. A refusal or a video post has nothing waiting and keeps the plain OK.
+        let uid = AuthService.shared.uid ?? ""
+        let waiting = !uid.isEmpty && StoryOutbox.hasWaiting(for: uid)
+        let text = waiting
+            ? message + "\n\nIt will be tried again automatically when you're back online."
+            : message
+        let a = UIAlertController(title: "Couldn't post story", message: text, preferredStyle: .alert)
+        if waiting {
+            a.addAction(UIAlertAction(title: "Try Again", style: .default) { [weak self] _ in
+                self?.service.uploadError = nil
+                self?.lastErrorShown = nil
+                StoryOutbox.retry(for: uid)
+            })
+        }
         a.addAction(UIAlertAction(title: "OK", style: .cancel) { [weak self] _ in
             self?.service.uploadError = nil
             self?.lastErrorShown = nil

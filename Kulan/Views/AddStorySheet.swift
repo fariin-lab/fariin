@@ -545,6 +545,30 @@ struct StoryLibraryPicker: View {
             }
             .padding(.horizontal, 2)
         }
+        .overlay { if store.accessDenied { photosAccessOff } }
+    }
+
+    /// 2026-09-24 decision D22: Photos access refused. Same title and Open Settings button as the
+    /// app's other "access is off" prompts (see `ChatsSettingsView`), shown in place of the empty
+    /// grid. Coming back from Settings asks again, so a new yes fills the grid without reopening.
+    private var photosAccessOff: some View {
+        VStack(spacing: 12) {
+            Text("Photos access is off").font(.headline)
+            Text("Allow Photos access in Settings to add photos and videos to your story.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Open Settings") {
+                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            store.load()
+        }
     }
 
     // MARK: - The selection bar
@@ -737,7 +761,12 @@ struct StoryLibraryPicker: View {
         // lands, so an empty `pinned` AND `albums` is the loading state — and a library with no
         // albums at all resolves to the same spinner for a beat and then an empty screen, which is
         // the truth about a library with no albums.
-        .overlay { if store.pinned.isEmpty && store.albums.isEmpty { ProgressView() } }
+        // 2026-09-24 decision D22: with Photos access off there is nothing to load, so the notice
+        // replaces the spinner here too.
+        .overlay {
+            if store.accessDenied { photosAccessOff }
+            else if store.pinned.isEmpty && store.albums.isEmpty { ProgressView() }
+        }
     }
 
     /// The row inset, and the hairline's leading edge — one number so the two cannot drift.
@@ -1090,6 +1119,8 @@ final class PhotoGridStore: ObservableObject {
     /// Everything else: the remaining smart albums (Videos, Selfies, Screenshots…) and the ones the
     /// person made themselves.
     @Published var albums: [AlbumInfo] = []
+    /// 2026-09-24 decision D22: Photos access was refused (denied or restricted).
+    @Published var accessDenied = false
     private let manager = PHCachingImageManager()
 
     // Photos AND videos (stories take both, like every big app).
@@ -1123,6 +1154,9 @@ final class PhotoGridStore: ObservableObject {
     func load() {
         guard assets.isEmpty else { return }   // a re-opened sheet already has its list
         Self.authorized { ok in
+            // 2026-09-24 decision D22: a refusal is published, so the sheet can say so and offer
+            // Settings instead of showing an empty grid (and an albums spinner that never ends).
+            Task { @MainActor in self.accessDenied = !ok }
             guard ok else { return }
             let opts = PHFetchOptions()
             opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]

@@ -310,8 +310,16 @@ private struct GlowPersonRow: View {
     /// with a tint at about 12% and draws no stroke at all, which on this page's black is a button
     /// you can only find by knowing it is there. A stated 1pt outline is the pair to `filled` above:
     /// same size, same shape, opposite emphasis.
+    ///
+    /// 2026-09-24 decision D21: removing a Glow asks first (his 2026-09-02 ruling). The outlined
+    /// "Glowing" capsule is only ever the remove door, so it opens the same menu the profile's
+    /// Glow button does, with the same red "Remove Glowing" row, instead of removing on touch.
     private func outlined(_ title: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Menu {
+            Button(role: .destructive, action: action) {
+                Label { Text("Remove Glowing") } icon: { GlowStyle.mark(20, filled: true) }
+            }
+        } label: {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.primary)

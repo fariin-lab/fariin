@@ -388,6 +388,37 @@ enum StoryDoor {
         req?.onClosed()
     }
 
+    /// 2026-09-24 decision D20: a story on screen went away for me (deleted, expired, or no longer
+    /// visible). Re-feed the open viewer without it, the way the author's own delete does
+    /// (`onDeletedRemaining` below): the same person's next story if they have one, else the next
+    /// person, through `replaceContent`. Returns false when there is nothing left to show, or no
+    /// viewer of ours is open, and the caller closes instead.
+    static func dropStory(_ storyId: String) -> Bool {
+        guard var next = request else { return false }
+        var list = next.siblings.isEmpty ? [next.group] : next.siblings
+        guard let gi = list.firstIndex(where: { $0.stories.contains { $0.id == storyId } }),
+              let si = list[gi].stories.firstIndex(where: { $0.id == storyId }) else { return false }
+        var g = list[gi]
+        g.stories.remove(at: si)
+        let landing: StoryGroup
+        if g.stories.isEmpty {
+            list.remove(at: gi)
+            guard !list.isEmpty else { return false }
+            landing = list[min(gi, list.count - 1)]
+            next.startStoryId = nil
+        } else {
+            list[gi] = g
+            landing = g
+            next.startStoryId = g.stories[min(si, g.stories.count - 1)].id
+        }
+        next.group = landing
+        if !next.siblings.isEmpty { next.siblings = list }
+        request = next
+        StoryDoorState.shared.openGroup = landing
+        StoryZoomPresenter.replaceContent(viewer(next, refeed: true))
+        return true
+    }
+
     /// `refeed: true` builds the replacement viewer for a delete-with-stories-remaining swap: the
     /// screen is already up, so the new viewer must not replay the open flight (`heroStageOpen`).
     @ViewBuilder

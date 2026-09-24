@@ -159,9 +159,52 @@ enum StoryOutbox {
         // Once per account per process, and never a ticket a running post owns. See `liveIds`.
         lock.lock()
         let first = resumedUids.insert(uid).inserted
-        let running = liveIds
         lock.unlock()
         guard first else { return }
+        observeReconnect()
+        replay(for: uid)
+    }
+
+    /// 2026-09-24 decision D18: a failed post is retried again when the connection comes back, and
+    /// from the alert's "Try Again", not only at the next launch. Same door as `resume`, without its
+    /// once-per-process gate; a running post's ticket is still skipped (see `liveIds`).
+    @MainActor static func retry(for uid: String) {
+        guard !uid.isEmpty else { return }
+        replay(for: uid)
+    }
+
+    /// 2026-09-24 decision D18: is there a failed post of this account's waiting for a retry? The
+    /// alert offers "Try Again" only when there is.
+    static func hasWaiting(for uid: String) -> Bool {
+        lock.lock(); let running = liveIds; lock.unlock()
+        return pending().contains { $0.0.ownerUid == uid && !running.contains($0.0.id) }
+    }
+
+    /// 2026-09-24 decision D18: the post failed but its ticket is kept for a retry. It is no longer
+    /// running, so it leaves `liveIds` (the files stay), or `retry` would skip it as a live post.
+    static func release(_ id: String) {
+        guard !id.isEmpty else { return }
+        lock.lock(); liveIds.remove(id); lock.unlock()
+    }
+
+    /// 2026-09-24 decision D18: the reconnect trigger, installed once with the first `resume`.
+    /// `NetworkState` announces `.networkCameBack` on the main queue.
+    @MainActor private static var reconnectObserver: NSObjectProtocol?
+    @MainActor private static func observeReconnect() {
+        guard reconnectObserver == nil else { return }
+        _ = NetworkState.shared   // its path monitor is what posts the notification
+        reconnectObserver = NotificationCenter.default.addObserver(
+            forName: .networkCameBack, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                if let uid = AuthService.shared.uid { retry(for: uid) }
+            }
+        }
+    }
+
+    @MainActor private static func replay(for uid: String) {
+        lock.lock()
+        let running = liveIds
+        lock.unlock()
         for (t, img) in pending() where !running.contains(t.id) {
             guard t.ownerUid == uid else {
                 forget(t.id)

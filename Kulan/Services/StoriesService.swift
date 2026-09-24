@@ -790,6 +790,9 @@ final class StoriesService {
                 // refused and shows the same alert again, forever.
                 failure = Self.friendlyPostError(error)
                 if Self.isPermanentPostFailure(error) { StoryOutbox.forget(ticket) }
+                // 2026-09-24 decision D18: a kept ticket is no longer a running post, so a retry
+                // (reconnect or "Try Again") may pick it up in this same session.
+                else { StoryOutbox.release(ticket) }
             }
             // ⚠️ A PLAIN FAILURE KEEPS ITS TICKET. That is the whole point: no connection now is the
             // case worth remembering, and the next sign-in puts it back through this same door.
@@ -889,6 +892,53 @@ final class StoriesService {
         // Storage: -13021 is unauthorized, its own equivalent of a rule refusal.
         if ns.domain == StorageErrorDomain { return ns.code == -13021 }
         return false
+    }
+
+    /// 2026-09-24 decision D20: an open viewer listens to the story on screen, and `onGone` runs
+    /// when it is deleted or I can no longer read it (audience changed, blocked). Returns the stop.
+    ///
+    /// ⚠️ A PERMISSION ERROR ON `stories/{id}` IS NOT YET "GONE". An "Everyone" story reached from a
+    /// profile is read through the author's `publicStories` mirror, and `stories/{id}` refuses a
+    /// stranger by design. So a refusal moves the watch to the mirror, which answers for itself:
+    /// missing, or refused (the author blocked me), is gone.
+    ///
+    /// Cache snapshots are ignored: a document the cache has never held reads as missing offline.
+    /// Firestore delivers these callbacks on the main queue, which is where the box is touched.
+    func watchStoryGone(_ storyId: String, authorUid: String,
+                        onGone: @escaping @MainActor () -> Void) -> () -> Void {
+        final class Box { var reg: ListenerRegistration?; var stopped = false; var fired = false }
+        let box = Box()
+        let gone: () -> Void = {
+            guard !box.stopped, !box.fired else { return }
+            box.fired = true
+            Task { @MainActor in onGone() }
+        }
+        let denied: (Error) -> Bool = { e in
+            let ns = e as NSError
+            return ns.domain == FirestoreErrorDomain && ns.code == 7
+        }
+        let mirror = db.collection("users").document(authorUid)
+            .collection("publicStories").document(storyId)
+        box.reg = db.collection("stories").document(storyId).addSnapshotListener { snap, error in
+            guard !box.stopped else { return }
+            if let error {
+                guard denied(error) else { return }
+                box.reg?.remove()
+                box.reg = mirror.addSnapshotListener { snap, error in
+                    if let error { if denied(error) { gone() }; return }
+                    guard let snap, !snap.metadata.isFromCache else { return }
+                    if !snap.exists { gone() }
+                }
+                return
+            }
+            guard let snap, !snap.metadata.isFromCache else { return }
+            if !snap.exists { gone() }
+        }
+        return {
+            box.stopped = true
+            box.reg?.remove()
+            box.reg = nil
+        }
     }
 
     /// What to SAY about it. "Missing or insufficient permissions" is Firestore describing a rule to

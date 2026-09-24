@@ -335,7 +335,14 @@ private struct GlowEventRow: View {
                 // bare secondary text beside a filled capsule, so the mutual state read as a label
                 // rather than as the same control in its other state. Same size and shape as
                 // "Glow back" above, opposite emphasis — the pair the Glowers list now uses too.
-                Button { glow.remove(to: event.person.id) } label: {
+                //
+                // 2026-09-24 decision D21: removing a Glow asks first (his 2026-09-02 ruling). A
+                // menu with the profile's red "Remove Glowing" row, not a remove on touch.
+                Menu {
+                    Button(role: .destructive) { glow.remove(to: event.person.id) } label: {
+                        Label { Text("Remove Glowing") } icon: { GlowStyle.mark(20, filled: true) }
+                    }
+                } label: {
                     Text("Glowing")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.primary)

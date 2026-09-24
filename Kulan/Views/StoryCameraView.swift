@@ -57,6 +57,9 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     @Published var hasLight = false
     @Published var denied = false   // camera access denied/restricted → the view shows a Settings prompt
     @Published var recording = false
+    /// 2026-09-24 decision D19: microphone access is refused, so video records without sound and
+    /// the view says so while recording.
+    @Published var micOff = false
     var onCapture: ((Data) -> Void)?
     var onVideo: ((URL) -> Void)?
 
@@ -329,6 +332,26 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     /// `didStartRecordingTo`. The shutter has to answer the finger, not the capture pipeline.
     func startRecording() {
         guard session.isRunning, !movieOutput.isRecording else { return }
+        // 2026-09-24 decision D19: ask for the microphone BEFORE the first take, not in the middle
+        // of it. The prompt covers the screen and takes the finger off the shutter anyway, so this
+        // press is spent on the question: the optimistic flag comes back down, and the answer is
+        // attached (or not) before the next press. A refusal records without sound and `micOff`
+        // shows the notice.
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined:
+            recording = false
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                guard let self else { return }
+                DispatchQueue.main.async { self.micOff = !granted }
+                guard granted else { return }
+                self.sessionQueue.async { self.attachAudioIfNeeded(promptIfNeeded: false) }
+            }
+            return
+        case .authorized:
+            micOff = false
+        default:
+            micOff = true
+        }
         sessionQueue.async { [weak self] in
             guard let self else { return }
             self.attachAudioIfNeeded()   // no-op after the first time; the prompt path only
@@ -1461,7 +1484,21 @@ struct StoryCameraView: View {
                     .padding(.bottom, 26)
             }
             .overlay(alignment: .top) {
-                if cam.recording { recordingClock.padding(.top, 18) }
+                if cam.recording {
+                    VStack(spacing: 8) {
+                        recordingClock
+                        // 2026-09-24 decision D19: a take without sound says so while it records.
+                        if cam.micOff {
+                            Text("No sound: microphone access is off")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12).frame(height: 26)
+                                .background(Color.black.opacity(0.55), in: Capsule())
+                                .transition(.opacity)
+                        }
+                    }
+                    .padding(.top, 18)
+                }
             }
             .animation(.easeInOut(duration: 0.2), value: cam.recording)
             .opacity(handingOver ? 0 : 1)

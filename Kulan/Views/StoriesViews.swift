@@ -1561,6 +1561,27 @@ struct StoryViewer: View {
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.max() ?? 0
     }
     private var currentStory: Story? { groups.flatMap(\.stories).first { $0.id == currentStoryId } }
+
+    /// 2026-09-24 decision D20: which stories the live watch covers. Not my own (my delete already
+    /// has its path, and a placeholder has no document), not a one-time story (opening it takes me
+    /// out of its audience on purpose, which would read as "gone" while I watch), not demo rows.
+    private var liveWatchEnabled: Bool {
+        guard let s = currentStory else { return false }
+        return s.authorUid != (AuthService.shared.uid ?? "")
+            && !s.oneTime
+            && !StoriesService.isPending(s.id)
+            && !GlowDemo.isDemoPerson(s.authorUid)
+    }
+
+    /// 2026-09-24 decision D20: the story on screen is gone for me. Same path as the author's own
+    /// delete: the close cover goes (it is a picture of something gone), and the viewer is re-fed
+    /// without that story through `StoryZoomPresenter.replaceContent`. Nothing left, or a viewer
+    /// that `StoryDoor` did not open, closes instead.
+    private func dropGoneStory(_ id: String) {
+        guard id == currentStoryId else { return }
+        StoryZoomPresenter.invalidateCover()
+        if !StoryDoor.dropStory(id) { onClose() }
+    }
     // Which of my stories the viewers sheet should target. Usually the item on screen; but for the
     // first ~50ms after opening, `currentStoryId` is still "" (the library's first timer tick hasn't
     // fired) — fall back to the item the viewer OPENED on (first unseen, else the first), matching
@@ -1873,6 +1894,14 @@ struct StoryViewer: View {
         } message: {
             Text("It will also be deleted for everyone who received it.")
         }
+        // 2026-09-24 decision D20: the story on screen is listened to while it is up. Deleted,
+        // expired, or no longer visible to me (audience change, block) drops that page the way the
+        // author's own delete does. See `LiveStoryWatch` and `dropGoneStory`.
+        .modifier(LiveStoryWatch(storyId: currentStory?.id ?? "",
+                                 authorUid: currentStory?.authorUid ?? "",
+                                 expiresAt: currentStory?.expiresAt,
+                                 enabled: liveWatchEnabled,
+                                 onGone: dropGoneStory))
         // The viewer dropped the item in-place + advanced; here we delete it from the database. If that was
         // my last story, close the viewer (Case 3). Otherwise leave the (captured) viewer untouched — no re-feed.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyItemDeleted"))) { note in
@@ -5874,4 +5903,45 @@ func storyAudienceTitle(for s: Story) -> String {
 func storyAudienceHasBothTabs(_ s: Story?) -> Bool {
     guard let s else { return false }
     return s.audienceLabel == "everyone" && !s.oneTime
+}
+
+/// 2026-09-24 decision D20: one listener on the story currently on screen, moved as the viewer
+/// pages and removed when it closes. `onGone` gets the story id when the document is deleted or
+/// refused to me (see `StoriesService.watchStoryGone`), or when the story reaches its expiry while
+/// it is still up.
+private struct LiveStoryWatch: ViewModifier {
+    let storyId: String
+    let authorUid: String
+    let expiresAt: Date?
+    let enabled: Bool
+    let onGone: (String) -> Void
+    @State private var stop: (() -> Void)?
+    @State private var expiry: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: "\(storyId)|\(enabled)", initial: true) { _, _ in rewatch() }
+            .onDisappear { tearDown() }
+    }
+
+    private func tearDown() {
+        stop?(); stop = nil
+        expiry?.cancel(); expiry = nil
+    }
+
+    private func rewatch() {
+        tearDown()
+        guard enabled, !storyId.isEmpty, !authorUid.isEmpty else { return }
+        let id = storyId
+        let gone = onGone
+        stop = StoriesService.shared.watchStoryGone(id, authorUid: authorUid) { gone(id) }
+        if let expiresAt {
+            let wait = max(0, expiresAt.timeIntervalSince(ServerClock.now))
+            expiry = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                gone(id)
+            }
+        }
+    }
 }
