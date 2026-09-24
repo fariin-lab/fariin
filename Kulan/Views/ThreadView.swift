@@ -679,7 +679,11 @@ struct ThreadView: View {
                 }
                 // Read receipts: only for INCOMING messages the user can actually see (at the bottom) —
                 // never while scrolled up reading history. Own sends in the same batch no longer mask them.
-                if !incoming.isEmpty && isAtBottom && !repo.iBlocked {
+                // ACTIVE only (2026-09-24 audit): the listener keeps delivering while the app is in
+                // the background (a voice note or a call keeps it awake), and those arrivals were
+                // marked read with nobody looking. `didBecomeActive` below sends the receipt instead.
+                if !incoming.isEmpty && isAtBottom && !repo.iBlocked
+                    && UIApplication.shared.applicationState == .active {
                     ChatService.markReadThrottled(cid)
                     // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
                     // badge goes stale if the app is killed while this chat is still open.
@@ -1830,6 +1834,19 @@ struct ThreadView: View {
         // no goodbye at all; parking on the way to background is the last reliable moment.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             if recordLocked { parkRecordingDraft() }
+            // Stop "typing…" on the way out (2026-09-24 audit). The 3s idle stop is a main-queue
+            // asyncAfter that a suspended app never runs, and the 10s keep-alive kept re-sending
+            // "typing" for as long as iOS let the app run in the background.
+            typingIdleStop?.cancel()
+            typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+            if typingSent { typingSent = false; broadcastTyping(false) }
+        }
+        // Back in front with the newest message on screen: send the read receipt the background
+        // arrivals were denied above (2026-09-24 audit).
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            guard isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
+            ChatService.markReadThrottled(cid)
+            Task { await ChatService.resetUnread(cid) }
         }
         // A hide from anywhere (the image viewer, the gallery, the row itself) reaches the signature
         // through this tick. See `hiddenTick`.
@@ -4932,6 +4949,11 @@ struct ThreadView: View {
         // only; the text always survives, which is the part that matters.)
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
                       ts: Date().timeIntervalSince1970)
+        // Already on its way (an offline send suspends, it does not fail): a Retry tap or a reopen
+        // drain must not start a second copy (2026-09-24 audit, see `SendQueue.beginSending`). The
+        // bubble stays; the original's echo or failure settles it.
+        guard SendQueue.beginSending(clientId) else { return }
+        defer { SendQueue.endSending(clientId) }
         do {
             let preview = draft.map {
                 ChatService.OutgoingLinkPreview(url: $0.url.absoluteString, title: $0.title,
@@ -4964,7 +4986,10 @@ struct ThreadView: View {
             if await SendQueue.alreadySent(cid: cid, clientId: entry.clientId) { SendQueue.remove(clientId: entry.clientId); continue }
             let reply: ReplyRef? = entry.replyId.map { ReplyRef(id: $0, authorId: entry.replyAuthor ?? "", text: entry.replyText ?? "") }
             await MainActor.run {
-                if !repo.messages.contains(where: { $0.clientId == entry.clientId }) {
+                // `pending` too (2026-09-24 audit): the repo restores this chat's pending bubbles
+                // from its cache on open, so checking only the server list drew the same message twice.
+                if !repo.messages.contains(where: { $0.clientId == entry.clientId }),
+                   !repo.pending.contains(where: { $0.clientId == entry.clientId }) {
                     repo.addPending(Message(localText: entry.text, authorId: me, clientId: entry.clientId,
                                             replyTo: reply, sendState: .sending))
                 }
@@ -5803,7 +5828,12 @@ struct ThreadView: View {
                     .multilineTextAlignment(.center)
                 HStack(spacing: 10) {
                     Button {
-                        Task { try? await MessageRequests.decline(cid); dismiss() }
+                        // Close first (2026-09-24 audit): the await only returns on the server's
+                        // answer, so offline the thread never closed. The batch is queued locally
+                        // at once and lands on reconnect; the unstructured Task outlives the view.
+                        let id = cid
+                        dismiss()
+                        Task { try? await MessageRequests.decline(id) }
                     } label: {
                         Text("Delete").font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)

@@ -215,7 +215,9 @@ struct MediaGalleryView: View {
             // (files, voice, links, GIFs) get the same treatment `expandedAll` gives the grid.
             func visible(_ m: [Message]) -> [Message] { m.filter { !HiddenMessages.isHidden($0.id) } }
             if let cached = GalleryCache.store[cid] { all = visible(cached); loaded = true }
-            let fresh = visible(await ChatService.galleryContent(cid))
+            // nil = the load failed: keep the cached gallery on screen instead of wiping it (2026-09-24).
+            guard let fetched = await ChatService.galleryContent(cid) else { loaded = true; return }
+            let fresh = visible(fetched)
             all = fresh
             GalleryCache.store[cid] = fresh
             loaded = true

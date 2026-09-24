@@ -4249,7 +4249,8 @@ private struct ChatPeekPreview: View {
             // receipts, nothing marked seen. One fetch is the whole cost.
             guard !OfficialChannel.isOfficial(cid) else { return }
             // Newest-first fetch → ascending for display.
-            let fetched = await ChatService.galleryContent(cid, limit: 14)
+            // nil = the fetch failed: keep what the cache drew (2026-09-24 audit; it used to blank the peek).
+            guard let fetched = await ChatService.galleryContent(cid, limit: 14) else { loaded = true; return }
             msgs = Array(fetched.reversed()).filter { !$0.isSystem }
             loaded = true
         }

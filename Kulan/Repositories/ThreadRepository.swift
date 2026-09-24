@@ -450,6 +450,10 @@ final class ThreadRepository {
             guard let self, !self.didInitialLoad else { return }   // cache already answered
             self.skeletonArmed = true
         }
+        // Tear down the previous run FIRST (2026-09-24 audit). `stop()` sat below the two outbox
+        // observers and removes them, so they were unregistered the instant they were added: a
+        // forward that failed or arrived while this chat was open never reached it.
+        stop()
         // Anything a forward parked for this chat before we existed. Claimed BEFORE the listener
         // attaches, so the bubble is on screen on the first frame rather than appearing a beat later.
         pending.append(contentsOf: PendingOutbox.take(cid))
@@ -478,7 +482,7 @@ final class ThreadRepository {
         let isOneToOne = cid.contains("_")
         let other = isOneToOne ? (cid.split(separator: "_").map(String.init).first { $0 != uid } ?? "") : ""
         otherUid = other
-        stop()
+        // (`stop()` moved to the top of this function; see the note there.)
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
         convListener = db.collection("conversations").document(cid)
@@ -1080,7 +1084,11 @@ final class ThreadRepository {
                 let docs = snap?.documents ?? []
                 for doc in docs { self.buildCached(doc) }
                 if let last = docs.last { self.oldestDoc = last }
-                if docs.count < self.pageSize { self.canLoadOlder = false }
+                // Only the SERVER can say history has ended (2026-09-24 audit). A failed fetch
+                // (snap nil) or an offline answer from the local cache (a partial page) used to
+                // switch paging off for the rest of the visit, so older messages never loaded
+                // again even after the signal came back.
+                if let snap, !snap.metadata.isFromCache, docs.count < self.pageSize { self.canLoadOlder = false }
                 self.loadingOlder = false
                 self.rebuild()
                 completion()

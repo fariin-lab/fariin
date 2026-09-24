@@ -308,6 +308,20 @@ enum ChatService {
                 PendingUploadStore.remove(job.id)
                 try? FileManager.default.removeItem(atPath: job.filePath)
             } catch {
+                // 2026-09-24 audit: a job whose message was deleted meanwhile was kept "for the next
+                // launch", so it uploaded again and failed again on EVERY launch, forever. The attach
+                // write fails as not-found (5) or, through the rules reading a missing doc, as
+                // permission-denied (7); either way ask the server whether the message is still
+                // there, and drop the job only on a definite "no". Offline stays queued as before.
+                let ns = error as NSError
+                if ns.domain == FirestoreErrorDomain, ns.code == 5 || ns.code == 7,
+                   let snap = try? await db.collection("conversations").document(job.cid)
+                       .collection("messages").document(job.messageId).getDocument(source: .server),
+                   !snap.exists {
+                    PendingUploadStore.remove(job.id)
+                    try? FileManager.default.removeItem(atPath: job.filePath)
+                    continue
+                }
                 print("resumePendingUploads: \(job.storagePath) not finished yet:", error)
             }
         }
@@ -428,23 +442,39 @@ enum ChatService {
 
     /// Leave a group (remove self). Writes the system message FIRST (while still a member,
     /// so the message-create rule passes), then removes self.
+    ///
+    /// ONE BATCH (2026-09-24 audit). It was three awaited writes, so a kill or a dropped signal
+    /// between them left "X left" in the chat while X was still a member. The message rule reads
+    /// the conversation with `get()`, which sees the state BEFORE the batch, so I still count as a
+    /// member for the two notices; the self-leave update branch limits no other keys.
     static func leaveGroup(cid: String) async throws {
         let convRef = db.collection("conversations").document(cid)
-        // If I'm the LAST admin, promote a remaining member first (while I'm still an admin)
-        // so the group never ends up with no one who can manage it.
-        if let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
-           conv.admins.filter({ $0 != uid }).isEmpty,
-           let heir = conv.users.first(where: { $0 != uid }) {
-            try? await convRef.updateData(["admins": FieldValue.arrayUnion([heir])])
-            // Tell everyone who inherited admin (otherwise the heir never learns).
-            try? await writeSystemMessage(cid: cid, text: "\(conv.names[heir] ?? "A member") is now an admin")
+        let batch = db.batch()
+        func notice(_ text: String) {
+            batch.setData(["text": text, "authorId": uid, "type": "system",
+                           "createdAt": FieldValue.serverTimestamp()],
+                          forDocument: convRef.collection("messages").document())
         }
-        try await writeSystemMessage(cid: cid, text: "\(myName()) left")
-        try await convRef.updateData([
+        var convUpdate: [String: Any] = [
             "users": FieldValue.arrayRemove([uid]),
             "admins": FieldValue.arrayRemove([uid]),
             "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        ]
+        // If I'm the LAST admin, promote a remaining member in the same write so the group never
+        // ends up with no one who can manage it.
+        if let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
+           conv.admins.filter({ $0 != uid }).isEmpty,
+           let heir = conv.users.first(where: { $0 != uid }) {
+            convUpdate["admins"] = [heir]   // one field cannot take arrayUnion and arrayRemove at once
+            // Tell everyone who inherited admin (otherwise the heir never learns).
+            notice("\(conv.names[heir] ?? "A member") is now an admin")
+        }
+        let left = "\(myName()) left"
+        notice(left)
+        convUpdate["lastMessage"] = left
+        convUpdate["lastSender"] = uid
+        batch.updateData(convUpdate, forDocument: convRef)
+        try await batch.commit()
     }
 
     /// Announcement mode (admin): when true, only admins may send. Enforced in the message
@@ -2203,7 +2233,10 @@ enum ChatService {
         }
     }
 
-    static func galleryContent(_ cid: String, limit: Int = 400) async -> [Message] {
+    /// Returns nil when the LOAD FAILED (2026-09-24 audit). It returned [] before, and the gallery
+    /// wrote that empty answer over its cached copy, so one offline open wiped a full gallery.
+    static func galleryContent(_ cid: String, limit: Int = 400) async -> [Message]? {
+        guard !cid.isEmpty else { return nil }   // an empty id throws an NSException — see `sharedMedia`
         do {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .order(by: "createdAt", descending: true)
@@ -2211,7 +2244,7 @@ enum ChatService {
             return snap.documents
                 .map { Message(id: $0.documentID, data: $0.data(), cid: cid, crypto: Crypto.shared) }
         } catch {
-            return []
+            return nil
         }
     }
 
@@ -2263,7 +2296,9 @@ enum ChatService {
         else { enc = try? await Crypto.shared.encryptForConversation(cid, emoji) }
         // Dotted field update — only touches my own key, so concurrent reactions never clobber.
         if let enc {
-            try? await ref.updateData(["reactions.\(uid)": enc])
+            // Preview only once the reaction itself landed (2026-09-24 audit): reacting to a message
+            // deleted meanwhile failed here, and the chat list still said "Reacted 🙏" about nothing.
+            guard (try? await ref.updateData(["reactions.\(uid)": enc])) != nil else { return }
             // Surface it in the chat list ("Reacted 🙏") — a separate best-effort write, so the
             // reaction itself still lands even if this one is rejected. Deliberately does NOT
             // bump updatedAt: a reaction shouldn't reorder chats or re-arm unread; the list
@@ -2891,14 +2926,26 @@ enum ChatService {
         try? await writeSystemMessage(cid: cid, text: text, extra: ["disappearSeconds": seconds])
     }
 
-    static func setBlocked(_ cid: String, _ value: Bool) async {
+    /// Returns false when the write was refused, so a caller can say so (2026-09-24 audit).
+    /// ⚠️ Blocking someone you never chatted with was a silent no-op: there is no conversation doc,
+    /// this merge write would CREATE one without `users`, the create rule refuses it, and `try?`
+    /// hid that. Creating the chat here is not the fix — every new 1:1 is born a request to the
+    /// other person. Where a block should live when no chat exists is a backend decision.
+    @discardableResult
+    static func setBlocked(_ cid: String, _ value: Bool) async -> Bool {
         var data: [String: Any] = ["blockedBy": [uid: value]]
         let now = Date().timeIntervalSince1970 * 1000
         // Stamp block start / unblock time so the blocker hides exactly the messages
         // that arrived DURING the block — and keeps hiding them after unblock
         // (never delivered, as standard messengers do). Older history stays visible.
         if value { data["blockedAt"] = [uid: now] } else { data["blockClearedAt"] = [uid: now] }
-        try? await db.collection("conversations").document(cid).setData(data, merge: true)
+        var ok = true
+        do {
+            try await db.collection("conversations").document(cid).setData(data, merge: true)
+        } catch {
+            print("setBlocked(\(cid), \(value)) refused:", error)
+            ok = false
+        }
         // REVOKE MY ACTIVE STORIES FROM THEM (audit). The audience is frozen into recipientUids at
         // post time and nothing ever rewrote it, so blocking someone only affected FUTURE stories:
         // for up to 24h they kept the ring, kept watching, and kept landing in my Seen-by. Blocking
@@ -2907,6 +2954,7 @@ enum ChatService {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
             if !other.isEmpty { await StoriesRepository.shared.revokeAudience(for: other) }
         }
+        return ok
     }
 
     /// File an abuse report. App Store Guideline 1.2 requires users to be able to
@@ -2961,6 +3009,11 @@ enum ChatService {
         var h = handle.trimmingCharacters(in: .whitespaces).lowercased()
         if h.hasPrefix("@") { h.removeFirst() }   // users type "@ayaan"
         guard !h.isEmpty else { return nil }
+        // Typed text goes straight into `document(_:)`, which RAISES an ObjC exception `try?` cannot
+        // catch for an id with "/", ".", "..", "__x__" or over the length limit: typing one in
+        // @search crashed the app (2026-09-24 audit). None of those can be a handle.
+        guard !h.contains("/"), h != ".", h != "..", !(h.hasPrefix("__") && h.hasSuffix("__")),
+              h.utf8.count <= 128 else { return nil }
         do {
             let nameDoc = try await db.collection("usernames").document(h).getDocument()
             guard let nd = nameDoc.data(), let owner = nd["uid"] as? String, !owner.isEmpty else { return nil }

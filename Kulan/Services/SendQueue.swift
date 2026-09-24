@@ -34,6 +34,25 @@ enum SendQueue {
     private static let key = "sendQueue.v1"
     private static let lock = NSLock()
 
+    /// ⛔ ONE SEND PER clientId AT A TIME, in this process (2026-09-24 audit). An offline send does
+    /// not fail, it SUSPENDS: the Firestore await returns only when the server answers. Meanwhile the
+    /// stuck-send sweep marks the bubble failed after 5s, and a Retry tap, a reopen of the chat
+    /// (a new view, a new drain) or the launch drain each started a SECOND send of the same entry.
+    /// `alreadySent` cannot see a message that is not even written yet, so on reconnect both went
+    /// out and the other person got the text twice. Every sender claims the id first.
+    private static var inFlight = Set<String>()
+
+    /// False when this clientId is already being sent; the caller must not send it again.
+    static func beginSending(_ clientId: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return inFlight.insert(clientId).inserted
+    }
+
+    static func endSending(_ clientId: String) {
+        lock.lock(); defer { lock.unlock() }
+        inFlight.remove(clientId)
+    }
+
     private static func load() -> [String: Entry] {
         guard let data = UserDefaults.standard.data(forKey: key),
               let map = try? JSONDecoder().decode([String: Entry].self, from: data) else { return [:] }
@@ -97,6 +116,9 @@ enum SendQueue {
         let open = AppRouter.shared.activeChatId
         let entries = allPending().filter { $0.cid != open }
         for e in entries {
+            // The chat may have been opened since this loop started; its own drain then owns it.
+            guard beginSending(e.clientId) else { continue }
+            defer { endSending(e.clientId) }
             if await alreadySent(cid: e.cid, clientId: e.clientId) { remove(clientId: e.clientId); continue }
             let reply: ReplyRef? = e.replyId.map {
                 ReplyRef(id: $0, authorId: e.replyAuthor ?? "", text: e.replyText ?? "")
