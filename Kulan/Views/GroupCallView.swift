@@ -44,7 +44,11 @@ struct GroupCallView: View {
             Spacer()
             VStack(spacing: 2) {
                 Text(service.callTitle).font(.headline).foregroundStyle(.white)
-                Text("\(participants.count) in call").font(.caption).foregroundStyle(.white.opacity(0.7))
+                // 2026-09-24 audit: `connecting` was published and never read, so a join still in
+                // flight showed "1 in call", identical to a live call nobody else is in. Same word
+                // the 1:1 call screen uses.
+                Text(service.connecting ? "Connecting…" : "\(participants.count) in call")
+                    .font(.caption).foregroundStyle(.white.opacity(0.7))
             }
             Spacer()
             Color.clear.frame(width: 38, height: 38)

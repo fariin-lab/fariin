@@ -128,6 +128,19 @@ final class CallKitManager: NSObject {
         }
     }
 
+    /// 2026-09-24 audit: a VoIP push that names no call. iOS still requires a report for every VoIP
+    /// push (or it kills the app and stops delivering them), so report a transient call and end it
+    /// at once, the same way the busy branch above does, without touching any call state.
+    func reportAndDiscard(completion: @escaping () -> Void) {
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "Call")
+        provider.reportNewIncomingCall(with: uuid, update: update) { [provider] _ in
+            provider.reportCall(with: uuid, endedAt: nil, reason: .failed)
+            completion()
+        }
+    }
+
     // Reflect a mid-call video<->voice switch in the system call UI (green pill shows the camera glyph).
     func updateHasVideo(_ hasVideo: Bool) {
         guard let uuid = activeUUID else { return }

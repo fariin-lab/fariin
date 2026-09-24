@@ -96,6 +96,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         guard type == .voIP else { completion(); return }
         let d = payload.dictionaryPayload
         let callId = d["callId"] as? String ?? ""
+        // 2026-09-24 audit: no call id means no call document to ring for (an empty id is not a
+        // valid Firestore path). Still reported to CallKit, as iOS requires, then ended at once.
+        guard !callId.isEmpty else { CallKitManager.shared.reportAndDiscard(completion: completion); return }
         let name = d["callerName"] as? String ?? "Call"
         let uid = d["callerUid"] as? String ?? ""
         let photo = d["photo"] as? String

@@ -546,6 +546,12 @@ struct CallsView: View {
     private func deleteRun(_ r: CallRun) {
         Task { await repo.delete(ids: r.ids) }   // a grouped row deletes ALL calls in the run
     }
+    /// 2026-09-24 audit: the same test the chat header's call buttons use (ThreadView). While a call
+    /// is up, `startCall` refuses silently, so the menu and the confirm's Call button were dead taps.
+    private var callsEnabled: Bool {
+        let s = CallService.shared.state
+        return s == .idle || s == .ended
+    }
     /// Is everything currently on screen already ticked? Drives the Select All button's two states.
     /// ⚠️ Compared against `shownRuns`, the same list the button acts on, so filtering or searching
     /// mid-selection cannot leave the button claiming "all" about rows that are no longer visible.
@@ -578,6 +584,14 @@ struct CallsView: View {
                 } else if !repo.hasLoaded || repo.calls.isEmpty {
                     EmptyStateView(title: "No Calls Yet", icon: "phone",
                                    text: "Your call history will appear here.")
+                } else if shownRuns.isEmpty && !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    // 2026-09-24 audit: a search with no match drew a blank list. Same view the
+                    // other searches in the app use.
+                    ContentUnavailableView.search(text: searchText)
+                } else if shownRuns.isEmpty {
+                    // 2026-09-24 audit: Missed with no missed calls drew a blank list too.
+                    EmptyStateView(title: "No Missed Calls", icon: "phone",
+                                   text: "Missed calls will appear here.")
                 } else {
                     List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                         ForEach(shownRuns) { run in
@@ -642,9 +656,11 @@ struct CallsView: View {
                                 Button {
                                     pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
                                 } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
+                                .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
                                 Button {
                                     pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
                                 } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
+                                .disabled(!callsEnabled)
                                 Button {
                                     AppRouter.shared.pendingChatName = call.name
                                     AppRouter.shared.pendingChatPhoto = call.photoUrl
@@ -761,6 +777,7 @@ struct CallsView: View {
                 Button("Call") {
                     CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
                 }
+                .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
             } message: { c in
                 Text("\(c.video ? "Video call" : "Call") \(c.name)?")
             }
@@ -941,6 +958,7 @@ struct NewCallView: View {
                     CallService.shared.startCall(to: c.uid, name: c.name, photo: c.photo, video: c.video)
                     dismiss()
                 }
+                .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
             } message: { c in
                 Text("\(c.video ? "Video call" : "Call") \(c.name)?")
             }
@@ -956,12 +974,21 @@ struct NewCallView: View {
                 Image(systemName: "phone").font(.system(size: 19)).foregroundStyle(.primary)
             }
             .buttonStyle(.plain).frame(width: 44, height: 44).contentShape(Rectangle())
+            .disabled(!callsEnabled)
             Button { call(c, video: true) } label: {
                 Image(systemName: "video").font(.system(size: 19)).foregroundStyle(.primary)
             }
             .buttonStyle(.plain).frame(width: 44, height: 44).contentShape(Rectangle())
+            .disabled(!callsEnabled)
         }
         .padding(.vertical, 2)
+    }
+
+    /// 2026-09-24 audit: same gate as the chat header (ThreadView). `startCall` refuses silently
+    /// while a call is up, so these glyphs were dead taps behind a confirm that lied.
+    private var callsEnabled: Bool {
+        let s = CallService.shared.state
+        return s == .idle || s == .ended
     }
 
     private func call(_ c: Conversation, video: Bool) {

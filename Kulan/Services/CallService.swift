@@ -496,10 +496,13 @@ final class CallService: NSObject {
         // produce a relay candidate and the connection can never come up. A failed TURN fetch, or a
         // server that hands back STUN only, must therefore fall back to `.all` — connecting beats
         // failing silently, and the call then behaves exactly as it did before this existed.
-        let haveTurn = servers.contains { $0.urlStrings.contains { url in
-            url.hasPrefix("turn:") || url.hasPrefix("turns:")
-        } }
-        c.iceTransportPolicy = (haveTurn && !peerIsEstablishedContact) ? .relay : .all
+        //
+        // 2026-09-24 audit: that `.all` fallback is for established contacts ONLY. A failed or slow
+        // relay fetch used to send a STRANGER's call direct too, handing both IPs to someone found by
+        // QR code or username. A stranger with no relay in hand is now refused before this is read
+        // (see `strangerWithoutRelay`), and this line is the last lock: if a new path ever forgets
+        // that check, a stranger's call stays relay-only and fails instead of going direct.
+        c.iceTransportPolicy = peerIsEstablishedContact ? .all : .relay
         c.sdpSemantics = .unifiedPlan
         // Connect faster (shorter "Connecting…"): pre-gather ICE candidates so they're ready the
         // instant the offer/answer is set, keep gathering continuously, and bundle all media on ONE
@@ -550,6 +553,24 @@ final class CallService: NSObject {
         _ = fetch   // deliberately NOT cancelled: let it finish and warm the next call
     }
 
+    /// 2026-09-24 audit: true when this call must be relayed (the peer is not an established
+    /// contact) but no `turn:`/`turns:` server is in hand. Such a call ends as a failure through the
+    /// normal `.failed` path; contacts are unaffected and still fall back to STUN-only.
+    private var strangerWithoutRelay: Bool {
+        guard !peerIsEstablishedContact else { return false }
+        let servers = fetchedIceServers ?? Self.fallbackIceServers
+        return !servers.contains { $0.urlStrings.contains { url in
+            url.hasPrefix("turn:") || url.hasPrefix("turns:")
+        } }
+    }
+
+    /// For a stranger, give the relay fetch one more, longer chance before refusing the call.
+    private func awaitRelayForStranger() async {
+        // A list that arrived without TURN will not grow one on a retry; only a missing list waits.
+        guard strangerWithoutRelay, fetchedIceServers == nil else { return }
+        await awaitIceServers(timeout: 6.0)
+    }
+
     // Audio session is owned by CallKit (manual mode) — see CallKitManager.
 
     private func makePeerConnection() -> RTCPeerConnection? {
@@ -566,7 +587,12 @@ final class CallService: NSObject {
         // Belt as well as braces — CallKit owns the audio session and WebRTC's audio unit stays off
         // until didActivate, which only fires on a real answer. Either one alone would be enough;
         // both together mean a refactor has to break two things to start recording somebody early.
-        audioTrack.isEnabled = !(preNegotiated && !wasAccepted)
+        //
+        // 2026-09-24 audit: also honour a mute tapped BEFORE this track existed. The caller's mute
+        // button is live from "Calling…", but the track is only built after the mic prompt and the
+        // relay fetch, so `toggleMute` hit a nil track and the call went out with the mic open while
+        // the button read muted. Nothing re-applied it later.
+        audioTrack.isEnabled = !(preNegotiated && !wasAccepted) && !(isMuted || isHeld)
         connection?.add(audioTrack, streamIds: ["stream0"])
         localAudioTrack = audioTrack
         // Always negotiate a video m-line up front — the track is DISABLED for a voice call (no
@@ -1861,7 +1887,10 @@ final class CallService: NSObject {
             // TURN creds must be in hand BEFORE makePeerConnection reads `config` — see awaitIceServers.
             Task { @MainActor in
                 await self.awaitIceServers()
+                await self.awaitRelayForStranger()
                 guard self.state == .outgoing else { return }   // cancelled while we waited
+                // 2026-09-24 audit: no relay for a stranger → fail, never go direct.
+                if self.strangerWithoutRelay { self.endReason = .failed; self.hangUp(); return }
                 self.beginOutgoingMedia(to: uid)
             }
         }
@@ -1982,7 +2011,14 @@ final class CallService: NSObject {
             // ring, so without this guard the phone reads its own write as somebody else answering
             // and ends its own call. Belt as well as braces: buildAnswer no longer writes the
             // status early either, and either fix alone would do.
-            if self.preNegotiated, !self.wasAccepted, self.state == .incoming {
+            // 2026-09-24 audit: a claim by another of my devices is proof, not inference, so it
+            // stops this phone ringing even while its own pre-negotiation is in flight (the branch
+            // below skips every other signal in that case, and pre-negotiation never writes status).
+            if Self.answeredOnOtherDevice(d), self.state == .incoming, !self.wasAccepted {
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                self.recordWritten = true
+                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+            } else if self.preNegotiated, !self.wasAccepted, self.state == .incoming {
                 // our own pre-negotiation is in flight — nobody else has answered anything
             } else if (d["status"] as? String) == "active", self.state == .incoming {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
@@ -2341,6 +2377,9 @@ final class CallService: NSObject {
             await self.awaitIceServers()
             // Still the same call, still nobody has answered or hung up.
             guard self.state == .incoming, self.callId == callId, self.pc == nil else { return }
+            // 2026-09-24 audit: no relay yet for a stranger → skip pre-negotiation. Resetting the
+            // flag sends answer() down the normal path, which retries the fetch and refuses there.
+            if self.strangerWithoutRelay { self.preNegotiated = false; return }
             self.mark("preRelayCredsReady")
             self.callDocCreated = true      // the doc exists — the caller made it — so candidates may fly
             self.buildAnswer(ref: self.db.collection("calls").document(callId), offerSdp: offerSdp)
@@ -2358,6 +2397,7 @@ final class CallService: NSObject {
             state = .active
             wasAccepted = true
             db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
+            claimAnswer(db.collection("calls").document(id))   // 2026-09-24 audit: one device wins
             ringingWatcher?.remove(); ringingWatcher = nil
             if cameraOn { prepareLocalVideo() }
             ensureMicPermission { [weak self] granted in
@@ -2384,6 +2424,7 @@ final class CallService: NSObject {
         // the heavy chain stalls, the caller stops ringing and shows "Connecting…" instead of
         // ringing out on a call that was answered.
         db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
+        claimAnswer(db.collection("calls").document(id))   // 2026-09-24 audit: one device wins
         wasAccepted = true
         // Video call: warm the camera NOW, in parallel with permissions/TURN/SDP (the reference apps' order),
         // so the local video is live the moment the connection comes up.
@@ -2434,8 +2475,11 @@ final class CallService: NSObject {
         mark("offerInHand")   // gap from answerTapped = what the offer fetch cost, if anything
         Task { @MainActor in
             await self.awaitIceServers()
+            await self.awaitRelayForStranger()
             self.mark("relayCredsReady")   // gap from offerInHand = what the TURN fetch cost
             guard self.state == .active else { return }   // ended while we waited
+            // 2026-09-24 audit: no relay for a stranger → fail, never go direct.
+            if self.strangerWithoutRelay { self.endReason = .failed; self.hangUp(); return }
             self.buildAnswer(ref: ref, offerSdp: offerSdp)
         }
     }
@@ -2489,6 +2533,49 @@ final class CallService: NSObject {
         observeRemoteCandidates(ref.collection("callerCandidates"))
     }
 
+    /// 2026-09-24 audit: TWO OF MY OWN DEVICES ANSWERING IN THE SAME INSTANT. Each running app gets
+    /// one id, and the accept claims the call doc for it in a transaction. Transactions serialise, so
+    /// exactly one device wins; the other reads the winner's claim and stands down through the same
+    /// "answered elsewhere" path the ring watcher already uses. Before this, both went .active, both
+    /// opened the mic, and the loser sat in "Reconnecting…" until the 30s cap.
+    private static let deviceClaim = UUID().uuidString
+
+    private static func answeredOnOtherDevice(_ d: [String: Any]?) -> Bool {
+        guard let owner = d?["answeredDevice"] as? String, !owner.isEmpty else { return false }
+        return owner != deviceClaim
+    }
+
+    /// Claim the answer for this device. Best effort: the plain `acceptedAt` write beside it still
+    /// carries the accept if this transaction cannot run (offline), exactly as before.
+    private func claimAnswer(_ ref: DocumentReference) {
+        ref.firestore.runTransaction({ txn, errPtr -> Any? in
+            do {
+                let snap = try txn.getDocument(ref)
+                if (snap.data()?["status"] as? String) == "ended" { return "ended" }
+                if Self.answeredOnOtherDevice(snap.data()) { return "taken" }
+            } catch {
+                errPtr?.pointee = error as NSError
+                return nil
+            }
+            txn.updateData(["answeredDevice": Self.deviceClaim], forDocument: ref)
+            return nil
+        }, completion: { [weak self] result, _ in
+            if (result as? String) == "taken" { self?.standDownAnsweredElsewhere(ref.documentID) }
+        })
+    }
+
+    /// The existing "answered elsewhere" stand-down (see watchRingingCancel), usable after this
+    /// phone has already gone .active. No doc write (it would fight the device that owns the call)
+    /// and no call record (the winner writes the real one for this same callId).
+    private func standDownAnsweredElsewhere(_ id: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.callId == id, self.state != .ended, self.state != .idle else { return }
+            self.ringingWatcher?.remove(); self.ringingWatcher = nil
+            self.recordWritten = true
+            self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+        }
+    }
+
     /// The "I answered" write, no longer allowed to die silently (the 12:27 call: it never landed,
     /// the caller rang out on an answered call, and nothing anywhere noticed). Still a transaction —
     /// answering an ENDED call must stay refused (the caller-cancelled race this has always
@@ -2506,15 +2593,21 @@ final class CallService: NSObject {
             do {
                 let snap = try txn.getDocument(ref)
                 if (snap.data()?["status"] as? String) == "ended" { return "ended" }
+                // 2026-09-24 audit: another of MY devices already claimed this answer. Writing ours
+                // would overwrite its SDP and leave this phone in a call nobody hears.
+                if Self.answeredOnOtherDevice(snap.data()) { return "taken" }
             } catch {
                 errPtr?.pointee = error as NSError
                 return nil
             }
-            txn.updateData(data, forDocument: ref)
+            var write = data
+            if data["status"] != nil { write["answeredDevice"] = Self.deviceClaim }
+            txn.updateData(write, forDocument: ref)
             return nil
         }, completion: { [weak self] result, error in
             guard let self else { return }
             if (result as? String) == "ended" { return }   // caller cancelled — the end path owns this
+            if (result as? String) == "taken" { self.standDownAnsweredElsewhere(ref.documentID); return }
             guard error != nil else { return }             // landed
             guard self.state == .active else { return }    // call already over — nothing to save
             guard attempt < 3 else {
