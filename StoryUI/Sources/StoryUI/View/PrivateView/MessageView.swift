@@ -108,7 +108,13 @@ private extension MessageView {
     @ViewBuilder
     func buttonViewBuilder(_ config: StoryInteractionConfig?) -> some View {
         if let config {
-            HStack(spacing: 16) {
+            // ⚠️ ZERO, AND THE GAP IS STILL ~18pt — his 2026-09-24 "the gap between the repost icon
+            // and the heart is too big". Each mark is a `.title2` glyph (22pt tall, 24-28pt wide)
+            // centred in a 44pt tap frame, so the frames themselves hold 8-10pt of air on either
+            // side of the glyph; at 16 the two marks sat ~34pt apart while the pill stood only ~20pt
+            // from the first one (12 + the frame's 8). Touching frames put the marks ~18pt apart,
+            // which reads as one group beside the field, and both targets keep their full 44pt.
+            HStack(spacing: 0) {
                 // Left of the heart, which is the order in the footer he is matching.
                 if config.showRepostButton {
                     repostButton
