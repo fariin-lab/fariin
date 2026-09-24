@@ -213,6 +213,7 @@ struct ImageViewerView: View {
     /// cover requested while the old one is still leaving. That is why the photo was back in its bubble
     /// and still not tappable.
     private func instantDismiss() {
+        imageCloseLog.info("viewer instantDismiss called for page \(current)")
         MediaPresentGate.noteDismissed()
         var t = Transaction()
         t.disablesAnimations = true
@@ -277,6 +278,7 @@ struct ImageViewerView: View {
         // The cover is gone for real — release a tap that arrived while it was leaving, instead of
         // making it wait out a fixed guess at how long that takes. See MediaPresentGate.
         .onDisappear {
+            imageCloseLog.info("viewer cover gone (onDisappear), orphan sweep in 1s")
             MediaPresentGate.noteClosed()
             // A flying copy outlives this cover on purpose (it lands on the thumbnail after the
             // viewer is gone). If its landing never completes it is left in the window, drawn over

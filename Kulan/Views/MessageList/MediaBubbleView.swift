@@ -131,16 +131,39 @@ final class MediaBubbleView: UIView {
         // ⚠️ THE SWIPE IS WHY. Every change of person in the story viewer writes this singleton
         // once, so every live bubble woke and rewrote its alphas mid-transition. The SwiftUI half
         // of the same problem is written up on `MediaSourceVisibility.hiddenIdPublisher`.
+        //
+        // ⛔ THE VALUE IN THE PIPE, NOT THE PROPERTY — owner, 2026-09-24, fourth report of "the
+        // closed image never returns to its bubble" (blank purple bubble after a swipe-down close).
+        //
+        // The 09-11 pass above assumed `$hiddenId` publishes AFTER the property is set. It does
+        // not: a `@Published` projected publisher emits inside the property's `willSet`, so a sink
+        // that re-reads `MediaSourceVisibility.shared.hiddenId` sees the PREVIOUS value, every
+        // time. The stories row kept its `receive(on: .main)` hop and so never hit this; the two
+        // chat bubble views dropped the hop and started reading one step behind. Traced:
+        //   1. drag begins → `MediaDismiss.hideSource` → `hide("chat|<id>")` → publisher emits the
+        //      key → this sink → `applyVisibility` read `hiddenId`, still nil → bubble stays
+        //      VISIBLE for the whole flight (the copy lands on an already-visible tile, harmless).
+        //   2. landing completion → `restoreSource` → `reveal()` → publisher emits nil → this sink
+        //      → `applyVisibility` read `hiddenId`, still "chat|<id>" → alpha 0 → the picture goes
+        //      BLANK at the exact moment the copy is about to be removed. That is "the image
+        //      disappears during the closing animation".
+        //   3. the property then becomes nil and nothing fires again, so the bubble stays blank
+        //      until the cell is reconfigured, or until the NEXT flight anywhere in the app hides
+        //      some other key (step 1 again, which reads the now-nil value and restores it). That
+        //      is why it looked intermittent and why two guessed fixes changed nothing.
+        // Both closes (drag and the chevron) share `hideSource`/`restoreSource`, so both blanked.
+        // The published value is the settled answer; `configure` still reads the property, which
+        // is correct there because nothing is mid-assignment.
         visibilityToken = MediaSourceVisibility.shared.hiddenIdPublisher
             .removeDuplicates()
-            .sink { [weak self] _ in self?.applyVisibility() }
+            .sink { [weak self] id in self?.applyVisibility(hiddenId: id) }
     }
     required init?(coder: NSCoder) { fatalError() }
 
     /// Everything the flying copy replaces — the picture and the badges drawn over it. The caption
     /// is not on the copy, so it stays put; it belongs to the bubble, not to the photograph.
-    private func applyVisibility() {
-        let hidden = !flightKey.isEmpty && MediaSourceVisibility.shared.hiddenId == flightKey
+    private func applyVisibility(hiddenId: String?) {
+        let hidden = !flightKey.isEmpty && hiddenId == flightKey
         let a: CGFloat = hidden ? 0 : 1
         picture.alpha = a
         gif?.alpha = a
@@ -250,7 +273,7 @@ final class MediaBubbleView: UIView {
         // Last, because the branches above create the gif view and the ring lazily and a row can be
         // reconfigured in the middle of a drag — a scroll or a reload would otherwise hand the
         // picture back at full alpha while its copy is still in the air.
-        applyVisibility()
+        applyVisibility(hiddenId: MediaSourceVisibility.shared.hiddenId)
     }
 
     func prepareForReuse() {
@@ -290,14 +313,16 @@ final class AlbumBubbleView: UIView {
         // ⚠️ THE SWIPE IS WHY. Every change of person in the story viewer writes this singleton
         // once, so every live bubble woke and rewrote its alphas mid-transition. The SwiftUI half
         // of the same problem is written up on `MediaSourceVisibility.hiddenIdPublisher`.
+        // ⛔ THE VALUE IN THE PIPE, NOT THE PROPERTY. `$hiddenId` emits in `willSet`, so a sink that
+        // re-reads the property is one step behind: the hide never applied and the reveal blanked
+        // the tile. The full trace is on the single-media view's subscription above.
         visibilityToken = MediaSourceVisibility.shared.hiddenIdPublisher
             .removeDuplicates()
-            .sink { [weak self] _ in self?.applyVisibility() }
+            .sink { [weak self] id in self?.applyVisibility(hiddenId: id) }
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private func applyVisibility() {
-        let id = MediaSourceVisibility.shared.hiddenId
+    private func applyVisibility(hiddenId id: String?) {
         for (i, v) in tiles.enumerated() {
             let key = i < flightKeys.count ? flightKeys[i] : ""
             v.alpha = (!key.isEmpty && key == id) ? 0 : 1
@@ -342,7 +367,7 @@ final class AlbumBubbleView: UIView {
 
         // Last, and for the same reason as the single-media view: the loop above may have just
         // built a tile, and a reconfigure mid-drag must not hand the picture back at full alpha.
-        applyVisibility()
+        applyVisibility(hiddenId: MediaSourceVisibility.shared.hiddenId)
     }
 
     /// Which tile is at this point, in this view's coordinates? The album opens the tile you hit,
