@@ -6,6 +6,7 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
 import FirebaseFunctions
+import CryptoKit     // MD5 only, to recognise our own upload after a lost reply (not for security)
 
 /// Write-side operations (port of the RN Db writes). All E2EE goes through Crypto.
 enum ChatService {
@@ -126,6 +127,16 @@ enum ChatService {
         return cid
     }
 
+    /// `openConversation` for a place that holds only the other person's uid (a group member, a
+    /// shared contact card). 2026-09-24 audit: those places set `pendingChatId` and nothing else,
+    /// so the chat document did not exist and the first send created it without `startedBy` /
+    /// `accepted`, which the create rule refuses: the first message to a group member you had
+    /// never messaged failed on every retry.
+    static func openConversation(uid other: String) async {
+        guard let p = await ProfileStore.shared.fetch(other) else { return }
+        _ = try? await openConversation(other: p)
+    }
+
     /// Create a GROUP conversation: random doc id, N members, creator is the sole admin.
     /// Returns the new conversation id.
     @discardableResult
@@ -221,6 +232,15 @@ enum ChatService {
                     try await putFileReportingProgress(ref, from: tmp, metadata: meta, progressId: progressId)
                     return try await ref.downloadURL().absoluteString
                 } catch {
+                    // ⛔ OUR OWN EARLIER ATTEMPT MAY HAVE LANDED. A put that reached the server but
+                    // lost its reply leaves the object in place, and the create-only rule then
+                    // refuses the retry as if a stranger owned the path: a red bubble for a clip
+                    // that was delivered, and an orphan object nobody points at. On a refusal, ask
+                    // what is there; if it is byte-for-byte ours (same MD5), that is our upload.
+                    if !isRetryableUpload(error), !Task.isCancelled,
+                       let url = await alreadyUploaded(ref, bytes: bytes) {
+                        return url
+                    }
                     attempt += 1
                     // ⛔ SIX, NOT FOUR, AND A MINUTE OF PATIENCE (owner, 2026-08-25: "every corner,
                     // even bad network"). Four tries over about half a minute is tuned for a
@@ -331,12 +351,28 @@ enum ChatService {
     /// the user's data and delays the error they actually need to see, so those fail immediately.
     /// Anything we cannot identify is treated as transport and retried.
     private static func isRetryableUpload(_ error: Error) -> Bool {
+        // The background engine talks to the REST endpoint and reports a rules refusal as a plain
+        // HTTP status, which fell through to "transport" below: the same create-only denial the SDK
+        // path fails on at once spent all six attempts and about two minutes here.
+        if case BackgroundUploadError.badStatus(let code)? = error as? BackgroundUploadError {
+            return !(code == 401 || code == 403)
+        }
         let ns = error as NSError
         guard ns.domain == StorageErrorDomain else { return true }
         switch StorageErrorCode(rawValue: ns.code) {
         case .unauthorized, .unauthenticated, .quotaExceeded, .cancelled, .objectNotFound: return false
         default: return true
         }
+    }
+
+    /// The download address of the object at `ref` IF it is exactly `bytes` (Storage's MD5 of the
+    /// stored object against ours), else nil. Every chat object is fresh ciphertext under a new
+    /// message id, so a match means our own earlier attempt, never somebody else's file.
+    private static func alreadyUploaded(_ ref: StorageReference, bytes: Data) async -> String? {
+        guard let meta = try? await ref.getMetadata(), let stored = meta.md5Hash else { return nil }
+        let ours = Data(Insecure.MD5.hash(data: bytes)).base64EncodedString()
+        guard stored == ours else { return nil }
+        return try? await ref.downloadURL().absoluteString
     }
 
     /// Holds the app awake for the short grace period iOS grants after the user leaves, so
@@ -399,7 +435,9 @@ enum ChatService {
         // Re-adding a removed member lifts their ban — but ONLY when an ADMIN adds. A non-admin member
         // (membersCanAdd) writes through a field-whitelisted rule branch that forbids `bannedUids`, so
         // touching it would reject the whole add. Admins write through the any-field admin branch.
-        let iAmGroupAdmin = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isAdmin(uid) ?? false
+        // 2026-09-24 audit: the rules now hold an admin to their rights, and an admin without Add
+        // members adds through the membersCanAdd branch, so the test is the right, not the badge.
+        let iAmGroupAdmin = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.adminCan(uid, .inviteUsers) ?? false
         if iAmGroupAdmin { update["bannedUids"] = FieldValue.arrayRemove(newOnes) }
         var addedNames: [String] = []
         var keyless: [String] = []
@@ -460,34 +498,54 @@ enum ChatService {
     /// between them left "X left" in the chat while X was still a member. The message rule reads
     /// the conversation with `get()`, which sees the state BEFORE the batch, so I still count as a
     /// member for the two notices; the self-leave update branch limits no other keys.
+    ///
+    /// A TRANSACTION, NOT A BATCH (2026-09-24 audit). "Am I the last admin?" was answered from the
+    /// local cache, so two admins leaving at the same moment each saw the other still listed, both
+    /// skipped the heir, and the group was left with no admin. The answer now comes from the server
+    /// read inside the transaction, and a concurrent leave makes it retry against the new state.
+    /// The rules refuse an admin-emptying leave as well. Cost: leaving needs a connection.
     static func leaveGroup(cid: String) async throws {
         let convRef = db.collection("conversations").document(cid)
-        let batch = db.batch()
-        func notice(_ text: String) {
-            batch.setData(["text": text, "authorId": uid, "type": "system",
-                           "createdAt": FieldValue.serverTimestamp()],
-                          forDocument: convRef.collection("messages").document())
-        }
-        var convUpdate: [String: Any] = [
-            "users": FieldValue.arrayRemove([uid]),
-            "admins": FieldValue.arrayRemove([uid]),
-            "updatedAt": FieldValue.serverTimestamp(),
-        ]
-        // If I'm the LAST admin, promote a remaining member in the same write so the group never
-        // ends up with no one who can manage it.
-        if let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }),
-           conv.admins.filter({ $0 != uid }).isEmpty,
-           let heir = conv.users.first(where: { $0 != uid }) {
-            convUpdate["admins"] = [heir]   // one field cannot take arrayUnion and arrayRemove at once
-            // Tell everyone who inherited admin (otherwise the heir never learns).
-            notice("\(conv.names[heir] ?? "A member") is now an admin")
-        }
+        let me = uid
         let left = "\(myName()) left"
-        notice(left)
-        convUpdate["lastMessage"] = left
-        convUpdate["lastSender"] = uid
-        batch.updateData(convUpdate, forDocument: convRef)
-        try await batch.commit()
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            db.runTransaction({ txn, errPtr -> Any? in
+                let snap: DocumentSnapshot
+                do { snap = try txn.getDocument(convRef) } catch {
+                    errPtr?.pointee = error as NSError
+                    return nil
+                }
+                let data = snap.data() ?? [:]
+                let users = data["users"] as? [String] ?? []
+                let admins = data["admins"] as? [String] ?? []
+                let names = data["names"] as? [String: String] ?? [:]
+                func notice(_ text: String) {
+                    txn.setData(["text": text, "authorId": me, "type": "system",
+                                 "createdAt": FieldValue.serverTimestamp()],
+                                forDocument: convRef.collection("messages").document())
+                }
+                var convUpdate: [String: Any] = [
+                    "users": FieldValue.arrayRemove([me]),
+                    "admins": FieldValue.arrayRemove([me]),
+                    "updatedAt": FieldValue.serverTimestamp(),
+                ]
+                // If I'm the LAST admin, promote a remaining member in the same write so the group
+                // never ends up with no one who can manage it.
+                if admins.filter({ $0 != me }).isEmpty,
+                   let heir = users.first(where: { $0 != me }) {
+                    convUpdate["admins"] = [heir]   // one field cannot take arrayUnion and arrayRemove at once
+                    // Tell everyone who inherited admin (otherwise the heir never learns).
+                    notice("\(names[heir] ?? "A member") is now an admin")
+                }
+                notice(left)
+                convUpdate["lastMessage"] = left
+                convUpdate["lastSender"] = me
+                txn.updateData(convUpdate, forDocument: convRef)
+                return nil
+            }, completion: { _, error in
+                if let error { cont.resume(throwing: error) } else { cont.resume() }
+            })
+        }
     }
 
     /// Announcement mode (admin): when true, only admins may send. Enforced in the message
@@ -742,8 +800,16 @@ enum ChatService {
         if isNewConv {
             let def = UserDefaults.standard.integer(forKey: "defaultDisappearSeconds")
             if def > 0 { convSeed["disappearSeconds"] = def }
+            // 2026-09-24 audit: a new 1:1 is born a request, and the create rule refuses one without
+            // these two, so a chat reached without `openConversation` could never send its first
+            // message. `isNewConv` is true only when the server read answered "not there", the same
+            // condition `openConversation` stamps on.
+            convSeed["startedBy"] = uid
+            convSeed["accepted"] = false
         }
         try await convRef.setData(convSeed, merge: true)
+        // ...and that first message is a knock, which the check above could not see (no document yet).
+        if isNewConv && knocking == nil { await MessageRequests.countKnock() }
 
         let msgRef = convRef.collection("messages").document()
         let batch = db.batch()
@@ -1437,7 +1503,7 @@ enum ChatService {
                         // the sender's own album video 404'd forever after the other side pressed play (and
                         // forwarding that album failed for good). Keyed by the synthetic album-child id the
                         // viewer and cache use: "<parentId>-<index>".
-                        VideoCache.store(mp4, for: "\(msgId)-\(i)")
+                        guard VideoCache.store(mp4, for: "\(msgId)-\(i)") else { throw VideoCache.NoRoomError() }
                         return AlbumTile(index: i, imageUrl: thumbUrl, imageEnc: thumbMeta,
                                          width: w, height: h,
                                          videoUrl: vidUrl, videoEnc: vidMeta, duration: duration)
@@ -1734,8 +1800,9 @@ enum ChatService {
         let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
         // Mailman model: the SENDER's copy lives on their own device from day one — the server object
         // exists only to deliver, and the recipient deletes it on pickup. Stored before the upload so
-        // it survives a send that never completes.
-        VideoCache.store(video, for: messageId)
+        // it survives a send that never completes. If it did not land, stop here: delivering a clip
+        // the recipient will delete on pickup, with no copy on this phone, loses it for good.
+        guard VideoCache.store(video, for: messageId) else { throw VideoCache.NoRoomError() }
         let cipher: Data, meta: EncMeta
         if let members {
             (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(video, members: members)
@@ -1878,13 +1945,15 @@ enum ChatService {
             convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
         }
         batch.updateData(convUpdate, forDocument: convRef)
+        // Mailman model: the SENDER's copy lives on their own device from day one — the
+        // server object exists only to deliver, and the recipient deletes it on pickup. Kept BEFORE
+        // the message is announced, and the send stops if it did not land: a full disk used to let
+        // the clip go out with no copy here, and the recipient's pickup then deleted the only other.
+        guard VideoCache.store(video, for: msgRef.documentID) else { throw VideoCache.NoRoomError() }
         try await batch.commit()
         // Same as the photo path: from here Cancel has a document to delete, and only this side
         // knows its id.
         if let clientId { await MediaSend.shared.noteAnnounced(clientId, messageId: msgRef.documentID) }
-        // Mailman model: the SENDER's copy lives on their own device from day one — the
-        // server object exists only to deliver, and the recipient deletes it on pickup.
-        VideoCache.store(video, for: msgRef.documentID)
         // And the clip itself, whenever it finishes.
         let videoUrl = try await videoUp
         // The clip has landed — the ring comes off here rather than when the message commits. Same

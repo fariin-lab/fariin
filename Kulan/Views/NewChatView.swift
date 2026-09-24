@@ -181,7 +181,10 @@ struct NewChatView: View {
                 }
             }
             .sheet(isPresented: $showScan) {
-                ScanQRView { user in showScan = false; start(user) }
+                // 2026-09-24 audit: a scanned group invite closes New Chat and opens Join Group.
+                ScanQRView(onGroupInvite: { code in QRGroupInviteRoute.open(code); dismiss() }) { user in
+                    showScan = false; start(user)
+                }
             }
             .sheet(isPresented: $showNewGroup) {
                 NewGroupView { t in showNewGroup = false; dismiss(); onOpen(t) }

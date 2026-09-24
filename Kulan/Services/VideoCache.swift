@@ -31,10 +31,22 @@ enum VideoCache {
         url(for: messageId).flatMap { try? Data(contentsOf: $0) }
     }
 
-    /// Persist a decrypted video on this device (atomic + protected).
-    static func store(_ data: Data, for messageId: String) {
+    /// Persist a decrypted video on this device (atomic + protected). Returns whether the file is
+    /// really there afterwards: the write swallows a full disk, and under the mailman model the
+    /// sender's copy is the only one left once the recipient picks the server object up, so the
+    /// send paths must not carry on when this is false.
+    @discardableResult
+    static func store(_ data: Data, for messageId: String) -> Bool {
         let u = fileURL(messageId)
         try? data.write(to: u, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return url(for: messageId) != nil
+    }
+
+    /// Thrown by a send whose own copy could not be kept on this phone.
+    struct NoRoomError: LocalizedError {
+        var errorDescription: String? {
+            "There isn't enough storage on this phone to keep a copy of this video. Free up some space and try again."
+        }
     }
 
     static func remove(_ messageId: String) {

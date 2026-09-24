@@ -173,6 +173,9 @@ final class ProfileStore {
                 try await self.uploadProfileImages(circle: circle, poster: poster)
             } catch {
                 await MainActor.run {
+                    // 2026-09-24 audit: only if this is still the account that started the upload
+                    // (same guard as loadMine), or a sign-out mid-upload gets its profile put back.
+                    guard Auth.auth().currentUser?.uid == uid else { return }
                     self.me = previous
                     if let p = previous {
                         ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
@@ -182,14 +185,13 @@ final class ProfileStore {
                 }
             }
             await MainActor.run { self.photoUploading = false }
-            _ = uid
         }
     }
 
     /// The same shape for removal: the letter is there immediately and the server catches up.
     @MainActor
     func removePhotoLocallyThenSync() {
-        guard me != nil else { return }
+        guard let uid = Auth.auth().currentUser?.uid, me != nil else { return }
         let previous = me
         me?.photoUrl = ""
         me?.posterUrl = ""
@@ -205,6 +207,7 @@ final class ProfileStore {
             do { try await self.removePhoto() }
             catch {
                 await MainActor.run {
+                    guard Auth.auth().currentUser?.uid == uid else { return }   // 2026-09-24 audit, as above
                     self.me = previous
                     if let p = previous {
                         ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
@@ -315,8 +318,9 @@ final class ProfileStore {
         guard let uid = Auth.auth().currentUser?.uid else { return nil }
         guard let snap = try? await db.collection("users").document(uid).getDocument(),
               let ts = snap.data()?["deletionScheduledFor"] as? Timestamp else { return nil }
-        let due = ts.dateValue()
-        return due > Date() ? due : nil
+        // 2026-09-24 audit: no `due > Date()`. The phone's clock can run ahead, and the field still
+        // being on a profile that still exists means the purge has not happened, whatever the date.
+        return ts.dateValue()
     }
 
     /// Undo a scheduled deletion. Everything is still where it was, so this is just clearing the flags.
@@ -362,7 +366,10 @@ final class ProfileStore {
         // account, for ever. The media bytes go with `deleteAllMine`, so this is metadata rather
         // than pictures, and it is still exactly what "delete my account" is promising not to keep.
         // Nothing expires these either, so they accumulate for live accounts too.
-        for sub in ["storyContexts", "storyLists", "devices", "publicStories"] {
+        // 2026-09-24 audit: `push` too. It holds the push and VoIP tokens the servers read, and left
+        // behind it kept pushes coming to this phone from every group the deleted uid was still in.
+        // (functions-chatpin onUserDeleted now also removes it and takes the uid out of its groups.)
+        for sub in ["storyContexts", "storyLists", "devices", "publicStories", "push"] {
             if let docs = try? await db.collection("users").document(uid).collection(sub).getDocuments() {
                 for d in docs.documents { try? await d.reference.delete() }
             }
@@ -554,8 +561,14 @@ final class ProfileStore {
             }
             // On the main actor explicitly. This used to be reached from a caller that was already
             // there; now it is not, and `me` is observed by SwiftUI.
+            // 2026-09-24 audit: SAME ACCOUNT GUARD AS loadMine. This finishes long after the dismiss;
+            // a sign-out or deletion in between wiped `me`, and publishing here brought the departed
+            // account's profile back. And a failed read keeps `me` rather than blanking it.
             let fresh = await self.fetch(uid)
-            await MainActor.run { self.me = fresh }
+            await MainActor.run {
+                guard Auth.auth().currentUser?.uid == uid else { return }
+                self.me = fresh ?? self.me
+            }
         }
     }
 
@@ -608,6 +621,9 @@ final class ProfileStore {
         try? await Storage.storage().reference().child("profiles/\(uid).jpg").delete()
         try? await Storage.storage().reference().child("profiles/\(uid)-poster.jpg").delete()
 
-        me = await fetch(uid) ?? me   // nil on a failed read must not blank `me` — see refreshMe
+        let fresh = await fetch(uid)
+        // 2026-09-24 audit: same-account guard as loadMine; a sign-out during the sweep wiped `me`.
+        guard Auth.auth().currentUser?.uid == uid else { return }
+        me = fresh ?? me   // nil on a failed read must not blank `me` — see refreshMe
     }
 }

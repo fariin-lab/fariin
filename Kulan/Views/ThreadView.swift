@@ -2270,6 +2270,7 @@ struct ThreadView: View {
                     AppRouter.shared.pendingChatName = name    // so a brand-new chat shows the name/photo,
                     AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
                     AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
+                    Task { await ChatService.openConversation(uid: uid) }   // 2026-09-24 audit: create it properly
                 },
                 // OPEN LIKE THE REFERENCE APP: fly only the MEDIA out of its bubble, then reveal the viewer.
                 // `.navigationTransition(.zoom)` scaled the ENTIRE cover - black backdrop, header, thumb
@@ -3229,6 +3230,8 @@ struct ThreadView: View {
                 AppRouter.shared.pendingChatName = card.name     // so a brand-new chat shows the name
                 AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
                 AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
+                let other = card.uid
+                Task { await ChatService.openConversation(uid: other) }   // 2026-09-24 audit: create it properly
             },
             onTapReactions: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
@@ -4317,6 +4320,20 @@ struct ThreadView: View {
     private func openFile(_ message: Message) {
         guard let s = message.fileUrl, let url = URL(string: s), let meta = message.enc else { return }
         Task {
+            // 2026-09-24 audit: ALREADY HERE? The Documents auto-download setting now fetches files
+            // ahead of the tap into this same path (DocumentPrefetch); open that copy, no download.
+            if let local = DocumentPrefetch.cached(id: message.id, fileName: message.fileName),
+               let head = try? FileHandle(forReadingFrom: local).read(upToCount: 4) {
+                let safe = DocumentPrefetch.safeName(message.fileName)
+                let isPDF = safe.lowercased().hasSuffix(".pdf") || head.elementsEqual([0x25, 0x50, 0x44, 0x46])
+                // No extension: QuickLook needs a typed name to know what it is looking at.
+                let preview = isPDF ? local : DocumentPrefetch.previewURL(for: local)
+                await MainActor.run {
+                    if isPDF { pdfDoc = PDFDocWrap(url: local, title: safe) }
+                    else { filePreview = PreviewFile(url: preview) }
+                }
+                return
+            }
             guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
                 await MainActor.run { sendError = "Couldn't open the file." }; return
@@ -4344,11 +4361,13 @@ struct ThreadView: View {
             }
             // PDFs open in the custom PDFKit reader (Liquid Glass); everything else uses QuickLook.
             let isPDF = safe.lowercased().hasSuffix(".pdf") || data.prefix(4).elementsEqual([0x25, 0x50, 0x44, 0x46])   // "%PDF"
+            // No extension: QuickLook needs a typed name to know what it is looking at.
+            let preview = isPDF ? tmp : DocumentPrefetch.previewURL(for: tmp)
             await MainActor.run {
                 // The sanitised name is also the one shown as the reader's title: what is on screen
                 // should be the file that was actually opened.
                 if isPDF { pdfDoc = PDFDocWrap(url: tmp, title: safe) }
-                else { filePreview = PreviewFile(url: tmp) }
+                else { filePreview = PreviewFile(url: preview) }
             }
         }
     }
@@ -5469,20 +5488,36 @@ struct ThreadView: View {
         // media list: a lone photo/video keeps its dedicated editor; anything else (multiple photos,
         // multiple videos, or a MIX) opens the mixed approval pager — swipe all, edit each, one caption.
         var items: [ApprovalMedia] = []
+        // Videos the picker could not hand over. Copying a large clip out of the library needs its
+        // full size free on disk, and on a nearly full phone that copy throws; the `try?` below used
+        // to drop the clip without a word, so the picker closed and nothing happened, or the photos
+        // went and the video silently did not.
+        var droppedVideos = 0
         for item in picked {
             if isVideoItem(item) {
-                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                    let asset = AVURLAsset(url: movie.url)
-                    let dur = (try? await asset.load(.duration).seconds) ?? 0
-                    let gen = AVAssetImageGenerator(asset: asset)
-                    gen.appliesPreferredTrackTransform = true
-                    gen.maximumSize = CGSize(width: 320, height: 320)
-                    let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
-                    items.append(.video(UUID().uuidString, movie.url, thumb, dur))
+                guard let movie = try? await item.loadTransferable(type: PickedMovie.self) else {
+                    droppedVideos += 1
+                    continue
                 }
+                let asset = AVURLAsset(url: movie.url)
+                let dur = (try? await asset.load(.duration).seconds) ?? 0
+                let gen = AVAssetImageGenerator(asset: asset)
+                gen.appliesPreferredTrackTransform = true
+                gen.maximumSize = CGSize(width: 320, height: 320)
+                let thumb = (try? await gen.image(at: .zero).image).map { UIImage(cgImage: $0) }
+                items.append(.video(UUID().uuidString, movie.url, thumb, dur))
             } else if let data = try? await item.loadTransferable(type: Data.self),
                       let ui = UIImage(data: data) {
                 items.append(.image(UUID().uuidString, ui))
+            }
+        }
+        // Said only when nothing else opens: the alert and the approval sheet presented in the same
+        // pass would drop one of them. With a partial selection the approval screen opens without
+        // the clip, which at least shows what is going.
+        if droppedVideos > 0, items.isEmpty {
+            let what = droppedVideos == 1 ? "the video" : "\(droppedVideos) videos"
+            await MainActor.run {
+                sendError = "Couldn't attach \(what). Your phone may be low on storage."
             }
         }
         guard !items.isEmpty else { return }

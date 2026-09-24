@@ -163,6 +163,8 @@ struct InviteLinkSheet: View {
     @State private var invite: GroupInvite?
     @State private var loading = true
     @State private var working = false
+    @State private var confirmRevoke = false
+    @State private var confirmNewLink = false
 
     private let expiryOptions: [(String, Double)] = [("Never", 0), ("1 day", 86_400), ("1 week", 604_800), ("1 month", 2_592_000)]
     private let limitOptions: [(String, Int)] = [("No limit", 0), ("10 uses", 10), ("50 uses", 50), ("100 uses", 100)]
@@ -201,8 +203,18 @@ struct InviteLinkSheet: View {
                         } label: { LabeledContent("Usage limit", value: inv.usageLimit == 0 ? "No limit" : "\(inv.usageLimit)") }
                     }
                     Section {
-                        Button(role: .destructive) { revoke() } label: { Label("Revoke Link", systemImage: "xmark.circle") }
-                        Button { regenerate() } label: { Label("New Link", systemImage: "arrow.triangle.2.circlepath") }
+                        // 2026-09-24 audit: both kill the link everyone already has, so each asks
+                        // first, with the row's own words (no new copy) in a destructive sheet.
+                        Button(role: .destructive) { confirmRevoke = true } label: { Label("Revoke Link", systemImage: "xmark.circle") }
+                        Button { confirmNewLink = true } label: { Label("New Link", systemImage: "arrow.triangle.2.circlepath") }
+                    }
+                    .confirmationDialog("Revoke Link", isPresented: $confirmRevoke, titleVisibility: .hidden) {
+                        Button("Revoke Link", role: .destructive) { revoke() }
+                        Button("Cancel", role: .cancel) {}
+                    }
+                    .confirmationDialog("New Link", isPresented: $confirmNewLink, titleVisibility: .hidden) {
+                        Button("New Link", role: .destructive) { regenerate() }
+                        Button("Cancel", role: .cancel) {}
                     }
                 } else {
                     Section {

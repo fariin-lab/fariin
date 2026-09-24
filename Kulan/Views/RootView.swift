@@ -111,9 +111,30 @@ struct RootView: View {
             case .restore(let handle, let due):
                 // A scheduled-for-deletion account cannot enter the app: it is hidden from everyone
                 // else, so being half-inside it would be worse than either choice. Restore or finish.
-                RestoreAccountView(handle: handle, scheduledFor: due,
-                                   onRestored: { Task { await route() } },
-                                   onDeletedNow: { Task { await route() } })
+                // 2026-09-24 audit: THE SAME WAY OUT `.proveEmail` has. Sign in to the wrong account
+                // (the phone offered a cached Apple ID) and this screen had two doors, restore it or
+                // delete it, and no way back to the front door. Full teardown, not the light one:
+                // the background check can land here AFTER the app registered push and this device.
+                NavigationStack {
+                    RestoreAccountView(handle: handle, scheduledFor: due,
+                                       onRestored: { Task { await route() } },
+                                       onDeletedNow: { Task { await route() } })
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Sign Out") {
+                                    Task {
+                                        await Push.unregister()
+                                        await DeviceRegistry.shared.removeThisDevice()
+                                        await AuthService.shared.abandonSession()   // the signOut
+                                        SessionWipe.wipeAccountData()
+                                        await route()
+                                    }
+                                }
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                }
             case .main:
                 // Root-level call container so an active call (full screen or top mini
                 // bar) lives above every screen and survives all navigation.
@@ -256,7 +277,10 @@ struct RootView: View {
         // Launch must never wait on the network — offline, each awaited server call
         // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
         // is Keychain-only now, so the whole fast path is local.
-        if await ProfileStore.shared.loadCachedMine() {
+        // 2026-09-24 audit: a cached profile with a handle but NO NAME takes the slow path below, whose
+        // `ready` check sends it back to onboarding (see there).
+        if await ProfileStore.shared.loadCachedMine(),
+           ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces).isEmpty == false {
             // ⚠️ THE SERVER CHECK CAME OFF THE BOOT PATH, AND THE TWO LINES ABOVE ARE WHY.
             //
             // This asked the server whether the account is pending deletion, and awaited it, three
@@ -271,7 +295,12 @@ struct RootView: View {
             // instantly, and the server's answer arrives a moment later and routes then — the
             // difference is a second or two inside an account that is being deleted anyway, against
             // a ten-second white screen for everybody else.
-            if let due = ProfileStore.shared.me?.deletionScheduledFor, due > Date() {
+            // 2026-09-24 audit: no `due > Date()`. That compared the server's date with the PHONE's
+            // clock, so a phone set ahead walked a still-scheduled account straight into the app,
+            // with no sign of the countdown and no way to cancel it before the purge. The profile
+            // still existing IS the server's answer that the purge has not run; the date is only
+            // for the screen to show.
+            if let due = ProfileStore.shared.me?.deletionScheduledFor {
                 phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
                 return
             }
@@ -322,11 +351,17 @@ struct RootView: View {
         // fire-and-forget by `initKeys`'s own description — so it costs a whole round trip in front
         // of a screen for nothing.
         Task { await Crypto.shared.publishPublicKey() }
-        if let due = ProfileStore.shared.me?.deletionScheduledFor, due > Date() {
+        // 2026-09-24 audit: no device-clock comparison here either (see the cached path above).
+        if let due = ProfileStore.shared.me?.deletionScheduledFor {
             phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
             return
         }
+        // 2026-09-24 audit: the NAME too. Onboarding claims the handle (a server transaction) and
+        // THEN writes the name, as two steps; an app killed between them left a handle with no name,
+        // and a handle alone read as "finished", so that account lived with a blank name for ever.
+        // Onboarding prefills the handle it already owns, so the way back costs one field.
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
+            && ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces).isEmpty == false
         if ready {
             // "Demo chats" survives a restart like any other setting. Rebuilt HERE rather than
             // inside the repository because building the rows needs the main actor and a uid, and
@@ -401,6 +436,17 @@ struct RootView: View {
 struct LockScreen: View {
     var onUnlock: () -> Void
     @Environment(\.colorScheme) private var scheme
+    /// 2026-09-24 audit: this was a Face ID glyph on every phone. The Settings rows were already
+    /// corrected to "Face ID, Touch ID or your passcode"; the lock itself shows what this phone has.
+    private var unlockIcon: String {
+        let ctx = LAContext()
+        _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)   // fills biometryType
+        switch ctx.biometryType {
+        case .faceID: return "faceid"
+        case .touchID: return "touchid"
+        default: return "lock.open.fill"   // passcode only (or a type this build does not name)
+        }
+    }
     var body: some View {
         ZStack {
             Theme.bg(scheme == .dark).ignoresSafeArea()
@@ -411,7 +457,7 @@ struct LockScreen: View {
                     // `Color.accentColor` is the app's `.primary` tint, so this capsule is WHITE at
                     // night. A hardcoded white label left the lock screen showing an empty pill,
                     // which is the worst screen in the app to lose a button on.
-                    Label("Unlock", systemImage: "faceid").font(.body.weight(.semibold))
+                    Label("Unlock", systemImage: unlockIcon).font(.body.weight(.semibold))
                         .padding(.horizontal, 24).frame(height: 48)
                         .background(Color.accentColor, in: Capsule())
                         .foregroundStyle(Theme.onAccent(scheme == .dark))
@@ -445,13 +491,19 @@ struct OnboardingView: View {
     /// It does make scraping the namespace easier, and that exposure already exists via @search;
     /// real rate limiting would mean routing every lookup through a Cloud Function and paying a
     /// round trip on all of them. Worth writing down, not worth doing before launch.
-    enum HandleState: Equatable { case empty, invalid, checking, free, taken }
+    /// `unknown` (2026-09-24 audit): the check itself failed (offline, a timeout). It used to read as
+    /// `free`, because findByHandle answers nil both for "nobody has it" and "could not ask", so the
+    /// screen said "@x is available" about a name it never checked.
+    enum HandleState: Equatable { case empty, invalid, checking, free, taken, unknown }
 
     @State private var handleState: HandleState = .empty
     @State private var checkTask: Task<Void, Never>?
 
+    /// `unknown` may continue too: Continue asks the server anyway (claimUsername decides), and a
+    /// check that failed once must not strand somebody whose connection has since come back.
     private var canContinue: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty && handleState == .free && !saving
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && (handleState == .free || handleState == .unknown) && !saving
     }
 
     /// Debounced so it is one read per PAUSE rather than one per keystroke. The previous task is
@@ -466,13 +518,21 @@ struct OnboardingView: View {
         checkTask = Task {
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled else { return }
-            let found = await ChatService.findByHandle(h)
+            // 2026-09-24 audit: the SERVER's check, the one Settings' username editor already uses.
+            // It throws when it cannot answer, so a failure is no longer "available", and it knows
+            // what findByHandle cannot: a name released less than 30 days ago is still held, and
+            // claimUsername refuses it. "Mine" is answered by the server as available.
+            let answer: HandleState
+            do {
+                let r = try await ChatService.checkHandleAvailable(h)
+                answer = r.available ? .free : ((r.reason == nil || r.reason == "taken") ? .taken : .invalid)
+            } catch {
+                answer = .unknown
+            }
             guard !Task.isCancelled else { return }
             // Still typing? A late answer about an older string must not overwrite a newer one.
             guard ChatService.sanitizeHandle(handle) == h else { return }
-            // Your own handle is not "taken" from your point of view.
-            let mine = found?.id == AuthService.shared.uid
-            await MainActor.run { handleState = (found == nil || mine) ? .free : .taken }
+            await MainActor.run { handleState = answer }
         }
     }
 
@@ -528,6 +588,9 @@ struct OnboardingView: View {
                             case .taken:
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundStyle(.red).font(.system(size: 17))
+                            case .unknown:
+                                Image(systemName: "wifi.slash")
+                                    .foregroundStyle(.secondary).font(.system(size: 15))
                             }
                         }) {
                             HStack(spacing: 2) {
@@ -557,6 +620,9 @@ struct OnboardingView: View {
                                     .foregroundStyle(.primary)
                             case .checking:
                                 Text("Checking…").foregroundStyle(.secondary)
+                            case .unknown:
+                                Text("Couldn't check @\(ChatService.sanitizeHandle(handle)). Check your connection.")
+                                    .foregroundStyle(.secondary)
                             case .empty, .invalid:
                                 Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
                                     .foregroundStyle(.secondary)
@@ -616,6 +682,12 @@ struct OnboardingView: View {
             // Apple hands over the person's name exactly once, at first authorization —
             // prefill it so they just pick a username.
             if name.isEmpty, let n = AuthService.shared.pendingDisplayName { name = n }
+            // 2026-09-24 audit: back here after a sign-up that claimed its handle and died before
+            // the name was written. The handle is already this account's; offer it back.
+            if handle.isEmpty, let h = ProfileStore.shared.me?.handle, !h.isEmpty {
+                handle = h
+                scheduleHandleCheck()
+            }
         }
     }
 
@@ -658,6 +730,11 @@ struct OnboardingView: View {
         guard !n.isEmpty else { error = "Enter your name"; return }
         guard ChatService.isValidHandle(h) else {
             error = "Username: letters, numbers and _ only, 3–30 characters"; return   // matches Limits.usernameMaxChars
+        }
+        // 2026-09-24 audit: the same offline guard and words as every other screen in this flow.
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
         }
         saving = true; error = nil
         do {

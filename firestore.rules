@@ -232,9 +232,9 @@ service cloud.firestore {
       // Costs nothing to lock: the app never writes this field (checked across the whole iOS source),
       // and the function writes it with the admin SDK, which does not go through these rules.
       //
-      // ⚠️ `fcmTokens`/`voipTokens` belong here too and are deliberately NOT added yet — that is
-      // stage 4 of the push-token move, and adding them before the fleet has the new build would
-      // stop old phones registering for notifications. See the note on the /push subcollection.
+      // `fcmTokens`/`voipTokens`/`pushTokens` are NOT in this list on purpose: the current app still
+      // strips its own token off them. 2026-09-24 audit (stage 4): they are guarded instead by
+      // pushTokensNotAdded() below, which lets them shrink and never grow.
       function serverOnlyUserFields() {
         // glowerCount / glowingCount: the Glow feature's public numbers, maintained by the
         // onGlowWrite function off the /glows collection. Here so no phone can inflate its own —
@@ -259,13 +259,49 @@ service cloud.firestore {
                 && request.resource.data.links.size() <= 2);
       }
 
+      // 2026-09-24 audit: NAME AND BIO HAVE A CEILING HERE TOO. The editor stops the name at 40 + 40
+      // (first + last, SettingsView) and the bio at Limits.bioChars = 140, but that is client code;
+      // a modified client could write any size onto a document every chat partner reads. The swift
+      // editor counts visible characters and a rule counts code points, and one emoji can be several
+      // code points, so the ceilings are four times the editor's to never refuse a real edit.
+      // Checked only when the field is written, so an older over-long value does not block other
+      // edits to the same document.
+      function profileTextOk(fields) {
+        return (!('name' in fields) || (request.resource.data.name is string
+                                         && request.resource.data.name.size() <= 324))
+            && (!('about' in fields) || (request.resource.data.about is string
+                                          && request.resource.data.about.size() <= 560));
+      }
+
+      // 2026-09-24 audit: STAGE 4 OF THE PUSH-TOKEN MOVE. Push tokens may no longer be ADDED to this
+      // document, which every signed-in account can read. The app has written them only to
+      // users/{uid}/push/tokens since build 511, and the servers now read only there. A write may
+      // still SHRINK these fields (or empty them), because the current app strips its own token off
+      // them at every save and sign-out, and refusing that would sink its whole sign-out batch.
+      function tokenShrinkOnly(f) {
+        return !(f in request.resource.data)
+            || (request.resource.data[f] is list
+                && (request.resource.data[f].size() == 0
+                    || (f in resource.data && resource.data[f] is list
+                        && request.resource.data[f].toSet()
+                             .difference(resource.data[f].toSet()).size() == 0)));
+      }
+      function pushTokensNotAdded() {
+        return tokenShrinkOnly('fcmTokens') && tokenShrinkOnly('voipTokens')
+            && tokenShrinkOnly('pushTokens');
+      }
+
       allow create: if signedIn() && request.auth.uid == uid
         && !request.resource.data.keys().hasAny(serverOnlyUserFields())
-        && linksOk();
+        && !request.resource.data.keys().hasAny(['fcmTokens', 'voipTokens', 'pushTokens'])
+        && linksOk()
+        && profileTextOk(request.resource.data.keys());
       allow update: if signedIn() && request.auth.uid == uid
         && !request.resource.data.diff(resource.data).affectedKeys()
               .hasAny(serverOnlyUserFields())
-        && linksOk();
+        && pushTokensNotAdded()
+        && linksOk()
+        && profileTextOk(request.resource.data.diff(resource.data).affectedKeys());
 
       // A moderator may set the ban flag on ANY account, and may touch nothing else on it. The
       // hasOnly list is what keeps this from being a general "edit any profile" power: a moderator
@@ -316,7 +352,13 @@ service cloud.firestore {
           request.auth.uid == uid
           || get(/databases/$(database)/documents/users/$(uid)).data
                .get('privacy', {}).get('lastSeen', 'everyone') == 'everyone'
-          || (exists(presencePair())
+          // 2026-09-24 audit: the conversation branch now applies ONLY to "My Chats" (`contacts`).
+          // It used to fire for any stored value, so "No One" let every chat partner read exactly
+          // what "My Chats" did. With `nobody` the owner is the only reader. (Same user document
+          // as the line above, so it is still one billed read.)
+          || (get(/databases/$(database)/documents/users/$(uid)).data
+                .get('privacy', {}).get('lastSeen', 'everyone') == 'contacts'
+              && exists(presencePair())
               && get(presencePair()).data.get('blockedBy', {}).get(uid, false) != true)
         );
         allow write: if signedIn() && request.auth.uid == uid;
@@ -492,7 +534,20 @@ service cloud.firestore {
       // app writes here; that build reaches people; only then migrate the existing tokens and drop
       // the old fields. The hole is open until that third step.
       match /push/{docId} {
-        allow read, write: if signedIn() && request.auth.uid == uid;
+        // 2026-09-24 audit: each token list is capped at 50. Uncapped, a modified client could grow
+        // one past the 500 tokens a single multicast send accepts, and every push to the account
+        // would then fail. A write that SHRINKS a list is always allowed, so an account already over
+        // the cap can still sign out and prune.
+        function tokenListOk(f) {
+          return !(f in request.resource.data)
+              || (request.resource.data[f] is list
+                  && (request.resource.data[f].size() <= 50
+                      || (resource != null && f in resource.data && resource.data[f] is list
+                          && request.resource.data[f].size() <= resource.data[f].size())));
+        }
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && tokenListOk('fcmTokens') && tokenListOk('voipTokens') && tokenListOk('pushTokens');
       }
 
       // Which sticker packs you have added, and the order you keep them in. A subcollection
@@ -1085,6 +1140,63 @@ service cloud.firestore {
             && request.resource.data.get('accepted', true) == false
           )
         );
+      // 2026-09-24 audit: THE ADMIN RIGHTS ARE ENFORCED HERE, NOT ONLY BY WHICH BUTTONS SHOW.
+      //
+      // `Conversation.Right` / `adminCan` (Models.swift) is the model: the owner (`createdBy`) can do
+      // everything; an admin with NO `adminRights` entry is a legacy full admin; an admin WITH an
+      // entry holds only the slugs listed in it. Managing the admin TEAM (promote, demote, set
+      // rights) is owner-only. Before this, any uid in `admins` could write any field: promote
+      // anyone, demote the owner's appointees, grant itself every right.
+      function adminHasRight(right) {
+        return !(request.auth.uid in resource.data.get('adminRights', {}))
+               || right in resource.data.get('adminRights', {})[request.auth.uid];
+      }
+      // What a NON-owner admin's write may change. Each key is matched to the client write that
+      // uses it and the right its button is gated on in GroupInfoView / ThreadView:
+      //   title, avatarUrl, desc, disappearSeconds, onlyAdminsSend, membersCan* → changeInfo
+      //   users grow (addGroupMembers), inviteCode (Invite via Link)             → inviteUsers
+      //   users shrink by others, restrictions, bans (removeGroupMember, mute)   → banUsers
+      //     (a ban may be LIFTED by an inviteUsers admin: re-adding clears it)
+      //   pinnedMessageIds grows (pin)                                            → pinMessages
+      //   admins / adminRights: never added to; an admin may only drop out of `admins` in the same
+      //     write that takes them out of `users` (removed from the group, or leaving).
+      // Everything else (sends, previews, own private state) is untouched by this check.
+      function nonOwnerAdminWriteOK() {
+        let o = resource.data;
+        let n = request.resource.data;
+        let keys = n.diff(o).affectedKeys();
+        let gone = o.users.toSet().difference(n.users.toSet());
+        let added = n.users.toSet().difference(o.users.toSet());
+        return !keys.hasAny(['createdBy', 'type'])
+          && n.get('admins', []).toSet().difference(o.get('admins', []).toSet()).size() == 0
+          && o.get('admins', []).toSet().difference(n.get('admins', []).toSet()).difference(gone).size() == 0
+          && n.get('adminRights', {}).diff(o.get('adminRights', {})).affectedKeys().difference(gone).size() == 0
+          && (!keys.hasAny(['title', 'avatarUrl', 'desc', 'disappearSeconds', 'onlyAdminsSend',
+                            'membersCanAdd', 'membersCanEditInfo'])
+              || adminHasRight('changeInfo'))
+          && (added.size() == 0 || adminHasRight('inviteUsers'))
+          && (!('inviteCode' in keys) || adminHasRight('inviteUsers'))
+          && (gone.size() == 0 || gone.hasOnly([request.auth.uid]) || adminHasRight('banUsers'))
+          && (!keys.hasAny(['restrictedFlags', 'restrictedUntil']) || adminHasRight('banUsers'))
+          && (!('bannedUids' in keys) || adminHasRight('banUsers')
+              || (adminHasRight('inviteUsers') && o.get('bannedUids', []).hasAll(n.get('bannedUids', []))))
+          && (!('pinnedMessageIds' in keys) || adminHasRight('pinMessages')
+              || o.get('pinnedMessageIds', []).hasAll(n.get('pinnedMessageIds', [])));
+      }
+      // 2026-09-24 audit: two floors every group write keeps, whichever branch lets it through.
+      // 30 members: the create rule and the membersCanAdd branch capped it, the admin branch did not
+      // (addGroupMembers' own check reads a cached count, so two admins adding at once overshot).
+      // Only a write that GROWS the list is held to it, so a group already over 30 from before the
+      // cap can still be edited. And a group with admins never ends with none: two admins leaving at
+      // the same moment each saw the other still listed and both removed themselves. The last member
+      // leaving (users empty) and a group that already had no admins are exempt.
+      function groupFloorsKept() {
+        return (request.resource.data.users.size() <= resource.data.users.size()
+                || request.resource.data.users.size() <= 30)
+          && (resource.data.get('admins', []).size() == 0
+              || request.resource.data.get('admins', []).size() > 0
+              || request.resource.data.users.size() == 0);
+      }
       // A member may update the conversation. Membership (`users`) can change ONLY when:
       //   • it's unchanged as a SET (normal sends — the client rewrites order each send), OR
       //   • a group ADMIN is making the change (add/remove/promote), OR
@@ -1147,10 +1259,13 @@ service cloud.firestore {
           // Group ADMIN may change anything (membership, title, admins) — but a NON-owner admin
           // must keep the owner (createdBy) in BOTH admins and users. Only the owner can remove
           // themselves, and that goes through the self-leave branch below.
+          // 2026-09-24 audit: plus the per-right check (nonOwnerAdminWriteOK) and the two floors.
           || (resource.data.get('type', '') == 'group' && request.auth.uid in resource.data.admins
+              && groupFloorsKept()
               && (request.auth.uid == resource.data.get('createdBy', '')
                   || (resource.data.get('createdBy', '') in request.resource.data.admins
-                      && resource.data.get('createdBy', '') in request.resource.data.users)))
+                      && resource.data.get('createdBy', '') in request.resource.data.users
+                      && nonOwnerAdminWriteOK())))
           // Group NON-admin member: members unchanged AND only send/per-user fields touched
           // (cannot self-promote, rename, change type/createdBy, etc.).
           || (
@@ -1247,6 +1362,9 @@ service cloud.firestore {
                 || (resource.data.get('admins', []).hasOnly([request.auth.uid])
                     && request.resource.data.get('admins', []).size() == 1
                     && request.resource.data.get('admins', [])[0] in request.resource.data.users))
+            // 2026-09-24 audit: the plain removal above also matched the LAST admin removing
+            // themselves with no heir, leaving the group with nobody to run it.
+            && groupFloorsKept()
           )
         );
       // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
@@ -1270,9 +1388,25 @@ service cloud.firestore {
       // hides it and the push function skips their notification. You may delete
       // only your own message.
       match /messages/{mid} {
+        // 2026-09-24 audit: the CALLEE's fallback call record. `ChatService.recordCall` always
+        // writes `authorId` = the caller (one deterministic author for the row both phones merge
+        // into), so when the caller's phone never wrote the live row and the callee's phone is the
+        // first writer, the plain author check refused it and the call left no record at all. A
+        // call record at its own `call_<callId>` id, carrying only the call-record keys, may be
+        // created by either member provided it names a member as the caller and the author.
+        function isCallRecordForMember() {
+          return request.resource.data.get('type', '') == 'call'
+            && mid.matches('call_.+')
+            && request.resource.data.get('callerUid', '') in convData().users
+            && request.resource.data.authorId == request.resource.data.callerUid
+            && request.resource.data.get('text', '') == ''
+            && request.resource.data.keys().hasOnly([
+                 'type', 'authorId', 'callerUid', 'callOutcome', 'callVideo', 'text', 'createdAt'
+               ]);
+        }
         allow read: if signedIn() && request.auth.uid in convData().users;
         allow create: if signedIn()
-          && request.auth.uid == request.resource.data.authorId
+          && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
           && request.auth.uid in convData().users
           // ⛔ `expiresAt` BELONGS TO THE SERVER. It is the disappearing-message timer, written by
           // `onNewMessage` out of the conversation's own `disappearSeconds` the moment a message
@@ -1464,18 +1598,56 @@ service cloud.firestore {
       // GET only (you must already know the exact code) — NOT list, or any signed-in user could
       // enumerate every group's invite/title/photo and mass-join.
       allow get: if signedIn();
+      // 2026-09-24 audit: and holding the Add-members right (`Right.inviteUsers`), the same test as
+      // `adminCan` on the client: owner always, an admin with no `adminRights` entry always, an
+      // admin with an entry only when it lists the slug.
+      function canInvite(c) {
+        let conv = get(/databases/$(database)/documents/conversations/$(c)).data;
+        return request.auth.uid in conv.get('admins', [])
+          && (request.auth.uid == conv.get('createdBy', '')
+              || !(request.auth.uid in conv.get('adminRights', {}))
+              || 'inviteUsers' in conv.get('adminRights', {})[request.auth.uid]);
+      }
       allow create: if signedIn()
         && request.resource.data.cid is string
-        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(request.resource.data.cid)).data.admins;
+        && canInvite(request.resource.data.cid);
       allow update, delete: if signedIn()
-        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(resource.data.cid)).data.admins;
+        && canInvite(resource.data.cid);
     }
 
     // Group calls: a single coordination doc per group (active flag + who started). Any member
     // of the conversation may read it (to show a "Join call" bar) and write it (start/end).
+    //
+    // 2026-09-24 audit: WHO STARTED IT IS NO LONGER SPOOFABLE. `write` was open to every member, so
+    // one member could set `startedBy` to another and `onGroupCallStarted` pushed "<that person>
+    // started a call" to the whole group in a name they never used. The two writes the app makes
+    // (GroupCallService) are all that is allowed now:
+    //  - START: the full doc, `active: true`, `startedBy` = me. On an
+    //    existing doc only when no call is live, when the live one is mine, or when it is a stale
+    //    one past the same 4h the Join bar ignores. A member JOINING a live call makes this same
+    //    write and is refused, harmlessly (`try?`, the doc is already right).
+    //  - END: `active: false` and nothing else, by any member (the last one out clears it).
+    // No delete: nothing in the app deletes it.
     match /groupCalls/{cid} {
-      allow read, write: if signedIn()
-        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.users;
+      function isGroupMember() {
+        return request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.users;
+      }
+      function isStartWrite() {
+        return request.resource.data.keys().hasOnly(['active', 'startedBy', 'video', 'title', 'startedAt'])
+          && request.resource.data.active == true
+          && request.resource.data.startedBy == request.auth.uid;
+      }
+      allow read: if signedIn() && isGroupMember();
+      allow create: if signedIn() && isGroupMember() && isStartWrite();
+      allow update: if signedIn() && isGroupMember() && (
+           (isStartWrite()
+             && (resource.data.get('active', false) != true
+                 || resource.data.get('startedBy', '') == request.auth.uid
+                 || (resource.data.get('startedAt', null) is timestamp
+                     && resource.data.startedAt < request.time - duration.value(4, 'h'))))
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
+            && request.resource.data.active == false)
+      );
     }
 
     // Calls: ephemeral WebRTC signaling (offer/answer + ICE candidates). Scoped to the

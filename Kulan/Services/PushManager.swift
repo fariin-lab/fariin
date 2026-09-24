@@ -186,8 +186,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // A cid becomes a Firestore document id in ThreadView, where an empty or slashed one raises
         // an uncatchable exception (audit, 2026-09-24). Our own pushes never carry one; refuse it anyway.
         if let cid = response.notification.request.content.userInfo["cid"] as? String,
-           !cid.isEmpty, !cid.contains("/") {
+           !cid.isEmpty, !cid.contains("/"),
+           await Self.mayOpenFromPush(cid) {
             await MainActor.run { AppRouter.shared.pendingChatId = cid }
+        }
+    }
+
+    /// 2026-09-24 audit: a notification can outlive its account. Sign out of A, sign in as B, tap A's
+    /// banner, and B was pushed onto a chat it is not in (a blank screen the rules refuse to fill).
+    /// A chat already in this account's list is fine; otherwise ask the server, and drop the tap
+    /// only when it says no (refused, missing, or not a member). Offline or any other error still
+    /// opens, because a real chat the list has not loaded yet must not become a dead tap.
+    private static func mayOpenFromPush(_ cid: String) async -> Bool {
+        guard let me = Auth.auth().currentUser?.uid else { return false }
+        let known = await MainActor.run { ConversationsRepository.shared.conversations.contains { $0.id == cid } }
+        if known { return true }
+        do {
+            let snap = try await Firestore.firestore().collection("conversations").document(cid).getDocument()
+            guard snap.exists, let users = snap.data()?["users"] as? [String] else { return false }
+            return users.contains(me)
+        } catch {
+            // 7 = permissionDenied, by wire number (see StoriesService on why not the SDK enum).
+            let ns = error as NSError
+            return !(ns.domain == FirestoreErrorDomain && ns.code == 7)
         }
     }
 }

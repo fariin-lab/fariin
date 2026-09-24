@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 /// Every piece of account-scoped state that lives on this DEVICE, wiped in one place.
 /// Called on sign-out and account deletion — the singletons otherwise outlive the
@@ -101,6 +102,12 @@ enum SessionWipe {
         AppRouter.shared.pendingChatName = nil
         AppRouter.shared.pendingChatPhoto = nil
         AppRouter.shared.pendingInviteCode = nil
+        // 2026-09-24 audit: the signed-out account's notifications and badge. Left behind, the icon
+        // kept showing its unread count on the Welcome screen, and a banner still in Notification
+        // Center could be tapped under the NEXT account and open a chat that account is not in.
+        let center = UNUserNotificationCenter.current()
+        center.removeAllDeliveredNotifications()
+        center.setBadgeCount(0)
         wipeAccountPrefs()
         CallPrivacyIndex.clear()                // who-refuses-calls is per-account too
         VerificationIndex.clear()               // and who is verified — the next account starts blank

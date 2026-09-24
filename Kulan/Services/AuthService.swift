@@ -298,9 +298,11 @@ final class AuthService: NSObject {
 
     // MARK: - New-device security email
 
-    /// Tell the backend this device signed in. The function emails the account owner only when the
-    /// device is NEW (and never for the very first device, which is the sign-up itself), so someone
-    /// else getting into your account is visible to you.
+    /// Tell the backend this device signed in. The function emails the account owner on EVERY sign-in
+    /// (owner decision 2026-08-04, see notifyNewLogin in functions-loginalert), naming the device as
+    /// new when it has not been seen before; the very first device is the sign-up itself and gets the
+    /// welcome mail instead. 2026-09-24 audit: this comment used to say "only when the device is NEW",
+    /// which the server has not done since that decision.
     ///
     /// Fire-and-forget on purpose: a sign-in must never fail or wait because email is down.
     /// Email the account owner that deletion was requested. AWAITED (unlike reportLogin) because the

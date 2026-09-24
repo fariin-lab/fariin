@@ -350,6 +350,17 @@ struct GroupInfoView: View {
             .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
+    /// 2026-09-24 audit: approve/deny were `try?`, so a refusal (group full, request already
+    /// handled by another admin, offline) looked exactly like success. Same alert as Leave.
+    private func joinAction(_ op: @escaping () async throws -> Void) {
+        Task {
+            do { try await op() } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { actionError = msg }
+            }
+        }
+    }
+
     private var joinRequestsSection: some View {
         Section("Join requests (\(joinReqs.count))") {
             ForEach(joinReqs) { r in
@@ -357,10 +368,10 @@ struct GroupInfoView: View {
                     AvatarView(name: r.name, photoUrl: r.photo, size: 34)
                     Text(r.name).foregroundStyle(.primary).lineLimit(1)
                     Spacer(minLength: 8)
-                    Button { Task { try? await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
+                    Button { joinAction { try await GroupInviteService.approveJoin(cid: cid, uid: r.uid) } } label: {
                         Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
                     }.buttonStyle(.plain)
-                    Button { Task { try? await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
+                    Button { joinAction { try await GroupInviteService.denyJoin(cid: cid, uid: r.uid) } } label: {
                         Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.red)
                     }.buttonStyle(.plain)
                 }
@@ -623,7 +634,7 @@ struct AddMembersSheet: View {
                                 await MainActor.run {
                                     if keyless.isEmpty { dismiss() }
                                     else {
-                                        noticeText = "\(keyless.joined(separator: ", ")) hasn't opened Falan yet — they'll see messages once they do."
+                                        noticeText = "\(keyless.joined(separator: ", ")) hasn't opened Fariin yet — they'll see messages once they do."
                                         adding = false
                                     }
                                 }
@@ -761,6 +772,9 @@ struct GroupMemberSheet: View {
                             AppRouter.shared.pendingChatName = member.name
                             AppRouter.shared.pendingChatPhoto = profile?.photoUrl
                             AppRouter.shared.pendingChatId = ChatService.convId(me, member.id)
+                            // 2026-09-24 audit: create the chat the way every other entry point does.
+                            let other = member.id
+                            Task { await ChatService.openConversation(uid: other) }
                             dismiss()
                         } label: { Label("Message", systemImage: "message") }
                     }

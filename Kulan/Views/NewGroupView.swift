@@ -58,7 +58,11 @@ struct NewGroupView: View {
                 }
 
                 if !selected.isEmpty {
-                    Section("Members · \(selected.count + 1)") {   // +1 = you
+                    // +1 = you. 2026-09-24 audit: at the cap the header says so, because the next
+                    // tap only buzzes and otherwise reads as a broken row.
+                    Section(selected.count >= Self.maxOthersAtCreate
+                            ? "Members · \(selected.count + 1) max"
+                            : "Members · \(selected.count + 1)") {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 14) {
                                 ForEach(Array(selected.values)) { p in

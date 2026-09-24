@@ -63,6 +63,21 @@ const left = (base, over = {}) => ({ ...base, users: base.users.filter((u) => u 
   lastMessage: 'x left', lastSender: over._who || ME, updatedAt: REQ_TIME, ...over, _who: undefined });
 const clean = (o) => { const c = { ...o }; delete c._who; return c; };
 
+// calls area: group call doc as GroupCallService.start writes it (startedAt is a server timestamp
+// in the app; plain JSON cannot carry one, and the rules do not read it on these rows).
+const gcPath = `${D}/groupCalls/${CID}`;
+const gcStart = (by) => ({ active: true, startedBy: by, video: false, title: 'Family', startedAt: REQ_TIME });
+// A 1:1 pair from before message requests (no startedBy), so the create's request branches stay out.
+const pairPath = `${D}/conversations/${PAIR}`;
+const pairMocks = [
+  ...notAdmin(ME), ...notAdmin(THIRD),
+  { function: 'exists', args: [{ exactValue: pairPath }], result: { value: true } },
+  { function: 'get', args: [{ exactValue: pairPath }],
+    result: { value: { data: { users: [ME, THIRD], blockedBy: {}, lastMessage: 'hi', lastSender: ME } } } },
+];
+const callRec = (caller) => ({ type: 'call', authorId: caller, callerUid: caller, callOutcome: 'missed',
+  callVideo: false, text: '', createdAt: REQ_TIME });
+
 // [name, before, after, caller, path, method, newData, oldData, mocks]
 const cases = [
   // ── 1. group self-leave may touch only what leaveGroup writes ──
@@ -165,7 +180,172 @@ const cases = [
   ['ATTACK  a blocked person reads the blocker\'s last seen',
     'ALLOW', 'DENY', ME, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
     presenceMocks('contacts', { [THIRD]: true })],
+  // 2026-09-24 audit (settings QA): "No One" must be stricter than "My Chats".
+  ['ATTACK  a chat partner reads last seen set to No One',
+    'ALLOW', 'DENY', ME, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
+    presenceMocks('nobody', {})],
+  ['OK      the owner reads their own last seen set to No One',
+    'ALLOW', 'ALLOW', THIRD, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
+    presenceMocks('nobody', {})],
+  // 2026-09-24 audit (settings QA): server ceiling on profile name and bio.
+  ['OK      owner saves an 81-character name and a 140-character bio',
+    'ALLOW', 'ALLOW', ME, `${D}/users/${ME}`, 'update',
+    { name: 'a'.repeat(81), about: 'b'.repeat(140) }, { name: 'x', about: '' }, notAdmin(ME)],
+  ['OK      owner edits the bio while an older over-long name stays untouched',
+    'ALLOW', 'ALLOW', ME, `${D}/users/${ME}`, 'update',
+    { name: 'a'.repeat(400), about: 'new' }, { name: 'a'.repeat(400), about: '' }, notAdmin(ME)],
+  ['ATTACK  a modified client writes a 5000-character bio',
+    'ALLOW', 'DENY', ME, `${D}/users/${ME}`, 'update',
+    { name: 'x', about: 'b'.repeat(5000) }, { name: 'x', about: '' }, notAdmin(ME)],
+  ['ATTACK  a modified client writes a 5000-character name',
+    'ALLOW', 'DENY', ME, `${D}/users/${ME}`, 'update',
+    { name: 'a'.repeat(5000) }, { name: 'x' }, notAdmin(ME)],
+
+  // ── 7. calls area (calls QA): group call doc + the callee's fallback call record ──
+  ['OK      member starts a group call as themselves',
+    'ALLOW', 'ALLOW', ME, gcPath, 'create', gcStart(ME), null, [...members, ...convGet(group)]],
+  ['ATTACK  member starts a group call in ADMIN\'s name (spoofed push)',
+    'ALLOW', 'DENY', ME, gcPath, 'create', gcStart(ADMIN), null, [...members, ...convGet(group)]],
+  ['OK      member restarts after the last call ended',
+    'ALLOW', 'ALLOW', ME, gcPath, 'update', gcStart(ME), { ...gcStart(ADMIN), active: false },
+    [...members, ...convGet(group)]],
+  ['ATTACK  member takes over ADMIN\'s live call as its starter',
+    'ALLOW', 'DENY', ME, gcPath, 'update', gcStart(ME), gcStart(ADMIN), [...members, ...convGet(group)]],
+  ['ATTACK  member rewrites a live call\'s startedBy to THIRD',
+    'ALLOW', 'DENY', ME, gcPath, 'update', gcStart(THIRD), gcStart(ADMIN), [...members, ...convGet(group)]],
+  ['OK      last member out ends the call (active:false only)',
+    'ALLOW', 'ALLOW', ME, gcPath, 'update', { ...gcStart(ADMIN), active: false }, gcStart(ADMIN),
+    [...members, ...convGet(group)]],
+  ['ATTACK  ending the call also renames it',
+    'ALLOW', 'DENY', ME, gcPath, 'update', { ...gcStart(ADMIN), active: false, title: 'X' }, gcStart(ADMIN),
+    [...members, ...convGet(group)]],
+  ['ATTACK  member deletes the group call doc',
+    'ALLOW', 'DENY', ME, gcPath, 'delete', null, gcStart(ADMIN), [...members, ...convGet(group)]],
+  ['GUARD   non-member starts a group call',
+    'DENY', 'DENY', 'uidOutsider', gcPath, 'create', gcStart('uidOutsider'), null,
+    [...members, ...notAdmin('uidOutsider'), ...convGet(group)]],
+  ['OK      caller writes their own call record',
+    'ALLOW', 'ALLOW', ME, `${pairPath}/messages/call_abc`, 'create', callRec(ME), null, pairMocks],
+  ['FIX     callee writes the fallback call record (author = caller)',
+    'DENY', 'ALLOW', THIRD, `${pairPath}/messages/call_abc`, 'create', callRec(ME), null, pairMocks],
+  ['GUARD   callee fallback at a non-call id',
+    'DENY', 'DENY', THIRD, `${pairPath}/messages/m9`, 'create', callRec(ME), null, pairMocks],
+  ['GUARD   callee fallback smuggling text',
+    'DENY', 'DENY', THIRD, `${pairPath}/messages/call_abc`, 'create', { ...callRec(ME), text: 'enc1:x' }, null, pairMocks],
+  ['GUARD   callee fallback naming an outsider as caller',
+    'DENY', 'DENY', THIRD, `${pairPath}/messages/call_abc`, 'create', callRec('uidOutsider'), null, pairMocks],
+  ['GUARD   outsider writes a call record into the pair',
+    'DENY', 'DENY', 'uidOutsider', `${pairPath}/messages/call_abc`, 'create', callRec(ME), null,
+    [...pairMocks, ...notAdmin('uidOutsider')]],
+
+  // ── groups (2026-09-24 audit, groups area): admin rights, the 30 cap, never adminless ──
+  ...groupCases(),
+
+  // ── shell (2026-09-24 audit, shell area): push tokens off the public profile, and capped ──
+  ...shellCases(),
 ];
+
+// Stage 4 of the push-token move: users/{uid}.fcmTokens / .voipTokens / .pushTokens may shrink,
+// never grow; users/{uid}/push/{doc} lists are capped at 50 but may always shrink.
+function shellCases() {
+  const up = `${D}/users/${ME}`, pushDoc = `${D}/users/${ME}/push/tokens`;
+  const m = [...notAdmin(ME), ...notAdmin(THIRD)];
+  const toks = (n) => Array.from({ length: n }, (_, i) => `tok${i}`);
+  return [
+    ['ATTACK  owner adds a stolen FCM token to the public profile', 'ALLOW', 'DENY',
+      ME, up, 'update', { name: 'A', fcmTokens: ['t1', 'stolen'] }, { name: 'A', fcmTokens: ['t1'] }, m],
+    ['ATTACK  owner adds a VoIP token field to the public profile', 'ALLOW', 'DENY',
+      ME, up, 'update', { name: 'A', voipTokens: ['v1'] }, { name: 'A' }, m],
+    ['ATTACK  owner adds a legacy Expo token to the public profile', 'ALLOW', 'DENY',
+      ME, up, 'update', { name: 'A', pushTokens: ['ExponentPushToken[x]'] }, { name: 'A' }, m],
+    ['ATTACK  profile created carrying a token', 'ALLOW', 'DENY',
+      ME, up, 'create', { name: 'A', fcmTokens: ['t1'] }, null, m],
+    ['OK      app strips its own token off the old field', 'ALLOW', 'ALLOW',
+      ME, up, 'update', { name: 'A', fcmTokens: ['t2'] }, { name: 'A', fcmTokens: ['t1', 't2'] }, m],
+    ['OK      strip on an account that never had the field (arrayRemove leaves [])', 'ALLOW', 'ALLOW',
+      ME, up, 'update', { name: 'A', fcmTokens: [], voipTokens: [] }, { name: 'A' }, m],
+    ['OK      name edit with old tokens left as they are', 'ALLOW', 'ALLOW',
+      ME, up, 'update', { name: 'B', fcmTokens: ['t1'] }, { name: 'A', fcmTokens: ['t1'] }, m],
+    ['OK      app saves a token into its private push doc', 'ALLOW', 'ALLOW',
+      ME, pushDoc, 'update', { fcmTokens: ['a', 'b'] }, { fcmTokens: ['a'] }, m],
+    ['OK      first token creates the private push doc', 'ALLOW', 'ALLOW',
+      ME, pushDoc, 'create', { voipTokens: ['v'] }, null, m],
+    ['ATTACK  private push doc grown past 50 tokens', 'ALLOW', 'DENY',
+      ME, pushDoc, 'update', { fcmTokens: toks(51) }, { fcmTokens: toks(50) }, m],
+    ['OK      an over-cap list may still shrink (sign-out)', 'ALLOW', 'ALLOW',
+      ME, pushDoc, 'update', { fcmTokens: toks(59) }, { fcmTokens: toks(60) }, m],
+    ['OK      owner deletes the push doc (account delete)', 'ALLOW', 'ALLOW',
+      ME, pushDoc, 'delete', null, { fcmTokens: ['a'] }, m],
+    ['GUARD   another account writes my push doc', 'DENY', 'DENY',
+      THIRD, pushDoc, 'update', { fcmTokens: ['a', 'x'] }, { fcmTokens: ['a'] }, m],
+    ['GUARD   another account reads my push doc', 'DENY', 'DENY',
+      THIRD, pushDoc, 'get', null, { fcmTokens: ['a'] }, m],
+  ];
+}
+
+// ADMIN owns `team`; LIM is an admin the owner limited to pinning; LEG is a legacy full admin
+// (no adminRights entry). A function so its fixtures stay out of the shared namespace above.
+function groupCases() {
+  const LIM = 'uidLimited', LEG = 'uidLegacy', NEW = 'uidNew';
+  const team = {
+    ...group, users: [ADMIN, LIM, LEG, ME, THIRD], admins: [ADMIN, LIM, LEG],
+    adminRights: { [LIM]: ['pinMessages'] }, bannedUids: [],
+    unreadCount: { [ADMIN]: 0, [LIM]: 0, [LEG]: 0, [ME]: 0, [THIRD]: 0 },
+  };
+  const m = [ADMIN, LIM, LEG, ME, THIRD, NEW].flatMap(notAdmin);
+  const up = (who, over, base = team) => [who, convPath, 'update', { ...base, updatedAt: REQ_TIME, ...over }, base, m];
+  const big = (n) => Array.from({ length: n }, (_, i) => (i === 0 ? ADMIN : `uidM${i}`));
+  const g29 = { ...team, users: big(29), admins: [ADMIN], adminRights: {} };
+  const g31 = { ...team, users: big(31), admins: [ADMIN], adminRights: {} };
+  const soloOwner = { ...group, admins: [ADMIN] };
+  const lastOne = { ...group, users: [ADMIN], admins: [], createdBy: GONE };
+  const inv = { cid: CID, code: 'abc', createdBy: LEG, revoked: false };
+  const invPath = `${D}/invites/abc`;
+  return [
+    // legitimate writes must keep passing
+    ['OK      owner makes THIRD an admin', 'ALLOW', 'ALLOW', ...up(ADMIN, { admins: [ADMIN, LIM, LEG, THIRD] })],
+    ['OK      owner limits LEG to pinning', 'ALLOW', 'ALLOW',
+      ...up(ADMIN, { adminRights: { [LIM]: ['pinMessages'], [LEG]: ['pinMessages'] } })],
+    ['OK      legacy admin renames the group', 'ALLOW', 'ALLOW', ...up(LEG, { title: 'New name' })],
+    ['OK      legacy admin removes THIRD (ban + notice)', 'ALLOW', 'ALLOW',
+      ...up(LEG, { users: [ADMIN, LIM, LEG, ME], bannedUids: [THIRD], lastMessage: 'x removed y', lastSender: LEG })],
+    ['OK      legacy admin removes admin LIM from the group', 'ALLOW', 'ALLOW',
+      ...up(LEG, { users: [ADMIN, LEG, ME, THIRD], admins: [ADMIN, LEG], adminRights: {}, bannedUids: [LIM] })],
+    ['OK      legacy admin adds a member', 'ALLOW', 'ALLOW',
+      ...up(LEG, { users: [...team.users, NEW], names: { [NEW]: 'New' }, unreadCount: { ...team.unreadCount, [NEW]: 0 } })],
+    ['OK      pin-only admin pins a message', 'ALLOW', 'ALLOW', ...up(LIM, { pinnedMessageIds: ['m1'] })],
+    ['OK      pin-only admin sends a message', 'ALLOW', 'ALLOW',
+      ...up(LIM, { lastMessage: 'enc', lastSender: LIM, unreadCount: { ...team.unreadCount, [ME]: 1 } })],
+    ['OK      a non-owner admin leaves', 'ALLOW', 'ALLOW',
+      ...up(LEG, { users: [ADMIN, LIM, ME, THIRD], admins: [ADMIN, LIM], lastMessage: 'x left', lastSender: LEG })],
+    ['OK      owner renames a group already over 30', 'ALLOW', 'ALLOW', ...up(ADMIN, { title: 'Big' }, g31)],
+    ['OK      owner adds the 30th member', 'ALLOW', 'ALLOW', ...up(ADMIN, { users: [...g29.users, NEW] }, g29)],
+    ['OK      the last member of an adminless group leaves', 'ALLOW', 'ALLOW',
+      ADMIN, convPath, 'update', { ...lastOne, users: [], lastMessage: 'x left', lastSender: ADMIN, updatedAt: REQ_TIME }, lastOne, m],
+    ['OK      legacy admin creates an invite link', 'ALLOW', 'ALLOW', LEG, invPath, 'create', inv, null, [...m, ...convGet(team)]],
+    // holes
+    ['ATTACK  pin-only admin makes THIRD an admin', 'ALLOW', 'DENY', ...up(LIM, { admins: [ADMIN, LIM, LEG, THIRD] })],
+    ['ATTACK  legacy (non-owner) admin makes THIRD an admin', 'ALLOW', 'DENY', ...up(LEG, { admins: [ADMIN, LIM, LEG, THIRD] })],
+    ['ATTACK  legacy admin demotes LIM', 'ALLOW', 'DENY', ...up(LEG, { admins: [ADMIN, LEG], adminRights: {} })],
+    ['ATTACK  pin-only admin grants itself every right', 'ALLOW', 'DENY',
+      ...up(LIM, { adminRights: { [LIM]: ['changeInfo', 'deleteMessages', 'banUsers', 'inviteUsers', 'pinMessages', 'manageCalls'] } })],
+    ['ATTACK  pin-only admin clears its own limits (legacy = all)', 'ALLOW', 'DENY', ...up(LIM, { adminRights: {} })],
+    ['ATTACK  pin-only admin renames the group', 'ALLOW', 'DENY', ...up(LIM, { title: 'Hacked' })],
+    ['ATTACK  pin-only admin removes THIRD', 'ALLOW', 'DENY',
+      ...up(LIM, { users: [ADMIN, LIM, LEG, ME], bannedUids: [THIRD] })],
+    ['ATTACK  pin-only admin mutes THIRD', 'ALLOW', 'DENY',
+      ...up(LIM, { restrictedFlags: { [THIRD]: ['sendText'] }, restrictedUntil: { [THIRD]: 9e15 } })],
+    ['ATTACK  pin-only admin adds a member', 'ALLOW', 'DENY', ...up(LIM, { users: [...team.users, NEW] })],
+    ['ATTACK  pin-only admin creates an invite link', 'ALLOW', 'DENY',
+      LIM, invPath, 'create', { ...inv, createdBy: LIM }, null, [...m, ...convGet(team)]],
+    ['ATTACK  owner adds two members to a 29-member group (31)', 'ALLOW', 'DENY',
+      ...up(ADMIN, { users: [...g29.users, NEW, 'uidNew2'] }, g29)],
+    ['ATTACK  sole admin (owner) leaves with no heir', 'ALLOW', 'DENY',
+      ADMIN, convPath, 'update', clean(left(soloOwner, { _who: ADMIN, admins: [] })), soloOwner, m],
+    ['ATTACK  last admin leaves with no heir after the owner left', 'ALLOW', 'DENY',
+      ADMIN, convPath, 'update', clean(left(ownerGone, { _who: ADMIN, admins: [] })), ownerGone, m],
+  ];
+}
 
 async function run(t, source, [, , , uid, path, method, after, before, mocks], expectation) {
   const request = {

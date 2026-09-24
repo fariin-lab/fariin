@@ -141,7 +141,8 @@ struct MyQRView: View {
             .fullScreenCover(isPresented: $showScanner) {
                 // `onMyCode: dismiss` on the scanner we open ourselves: its "My code" button comes
                 // back HERE instead of presenting a second copy of this screen on top of this one.
-                ScanQRView(onMyCode: { showScanner = false }) { user in
+                ScanQRView(onMyCode: { showScanner = false },
+                           onGroupInvite: { code in QRGroupInviteRoute.open(code); dismiss() }) { user in
                     // ⚠️ ROUTE FIRST, THEN ONE DISMISS, and do NOT close the cover by hand on the
                     // way. `showScanner = false` followed by `dismiss()` is the trap
                     // BottomActionSheet.swift already carries a note about: acting on a presenter
@@ -226,6 +227,19 @@ struct MyQRView: View {
     }
 }
 
+/// 2026-09-24 audit: a scanned group invite goes where a tapped invite link goes
+/// (`AppRouter.pendingInviteCode` → the Join Group sheet from the Chats tab). Set AFTER the code
+/// screen's own sheet has gone, because a sheet asked for while another is still on screen is
+/// dropped rather than queued.
+enum QRGroupInviteRoute {
+    static func open(_ code: String) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            AppRouter.shared.pendingInviteCode = code
+        }
+    }
+}
+
 // Camera QR scanner → resolves a Fariin link to a user.
 //
 // TWO THINGS BESIDES THE CAMERA, and both are about the times there is no code in front of the lens.
@@ -241,6 +255,9 @@ struct ScanQRView: View {
     /// Provided when this scanner was opened FROM the code screen, so "My code" goes back instead of
     /// presenting a second copy of that screen over the top of the first.
     var onMyCode: (() -> Void)?
+    /// A group invite link was scanned (2026-09-24 audit): the presenter closes itself and hands the
+    /// code to the Join Group sheet. Nil = such a code reads as "not found", as before.
+    var onGroupInvite: ((String) -> Void)? = nil
     var onUser: (UserProfile) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -393,6 +410,15 @@ struct ScanQRView: View {
         // impossible rather than merely unlikely. It also means codes printed or screenshotted
         // back when they were kulan:// still scan, because the parser still reads both.
         noCodeInPhoto = false   // a code is in hand now, whatever it turns out to be
+        // 2026-09-24 audit: a group's invite link is a Fariin code too. It was reported as "No
+        // Fariin user found"; it now opens Join Group, the same place tapping the link goes.
+        if let url = URL(string: code), case .group(let invite)? = KulanApp.route(from: url),
+           Flags.groupsEnabled, let onGroupInvite {
+            handling = true
+            onGroupInvite(invite)
+            dismiss()
+            return
+        }
         guard let url = URL(string: code),
               case .user(let handle)? = KulanApp.route(from: url) else {
             // Not a Fariin code: show feedback + re-arm — the scanner used to stay dead here.
@@ -617,7 +643,8 @@ struct ShareProfileSheet: View {
             // The same two steps the code screen takes when a scan resolves: route to the
             // conversation id and open it behind, in case these two have never spoken. Routing alone
             // opens a chat whose document does not exist yet. See `MyQRView` for the full note.
-            ScanQRView(onMyCode: { showScanner = false }) { user in
+            ScanQRView(onMyCode: { showScanner = false },
+                       onGroupInvite: { code in QRGroupInviteRoute.open(code); dismiss() }) { user in
                 AppRouter.shared.pendingChatId = ChatService.convId(AuthService.shared.uid ?? "", user.id)
                 AppRouter.shared.pendingChatName = user.name.isEmpty ? user.handle : user.name
                 AppRouter.shared.pendingChatPhoto = user.photoUrl
