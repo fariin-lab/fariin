@@ -69,6 +69,10 @@ protocol StoryCubePagerDelegate: AnyObject {
     /// The turn has landed. `committed` is false when the finger was released short and the focused
     /// peer sprang back to where it started — the person asked for nothing and nothing changed.
     func cubePager(_ pager: StoryCubePagerVC, didSettleOn vc: UIViewController, committed: Bool)
+    /// A swipe that qualified as a turn (past the distance, or fast enough) but had nobody to turn
+    /// to in that direction. The cube springs back on its own; this tells the owner the finger asked
+    /// to go past the end of the row. See the note in `commit`.
+    func cubePager(_ pager: StoryCubePagerVC, didSwipePastEnd direction: StoryCubePagerVC.Direction)
 }
 
 final class StoryCubePagerVC: UIViewController {
@@ -305,12 +309,22 @@ final class StoryCubePagerVC: UIViewController {
         // with a fraction of zero and a velocity of ±200, so it always reads as the second.
         let goNext = far ? panFraction < 0 : vx < 0
         guard let target = goNext ? after : before, far || fast else {
+            // ⚠️ RUNNING OFF THE END IS NOT "NOTHING HAPPENED". A swipe that clears the threshold on
+            // the last person has no `after`, so it landed here and sprang back — the one place in
+            // the viewer where a qualifying gesture did nothing at all. His report: two swipes
+            // forward work, the third does nothing, because the third was the one past the last
+            // person in the row. A tap on that same last story closes the viewer
+            // (`StoryDetailView.getNextStory`), and the reference app's pan commit runs through the
+            // same `navigate(direction:)` as its tap, which dismisses when there is no next peer.
+            // The spring-back still runs; the owner decides what a swipe past the end means.
+            let pastEnd = (far || fast) && (goNext ? after == nil : before == nil)
             settle(to: 0) { [weak self] in
                 guard let self else { return }
                 self.endTurn()
                 guard let focused = self.focused else { return }
                 self.delegate?.cubePager(self, didSettleOn: focused, committed: false)
             }
+            if pastEnd { delegate?.cubePager(self, didSwipePastEnd: goNext ? .next : .previous) }
             return
         }
         // ⚠️ THE ORDER HERE IS LOAD-BEARING AND IT IS THEIRS: move the focus first, shift the

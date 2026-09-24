@@ -797,6 +797,15 @@ struct StoryPager: UIViewControllerRepresentable {
             prewarmNeighbours(of: cur)
         }
 
+        /// The finger asked for the person after the last one. A tap on that story already closes
+        /// the viewer (`StoryDetailView.getNextStory`, last bundle → `dissmis()`), and this is the
+        /// same close, so the two gestures end the row the same way. Backwards past the first
+        /// person stays put, exactly as the tap does.
+        func cubePager(_ pager: StoryCubePagerVC, didSwipePastEnd direction: StoryCubePagerVC.Direction) {
+            guard direction == .next else { return }
+            withAnimation { parent.isPresented = false }
+        }
+
         // MARK: dismiss pan (down only) + require-to-fail on the pager's own scroll
 
         func installDismissPan() {
