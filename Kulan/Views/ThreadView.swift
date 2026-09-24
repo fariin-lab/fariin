@@ -1022,27 +1022,30 @@ struct ThreadView: View {
             showContactInfo = true
         }))
         .toolbar(.hidden, for: .tabBar)
-        // ⛔ THE BLUR ARRIVES WITH THE PUSH NOW, NOT AFTER IT — owner, 2026-09-23, on iOS 27: "when
-        // i open chat the header blur is coming late, make it native part of the page".
+        // ⛔ NO BAR BACKGROUND IS DECLARED HERE ANY MORE — owner, 2026-09-24, screenshot of the chat
+        // header: a full-width grey-to-purple wash over the wallpaper with a hard bottom edge. That
+        // wash was `.toolbarBackground(.visible, for: .navigationBar)` on this line (added
+        // 2026-09-23) together with the material `ChatNavigationItem` set on all three per-item
+        // appearances (since 2026-09-16). Between them they told UIKit to draw the old opaque
+        // material bar on every frame, which is not what the reference app shows.
         //
-        // ⚠️ THE APPEARANCE WAS ALWAYS CORRECT; IT WAS LATE, AND THE TWO NEED DIFFERENT FIXES.
-        // `ChatNavigationItem` sets the material on all three appearances (`9876825a` did that, and
-        // it is in his build), but it can only do so once its marker view can resolve
-        // `owningViewController` — and a marker cannot do that until it is IN the hierarchy, which
-        // on a push is after the transition has already begun. So UIKit animated the bar in using
-        // the system default, which is transparent at the scroll edge, and our material landed a
-        // beat later. That beat is the whole report.
+        // The reference app sets NOTHING at bar level on iOS 26: no appearance objects, no
+        // background, no shadow, no tint. The system draws the bare glass bar and its soft
+        // scroll-edge effect over the live list, and the app installs only the title view and the
+        // two call items. This screen now does the same; `ChatNavigationItem` leaves the per-item
+        // appearances nil on iOS 26, so there is nothing to declare here either.
         //
-        // ⚠️ SO IT IS DECLARED, NOT INSTALLED. `toolbarBackground` is part of this view's own
-        // configuration, which SwiftUI resolves while it is building the destination — before the
-        // animation, not during it. That is also literally what he asked for: native, and part of
-        // the page.
-        //
-        // ⚠️ AND IT DOES NOT REPLACE `applyBarAppearance`. SwiftUI exposes the background here and
-        // says nothing about the SHADOW, and the shadow is the hairline that drew the band he
-        // photographed in build 282. The bridge still clears that. The two are a pair: this one is
-        // about WHEN the material appears, that one is about what comes with it.
-        .toolbarBackground(.visible, for: .navigationBar)
+        // ⚠️ WHY THE 2026-09-16 REPORT ("the header opened transparent and snapped to glass late")
+        // WILL NOT COME BACK WITH THIS. That report was real, but its cause was never the missing
+        // material: the bar had no content scroll view to watch. The message list is a UIKit
+        // collection view hosted in a representable, and UIKit's own discovery (first subview of
+        // the page is a scroll view) does not see through SwiftUI's hosting view. With nothing to
+        // watch, the bar sat in its transparent scroll-edge state and only re-decided later.
+        // `MessageListController.registerAsContentScrollView()` now hands the collection view to
+        // the bar for the top edge, on itself and on the page directly under the navigation
+        // controller (the same shape `ChatListTable` uses), so the bar knows from the first frame
+        // whether content sits under it. A chat short enough that nothing reaches the bar stays
+        // clear; the reference behaves the same.
         .navigationBarTitleDisplayMode(.inline)
         // ⛔ NO `.toolbar` AND NO `.navigationBarBackButtonHidden` HERE ANY MORE — owner,
         // 2026-08-25. Both are set on the navigationItem from UIKit by `ChatNavigationItem`, the way

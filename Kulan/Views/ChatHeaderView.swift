@@ -100,10 +100,10 @@ final class ChatHeaderView: UIView {
 
     /// Kept so the glass-tracking handler can reach it; see init.
     private let textRows = UIStackView()
-    /// What the model said the backdrop is. `.unspecified` means "not known": no wallpaper, so the
-    /// glass probe below is allowed to decide. Anything else is a measured answer and the probe
-    /// must not overwrite it — see `WallpaperBlur.headerBackdrop`.
-    private var statedBackdrop: UIUserInterfaceStyle = .unspecified
+    /// True once the glass probe (see init) has resolved a light/dark style. Until then `configure`
+    /// seeds the measured answer from `WallpaperBlur.headerBackdrop` so the first frame reads
+    /// right; from then on the probe alone decides, as in the reference app.
+    private var probeHasDecided = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -180,10 +180,17 @@ final class ChatHeaderView: UIView {
         glassTrackingView.contentView.registerForTraitChanges(
             [UITraitUserInterfaceStyle.self],
             handler: { [weak self] (view: UIView, _) in
-                // The probe answers only when nothing measured has. On his phone it did not fire over
-                // a black wallpaper at all; where a wallpaper exists the model carries a measured
-                // answer, and this is the fallback for a chat drawn on the plain theme background.
-                guard let self, self.statedBackdrop == .unspecified else { return }
+                // ⛔ THE PROBE IS THE DECIDER, as in the reference app: whatever light/dark the glass
+                // resolves from what lies under the bar, the labels take, every time it fires.
+                // Until 2026-09-24 this handler yielded to the measured answer in `configure`,
+                // because on 2026-08-25 the probe did not fire over a black wallpaper. The reference
+                // app relies on the probe alone, so it decides here too, now that the bar is the
+                // bare system glass with the message list registered under it (see
+                // `ChatNavigationItem` and `MessageListController.registerAsContentScrollView`).
+                // `configure` still seeds the measured answer before the first resolution, so the
+                // name is readable on the first frame and stays so if the probe never speaks.
+                guard let self else { return }
+                self.probeHasDecided = true
                 self.textRows.overrideUserInterfaceStyle = view.traitCollection.userInterfaceStyle
             }
         )
@@ -206,9 +213,12 @@ final class ChatHeaderView: UIView {
         subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : .secondaryLabel
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
-        // The measured answer wins; `.unspecified` hands the decision back to the glass probe.
-        statedBackdrop = model.backdrop
-        if model.backdrop != .unspecified { textRows.overrideUserInterfaceStyle = model.backdrop }
+        // The measured answer is only the SEED for the first frame; once the glass probe has
+        // resolved (see init) it alone decides, and this line stops writing. `.unspecified` means
+        // no wallpaper, so the app's own appearance stands until the probe says otherwise.
+        if !probeHasDecided, model.backdrop != .unspecified {
+            textRows.overrideUserInterfaceStyle = model.backdrop
+        }
         // The timer glyph is a template so it re-resolves through `textRows`' style like the labels
         // do; a pre-tinted image would keep light-mode grey over a black wallpaper.
         secondaryIconView.tintColor = .secondaryLabel
@@ -247,8 +257,9 @@ struct ChatHeaderModel: Equatable {
     var titleIcon: UIImage?
     /// The disappearing-messages timer. See the file comment for why it is a second slot.
     var secondaryIcon: UIImage?
-    /// The interface style the text needs over the wallpaper under the bar, or `.unspecified` to let
-    /// the header's own glass probe decide. From `WallpaperBlur.headerBackdrop`.
+    /// The measured interface style of the wallpaper band under the bar, from
+    /// `WallpaperBlur.headerBackdrop`, or `.unspecified` when there is no wallpaper. The header uses
+    /// it only to seed the first frame; its own glass probe decides from then on.
     var backdrop: UIUserInterfaceStyle = .unspecified
 
     /// The verified mark drawn the way `VerifiedMark` draws it in SwiftUI — a palette seal, white

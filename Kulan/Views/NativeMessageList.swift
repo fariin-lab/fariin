@@ -3605,7 +3605,44 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // Registered once, not on every appearance (the `ChatListTable` rule): re-registering makes
+        // the bar re-decide standard vs scroll-edge while it is already animating a pop, a flicker
+        // for no gain. `didMove(toParent:)` does the real registration; this catches a parent chain
+        // that was not complete at that moment.
+        if collectionView.window == nil { registerAsContentScrollView() }
         isDisappearing = false
+    }
+
+    // ⛔ THE BAR WATCHES THIS LIST — owner, 2026-09-24, screenshot of the chat header: a full-width
+    // grey-to-purple wash with a hard bottom edge, where the reference app shows bare glass with a
+    // soft scroll-edge fade. The wash was a material forced onto the bar (`ThreadView`'s
+    // `.toolbarBackground(.visible)` plus per-item appearances in `ChatNavigationItem`), and it had
+    // been forced because of the 2026-09-16 report that the header opened clear and snapped to
+    // glass late. That lateness was THIS registration missing. A navigation bar decides its
+    // scroll-edge look by watching a scroll view; SwiftUI registers its own `List` for that, but
+    // this collection view lives in a representable, where UIKit's own discovery (first subview of
+    // the page) cannot see it through the hosting view. With nothing to watch, the bar sat on its
+    // clear state until something later made it re-decide.
+    //
+    // Same shape as `ChatListTableController.registerAsContentScrollView()`: the page the
+    // navigation controller consults is the one directly beneath it, the hosting controller SwiftUI
+    // made for `ThreadView`. Walk up to it and register there, and on this controller too in case
+    // the page forwards to its child. `.top` only: the bottom edge is our own composer, and its edge
+    // effect is hidden on his order (see `viewDidLoad`). Done at both moments the parent chain can
+    // complete, and idempotent, so twice costs nothing.
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        registerAsContentScrollView()
+    }
+
+    private func registerAsContentScrollView() {
+        guard isViewLoaded, let list = collectionView else { return }
+        setContentScrollView(list, for: .top)
+        var page: UIViewController = self
+        while let up = page.parent, !(up is UINavigationController), !(up is UITabBarController) {
+            page = up
+        }
+        if page !== self { page.setContentScrollView(list, for: .top) }
     }
 
     override func viewDidAppear(_ animated: Bool) {

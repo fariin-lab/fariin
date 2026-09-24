@@ -205,7 +205,7 @@ struct ChatNavigationItem: UIViewRepresentable {
                 target = vc
             }
             assertAll()
-            applyBarAppearance(on: vc)
+            // No bar appearance is applied here on purpose; see the note above `remove()`.
             guard observations.isEmpty else { return }
             let item = vc.navigationItem
             // Every property this bridge owns is watched. SwiftUI clears them on its own update
@@ -267,40 +267,36 @@ struct ChatNavigationItem: UIViewRepresentable {
             }
         }
 
-        // ⛔ THE BLUR ARRIVED LATE BECAUSE THE BAR COULD NOT DECIDE — his report, 2026-09-16: "chatlist
-        // to header when i click chat blur is coming late".
+        // ⛔ NO APPEARANCE OBJECTS ON THIS NAVIGATION ITEM — owner, 2026-09-24, screenshot of the
+        // chat header: a full-width grey-to-purple wash over the wallpaper with a hard bottom edge.
+        // That wash was the material this bridge used to set on `standardAppearance`,
+        // `scrollEdgeAppearance` and `compactAppearance` (`configureWithDefaultBackground()`, since
+        // 2026-09-16), doubled by `.toolbarBackground(.visible)` in `ThreadView` (since 2026-09-23).
+        // Both are gone, and the method that set them is gone with them.
         //
-        // ⚠️ IT WAS NEVER THE WRONG BLUR. He asked for the one Messages uses, and that is what this
-        // is: `configureWithDefaultBackground()` asks for the system's own material rather than
-        // describing one, which is exactly what nil-ing the appearances used to inherit. Only the
-        // TIMING was wrong.
+        // The reference app sets nothing at bar level on iOS 26: no `UINavigationBarAppearance`, no
+        // background, no shadow, no tint. The system draws the bare glass bar with its soft
+        // scroll-edge effect over the list, and the app installs only the title view and the two
+        // call items. A navigation item whose three appearances are nil asks for exactly that, so
+        // this bridge never writes them. The bar's per-item state on this screen is: none.
         //
-        // A navigation bar picks `scrollEdge` while its tracked scroll view is at the top and
-        // `standard` once content is under it, and the system default's `scrollEdge` is TRANSPARENT.
-        // This screen has no tracked scroll view to pick by — the message list is a UIKit collection
-        // view inside a representable, and `setContentScrollView` was tried, shipped and reported
-        // still wrong on the chat list for that same reason. So the bar opened on the transparent
-        // one and only swapped to the glass when something later made it re-decide. That is the
-        // lateness, and it is a decision the bar cannot make rather than a slow effect.
+        // ⚠️ THE 2026-09-16 REPORT ("chatlist to header when i click chat blur is coming late") was
+        // NOT caused by nil appearances. They were nil before that date too, the report came in,
+        // and the material was forced as the fix; so the real cause is written down here before
+        // they go nil a second time. A bar picks `scrollEdge` while
+        // its tracked scroll view is at the top and `standard` once content sits under it; the
+        // system's `scrollEdge` look is clear. This screen's list is a UIKit collection view inside
+        // a representable, and UIKit's own discovery (first subview of the page is a scroll view)
+        // does not see through SwiftUI's hosting view, so the bar had NO scroll view to watch, sat
+        // on the clear state, and re-decided late. Forcing the material hid that symptom and drew
+        // the band. `MessageListController.registerAsContentScrollView()` now hands the collection
+        // view to the bar for the top edge, on that controller and on the page directly under the
+        // navigation controller (the `ChatListTable` shape), so the bar decides on the first frame.
+        // If the header ever opens clear and snaps late again, look at that registration, not here.
         //
-        // The Chats list already solved this, and its `configureNavBar` says so in its own words:
-        // give BOTH appearances the same background and the bar looks right whichever it chooses.
-        // This is that, on this screen.
-        //
-        // ⛔ AND THE SHADOW IS WHY THE OLD NOTE SAID NEVER TO SET ONE. An override here drew the
-        // band he photographed in build 282 ("use 282") — that band is the bar's SHADOW, which the
-        // system default carries and which the Chats list clears on exactly these two lines. Cleared
-        // here too, so the band cannot come back with the material.
-        private func applyBarAppearance(on vc: UIViewController) {
-            let a = UINavigationBarAppearance()
-            a.configureWithDefaultBackground()
-            a.shadowColor = .clear
-            a.shadowImage = UIImage()
-            let item = vc.navigationItem
-            item.standardAppearance = a
-            item.scrollEdgeAppearance = a
-            item.compactAppearance = a
-        }
+        // The shadow hairline (the band of build 282) belonged to the default appearance that
+        // `configureWithDefaultBackground()` carried. With no appearance object there is no shadow
+        // to clear. This app is iOS 26 only, so there is no older branch to keep the material for.
 
         func remove() {
             observations.forEach { $0.invalidate() }
