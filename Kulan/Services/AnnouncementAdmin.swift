@@ -200,7 +200,7 @@ enum AnnouncementAdmin {
         /// The document every phone will read. Note what is NOT here: the chosen list. Writing user
         /// ids onto a document the whole world reads would publish exactly the thing a private send
         /// is meant to keep private.
-        func map(createdBy: String, editing: Bool) -> [String: Any] {
+        func map(createdBy: String, editing: Bool, publishNow: Bool) -> [String: Any] {
             var audienceMap = audience.asMap
             audienceMap["chosenCount"] = chosen.count
             if let minBuildOverride { audienceMap["minBuild"] = minBuildOverride }
@@ -211,15 +211,29 @@ enum AnnouncementAdmin {
                 "body": body.trimmingCharacters(in: .whitespacesAndNewlines),
                 "buttons": buttons.filter(\.isUsable).map(\.asMap),
                 "audience": audienceMap,
-                "publishAt": Timestamp(date: publishAt),
-                "deleted": false,
+                // 2026-09-24 decision D-admin-clock: a send-now takes the SERVER's time, not this
+                // phone's. A fast phone clock used to hide the announcement from every reader and
+                // push it to the 5-minute sweeper until real time caught up. A scheduled time is the
+                // admin's pick and stays as picked.
+                "publishAt": publishNow ? FieldValue.serverTimestamp() : Timestamp(date: publishAt),
             ]
+            // 2026-09-24 decision D-admin-resurrect: `deleted` is written on a NEW announcement only.
+            // An edit is a merge, and `deleted: false` in it silently undid a withdrawal made while
+            // the editor was open (on the shared record and on every recipient's copy). Withdrawing
+            // goes through `remove()` alone.
+            if !editing { m["deleted"] = false }
             if let mediaUrl { m["mediaUrl"] = mediaUrl }
             if let mediaWidth { m["mediaWidth"] = mediaWidth }
             if let mediaHeight { m["mediaHeight"] = mediaHeight }
             if let expiresAt { m["expiresAt"] = Timestamp(date: expiresAt) }
             if editing {
                 m["editedAt"] = FieldValue.serverTimestamp()
+                // 2026-09-24 decision D-admin-resurrect: an edit is a merge, so a field left out is a
+                // field KEPT. Removing the picture or the end date on an edit has to say so.
+                if mediaUrl == nil { m["mediaUrl"] = FieldValue.delete() }
+                if mediaWidth == nil { m["mediaWidth"] = FieldValue.delete() }
+                if mediaHeight == nil { m["mediaHeight"] = FieldValue.delete() }
+                if expiresAt == nil { m["expiresAt"] = FieldValue.delete() }
             } else {
                 m["createdBy"] = createdBy
                 m["createdAt"] = FieldValue.serverTimestamp()
@@ -260,21 +274,7 @@ enum AnnouncementAdmin {
     /// the history rather than lost.
     static func publish(_ draft: Draft, editing: Bool = false) async throws {
         guard let uid = AuthService.shared.uid else { throw AdminError.notAllowed("Sign in first.") }
-        let store = AdminStore.shared
-        guard store.can(.send) else { throw AdminError.notAllowed("You cannot send announcements.") }
-        if draft.isScheduled && !store.can(.schedule) {
-            throw AdminError.notAllowed("You cannot schedule announcements.")
-        }
-        if editing && !store.can(.edit) { throw AdminError.notAllowed("You cannot edit announcements.") }
-        if draft.kind == .security && !store.can(.security) {
-            throw AdminError.notAllowed("You cannot send security alerts.")
-        }
-        if draft.audience.scope == .countries && !store.can(.targetCountry) {
-            throw AdminError.notAllowed("You cannot choose countries.")
-        }
-        if draft.audience.scope == .chosen && !store.can(.targetChosen) {
-            throw AdminError.notAllowed("You cannot send to chosen people.")
-        }
+        try checkPermissions(draft, editing: editing)
 
         var draft = draft
         if let image = draft.image {
@@ -283,29 +283,47 @@ enum AnnouncementAdmin {
             draft.mediaWidth = w
             draft.mediaHeight = h
         }
+        // 2026-09-24 decision D-admin-recheck: checked again at write time. A demotion during the
+        // upload now fails here, before any document is touched, instead of at the rules.
+        try checkPermissions(draft, editing: editing)
 
-        let payload = draft.map(createdBy: uid, editing: editing)
+        // "Now" is the server's clock (see `Draft.map`). An edit keeps an announcement's original
+        // time unless the edit itself moved it to now (switching "Send later" off sets it to now).
+        let publishNow = !draft.isScheduled
+            && (!editing || draft.publishAt > Date().addingTimeInterval(-120))
+        let payload = draft.map(createdBy: uid, editing: editing, publishNow: publishNow)
         let home = collection(for: draft.audience.scope)
+        let homeRef = db.collection(home).document(draft.id)
 
-        guard draft.audience.scope == .chosen else {
-            try await db.collection(home).document(draft.id).setData(payload, merge: editing)
-            return
-        }
-
-        // The admin-only record, carrying the recipient list so this can be taken back later.
+        // The record. For a chosen send it is the admin-only record carrying the recipient list, so
+        // this can be taken back later, and a count of the copies written so far.
         var record = payload
-        record["recipients"] = draft.chosen.map(\.id)
-        try await db.collection(home).document(draft.id).setData(record, merge: editing)
+        if draft.audience.scope == .chosen {
+            record["recipients"] = draft.chosen.map(\.id)
+            record["deliveredCount"] = 0
+        }
+        try await writeGuarded(homeRef, record, editing: editing, kind: draft.kind,
+                               scope: draft.audience.scope, canSecurity: AdminStore.shared.can(.security))
+
+        guard draft.audience.scope == .chosen else { return }
 
         // The personal copies. `createdAt` cannot be a server timestamp on these: the phone sorts the
         // chat by it, and a pending server timestamp reads as nil, which would put a brand-new
         // announcement at the very bottom of the channel until the write came back. The recipient
         // list is stripped — nobody needs to know who else was sent this.
+        // 2026-09-24 decision D-admin-resurrect: an edit leaves `createdAt` alone (it used to re-date
+        // the message in every recipient's chat) and carries no `deleted` (see `Draft.map`), and the
+        // rules refuse an edit onto a withdrawn copy, so a withdrawal that lands mid-fan-out stops
+        // the edit instead of being undone by it.
         var copy = payload
-        copy["createdAt"] = Timestamp(date: Date())
-        copy["publishAt"] = Timestamp(date: draft.publishAt)
-        copy["createdBy"] = uid
+        if !editing {
+            copy["createdAt"] = Timestamp(date: Date())
+            copy["createdBy"] = uid
+        }
 
+        // 2026-09-24 decision D-admin-fanout: each batch also counts its copies onto the record, in
+        // the same commit, so a send that fails part way shows as "Partly sent" in the history
+        // instead of "Sent". Sending again (or Save on an edit) finishes it.
         for chunk in draft.chosen.chunked(into: 400) {
             let batch = db.batch()
             for person in chunk {
@@ -313,7 +331,74 @@ enum AnnouncementAdmin {
                     .collection("announcements").document(draft.id)
                 batch.setData(copy, forDocument: ref, merge: editing)
             }
+            batch.updateData(["deliveredCount": FieldValue.increment(Int64(chunk.count))], forDocument: homeRef)
             try await batch.commit()
+        }
+    }
+
+    /// Every permission a publish needs, from the live admin record.
+    private static func checkPermissions(_ draft: Draft, editing: Bool) throws {
+        let store = AdminStore.shared
+        guard store.can(.send) else { throw AdminError.notAllowed("You cannot send announcements.") }
+        if draft.isScheduled && !store.can(.schedule) {
+            throw AdminError.notAllowed("You cannot schedule announcements.")
+        }
+        if editing && !store.can(.edit) { throw AdminError.notAllowed("You cannot edit announcements.") }
+        // 2026-09-24 decision D-admin-security: an edit may KEEP a security alert's kind without the
+        // `security` permission (fixing a typo), never add or remove it. Which of those an edit is
+        // depends on the stored kind, so `writeGuarded` checks it against the server copy.
+        if draft.kind == .security && !store.can(.security) && !editing {
+            throw AdminError.notAllowed("You cannot send security alerts.")
+        }
+        if draft.audience.scope == .countries && !store.can(.targetCountry) {
+            throw AdminError.notAllowed("You cannot choose countries.")
+        }
+        if draft.audience.scope == .chosen && !store.can(.targetChosen) {
+            throw AdminError.notAllowed("You cannot send to chosen people.")
+        }
+    }
+
+    /// 2026-09-24 decision D-admin-resurrect: the record is written in a TRANSACTION that reads the
+    /// stored copy first. It was a blind `setData(merge:)`, so Save on an edit that had been open
+    /// while another admin withdrew the announcement brought it back for everybody. Now an edit
+    /// refuses when the stored announcement is withdrawn or gone, when it would change the audience
+    /// type, or when it would add or strip the Security kind without that permission. The rules
+    /// refuse the same three.
+    private static func writeGuarded(_ ref: DocumentReference, _ data: [String: Any], editing: Bool,
+                                     kind: AnnouncementKind, scope: AnnouncementAudience.Scope,
+                                     canSecurity: Bool) async throws {
+        func refusal(_ why: String) -> NSError {
+            NSError(domain: "Fariin", code: 409, userInfo: [NSLocalizedDescriptionKey: why])
+        }
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            db.runTransaction({ txn, errPtr -> Any? in
+                let snap: DocumentSnapshot
+                do { snap = try txn.getDocument(ref) } catch {
+                    errPtr?.pointee = error as NSError
+                    return nil
+                }
+                let stored = snap.data()
+                let withdrawn = stored?["deleted"] as? Bool == true
+                if withdrawn || (editing && stored == nil) {
+                    errPtr?.pointee = refusal("This announcement has been taken back. It no longer shows in anybody's chat.")
+                    return nil
+                }
+                if editing, let stored {
+                    let was = Announcement(id: ref.documentID, data: stored)
+                    if was.audience.scope != scope {
+                        errPtr?.pointee = refusal("Who an announcement goes to cannot be changed after it is sent.")
+                        return nil
+                    }
+                    if (was.kind == .security) != (kind == .security) && !canSecurity {
+                        errPtr?.pointee = refusal("You cannot send security alerts.")
+                        return nil
+                    }
+                }
+                txn.setData(data, forDocument: ref, merge: editing)
+                return nil
+            }, completion: { _, error in
+                if let error { cont.resume(throwing: error) } else { cont.resume() }
+            })
         }
     }
 
@@ -350,7 +435,12 @@ enum AnnouncementAdmin {
         guard let jpeg = bounded.jpegData(compressionQuality: 0.85) else {
             throw AdminError.notAllowed("That picture could not be prepared.")
         }
-        let ref = Storage.storage().reference().child("announcements/\(announcementId)/image.jpg")
+        // 2026-09-24 decision D-admin-media: a NEW file per upload. The fixed `image.jpg` meant a
+        // picture change on a live announcement replaced what its url served before the edit was
+        // saved (and the create-only storage rule refused the replacement anyway). The old file stays
+        // until the saved edit points away from it.
+        let version = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        let ref = Storage.storage().reference().child("announcements/\(announcementId)/image-\(version).jpg")
         let meta = StorageMetadata()
         meta.contentType = "image/jpeg"
         _ = try await ref.putDataAsync(jpeg, metadata: meta)

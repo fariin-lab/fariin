@@ -23,6 +23,13 @@ import FirebaseFirestore
 enum VerificationAdmin {
     private static var db: Firestore { Firestore.firestore() }
 
+    /// 2026-09-24 decision D-verify-txn: carries a refusal out of the transaction block as the typed
+    /// error the screen matches on (an error set through the block's NSError pointer is not).
+    private final class VerifyTxnOutcome: @unchecked Sendable {
+        var refusal: VerifyError?
+        var seen: Verification?
+    }
+
     enum VerifyError: LocalizedError {
         case notAllowed
         case noSuchPeer
@@ -166,21 +173,105 @@ enum VerificationAdmin {
         guard let adminUid = AuthService.shared.uid else { throw VerifyError.notSignedIn }
 
         let peerDoc = db.collection(peer.kind.collection).document(peer.id)
-        // From the SERVER, not the cache: the check below is only worth anything against the live value.
-        let existing = try await peerDoc.getDocument(source: .server)
-        guard existing.exists else { throw VerifyError.noSuchPeer }
-
-        let before = Verification((existing.data()?["verification"] as? [String: Any]))
-        // The screen chose this action from what IT last saw (`expectedStatus`, nil = no record).
-        // Audit 2026-09-24: when another admin had acted in between, this went ahead anyway, e.g. a
-        // second "Verify" over an existing grant, re-stamping the approved name. Refuse, and hand the
-        // real value to the index so the screen can redraw from it.
-        guard before?.status == expectedStatus else {
-            VerificationIndex.record(peer, before)
-            throw VerifyError.changedElsewhere
-        }
         let now = Date().timeIntervalSince1970 * 1000
         let adminHandle = AdminStore.shared.me?.handle ?? ""
+        // Fixed outside the transaction so a retried attempt writes the SAME audit entry, not a second.
+        let caseRef = db.collection("verifications").document(peer.key)
+        let auditRef = db.collection("verificationAudit").document(UUID().uuidString.lowercased())
+
+        // 2026-09-24 decision D-verify-txn: read, compare and write in ONE transaction. It was a server
+        // read followed by a separate batch, so two admins acting within one round trip both passed
+        // the `expectedStatus` check and the second silently overwrote the first. Now the second
+        // attempt is retried against the first one's result and refused as "changed elsewhere".
+        let outcome = VerifyTxnOutcome()
+        let written: [String: Any]
+        do {
+          written = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: Any], Error>) in
+            db.runTransaction({ txn, errPtr -> Any? in
+                outcome.refusal = nil   // a retried attempt starts clean
+                outcome.seen = nil
+                let existing: DocumentSnapshot
+                do { existing = try txn.getDocument(peerDoc) } catch {
+                    errPtr?.pointee = error as NSError
+                    return nil
+                }
+                guard existing.exists else {
+                    outcome.refusal = .noSuchPeer
+                    errPtr?.pointee = NSError(domain: "Fariin", code: 404)
+                    return nil
+                }
+                let before = Verification((existing.data()?["verification"] as? [String: Any]))
+                // The screen chose this action from what IT last saw (`expectedStatus`, nil = no
+                // record). Audit 2026-09-24: when another admin had acted in between, this went ahead
+                // anyway, e.g. a second "Verify" over an existing grant, re-stamping the approved
+                // name. Refuse, and hand the real value to the index so the screen can redraw from it.
+                guard before?.status == expectedStatus else {
+                    outcome.refusal = .changedElsewhere
+                    outcome.seen = before
+                    errPtr?.pointee = NSError(domain: "Fariin", code: 409)
+                    return nil
+                }
+                let mark = VerificationAdmin.markFor(action, before: before, status: status, kind: kind,
+                                   adminUid: adminUid, now: now, peerName: peerName, peerHandle: peerHandle)
+                txn.updateData(["verification": mark], forDocument: peerDoc)
+
+                // THE CASE FILE.
+                txn.setData([
+                    "peerKey": peer.key,
+                    "reason": reason,
+                    "updatedBy": adminUid,
+                    "updatedAt": now,
+                ], forDocument: caseRef, merge: true)
+
+                // THE TRAIL.
+                txn.setData([
+                    "peerKey": peer.key,
+                    "action": action.rawValue,
+                    "fromStatus": before?.status.rawValue ?? "",
+                    "toStatus": status.rawValue,
+                    "type": kind?.rawValue ?? "",
+                    "reason": reason,
+                    "adminUid": adminUid,
+                    "adminHandle": adminHandle,
+                    "peerName": peerName,
+                    "peerHandle": peerHandle,
+                    "at": now,
+                ], forDocument: auditRef)
+                return mark
+            }, completion: { result, error in
+                if let refusal = outcome.refusal {
+                    cont.resume(throwing: refusal)
+                } else if let error {
+                    cont.resume(throwing: error)
+                } else {
+                    cont.resume(returning: result as? [String: Any] ?? [:])
+                }
+            })
+        }
+        } catch {
+            if outcome.refusal == .changedElsewhere { VerificationIndex.record(peer, outcome.seen) }
+            throw error
+        }
+
+        // Reflect it locally at once. The peer's own listener will deliver the same value moments
+        // later; this is so the admin sees the badge change on the row they just acted on rather
+        // than wondering whether it worked.
+        //
+        // Parsed back out of the EXACT map that was just written, through the same reader every
+        // other screen uses. Rebuilding it field by field here would be a second set of rules that
+        // starts out looking identical and drifts, and a mirror that disagrees with what was stored
+        // is worse than no mirror: the admin sees one thing, the next reader sees another, and
+        // nothing on screen says which is real.
+        let applied = Verification(written)
+        VerificationIndex.record(peer, applied)
+    }
+
+    /// The verification map an action writes, from what was stored before it. 2026-09-24 decision
+    /// D-verify-txn: moved out of `apply` unchanged so the transaction can build it from the value
+    /// it read.
+    private static func markFor(_ action: Action, before: Verification?, status: Verification.Status,
+                                kind: Verification.Kind?, adminUid: String, now: Double,
+                                peerName: String, peerHandle: String) -> [String: Any] {
 
         // THE MARK. `isVerified` is written alongside `status` even though it is derivable, because it
         // is the field the rules and any future server-side query can read without parsing a string.
@@ -219,46 +310,7 @@ enum VerificationAdmin {
             mark["verifiedName"] = before?.verifiedName ?? ""
             mark["verifiedHandle"] = before?.verifiedHandle ?? ""
         }
-
-        let batch = db.batch()
-        batch.updateData(["verification": mark], forDocument: peerDoc)
-
-        // THE CASE FILE.
-        batch.setData([
-            "peerKey": peer.key,
-            "reason": reason,
-            "updatedBy": adminUid,
-            "updatedAt": now,
-        ], forDocument: db.collection("verifications").document(peer.key), merge: true)
-
-        // THE TRAIL. Its id is generated here rather than by the server so the batch stays a batch.
-        batch.setData([
-            "peerKey": peer.key,
-            "action": action.rawValue,
-            "fromStatus": before?.status.rawValue ?? "",
-            "toStatus": status.rawValue,
-            "type": kind?.rawValue ?? "",
-            "reason": reason,
-            "adminUid": adminUid,
-            "adminHandle": adminHandle,
-            "peerName": peerName,
-            "peerHandle": peerHandle,
-            "at": now,
-        ], forDocument: db.collection("verificationAudit").document(UUID().uuidString.lowercased()))
-
-        try await batch.commit()
-
-        // Reflect it locally at once. The peer's own listener will deliver the same value moments
-        // later; this is so the admin sees the badge change on the row they just acted on rather
-        // than wondering whether it worked.
-        //
-        // Parsed back out of the EXACT map that was just written, through the same reader every
-        // other screen uses. Rebuilding it field by field here would be a second set of rules that
-        // starts out looking identical and drifts, and a mirror that disagrees with what was stored
-        // is worse than no mirror: the admin sees one thing, the next reader sees another, and
-        // nothing on screen says which is real.
-        let applied = Verification(mark)
-        VerificationIndex.record(peer, applied)
+        return mark
     }
 
     /// A note with no change of state. Sometimes the useful thing to record is that somebody looked

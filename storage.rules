@@ -194,7 +194,9 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024
         && resource == null                                    // create-only: no overwriting a live announcement's picture
         && request.resource.contentType.matches('image/.*')    // images only — not an arbitrary file host
-        && file == 'image.jpg';                                // fixed filename — no arbitrary sub-paths
+        // 2026-09-24 decision D-admin-media: one new file per upload (image-<32 hex>.jpg) so a picture
+        // edit never replaces what a live announcement shows. Still one flat, named file per upload.
+        && file.matches('image(-[a-f0-9]{32})?[.]jpg');        // no arbitrary sub-paths
       allow delete: if false;
     }
   }

@@ -152,6 +152,7 @@ struct VerificationDetailView: View {
     @State private var working = false
     @State private var failure: String?
     @State private var confirmingWithdraw = false
+    @State private var confirmingSuspend = false   // 2026-09-24 decision D-verify-suspend
     @State private var current: Verification?
     @Environment(\.dismiss) private var dismiss
 
@@ -232,8 +233,10 @@ struct VerificationDetailView: View {
                     }
                     .disabled(!canSubmit || current?.kind == kind)
 
+                    // 2026-09-24 decision D-verify-suspend: confirmed like Remove. It hides a live
+                    // badge just as Remove does, and used to fire on one tap.
                     Button {
-                        act(.suspended, status: .suspended)
+                        confirmingSuspend = true
                     } label: {
                         Label("Suspend while reviewing", systemImage: "pause.circle")
                     }
@@ -246,6 +249,14 @@ struct VerificationDetailView: View {
                     }
                     .disabled(!canSubmit)
                 }
+                // 2026-09-24 decision D-verify-note: "looked, did nothing" gets written down too. The
+                // service had `addNote` and nothing called it. Uses the same reason field.
+                Button {
+                    addNote()
+                } label: {
+                    Label("Save as a note", systemImage: "note.text")
+                }
+                .disabled(!canSubmit)
             } footer: {
                 if isVerified {
                     Text("Suspending hides the badge and keeps the record and its history. Removing does the same and marks it withdrawn — neither ever deletes anything.")
@@ -286,6 +297,12 @@ struct VerificationDetailView: View {
         } message: {
             Text("The badge disappears everywhere. The record and its history are kept.")
         }
+        .alert("Suspend while reviewing?", isPresented: $confirmingSuspend) {
+            Button("Suspend while reviewing", role: .destructive) { act(.suspended, status: .suspended) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The badge disappears everywhere. The record and its history are kept.")
+        }
         .task { await load() }
     }
 
@@ -301,6 +318,26 @@ struct VerificationDetailView: View {
             history = try await VerificationAdmin.history(for: found.peer)
         } catch {
             failure = error.localizedDescription
+        }
+    }
+
+    /// 2026-09-24 decision D-verify-note: writes the reason field as the case note plus an audit entry.
+    private func addNote() {
+        guard !working else { return }
+        let note = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        working = true
+        failure = nil
+        Task {
+            do {
+                try await VerificationAdmin.addNote(note, to: found.peer,
+                                                    peerName: found.name, peerHandle: found.handle)
+                reason = ""
+                caseFile.notes = note
+                history = (try? await VerificationAdmin.history(for: found.peer)) ?? history
+            } catch {
+                failure = error.localizedDescription
+            }
+            working = false
         }
     }
 

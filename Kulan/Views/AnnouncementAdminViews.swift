@@ -102,6 +102,9 @@ private struct AnnouncementHistoryRow: View {
 
     private var status: (String, Color) {
         if announcement.deleted { return ("Deleted", .red) }
+        // 2026-09-24 decision D-admin-fanout: some private copies were never written. Open it and
+        // Save (or send again) to finish.
+        if announcement.isPartlyDelivered { return ("Partly sent", .orange) }
         if announcement.publishAt > Date() { return ("Scheduled", .orange) }
         if let e = announcement.expiresAt, e <= Date() { return ("Expired", .secondary) }
         return ("Sent", .green)
@@ -279,10 +282,13 @@ struct AnnouncementComposeView: View {
     @State private var sending = false
     @State private var error: String?
     @State private var confirmSend = false
+    /// 2026-09-24 decision D-admin-security: set once, from the announcement as it was opened.
+    private let kindLocked: Bool
 
     init(draft: AnnouncementAdmin.Draft, editing: Bool = false, onDone: @escaping () -> Void) {
         _draft = State(initialValue: draft)
         self.editing = editing
+        self.kindLocked = editing && draft.kind == .security && !AdminStore.shared.can(.security)
         self.onDone = onDone
         _scheduleOn = State(initialValue: draft.publishAt.timeIntervalSinceNow > 60)
         _expiryOn = State(initialValue: draft.expiresAt != nil)
@@ -309,14 +315,11 @@ struct AnnouncementComposeView: View {
         NavigationStack {
             List {
                 Section("Preview") {
-                    // The picked-but-not-yet-uploaded picture cannot come from a url, so it is drawn
-                    // here above the bubble rather than inside it. Everything else is the real thing.
-                    if let image = draft.image {
-                        Image(uiImage: image).resizable().scaledToFit()
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
+                    // 2026-09-24 decision D-admin-preview: the picked-but-not-yet-uploaded picture
+                    // goes INSIDE the bubble, as it will be sent, not above it as a second shape.
                     AnnouncementRow(announcement: previewAnnouncement, dark: scheme == .dark,
-                                    onImageTap: { _ in }, onButtonTap: { _ in })
+                                    onImageTap: { _ in }, onButtonTap: { _ in },
+                                    localImage: draft.image)
                         .allowsHitTesting(false)
                         .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
                 }
@@ -325,11 +328,15 @@ struct AnnouncementComposeView: View {
                     Picker("Type", selection: $draft.kind) {
                         // Security is simply not offered to an admin who may not send one, rather
                         // than offered and refused later. The rules refuse it too.
-                        ForEach(AnnouncementKind.allCases.filter { $0 != .security || admin.can(.security) }) { k in
+                        ForEach(AnnouncementKind.allCases.filter { $0 != .security || admin.can(.security) || kindLocked }) { k in
                             Label(k.label, systemImage: k.icon).tag(k)
                         }
                     }
                     .pickerStyle(.menu)
+                    // 2026-09-24 decision D-admin-security: editing a security alert without the
+                    // `security` permission keeps its kind, shown and locked. The option used to be
+                    // missing, so Save either failed or the alert was quietly turned into news.
+                    .disabled(kindLocked)
                 }
 
                 Section("Message") {
@@ -359,7 +366,8 @@ struct AnnouncementComposeView: View {
 
                 Section {
                     NavigationLink {
-                        AnnouncementAudienceView(audience: $draft.audience, chosen: $draft.chosen)
+                        AnnouncementAudienceView(audience: $draft.audience, chosen: $draft.chosen,
+                                                 scopeLocked: editing)
                     } label: {
                         HStack {
                             Text("Send to")
@@ -525,21 +533,25 @@ struct AnnouncementComposeView: View {
 
     private var confirmTitle: String {
         if editing { return "Save changes?" }
-        return draft.isScheduled ? "Schedule this announcement?" : "Send to \(audienceLabel.lowercased())?"
+        // 2026-09-24 decision D-admin-confirm: a scheduled send names its audience too; it used to
+        // drop every word about who it goes to.
+        return draft.isScheduled ? "Schedule for \(audienceLabel.lowercased())?" : "Send to \(audienceLabel.lowercased())?"
     }
 
     private var confirmMessage: String {
         if editing {
             return "Phones that already have this announcement will show the new words."
         }
-        if draft.isScheduled {
-            return "It will appear at \(draft.publishAt.formatted(date: .abbreviated, time: .shortened))."
-        }
+        let who: String
         switch draft.audience.scope {
-        case .everyone:  return "This goes to everybody using Fariin. It cannot be unsent, only deleted afterwards."
-        case .countries: return "This goes to \(draft.audience.summary). It cannot be unsent, only deleted afterwards."
-        case .chosen:    return "This goes to \(draft.chosen.count) \(draft.chosen.count == 1 ? "person" : "people")."
+        case .everyone:  who = "This goes to everybody using Fariin. It cannot be unsent, only deleted afterwards."
+        case .countries: who = "This goes to \(draft.audience.summary). It cannot be unsent, only deleted afterwards."
+        case .chosen:    who = "This goes to \(draft.chosen.count) \(draft.chosen.count == 1 ? "person" : "people")."
         }
+        if draft.isScheduled {
+            return "It will appear at \(draft.publishAt.formatted(date: .abbreviated, time: .shortened)). \(who)"
+        }
+        return who
     }
 
     // MARK: Doing it
@@ -559,6 +571,12 @@ struct AnnouncementComposeView: View {
 
     private func send() {
         guard !sending else { return }   // one publish per draft, even if the confirm fires twice
+        // 2026-09-24 decision D-admin-offline: say so at once, in the app's usual words, instead of
+        // a spinner that waits on a write that cannot land.
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
         sending = true
         Task {
             do {
@@ -644,10 +662,15 @@ private struct AnnouncementAudienceView: View {
     @State private var results: [UserProfile] = []
     @State private var searching = false
     @State private var countrySearch = ""
+    /// 2026-09-24 decision D-admin-audience: on an edit the audience TYPE is fixed. Each type lives
+    /// in a different place (a chosen send is private, a broadcast is world-readable), so switching
+    /// it on an edit wrote a second copy instead of moving the first. The rules refuse it too.
+    private let scopeLocked: Bool
 
-    init(audience: Binding<AnnouncementAudience>, chosen: Binding<[UserProfile]>) {
+    init(audience: Binding<AnnouncementAudience>, chosen: Binding<[UserProfile]>, scopeLocked: Bool = false) {
         _audience = audience
         _chosen = chosen
+        self.scopeLocked = scopeLocked
     }
 
     /// A struct rather than a tuple because Swift has no key paths into tuple elements, and `ForEach`
@@ -692,7 +715,7 @@ private struct AnnouncementAudienceView: View {
                             }
                         }
                     }
-                    .disabled(!allowed(scope))
+                    .disabled(!allowed(scope) || (scopeLocked && scope != audience.scope))
                 }
             } footer: {
                 if !admin.can(.targetCountry) || !admin.can(.targetChosen) {
@@ -734,6 +757,11 @@ private struct AnnouncementAudienceView: View {
                         .autocorrectionDisabled()
                         .onChange(of: search) { _, q in runSearch(q) }
                     if searching { ProgressView() }
+                    // 2026-09-24 decision D-admin-search: the verification search's own line, so a
+                    // search that found nobody is not a blank list.
+                    if !searching && results.isEmpty && search.trimmingCharacters(in: .whitespaces).count >= 2 {
+                        Text("Nobody found.").foregroundStyle(.secondary)
+                    }
                     ForEach(results) { person in
                         Button {
                             toggle(person)
@@ -1104,6 +1132,9 @@ private struct AppStoreLinkView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    // 2026-09-24 decision D-admin-saved: "Saved" is about the text on screen; an
+                    // unsaved change clears it.
+                    .onChange(of: url) { _, _ in saved = false }
             } footer: {
                 Text("Fariin is not on the App Store yet, so this cannot be built into the app. Set it once the app is published and every \"Update Now\" button will work from then on.")
             }

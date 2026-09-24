@@ -28,6 +28,15 @@ struct OfficialChatView: View {
 
     var body: some View {
         list
+            // 2026-09-24 decision D-admin-loading: a spinner until the channel's listeners have all
+            // answered, then the chat list's own empty line. Both used to be the same blank screen.
+            .overlay {
+                if !store.hasLoaded {
+                    ProgressView()
+                } else if store.visible.isEmpty {
+                    Text("No messages yet").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
             .background {
                 ChatWallpaperBackground(cid: OfficialChannel.cid)
                     .overlay { WallpaperAnchor(cid: OfficialChannel.cid) }   // the slices' reference — see WallpaperBlur
@@ -123,7 +132,8 @@ struct OfficialChatView: View {
     /// Changes that must redraw a row. Edited announcements are the reason this exists — an admin
     /// fixing a typo has to reach a phone that already has the old words on screen.
     private func signature(_ a: Announcement) -> String {
-        "\(a.title.count)|\(a.body.count)|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)"
+        // `hasAppStoreUrl`: the Update Link arriving shows the hidden "Update Now" (D-admin-update).
+        "\(a.title.count)|\(a.body.count)|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)"
     }
 
     private static let cal = Calendar.current
@@ -380,6 +390,9 @@ struct AnnouncementRow: View {
     /// and place that is not the window's, and a slice there would show the wrong piece of it, so
     /// they leave this nil and take the material approximation instead.
     var wallpaperBlur: WallpaperBlurState? = nil
+    /// 2026-09-24 decision D-admin-preview: the compose preview's picked picture, drawn inside the
+    /// bubble exactly where the uploaded one will be (it used to sit above it as a separate shape).
+    var localImage: UIImage? = nil
 
     /// Received-side cluster geometry, matching a normal chat bubble: 18pt outer corners, and the
     /// small 6pt corner is the one that fuses a run together. Every announcement stands alone, so
@@ -388,12 +401,19 @@ struct AnnouncementRow: View {
         RectangleCornerRadii(topLeading: 18, bottomLeading: 18, bottomTrailing: 18, topTrailing: 18)
     }
 
-    private var usableButtons: [AnnouncementButton] { announcement.buttons.filter(\.isUsable) }
+    /// 2026-09-24 decision D-admin-update: "Update Now" is hidden while the owner has not set the
+    /// Update Link. It used to show and do nothing when tapped.
+    private var usableButtons: [AnnouncementButton] {
+        announcement.buttons.filter { $0.isUsable && ($0.action != .appStore || OfficialConfig.shared.hasAppStoreUrl) }
+    }
 
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 0) {
-                if let url = announcement.mediaUrl {
+                if let localImage {
+                    AnnouncementImage(url: "", width: announcement.mediaWidth,
+                                      height: announcement.mediaHeight, local: localImage)
+                } else if let url = announcement.mediaUrl {
                     AnnouncementImage(url: url,
                                       width: announcement.mediaWidth,
                                       height: announcement.mediaHeight)
@@ -498,6 +518,8 @@ private struct AnnouncementImage: View {
     let url: String
     var width: Double?
     var height: Double?
+    /// 2026-09-24 decision D-admin-preview: a picked, not-yet-uploaded picture (compose preview).
+    var local: UIImage? = nil
 
     @State private var image: UIImage?
 
@@ -523,7 +545,7 @@ private struct AnnouncementImage: View {
 
     var body: some View {
         ZStack {
-            if let image {
+            if let image = local ?? image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 Rectangle().fill(.quaternary)
@@ -533,6 +555,7 @@ private struct AnnouncementImage: View {
         .aspectRatio(ratio, contentMode: .fit)
         .clipped()
         .task(id: url) {
+            if local != nil { return }   // the compose preview's picked picture, nothing to fetch
             if let cached = DiskImageCache.shared.memoryImage(for: url) { image = cached; return }
             if let onDisk = await DiskImageCache.shared.image(for: url) { image = onDisk; return }
             // ⚠️ NOBODY WAS EVER GOING TO PUT IT IN THE CACHE. This asked memory, then disk, and

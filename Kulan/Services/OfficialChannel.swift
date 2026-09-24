@@ -280,6 +280,15 @@ struct Announcement: Identifiable, Equatable {
     /// on anything a phone can read, and it exists for one reason: taking the announcement back. A
     /// withdrawal has to reach every private copy, and without the list there is nothing to reach.
     var recipients: [String] = []
+    /// 2026-09-24 decision D-admin-fanout: how many private copies of a chosen send are known to
+    /// have been written. Admin-only record. Nil on records older than this field: read as complete.
+    var deliveredCount: Int?
+
+    /// A chosen send whose private copies did not all get written (a batch failed part way).
+    var isPartlyDelivered: Bool {
+        guard let deliveredCount, audience.scope == .chosen else { return false }
+        return deliveredCount < recipients.count
+    }
 
     init(id: String, data: [String: Any], personal: Bool = false) {
         self.id = id
@@ -299,6 +308,7 @@ struct Announcement: Identifiable, Equatable {
         self.createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date.distantPast
         self.isPersonal = personal
         self.recipients = data["recipients"] as? [String] ?? []
+        self.deliveredCount = (data["deliveredCount"] as? NSNumber)?.intValue
     }
 
     /// One-line version for the chat list. Deliberately the TITLE, not the body: a release note opens
