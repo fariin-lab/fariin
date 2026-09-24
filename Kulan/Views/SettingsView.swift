@@ -657,6 +657,9 @@ struct AccountSettingsView: View {
                     // Same reason it is awaited: dropping our own row in Settings › Devices needs
                     // auth, and leaving it behind would show this phone as still signed in.
                     await DeviceRegistry.shared.removeThisDevice()
+                    // Offline presence also needs auth, so it goes before signOut. Without it a
+                    // signed-out account showed "online" to its contacts indefinitely (2026-09-24 audit).
+                    await PresenceService.set(online: false)
                     // Deliberately NOT bounded by a timeout. Leaving early to feel faster would put
                     // back the bug `Push.unregister`'s retry exists to fix: tokens left under the
                     // signed-out account keep ringing this phone and showing its notifications.

@@ -13,6 +13,13 @@ enum SessionWipe {
         // the audio, the call record and CallKit running under nobody.
         if CallService.shared.state != .idle { CallService.shared.hangUp() }
         InAppNotify.shared.reset()
+        // The previous account's imported wallpaper photos, per-chat wallpapers and custom colours
+        // showed in the next account's pickers (2026-09-24 audit).
+        WallpaperStore.shared.reset()
+        ChatColorStore.shared.reset()
+        // Save to Photos and its saved-list are this account's choice, not the phone's.
+        UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey)
+        UserDefaults.standard.removeObject(forKey: AutoSaveToPhotos.defaultsKey + ".done")
         ChatService.clearSharedMediaCache()
         ConversationsRepository.shared.reset()
         StoriesRepository.shared.reset()
