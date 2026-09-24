@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import FirebaseStorage
+import Photos   // 2026-09-24 decision D16: Save to Photos
 
 // Full-screen player for an E2EE video message — the delivery half of the mailman model:
 // play from the device copy if we have one; otherwise download the ciphertext, decrypt,
@@ -19,6 +20,16 @@ struct VideoPlayerScreen: View {
     var clipProvider: () -> CGRect? = { nil }
     // Which screen's tile registry to land on — ids are shared across screens, scopes are not.
     var rectScope: MediaOpenRects.Scope = .chat
+    // 2026-09-24 decision D16: Share / Save / Forward / Delete, like the photo viewer. Delete-for-me
+    // is wired by the conversation (same meaning as ImageViewerView.onDeleteForMe); nil elsewhere,
+    // where a received video falls back to the plain local hide, exactly as the photo viewer does.
+    var onDeleteForMe: ((Message) -> Void)? = nil
+    @State private var shareItems: [Any]?
+    @State private var saveError = false
+    @State private var confirmDelete = false
+    @State private var deleteFailed = false
+    @State private var forwarding: Message?
+    private var isMine: Bool { message.authorId == AuthService.shared.uid }
     // (A second, SwiftUI open/close animation used to live here alongside the UIKit one. It is gone —
     // see the note in ImageViewerView. One pipeline owns both directions for photo and video alike.)
 
@@ -118,6 +129,64 @@ struct VideoPlayerScreen: View {
         // is gone). If its landing never completes it is left in the window, drawn over the
         // conversation — see `sweepOrphanedFlights`.
         .onDisappear { cleanup(); MediaPresentGate.noteClosed(); MediaDismissHost.scheduleOrphanSweep() }
+        // 2026-09-24 decision D16: the photo viewer's alerts and sheets, video wording.
+        .alert("Couldn't save video", isPresented: $saveError) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Check Photos permission and try again.") }
+        .alert("Couldn't delete for everyone", isPresented: $deleteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The server refused the delete. The video is still there for both of you.")
+        }
+        .alert("Delete this video?", isPresented: $confirmDelete) {
+            if isMine {
+                Button("Delete for Everyone", role: .destructive) {
+                    Task {
+                        if await ChatService.deleteMessage(cid: cid, messageId: message.id) {
+                            await MainActor.run { dismiss() }
+                        } else {
+                            await MainActor.run { deleteFailed = true }
+                        }
+                    }
+                }
+            }
+            if let onDeleteForMe {
+                Button("Delete for Me", role: .destructive) { onDeleteForMe(message); dismiss() }
+            } else if !isMine {
+                Button("Delete for Me", role: .destructive) { HiddenMessages.hide(message.id); dismiss() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
+            if let items = shareItems { ActivityView(items: items) }
+        }
+        .sheet(item: $forwarding) { m in ForwardPicker(message: m, sourceCid: cid) }
+    }
+
+    // 2026-09-24 decision D16: the decrypted clip on this device (VideoCache, or the sender's own
+    // not-yet-uploaded file). Nil while it is still downloading; Share then does nothing and Save
+    // says it could not, the same as the photo viewer on a photo that has not loaded.
+    private var localVideoURL: URL? {
+        VideoCache.url(for: message.id) ?? message.localMediaURL.map { URL(fileURLWithPath: $0) }
+    }
+
+    private func share() {
+        guard let url = localVideoURL else { return }
+        shareItems = [url]
+    }
+
+    private func save() {
+        Task {
+            guard let url = localVideoURL else { await MainActor.run { saveError = true }; return }
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    _ = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                }
+                await MainActor.run { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+            } catch { await MainActor.run { saveError = true } }
+        }
     }
 
     /// The still the transition flies. the reference app flies a poster frame for video too — never a player
@@ -215,6 +284,20 @@ struct VideoPlayerScreen: View {
             }
             .buttonStyle(.plain)
             Spacer()
+            // 2026-09-24 decision D16: the photo viewer's actions, in its header-menu idiom.
+            Menu {
+                Button { share() } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
+                if message.sendState == nil, !message.deleted, !message.viewOnce {
+                    Button { forwarding = message } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
+                }
+                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
         }
         .padding(.horizontal, 14).padding(.top, 6)
         .transition(.move(edge: .top).combined(with: .opacity))

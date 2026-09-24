@@ -6,6 +6,22 @@ import SwiftUI
 // and Use Less Data for calls (REAL — caps the call bitrate). The Manage Storage page
 // shows true on-device numbers with honest clear buttons.
 
+/// 2026-09-24 decision D17: the most recent change to a temp item. For a folder that is the newest
+/// file anywhere inside it, since writing a nested file does not always touch the folder's own date.
+/// An item whose date cannot be read counts as brand new, so doubt keeps a file rather than losing it.
+fileprivate func tempNewestChange(_ url: URL, _ fm: FileManager) -> Date {
+    let keys: Set<URLResourceKey> = [.contentModificationDateKey, .creationDateKey, .isDirectoryKey]
+    guard let v = try? url.resourceValues(forKeys: keys) else { return .distantFuture }
+    var newest = max(v.contentModificationDate ?? .distantFuture, v.creationDate ?? .distantPast)
+    if v.isDirectory == true, let en = fm.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
+        for case let f as URL in en {
+            guard let fv = try? f.resourceValues(forKeys: keys) else { return .distantFuture }
+            newest = max(newest, fv.contentModificationDate ?? .distantFuture, fv.creationDate ?? .distantPast)
+        }
+    }
+    return newest
+}
+
 struct StorageDataView: View {
     @AppStorage("autodl.photos") private var pPhotos = AutoDownloadPrefs.Kind.photos.defaultPolicy
     @AppStorage("autodl.videos") private var pVideos = AutoDownloadPrefs.Kind.videos.defaultPolicy
@@ -311,12 +327,32 @@ struct ManageStoragePage: View {
             Button("Cancel", role: .cancel) {}
             Button("Clear", role: .destructive) {
                 DiskImageCache.shared.clear()
+                // 2026-09-24 decision D17: Clear Cache never deletes temp files younger than 1 hour
+                // or in use by an upload, transcode or recording. It used to empty the whole temp
+                // folder, which took the staged file out from under a send in progress, a clip
+                // being transcoded, a voice note being recorded, and a failed send's retry payload.
+                // Read here, on the main actor, because MediaSend lives there.
+                let owed = Set(PendingUploadStore.all().map { URL(fileURLWithPath: $0.filePath).standardizedFileURL.path })
+                let sending = MediaSend.shared.anyInFlight || !owed.isEmpty
                 // Off the main thread, same reason as Delete Forever above.
                 Task {
                     await Task.detached(priority: .userInitiated) {
                         let fm = FileManager.default
+                        let cutoff = Date().addingTimeInterval(-60 * 60)
                         if let items = try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil) {
-                            for u in items { try? fm.removeItem(at: u) }
+                            for u in items {
+                                let name = u.lastPathComponent
+                                // A background upload's staged ciphertext, still owed to the server.
+                                if owed.contains(u.standardizedFileURL.path) { continue }
+                                // A failed video/file send's bytes: Resend needs them (ThreadView).
+                                if name.hasPrefix("pending-") { continue }
+                                // Staged upload files and resume slices while a send is running.
+                                if sending, name.hasPrefix("upload-") || name.hasPrefix("resume-") { continue }
+                                // Anything touched in the last hour: a recording or a transcode
+                                // writes its file as it goes, so it is always this young.
+                                if tempNewestChange(u, fm) > cutoff { continue }
+                                try? fm.removeItem(at: u)
+                            }
                         }
                         URLCache.shared.removeAllCachedResponses()
                     }.value

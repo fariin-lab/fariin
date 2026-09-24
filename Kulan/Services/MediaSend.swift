@@ -61,6 +61,9 @@ final class MediaSend: ObservableObject {
     /// relaunch by definition: the task died with the process, which is exactly the case the sweep
     /// exists to clean up.
     func isInFlight(_ clientId: String) -> Bool { sendTasks[clientId] != nil }
+    /// 2026-09-24 decision D17: is ANY media send running in this process? Clear Cache asks, so it
+    /// leaves the staged upload files alone while one is.
+    var anyInFlight: Bool { !sendTasks.isEmpty }
 
     /// Cancel the whole send: the outer task AND every item upload currently in flight under it.
     /// Both matter — cancelling only the outer task would leave the current item's own child task
