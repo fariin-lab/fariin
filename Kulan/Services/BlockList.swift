@@ -7,8 +7,10 @@ import FirebaseFirestore
 ///
 /// A block used to live only on the conversation (`blockedBy`), so somebody with no chat could not
 /// be blocked at all. `ChatService.setBlocked` now writes one document per blocked person here as
-/// well, and the rules read it to refuse that person's new chat, messages and calls. This mirrors
-/// the list for the screens that show it (Settings › Blocked Users, a profile's Block row).
+/// well. The rules read it to refuse that person's CALLS only; their new chat and messages still
+/// land (blocking is silent), and this list is what hides them: `ConversationsRepository` drops
+/// their chat, `onNewMessage` skips the push. It also feeds the screens that show the list
+/// (Settings › Blocked Users, a profile's Block row). Started by `ConversationsRepository.start`.
 /// Only I can read it; the person blocked is never able to see that they are on it.
 @Observable
 final class BlockList {
@@ -37,7 +39,11 @@ final class BlockList {
                     let at = (d.data(with: .estimate)["at"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0
                     m[d.documentID] = at * 1000
                 }
-                DispatchQueue.main.async { self?.entries = m }
+                DispatchQueue.main.async {
+                    self?.entries = m
+                    // 2026-09-24 decision D8: re-filter the chat list (silent block, see there).
+                    ConversationsRepository.shared.blockListChanged()
+                }
             }
     }
 

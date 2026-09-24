@@ -65,6 +65,8 @@ final class ConversationsRepository {
             self.skeletonArmed = true
         }
         guard let uid = Auth.auth().currentUser?.uid else { return }
+        // 2026-09-24 decision D8: my account block list, which `hideAccountBlocked` reads. Idempotent.
+        BlockList.shared.start()
         // THE FIRST FRAME, BEFORE ANY CALLBACK. Read straight off disk, on this thread, right here.
         //
         // Everything below is asynchronous — the listener, and Firestore's own persistent cache with
@@ -124,8 +126,11 @@ final class ConversationsRepository {
                 // rather than inside publish() because publish coalesces and can skip a snapshot
                 // outright — this must see every one, since the request it has to catch may arrive
                 // in a snapshot that changes nothing else. No-op while the setting is off.
-                UnknownChatArchiver.sweep(convs)
-                self.publish(convs)
+                // 2026-09-24 decision D8: the raw list is kept so a block list change can re-filter it.
+                self.lastRaw = convs
+                let visible = self.hideAccountBlocked(convs, me: uid)
+                UnknownChatArchiver.sweep(visible)
+                self.publish(visible)
 
                 // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY
                 // (was N sequential round-trips → slow cold start). preloadKey is cached, so the
@@ -273,6 +278,29 @@ final class ConversationsRepository {
         }
     }
 
+    // MARK: - Account block list (2026-09-24 decision D8)
+    //
+    // Blocking is SILENT: the rules let a blocked person's new chat and messages land, so they look
+    // sent to them. The blocker must never see them. A 1:1 whose other member is on my account list
+    // is dropped here, before every screen (chat list, requests, search, forward) reads it, UNLESS the
+    // chat carries its own `blockedBy[me]`: that chat existed when I blocked (or I opened it since,
+    // see `ChatService.openConversation`), and the screens already handle it the way they always have.
+    @ObservationIgnored private var lastRaw: [Conversation] = []
+
+    private func hideAccountBlocked(_ convs: [Conversation], me: String) -> [Conversation] {
+        let list = BlockList.shared
+        guard !me.isEmpty, !list.entries.isEmpty else { return convs }
+        return convs.filter { c in
+            c.isGroup || c.isBlockedByMe(me) || !list.contains(c.otherUid(me))
+        }
+    }
+
+    /// Called by `BlockList` when my list changes, so a block or unblock applies to the list at once.
+    func blockListChanged() {
+        guard listener != nil, !lastRaw.isEmpty, let me = Auth.auth().currentUser?.uid else { return }
+        publish(hideAccountBlocked(lastRaw, me: me))
+    }
+
     func stop() {
         listener?.remove()
         listener = nil
@@ -296,6 +324,7 @@ final class ConversationsRepository {
     func reset() {
         stop()
         pendingConvs = nil
+        lastRaw = []   // 2026-09-24 decision D8
         conversations = []
         hasLoaded = false
         loadFailed = false   // 2026-09-24 audit: belongs to the account that just went away
