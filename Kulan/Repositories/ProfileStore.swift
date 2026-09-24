@@ -24,7 +24,12 @@ final class ProfileStore {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         // Offline: fetch() returns nil after the server-timeout — keep the cached
         // profile instead of wiping `me` (which would bounce the user to onboarding).
-        me = await fetch(uid) ?? me
+        let fresh = await fetch(uid)
+        // Still the same account? (audit, 2026-09-24) Boot runs this in a background Task nobody
+        // cancels; signing out and into another account during that read would publish the OLD
+        // account's profile as `me` and import its privacy switches into the new one's defaults.
+        guard Auth.auth().currentUser?.uid == uid else { return }
+        me = fresh ?? me
         Self.adoptServerPrivacy(me?.privacy)
     }
 
@@ -77,14 +82,16 @@ final class ProfileStore {
     /// instead of the bio arriving a moment later and shoving the whole page down (most visible
     /// opening from the Calls tab, where nothing is warm). Same trick as `loadCachedMine`.
     func cachedPeer(_ uid: String) async -> UserProfile? {
-        guard !uid.isEmpty,
+        guard !uid.isEmpty, !uid.contains("/"),   // see `fetch`
               let snap = try? await db.collection("users").document(uid).getDocument(source: .cache),
               let data = snap.data() else { return nil }
         return Self.indexed(UserProfile(id: uid, data: data))
     }
 
     func fetch(_ uid: String) async -> UserProfile? {
-        guard !uid.isEmpty else { return nil }
+        // A uid with a "/" is a collection path, and `document(_:)` raises an uncatchable exception
+        // on one rather than failing (audit, 2026-09-24). Uids arrive here from other people's data.
+        guard !uid.isEmpty, !uid.contains("/") else { return nil }
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
             guard let data = snap.data() else { return nil }
@@ -215,7 +222,12 @@ final class ProfileStore {
     /// which is how a username could be claimed successfully and still never appear anywhere.
     func refreshMe() async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        me = await fetch(uid)
+        // `?? me` (audit, 2026-09-24): `fetch` answers nil on a failed read, and assigning that
+        // straight in blanked my own profile (header photo, name, handle) on a bad connection.
+        // Same rule `loadMine` already keeps; applied to every read-back in this file.
+        let fresh = await fetch(uid)
+        guard Auth.auth().currentUser?.uid == uid else { return }
+        me = fresh ?? me
     }
 
     func updateProfile(name: String, handle: String, about: String = "") async throws {
@@ -244,7 +256,7 @@ final class ProfileStore {
             try await batch.commit()
         }
 
-        me = await fetch(uid)
+        me = await fetch(uid) ?? me   // nil on a failed read must not blank `me` — see refreshMe
     }
 
     /// ⛔ THE PROFILE'S LINKS, WRITTEN ON THEIR OWN — owner, 2026-09-11. Separate from
@@ -262,7 +274,7 @@ final class ProfileStore {
             "links": ProfileLink.encode(links),
         ], merge: true)
         // Read back rather than assuming, so the page draws what the server actually kept.
-        me = await fetch(uid)
+        me = await fetch(uid) ?? me   // nil on a failed read must not blank `me` — see refreshMe
     }
 
     /// How long a deleted account can still be brought back.
@@ -582,6 +594,6 @@ final class ProfileStore {
         try? await Storage.storage().reference().child("profiles/\(uid).jpg").delete()
         try? await Storage.storage().reference().child("profiles/\(uid)-poster.jpg").delete()
 
-        me = await fetch(uid)
+        me = await fetch(uid) ?? me   // nil on a failed read must not blank `me` — see refreshMe
     }
 }

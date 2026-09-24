@@ -177,6 +177,14 @@ struct KulanApp: App {
         }
 
         guard !value.isEmpty else { return nil }
+        // A LINK IS OUTSIDE TEXT (audit, 2026-09-24). `pathComponents` decodes percent escapes, so
+        // /u/a%2Fb arrives here as "a/b", and the value ends up as a Firestore document id
+        // (`findByHandle` → `usernames/<value>`). `document(_:)` does not fail on a bad id, it raises
+        // an ObjC exception nothing can catch, so a hostile link crashed the app on tap. Refused here,
+        // once, for all three shapes; no real handle, invite code or story id looks like these.
+        guard !value.contains("/"), value != ".", value != "..",
+              !(value.hasPrefix("__") && value.hasSuffix("__")),
+              value.count <= 128 else { return nil }
         switch kind {
         case "u": return .user(value)
         case "g": return .group(value)

@@ -17,6 +17,7 @@ struct RootView: View {
     @AppStorage("appLockDelay") private var lockDelay = 0   // grace period (seconds) before re-locking
     @AppStorage("screenSecurity") private var screenSecurity = false
     @State private var locked = false
+    @State private var authenticating = false   // a Face ID / passcode prompt is up — see authenticate()
     @State private var backgroundedAt: Date?
     // Someone signed this phone out from Settings › Devices on another phone.
     @ObservedObject private var devices = DeviceRegistry.shared
@@ -56,7 +57,21 @@ struct RootView: View {
                 // on it will not cover a single current user. That was the owner's call knowing the
                 // trade; changing it means a one-time ask for existing accounts, which is a
                 // deliberate decision and not a bug to quietly fix.
-                OnboardingView { phase = .main; Task { await askAgeOnce() } }
+                OnboardingView {
+                    // A NEW ACCOUNT GOT NO PUSH TOKEN (audit, 2026-09-24). route() registers push,
+                    // records the device and starts the official channel / limits / audience
+                    // listeners only on its two "ready" branches; finishing onboarding jumped
+                    // straight to .main past all of them, so a brand-new account received no
+                    // notifications (and had no Add Story allowance data) until its next cold
+                    // launch. Same calls route() makes, skipped for the Firebase-free demo.
+                    if !DemoMode.active {
+                        Push.register(); Push.saveVoipToken()
+                        DeviceRegistry.shared.start()
+                        startOfficialChannel()
+                    }
+                    phase = .main
+                    Task { await askAgeOnce() }
+                }
             case .proveEmail(let address):
                 // Wrapped in its own NavigationStack because it is standing in for the whole auth
                 // flow here rather than being pushed onto one, and LoginCodeView expects a bar to
@@ -165,20 +180,33 @@ struct RootView: View {
                    lockDelay > 0, Date().timeIntervalSince(t) >= Double(lockDelay) {
                     locked = true
                 }
+                // Only a return from the BACKGROUND asks again (audit, 2026-09-24). The Face ID
+                // sheet makes the app inactive and then active without ever backgrounding it, so
+                // cancelling the prompt used to raise a fresh one at once, forever. After a
+                // cancel the Unlock button is the way back in.
+                let cameFromBackground = backgroundedAt != nil
                 backgroundedAt = nil
-                if locked { authenticate() }
+                if locked, cameFromBackground { authenticate() }
             }
         }
     }
 
     private func authenticate() {
+        // ONE PROMPT AT A TIME (audit, 2026-09-24). The Face ID sheet itself takes the app to
+        // inactive and back to active, and `.onChange(of: scenePhase)` calls this on every return
+        // to active while `locked` is still true (the success hops to main a beat later). The cold
+        // launch also fired it twice (onAppear + the first active). A second evaluatePolicy over a
+        // live one cancels it or stacks a second prompt, so unlocking could loop.
+        guard !authenticating else { return }
+        authenticating = true
         let ctx = LAContext()
         var err: NSError?
         guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
+            authenticating = false
             locked = false; return   // no passcode/biometrics set up — don't lock the user out
         }
         ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Fariin") { ok, _ in
-            DispatchQueue.main.async { if ok { locked = false } }
+            DispatchQueue.main.async { authenticating = false; if ok { locked = false } }
         }
     }
 

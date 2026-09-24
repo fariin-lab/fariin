@@ -180,7 +180,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     // MainShell consumes the pending route once the conversation list is loaded).
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
-        if let cid = response.notification.request.content.userInfo["cid"] as? String {
+        // A cid becomes a Firestore document id in ThreadView, where an empty or slashed one raises
+        // an uncatchable exception (audit, 2026-09-24). Our own pushes never carry one; refuse it anyway.
+        if let cid = response.notification.request.content.userInfo["cid"] as? String,
+           !cid.isEmpty, !cid.contains("/") {
             await MainActor.run { AppRouter.shared.pendingChatId = cid }
         }
     }
@@ -264,6 +267,15 @@ enum Push {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
             guard granted else { return }
             DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+        }
+        // SAVE THE TOKEN WE ALREADY HOLD, for whoever is signed in NOW (audit, 2026-09-24). The FCM
+        // delegate only fires when the token is minted or rotates, and it drops it when nobody is
+        // signed in. Sign out (which strips the token) and sign in again, or into another account,
+        // in the same run, and the token is unchanged, so the delegate never fires and the new
+        // account got no pushes until the next cold launch. Same write as the delegate's.
+        if let token = Messaging.messaging().fcmToken, let uid = Auth.auth().currentUser?.uid {
+            saveToken(field: "fcmTokens", token: token, uid: uid)
+            Task { @MainActor in DeviceRegistry.shared.recordFCMToken(token) }
         }
         // The official channel's topics read the same switch, and nothing else would put this phone
         // back in them: they are a Firebase-side subscription, not a token, so turning Show
