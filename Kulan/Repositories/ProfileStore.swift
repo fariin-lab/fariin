@@ -31,6 +31,7 @@ final class ProfileStore {
         guard Auth.auth().currentUser?.uid == uid else { return }
         me = fresh ?? me
         Self.adoptServerPrivacy(me?.privacy)
+        startPrivacySync()   // 2026-09-24 decision D11: keep them in step with my other devices
     }
 
     /// BRING MY OWN PRIVACY SETTINGS BACK WITH ME (owner 2026-08-04: "after I close the app and sign
@@ -59,6 +60,65 @@ final class ProfileStore {
                 d.set(value, forKey: "priv.\(key)")
             }
         }
+    }
+
+    // MARK: - Live privacy sync (2026-09-24 decision D11)
+
+    /// 2026-09-24 decision D11: posted when another device's privacy change has been copied into
+    /// this phone's prefs, so a page that seeded its selection once can re-read it.
+    static let privacySynced = Notification.Name("ProfileStore.privacySynced")
+
+    @ObservationIgnored private var privacyListener: ListenerRegistration?
+    @ObservationIgnored private var privacyListenerUid: String?
+
+    /// 2026-09-24 decision D11: PRIVACY SETTINGS FOLLOW THE ACCOUNT ACROSS DEVICES. `adoptServerPrivacy`
+    /// only fills keys that are missing, once, at boot; a change made on another phone never reached
+    /// this one after its first visit to the settings page. This listens to my own profile document
+    /// and copies its `privacy` map over the local prefs whenever it changes. A snapshot already
+    /// carries this phone's own unsent writes (Firestore applies them locally first), so it cannot
+    /// undo a change made here a moment ago. Idempotent; started on every boot path via `loadMine`.
+    func startPrivacySync() {
+        guard let uid = Auth.auth().currentUser?.uid, !uid.isEmpty else { return }
+        if privacyListener != nil, privacyListenerUid == uid { return }
+        privacyListener?.remove()
+        privacyListenerUid = uid
+        privacyListener = db.collection("users").document(uid).addSnapshotListener { snap, _ in
+            // Same account still signed in: a late snapshot must not write one account's choices
+            // into the next account's prefs.
+            guard let snap, snap.exists, Auth.auth().currentUser?.uid == uid,
+                  let privacy = snap.data()?["privacy"] as? [String: String] else { return }
+            Task { @MainActor in
+                guard Auth.auth().currentUser?.uid == uid else { return }
+                if Self.syncServerPrivacy(privacy) {
+                    NotificationCenter.default.post(name: Self.privacySynced, object: nil)
+                }
+            }
+        }
+    }
+
+    /// 2026-09-24 decision D11: sign-out stops the listener (SessionWipe).
+    func stopPrivacySync() {
+        privacyListener?.remove()
+        privacyListener = nil
+        privacyListenerUid = nil
+    }
+
+    /// Overwrites (unlike `adoptServerPrivacy`) every local pref the server map names, in the same
+    /// two shapes. Returns whether anything changed.
+    @discardableResult
+    static func syncServerPrivacy(_ privacy: [String: String]) -> Bool {
+        let d = UserDefaults.standard
+        var changed = false
+        for (key, value) in privacy {
+            if PrivacyPrefs.flagKeys.contains(key) {
+                let on = value == "true"
+                if d.object(forKey: key) as? Bool != on { d.set(on, forKey: key); changed = true }
+            } else if d.string(forKey: "priv.\(key)") != value {
+                d.set(value, forKey: "priv.\(key)")
+                changed = true
+            }
+        }
+        return changed
     }
 
     /// Instant boot path: my profile straight from Firestore's on-disk cache, no
@@ -301,14 +361,18 @@ final class ProfileStore {
     /// Apple's in-app-deletion rule (5.1.1(v)) is satisfied by deletion being STARTED in the app; a
     /// grace period is allowed, which is how the standard messengers do it.
     func scheduleDeletion() async throws {
-        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
-        let due = Calendar.current.date(byAdding: .day, value: Self.gracePeriodDays, to: Date()) ?? Date()
-        try await db.collection("users").document(user.uid).setData([
-            "deletionScheduledFor": Timestamp(date: due),
-            // Denormalised so security rules and queries can hide the account without reading a date.
-            "isHidden": true,
-        ], merge: true)
-        me?.deletionScheduledFor = due
+        guard Auth.auth().currentUser != nil else { throw AuthFlowError.notSignedIn }
+        // 2026-09-24 decision D6: the server sets the date (its own now + 30 days) and `isHidden`;
+        // the rules refuse this phone writing `deletionScheduledFor` itself. See
+        // `scheduleAccountDeletion` in functions-account.
+        let d = try await AccountCall.run("scheduleAccountDeletion")
+        if let ms = d["due"] as? Double {
+            me?.deletionScheduledFor = Date(timeIntervalSince1970: ms / 1000)
+        } else if let ms = d["due"] as? Int {
+            me?.deletionScheduledFor = Date(timeIntervalSince1970: Double(ms) / 1000)
+        } else {
+            me?.deletionScheduledFor = Calendar.current.date(byAdding: .day, value: Self.gracePeriodDays, to: Date())
+        }
     }
 
     /// Server-truth check used on the boot fast path. Returns the date when this account is scheduled

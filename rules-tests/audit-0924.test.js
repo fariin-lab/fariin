@@ -74,6 +74,9 @@ const pairMocks = [
   { function: 'exists', args: [{ exactValue: pairPath }], result: { value: true } },
   { function: 'get', args: [{ exactValue: pairPath }],
     result: { value: { data: { users: [ME, THIRD], blockedBy: {}, lastMessage: 'hi', lastSender: ME } } } },
+  // 2026-09-24 decision D8: message create now reads the other person's account block list.
+  { function: 'exists', args: [{ exactValue: `${D}/users/${THIRD}/blocked/${ME}` }], result: { value: false } },
+  { function: 'exists', args: [{ exactValue: `${D}/users/${ME}/blocked/${THIRD}` }], result: { value: false } },
 ];
 const callRec = (caller) => ({ type: 'call', authorId: caller, callerUid: caller, callOutcome: 'missed',
   callVideo: false, text: '', createdAt: REQ_TIME });
@@ -243,7 +246,165 @@ const cases = [
 
   // ── shell (2026-09-24 audit, shell area): push tokens off the public profile, and capped ──
   ...shellCases(),
+
+  // ── accounts (2026-09-24 decisions D1 and D6): two-step per sign-in, server-set deletion date ──
+  ...accountCases(),
+
+  // ── admin (2026-09-24 decisions D-admin-*): edits never resurrect, retype or declassify ──
+  ...adminCases(),
+
+  // ── privacy (2026-09-24 decisions D7, D8, D13): server call privacy, account block list, own unread flag ──
+  ...privacyCases(),
 ];
+
+// 2026-09-24 decisions D7 (calls), D8 (account block list) and D13 (markedUnread).
+function privacyCases() {
+  const ex = (p, v) => ({ function: 'exists', args: [{ exactValue: `${D}/${p}` }], result: { value: v } });
+  const gt = (p, data) => ({ function: 'get', args: [{ exactValue: `${D}/${p}` }], result: { value: { data } } });
+  const blockDoc = (owner, who) => `users/${owner}/blocked/${who}`;
+  const pairDoc = (over = {}) => ({ users: [ME, THIRD], blockedBy: {}, lastMessage: 'hi', lastSender: ME, ...over });
+  const base = [...notAdmin(ME), ...notAdmin(THIRD)];
+  // A 1:1 message ME → THIRD (or THIRD → ME) in an existing pre-request chat.
+  const msgMocks = (pair, blockedOnList, author = ME) => {
+    const other = author === ME ? THIRD : ME;
+    return [...base, ex(`conversations/${PAIR}`, true), gt(`conversations/${PAIR}`, pair),
+      ex(blockDoc(other, author), blockedOnList)];
+  };
+  const newMsg = (author = ME) => [author, `${pairPath}/messages/m5`, 'create', { authorId: author, text: 'enc1:x' }, null];
+  // ME rings THIRD.
+  const callMocks = ({ calls, pair, listed = false }) => [
+    ...base, ex(blockDoc(THIRD, ME), listed),
+    ex(`conversations/${PAIR}`, !!pair), ...(pair ? [gt(`conversations/${PAIR}`, pair)] : []),
+    ex(`users/${THIRD}`, true), gt(`users/${THIRD}`, { name: 'T', privacy: calls ? { calls } : {} }),
+  ];
+  const ring = (mocks) => [ME, `${D}/calls/c1`, 'create', { caller: ME, callee: THIRD, status: 'ringing', type: 'voice' }, null, mocks];
+  const friends = pairDoc({ startedBy: THIRD, accepted: true });
+  const pending = pairDoc({ startedBy: ME, accepted: false });
+  // ME opens a new 1:1 with THIRD (born a request).
+  const openMocks = (listed) => [
+    ...base, ex(`users/${THIRD}`, true), gt(`users/${THIRD}`, { name: 'T', privacy: {} }),
+    ex(`requestDeclines/${THIRD}/from/${ME}`, false), ex(blockDoc(THIRD, ME), listed),
+    ex(`conversations/${PAIR}`, false),
+  ];
+  const open = [ME, pairPath, 'create', { users: [ME, THIRD], startedBy: ME, accepted: false, unreadCount: { [ME]: 0, [THIRD]: 0 } }, null];
+  const listPath = `${D}/${blockDoc(ME, THIRD)}`;
+  return [
+    // D13
+    ['FIX     D13 group member marks the group unread for themselves', 'DENY', 'ALLOW',
+      ME, convPath, 'update', { ...group, markedUnread: { [ME]: true } }, group, members],
+    ['GUARD   D13 group member sets THIRD\'s unread flag', 'DENY', 'DENY',
+      ME, convPath, 'update', { ...group, markedUnread: { [THIRD]: true } }, group, members],
+    ['OK      D13 1:1 member marks the chat unread for themselves', 'ALLOW', 'ALLOW',
+      ME, pairPath, 'update', pairDoc({ markedUnread: { [ME]: true } }), pairDoc(), base],
+    ['OK      D13 opening clears my flag (count to 0, flag removed)', 'ALLOW', 'ALLOW',
+      ME, pairPath, 'update', pairDoc({ unreadCount: { [ME]: 0 } }), pairDoc({ unreadCount: { [ME]: -1 }, markedUnread: { [ME]: true } }), base],
+    ['ATTACK  D13 1:1 member sets the other person\'s unread flag', 'ALLOW', 'DENY',
+      ME, pairPath, 'update', pairDoc({ markedUnread: { [THIRD]: true } }), pairDoc(), base],
+    // D8 the list itself
+    ['FIX     D8 owner blocks somebody on their account list', 'DENY', 'ALLOW',
+      ME, listPath, 'create', { at: REQ_TIME }, null, base],
+    ['FIX     D8 owner unblocks (deletes the entry)', 'DENY', 'ALLOW', ME, listPath, 'delete', null, { at: REQ_TIME }, base],
+    ['FIX     D8 owner reads their list entry', 'DENY', 'ALLOW', ME, listPath, 'get', null, { at: REQ_TIME }, base],
+    ['GUARD   D8 the blocked person reads the blocker\'s list', 'DENY', 'DENY', THIRD, listPath, 'get', null, { at: REQ_TIME }, base],
+    ['GUARD   D8 somebody writes into another person\'s list', 'DENY', 'DENY', THIRD, listPath, 'create', { at: REQ_TIME }, null, base],
+    ['GUARD   D8 list entry carrying extra fields', 'DENY', 'DENY', ME, listPath, 'create', { at: REQ_TIME, note: 'x' }, null, base],
+    // D8 new chat and messages
+    ['OK      D8 start a chat with somebody who has not blocked me', 'ALLOW', 'ALLOW', ...open, openMocks(false)],
+    ['ATTACK  D8 start a chat with somebody who blocked me with no chat', 'ALLOW', 'DENY', ...open, openMocks(true)],
+    ['OK      D8 message to somebody who has not blocked me', 'ALLOW', 'ALLOW', ...newMsg(), msgMocks(pairDoc(), false)],
+    ['ATTACK  D8 message to somebody who blocked me (account list)', 'ALLOW', 'DENY', ...newMsg(), msgMocks(pairDoc(), true)],
+    ['ATTACK  D8 message to somebody who blocked me (old chat block, was silent)', 'ALLOW', 'DENY',
+      ...newMsg(), msgMocks(pairDoc({ blockedBy: { [THIRD]: true } }), false)],
+    ['OK      D8 the blocker can still write to the person they blocked', 'ALLOW', 'ALLOW',
+      ...newMsg(THIRD), msgMocks(pairDoc({ blockedBy: { [THIRD]: true } }), false, THIRD)],
+    // D7 calls
+    ['OK      D7 a friend rings (Calls: My Chats)', 'ALLOW', 'ALLOW', ...ring(callMocks({ calls: 'contacts', pair: friends }))],
+    ['OK      D7 a stranger rings somebody set to Everyone', 'ALLOW', 'ALLOW', ...ring(callMocks({ calls: 'everyone' }))],
+    ['OK      D7 an old pre-request chat with a message counts as a friend', 'ALLOW', 'ALLOW', ...ring(callMocks({ pair: pairDoc() }))],
+    ['ATTACK  D7 a stranger rings somebody with the default (My Chats)', 'ALLOW', 'DENY', ...ring(callMocks({}))],
+    ['ATTACK  D7 a stranger rings somebody set to the old "nobody"', 'ALLOW', 'DENY', ...ring(callMocks({ calls: 'nobody' }))],
+    ['ATTACK  D7 an unanswered requester rings (not a friend yet)', 'ALLOW', 'DENY', ...ring(callMocks({ calls: 'contacts', pair: pending }))],
+    ['ATTACK  D7 a blocked friend rings (account list)', 'ALLOW', 'DENY',
+      ...ring(callMocks({ calls: 'contacts', pair: friends, listed: true }))],
+    ['ATTACK  D7 a blocked person rings somebody set to Everyone (chat block)', 'ALLOW', 'DENY',
+      ...ring(callMocks({ calls: 'everyone', pair: pairDoc({ blockedBy: { [THIRD]: true } }) }))],
+  ];
+}
+
+// 2026-09-24 decisions D-admin-resurrect / D-admin-security / D-admin-fanout.
+function adminCases() {
+  const B = `${D}/announcements/b1`, L = `${D}/announcementLog/a1`, C = `${D}/users/${ME}/announcements/a1`;
+  const gone = { deleted: true, deletedAt: REQ_TIME };
+  const log = (over = {}) => ({ recipients: [ME], deliveredCount: 0, ...ann(over) });
+  return [
+    ['OK      edit admin fixes a live broadcast', 'ALLOW', 'ALLOW', ADM, B, 'update',
+      broadcast({ title: 'Changed', editedAt: REQ_TIME }), broadcast(), staff(['edit'])],
+    ['ATTACK  edit brings back a WITHDRAWN broadcast', 'ALLOW', 'DENY', ADM, B, 'update',
+      broadcast({ title: 'Changed', editedAt: REQ_TIME }), broadcast(gone), staff(['edit'])],
+    ['ATTACK  edit brings back a withdrawn chosen record', 'ALLOW', 'DENY', ADM, L, 'update',
+      log({ title: 'Changed' }), log(gone), staff(['edit', 'targetChosen'])],
+    ['ATTACK  edit brings back a withdrawn person\'s copy', 'ALLOW', 'DENY', ADM, C, 'update',
+      ann({ title: 'Changed' }), ann(gone), staff(['edit', 'targetChosen'])],
+    ['ATTACK  edit rewrites a withdrawn copy, keeping it withdrawn', 'ALLOW', 'DENY', ADM, C, 'update',
+      ann({ ...gone, title: 'Changed' }), ann(gone), staff(['edit', 'targetChosen'])],
+    ['FIX     edit-only admin fixes a typo in a security alert', 'DENY', 'ALLOW', ADM, B, 'update',
+      broadcast({ kind: 'security', title: 'Fixed' }), broadcast({ kind: 'security' }), staff(['edit'])],
+    ['ATTACK  edit-only admin strips the Security kind', 'ALLOW', 'DENY', ADM, B, 'update',
+      broadcast({ kind: 'news' }), broadcast({ kind: 'security' }), staff(['edit'])],
+    ['ATTACK  edit-only admin strips Security from a person\'s copy', 'ALLOW', 'DENY', ADM, C, 'update',
+      ann({ kind: 'news' }), ann({ kind: 'security' }), staff(['edit', 'targetChosen'])],
+    ['OK      security admin changes a security alert to news', 'ALLOW', 'ALLOW', ADM, B, 'update',
+      broadcast({ kind: 'news' }), broadcast({ kind: 'security' }), staff(['edit', 'security'])],
+    ['ATTACK  edit turns an everyone broadcast into a country send', 'ALLOW', 'DENY', ADM, B, 'update',
+      broadcast({ audience: { scope: 'countries', countries: ['US'], chosenCount: 0 } }), broadcast(),
+      staff(['edit', 'targetCountry'])],
+    ['OK      sender counts delivered copies onto the chosen record', 'ALLOW', 'ALLOW', ADM, L, 'update',
+      log({ deliveredCount: 1 }), log(), staff(['send', 'targetChosen'])],
+    ['ATTACK  delivered count above the recipient list', 'ALLOW', 'DENY', ADM, L, 'update',
+      log({ deliveredCount: 5 }), log(), staff(['send', 'targetChosen'])],
+    ['ATTACK  delivered count onto a withdrawn record', 'ALLOW', 'DENY', ADM, L, 'update',
+      log({ ...gone, deliveredCount: 1 }), log(gone), staff(['send', 'targetChosen'])],
+  ];
+}
+
+// 2026-09-24 decisions D1 and D6. D1 rows read my own profile (`allow get: if signedIn()`), so
+// the only thing that changes between them is the token.
+function accountCases() {
+  const up = `${D}/users/${ME}`;
+  const m = [...notAdmin(ME)];
+  const T = Math.floor(now / 1000) - 3600;   // this session's sign-in, an hour ago
+  const ts = (claim, at = T) => ({ auth_time: at, ...(claim ? { twoStep: claim } : {}) });
+  const read = (tok) => [ME, up, 'get', null, { name: 'A' }, m, tok];
+  return [
+    ['OK      D1 account without two-step reads its profile', 'ALLOW', 'ALLOW', ...read(ts(null))],
+    ['OK      D1 sign-in that entered the password (on the list)', 'ALLOW', 'ALLOW',
+      ...read(ts({ required: true, ok: true, at: now, authTimes: [T - 50, T] }))],
+    ['OK      D1 old-style claim, session let in before it (kept after deploy)', 'ALLOW', 'ALLOW',
+      ...read(ts({ required: true, ok: true, at: (T + 60) * 1000 }))],
+    ['OK      D1 old session still in after a new device verified (legacyAt)', 'ALLOW', 'ALLOW',
+      ...read(ts({ required: true, ok: true, at: now, authTimes: [T + 900], legacyAt: (T + 60) * 1000 }))],
+    ['ATTACK  D1 fresh sign-in rides another session\'s pass', 'ALLOW', 'DENY',
+      ...read(ts({ required: true, ok: true, at: now, authTimes: [T] }, T + 500))],
+    ['ATTACK  D1 fresh sign-in after an old-style claim', 'ALLOW', 'DENY',
+      ...read(ts({ required: true, ok: true, at: (T + 60) * 1000 }, T + 120))],
+    ['ATTACK  D1 locked sign-in let in by a LATER device verifying', 'ALLOW', 'DENY',
+      ...read(ts({ required: true, ok: true, at: now, authTimes: [T + 900] }, T + 500))],
+    ['GUARD   D1 required and not passed', 'DENY', 'DENY', ...read(ts({ required: true, ok: false }))],
+
+    ['OK      D6 restore removes the deletion date', 'ALLOW', 'ALLOW',
+      ME, up, 'update', { name: 'A' }, { name: 'A', deletionScheduledFor: iso(now + 86400e3), isHidden: true }, m],
+    ['OK      D6 profile edit on an account with a date leaves it alone', 'ALLOW', 'ALLOW',
+      ME, up, 'update', { name: 'B', deletionScheduledFor: iso(now + 86400e3) },
+      { name: 'A', deletionScheduledFor: iso(now + 86400e3) }, m],
+    ['ATTACK  D6 phone writes its own deletion date', 'ALLOW', 'DENY',
+      ME, up, 'update', { name: 'A', deletionScheduledFor: iso(now + 365 * 86400e3), isHidden: true }, { name: 'A' }, m],
+    ['ATTACK  D6 phone moves an existing deletion date', 'ALLOW', 'DENY',
+      ME, up, 'update', { name: 'A', deletionScheduledFor: iso(now + 365 * 86400e3) },
+      { name: 'A', deletionScheduledFor: iso(now + 86400e3) }, m],
+    ['ATTACK  D6 profile created with a deletion date', 'ALLOW', 'DENY',
+      ME, up, 'create', { name: 'A', deletionScheduledFor: iso(now) }, null, m],
+  ];
+}
 
 // Stage 4 of the push-token move: users/{uid}.fcmTokens / .voipTokens / .pushTokens may shrink,
 // never grow; users/{uid}/push/{doc} lists are capped at 50 but may always shrink.
@@ -344,12 +505,36 @@ function groupCases() {
       ADMIN, convPath, 'update', clean(left(soloOwner, { _who: ADMIN, admins: [] })), soloOwner, m],
     ['ATTACK  last admin leaves with no heir after the owner left', 'ALLOW', 'DENY',
       ADMIN, convPath, 'update', clean(left(ownerGone, { _who: ADMIN, admins: [] })), ownerGone, m],
+
+    // 2026-09-24 decision D23: the owner's leave hands ownership on, and only that write may move it
+    ['OK      owner leaves, ownership to the longest-serving admin (D23)', 'ALLOW', 'ALLOW',
+      ...up(ADMIN, { users: [LIM, LEG, ME, THIRD], admins: [LIM, LEG], createdBy: LIM, adminRights: {},
+                     lastMessage: 'x left', lastSender: ADMIN })],
+    ['OK      sole-admin owner leaves, ownership to the first member (D23)', 'ALLOW', 'ALLOW',
+      ADMIN, convPath, 'update', clean(left(soloOwner, { _who: ADMIN, admins: [ME], createdBy: ME })), soloOwner, m],
+    ['FIX     admin renames a group whose owner already left (D23)', 'DENY', 'ALLOW',
+      ...up(ADMIN, { title: 'New name' }, ownerGone)],
+    ['ATTACK  owner leaves and hands ownership to an outsider (D23)', 'ALLOW', 'DENY',
+      ...up(ADMIN, { users: [LIM, LEG, ME, THIRD], admins: [LIM, LEG], createdBy: NEW })],
+    ['ATTACK  owner leaves and names a non-admin the owner (D23)', 'ALLOW', 'DENY',
+      ...up(ADMIN, { users: [LIM, LEG, ME, THIRD], admins: [LIM, LEG], createdBy: THIRD })],
+    ['ATTACK  owner gives the group away without leaving (D23)', 'ALLOW', 'DENY', ...up(ADMIN, { createdBy: LEG })],
+    ['GUARD   admin removes the owner while the owner is a member (D23)', 'DENY', 'DENY',
+      ...up(LEG, { users: [LIM, LEG, ME, THIRD], admins: [LIM, LEG] })],
+
+    // 2026-09-24 decision D24: admins are held to the members' private-map pin
+    ['OK      admin mutes the group for themselves (D24)', 'ALLOW', 'ALLOW', ...up(LEG, { mutedBy: { [LEG]: 1e15 } })],
+    ['OK      owner marks their own read (D24)', 'ALLOW', 'ALLOW', ...up(ADMIN, { lastRead: { [ADMIN]: REQ_TIME } })],
+    ['ATTACK  owner mutes THIRD (D24)', 'ALLOW', 'DENY', ...up(ADMIN, { mutedBy: { [THIRD]: 1e15 } })],
+    ['ATTACK  admin forges THIRD\'s read receipt (D24)', 'ALLOW', 'DENY', ...up(LEG, { lastRead: { [THIRD]: REQ_TIME } })],
+    ['ATTACK  admin clears THIRD\'s copy of the chat (D24)', 'ALLOW', 'DENY', ...up(LEG, { clearedAt: { [THIRD]: now } })],
   ];
 }
 
-async function run(t, source, [, , , uid, path, method, after, before, mocks], expectation) {
+// 2026-09-24 decision D1: an optional 10th element adds claims to the token (auth_time, twoStep).
+async function run(t, source, [, , , uid, path, method, after, before, mocks, tok], expectation) {
   const request = {
-    auth: { uid, token: { firebase: { sign_in_provider: 'password' } } },
+    auth: { uid, token: { firebase: { sign_in_provider: 'password' }, ...(tok || {}) } },
     path, method, time: REQ_TIME,
   };
   if (after) request.resource = { data: after };

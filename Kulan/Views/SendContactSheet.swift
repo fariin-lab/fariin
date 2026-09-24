@@ -57,6 +57,9 @@ struct SendContactSheet: View {
             // Same two exclusions as the forward picker (audit, 2026-09-24): no blocked person, and
             // no demo chat, whose id is not a real conversation.
             .filter { !$0.isBlockedByMe(me) && !DemoMode.isDemoConversation($0.id) }
+            // 2026-09-24 decision D10: no incoming request I have not answered; sending the link
+            // into it would accept it silently.
+            .filter { MessageRequests.stance($0, myUid: me) != .incoming }
         return (q.isEmpty ? list : list.filter { $0.displayName(me).lowercased().contains(q) })
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }

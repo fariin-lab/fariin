@@ -54,9 +54,20 @@ service cloud.firestore {
     // no claim at all, so `required` defaults false and nothing changes for them — which is what
     // makes this safe to deploy to a live app. Only a token that says it is required, and does not
     // say it passed, is turned away.
+    // 2026-09-24 decision D1: PER SIGN-IN. `ok` alone was a fact about the account, so once any
+    // device passed, every later sign-in was let in too. Now the claim lists the `auth_time` of each
+    // session that entered the password (`authTimes`) and this token's own `auth_time` must be on it.
+    // A refresh keeps `auth_time`; a fresh sign-in gets a new one and is refused until it answers.
+    // `legacyAt` (or `at` on a claim with no list) keeps sessions let in before this change working
+    // until their next sign-in. Mirrored by `twoStepSessionPassed` in functions-account.
     function twoStepSatisfied() {
-      return !request.auth.token.get('twoStep', {}).get('required', false)
-             || request.auth.token.get('twoStep', {}).get('ok', false);
+      let t = request.auth.token.get('twoStep', {});
+      let at = request.auth.token.get('auth_time', 0);
+      return !t.get('required', false)
+             || (t.get('ok', false) == true
+                 && (at in t.get('authTimes', [])
+                     || (!('authTimes' in t) && at * 1000 <= t.get('at', 0))
+                     || at * 1000 <= t.get('legacyAt', 0)));
     }
 
     function signedIn() {
@@ -104,6 +115,23 @@ service cloud.firestore {
     // phone clock a little fast is not refused for a send-now.
     function announcementKindAndTimeAllowed() {
       return (request.resource.data.get('kind', '') != 'security' || adminCan('security'))
+        && (request.resource.data.get('publishAt', request.time) <= request.time + duration.value(5, 'm')
+            || adminCan('schedule'));
+    }
+    // 2026-09-24 decision D-admin-resurrect: what an EDIT of any announcement record (broadcast,
+    // announcementLog, a person's copy) may not do. Replaces `announcementKindAndTimeAllowed()` on
+    // the edit branches. (1) Touch a withdrawn one, or withdraw through the edit branch: an edit
+    // carrying `deleted: false` used to undo a withdrawal. (2) Change the audience type. (3) Add or
+    // strip the Security kind without `security`; KEEPING it is allowed, so an admin without that
+    // permission can still fix a typo in one.
+    function announcementEditAllowed() {
+      return resource.data.get('deleted', false) != true
+        && request.resource.data.get('deleted', false) != true
+        && request.resource.data.get('audience', {}).get('scope', '')
+             == resource.data.get('audience', {}).get('scope', '')
+        && ((request.resource.data.get('kind', '') == 'security')
+              == (resource.data.get('kind', '') == 'security')
+            || adminCan('security'))
         && (request.resource.data.get('publishAt', request.time) <= request.time + duration.value(5, 'm')
             || adminCan('schedule'));
     }
@@ -167,6 +195,43 @@ service cloud.firestore {
         && 'verification' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data
         && get(/databases/$(database)/documents/users/$(request.auth.uid))
              .data.verification.get('isVerified', false) == true;
+    }
+
+    // ── 2026-09-24 decisions D7 + D8: BLOCKS AND CALL PRIVACY, CHECKED BY THE SERVER ──
+    //
+    // The 1:1 conversation id for the caller and `u`: the two uids sorted and joined by "_", the
+    // same as `ChatService.convId`.
+    function pairCid(u) {
+      return request.auth.uid < u ? request.auth.uid + '_' + u : u + '_' + request.auth.uid;
+    }
+    // 2026-09-24 decision D8: `u` has blocked the caller. Either on `u`'s account-level block list
+    // (users/{u}/blocked/{caller}, which works with no chat at all) or, for a block made before that
+    // list existed, on the chat the two share. GUARDED BY exists() (a get on a missing doc errors).
+    function isBlockedByUser(u) {
+      return exists(/databases/$(database)/documents/users/$(u)/blocked/$(request.auth.uid))
+        || (exists(/databases/$(database)/documents/conversations/$(pairCid(u)))
+            && get(/databases/$(database)/documents/conversations/$(pairCid(u)))
+                 .data.get('blockedBy', {}).get(u, false) == true);
+    }
+    // 2026-09-24 decision D7: the caller is `u`'s friend, by the app's one meaning of the word
+    // (`PrivacyPrefs.isContact`, `CallService.decideAllowed`): an accepted 1:1, or a chat from
+    // before message requests (no `startedBy`) that carries a message.
+    function isFriendOf(u) {
+      let c = /databases/$(database)/documents/conversations/$(pairCid(u));
+      return exists(c)
+        && (get(c).data.get('startedBy', '') != ''
+              ? get(c).data.get('accepted', false) == true
+              : get(c).data.get('lastMessage', '') != '');
+    }
+    // 2026-09-24 decision D7: `u`'s Calls setting lets the caller ring. Only two choices (owner,
+    // 2026-09-11): Everyone, or people in my chats; the old "nobody" value reads as the latter, and
+    // an ABSENT value is My Chats too, the same default `PrivacyPrefs.defaultAudience` and
+    // `CallPrivacyIndex` use. A callee with no profile document reads as Everyone, the direction
+    // `acceptsFromStrangers` leans.
+    function callsAllowedBy(u) {
+      return !exists(/databases/$(database)/documents/users/$(u))
+        || get(/databases/$(database)/documents/users/$(u)).data.get('privacy', {}).get('calls', 'contacts') == 'everyone'
+        || isFriendOf(u);
     }
 
     // Profiles: any signed-in user can look up a handle to start a chat,
@@ -291,14 +356,19 @@ service cloud.firestore {
             && tokenShrinkOnly('pushTokens');
       }
 
+      // 2026-09-24 decision D6: the deletion date is set by `scheduleAccountDeletion` (server now +
+      // 30 days). The phone may only REMOVE it (Restore), never write a date from its own clock.
       allow create: if signedIn() && request.auth.uid == uid
         && !request.resource.data.keys().hasAny(serverOnlyUserFields())
         && !request.resource.data.keys().hasAny(['fcmTokens', 'voipTokens', 'pushTokens'])
+        && !('deletionScheduledFor' in request.resource.data)
         && linksOk()
         && profileTextOk(request.resource.data.keys());
       allow update: if signedIn() && request.auth.uid == uid
         && !request.resource.data.diff(resource.data).affectedKeys()
               .hasAny(serverOnlyUserFields())
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['deletionScheduledFor'])
+            || !('deletionScheduledFor' in request.resource.data))
         && pushTokensNotAdded()
         && linksOk()
         && profileTextOk(request.resource.data.diff(resource.data).affectedKeys());
@@ -557,6 +627,19 @@ service cloud.firestore {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
 
+      // 2026-09-24 decision D8: MY BLOCK LIST, one document per person I blocked, so blocking works
+      // for anyone, chat or no chat. Owner only, both ways: the blocked person must never be able to
+      // read that they are on it. The rules read it through `isBlockedByUser` (conversation create,
+      // message create, call create), which ignores these read rules. The document carries only
+      // `at`, the server's time of the block.
+      match /blocked/{other} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && other != uid
+          && request.resource.data.keys().hasOnly(['at'])
+          && request.resource.data.at == request.time;
+      }
+
       // OFFICIAL CHANNEL, this person's half: muted, blocked, last read, delete-for-me. Private in
       // both directions - what you have read is nobody's business, and the read COUNTS the admin
       // screen shows come from anonymous shard counters, never from here.
@@ -583,7 +666,7 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly(['deleted'])
           && request.resource.data.deleted == true;
         allow update: if adminCan('edit') && adminCan('targetChosen')
-          && announcementWellFormed() && announcementKindAndTimeAllowed();
+          && announcementWellFormed() && announcementEditAllowed();   // 2026-09-24 decision D-admin-resurrect
         allow update: if adminCan('remove')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'deletedAt'])
           && request.resource.data.deleted == true;
@@ -873,12 +956,20 @@ service cloud.firestore {
       allow create: if adminCan('send') && adminCan('targetChosen')
         && announcementWellFormed() && announcementKindAndTimeAllowed()
         && request.resource.data.audience.get('scope', '') == 'chosen';
+      // 2026-09-24 decision D-admin-resurrect: edits go through `announcementEditAllowed()`.
+      // 2026-09-24 decision D-admin-fanout: the sender counts delivered copies onto the record in
+      // the same batch as the copies (`deliveredCount` only, never onto a withdrawn record).
       allow update: if (adminCan('edit') && adminCan('targetChosen')
-          && announcementWellFormed() && announcementKindAndTimeAllowed()
+          && announcementWellFormed() && announcementEditAllowed()
           && request.resource.data.audience.get('scope', '') == 'chosen')
         || (adminCan('remove')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'deletedAt'])
-          && request.resource.data.deleted == true);
+          && request.resource.data.deleted == true)
+        || ((adminCan('send') || adminCan('edit')) && adminCan('targetChosen')
+          && resource.data.get('deleted', false) != true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deliveredCount'])
+          && request.resource.data.deliveredCount is int
+          && request.resource.data.deliveredCount <= request.resource.data.get('recipients', []).size());
       allow delete: if false;
     }
 
@@ -913,6 +1004,12 @@ service cloud.firestore {
           // enforced by this line rather than by the app remembering to use the other collection.
           && request.resource.data.audience.get('scope', '') != 'chosen';
       }
+      // 2026-09-24 decision D-admin-security: the same audience checks for an edit, minus the kind
+      // and time test, which `announcementEditAllowed()` makes for edits.
+      function withinEditPermissions() {
+        return (request.resource.data.audience.get('scope', '') != 'countries' || adminCan('targetCountry'))
+          && request.resource.data.audience.get('scope', '') != 'chosen';
+      }
       // Taking one back is a TOMBSTONE, never a real delete: a phone that is offline right now holds
       // the old copy and can only learn the announcement is gone from a document that still exists to
       // say so. Which is also why delete is closed to everybody, forever.
@@ -922,7 +1019,11 @@ service cloud.firestore {
       }
 
       allow create: if adminCan('send') && wellFormed() && withinPermissions();
-      allow update: if (adminCan('edit') && wellFormed() && withinPermissions())
+      // 2026-09-24 decision D-admin-resurrect: an edit also passes `announcementEditAllowed()`.
+      // `withinPermissions()` still applies its country/chosen checks; its security check is the
+      // strict one, so a kept Security kind is let through here only by the edit rule's own test.
+      allow update: if (adminCan('edit') && wellFormed() && withinEditPermissions()
+          && announcementEditAllowed())
         || (adminCan('remove') && onlyWithdrawing());
       allow delete: if false;
 
@@ -995,7 +1096,9 @@ service cloud.firestore {
             // — writing themselves a "you played my note" mark you never gave, or wiping yours to
             // hide that they heard you. It is also how somebody with read receipts switched off
             // would have leaked one anyway.
-            && ownKeyOnly('lastPlayedVoice');
+            && ownKeyOnly('lastPlayedVoice')
+            // 2026-09-24 decision D13: Mark as Unread is its own per-user flag; only my own key.
+            && ownKeyOnly('markedUnread');
       }
       // The other party of a 1:1 being created.
       function otherMember() {
@@ -1124,6 +1227,8 @@ service cloud.firestore {
             // ...and not somebody who deleted my last request this week (§10). Same guard shape
             // as the privacy read above; the document is theirs and this is the only reader.
             && (request.auth.uid == otherMember() || !declinedRecently(otherMember()))
+            // 2026-09-24 decision D8: not somebody who has blocked me, chat or no chat.
+            && !isBlockedByUser(otherMember())
             // EVERY NEW 1:1 IS BORN AS A REQUEST, and the database is what says so.
             //
             // Without this there was a way around the whole feature: the media send paths touch the
@@ -1197,6 +1302,20 @@ service cloud.firestore {
               || request.resource.data.get('admins', []).size() > 0
               || request.resource.data.users.size() == 0);
       }
+      // 2026-09-24 decision D23: ownership moves only as the owner's own leave hands it on.
+      // `createdBy` may change in exactly one write: the owner leaving (out of `users`) names a
+      // member who stays, and that member is an admin after the write (ChatService.leaveGroup picks
+      // the longest-serving admin, else the longest-serving member and makes them admin too).
+      // Non-owners were already refused any `createdBy` change by nonOwnerAdminWriteOK.
+      function ownerHandOffOK() {
+        let o = resource.data;
+        let n = request.resource.data;
+        return n.get('createdBy', '') == o.get('createdBy', '')
+          || (request.auth.uid == o.get('createdBy', '')
+              && !(request.auth.uid in n.users)
+              && n.get('createdBy', '') in n.users
+              && n.get('createdBy', '') in n.get('admins', []));
+      }
       // A member may update the conversation. Membership (`users`) can change ONLY when:
       //   • it's unchanged as a SET (normal sends — the client rewrites order each send), OR
       //   • a group ADMIN is making the change (add/remove/promote), OR
@@ -1260,11 +1379,20 @@ service cloud.firestore {
           // must keep the owner (createdBy) in BOTH admins and users. Only the owner can remove
           // themselves, and that goes through the self-leave branch below.
           // 2026-09-24 audit: plus the per-right check (nonOwnerAdminWriteOK) and the two floors.
+          // 2026-09-24 decision D23: the owner's leave may hand `createdBy` on (ownerHandOffOK), and
+          // the keep-the-owner check applies only while the owner is still a member. A group whose
+          // owner left before the hand-off existed failed that check on EVERY admin write, so
+          // nobody could manage it at all.
+          // 2026-09-24 decision D24: admins, the owner included, are held to the same private-map
+          // pin as members: no client admin write touches another member's block/mute/read state.
           || (resource.data.get('type', '') == 'group' && request.auth.uid in resource.data.admins
               && groupFloorsKept()
+              && ownerHandOffOK()
+              && privateMapsUntouched()
               && (request.auth.uid == resource.data.get('createdBy', '')
-                  || (resource.data.get('createdBy', '') in request.resource.data.admins
-                      && resource.data.get('createdBy', '') in request.resource.data.users
+                  || ((!(resource.data.get('createdBy', '') in resource.data.users)
+                       || (resource.data.get('createdBy', '') in request.resource.data.admins
+                           && resource.data.get('createdBy', '') in request.resource.data.users))
                       && nonOwnerAdminWriteOK())))
           // Group NON-admin member: members unchanged AND only send/per-user fields touched
           // (cannot self-promote, rename, change type/createdBy, etc.).
@@ -1278,7 +1406,9 @@ service cloud.firestore {
                  'unreadCount', 'typing', 'lastRead', 'pinnedBy', 'mutedBy', 'archivedBy',
                  'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt', 'lastPlayedVoice',
                  'lastReactionEnc', 'lastReactionBy', 'lastReactionToAuthor', 'lastReactionAt',
-                 'names', 'photos', 'posters', 'pinnedMessageIds'
+                 'names', 'photos', 'posters', 'pinnedMessageIds',
+                 // 2026-09-24 decision D13: Mark as Unread flag, pinned to my key by privateMapsUntouched.
+                 'markedUnread'
                ])
             // names/photos/posters are the per-member profile mirrors every chat list reads.
             // A member may refresh THEIR OWN entry only — the map diff is pinned to their uid,
@@ -1383,6 +1513,8 @@ service cloud.firestore {
         // blocked them. `startedBy` is the one who has to ask (Remove Friend sets it too).
         && request.auth.uid != resource.data.get('startedBy', '');
 
+      // 2026-09-24 decision D8: the paragraph below is HISTORY for 1:1 chats. The message create
+      // rule now refuses a blocked person's message (see `isBlockedByUser`).
       // Messages: only the two members. Blocking is SILENT — a blocked person's
       // message still writes (it looks "sent" to them), but the blocker's client
       // hides it and the push function skips their notification. You may delete
@@ -1408,6 +1540,11 @@ service cloud.firestore {
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
           && request.auth.uid in convData().users
+          // 2026-09-24 decision D8: a 1:1 message is refused when the other person has blocked me
+          // (their account block list, or the chat's `blockedBy`). This REPLACES the old silent
+          // block at write time (see the note above this match): the blocked person's message no
+          // longer lands at all. Groups are not blockable per person and are unaffected.
+          && (convData().get('type', '') == 'group' || !isBlockedByUser(otherHalf()))
           // ⛔ `expiresAt` BELONGS TO THE SERVER. It is the disappearing-message timer, written by
           // `onNewMessage` out of the conversation's own `disappearSeconds` the moment a message
           // lands, and swept by `cleanupExpiringMessages`. A client that could set it could send a
@@ -1681,7 +1818,12 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.caller
         && request.resource.data.callee is string
-        && request.resource.data.callee != request.auth.uid;
+        && request.resource.data.callee != request.auth.uid
+        // 2026-09-24 decision D7: the callee's Calls setting and blocks are the server's to enforce,
+        // not only the callee's phone (which a patched caller never reaches past the push). The
+        // app's own gates (`CallPrivacyIndex` before dialling, `decideAllowed` on the callee) stay.
+        && !isBlockedByUser(request.resource.data.callee)
+        && callsAllowedBy(request.resource.data.callee);
       // Either party may update the call, but neither can change who's on it.
       allow update: if signedIn()
         && (request.auth.uid == resource.data.caller || request.auth.uid == resource.data.callee)

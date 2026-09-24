@@ -5,6 +5,7 @@ import CoreTransferable
 import AVFoundation
 import UIKit
 import FirebaseFirestore
+import FirebaseFunctions   // 2026-09-24 decision D12: consumeOnceImage call
 import UniformTypeIdentifiers
 import QuickLook
 
@@ -328,6 +329,8 @@ struct ThreadView: View {
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
+    // 2026-09-24 decision D14: a tapped failed message opens Resend / Delete instead of resending.
+    @State private var failedActionTarget: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
     /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
@@ -976,6 +979,7 @@ struct ThreadView: View {
         !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming && requestStance != .awaitingReply
             && !cannotMessageThem
+            && !otherAccountDeleted   // 2026-09-24 decision D15
             // ...and not while the key-accepted notice holds the slot, or the phone would draw the
             // composer and that panel at once — the exact disagreement this property exists to stop.
             && !keyAccepted
@@ -995,6 +999,9 @@ struct ThreadView: View {
                 restrictedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if repo.iBlocked {
                 blockedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if otherAccountDeleted {
+                // 2026-09-24 decision D15: nobody left to receive, so no composer.
+                deletedAccountBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if requestStance == .incoming {
                 requestBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if keyAccepted {
@@ -1166,6 +1173,14 @@ struct ThreadView: View {
             // A view-once photo is consumed the moment the viewer closes: bubble flips to "Viewed".
             if let m = pendingViewOnceConsume {
                 ViewedOnce.mark(m.id)
+                // 2026-09-24 decision D12: view-once photos are burned on the server like voice.
+                // Same fire-and-forget shape as OneTimeVoicePage's consumeOnceVoice call; the
+                // function refuses groups and anything not a view-once image from someone else.
+                // Voice is left out here because its page already makes its own call.
+                if m.type == "image" {
+                    Functions.functions(region: "me-central1").httpsCallable("consumeOnceImage")
+                        .call(["cid": cid, "messageId": m.id]) { _, _ in }
+                }
                 pendingViewOnceConsume = nil
                 viewedOnceTick += 1
             }
@@ -1245,7 +1260,8 @@ struct ThreadView: View {
         }
         .fullScreenCover(item: $viewerVideo) { msg in
             VideoPlayerScreen(message: msg, cid: cid,
-                              clipProvider: { MediaOpenRects.clipRect })
+                              clipProvider: { MediaOpenRects.clipRect },
+                              onDeleteForMe: { m in deleteForMe(m) })   // 2026-09-24 decision D16
                 // No transition modifier: the poster flies via MediaOpen before this presents,
                 // exactly like photos. One pipeline, both directions.
         }
@@ -1426,6 +1442,20 @@ struct ThreadView: View {
             Button("Open") { WebLink.open(url) }
             Button("Cancel", role: .cancel) {}
         } message: { url in Text(url.absoluteString) }
+        // 2026-09-24 decision D14: a failed message offers Resend and Delete, one dialog for the
+        // whole conversation like the link confirm above. Delete goes through deleteForMe, which
+        // for an unsent message drops its queue entry, any upload in flight, and the bubble. The
+        // only reason we know per message is "no connection", so that is the one shown.
+        .confirmationDialog("Message not sent",
+                            isPresented: Binding(get: { failedActionTarget != nil },
+                                                 set: { if !$0 { failedActionTarget = nil } }),
+                            titleVisibility: .visible, presenting: failedActionTarget) { m in
+            Button("Resend") { resend(m) }
+            Button("Delete", role: .destructive) { deleteForMe(m) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            if !NetworkState.shared.isOnline { Text("No internet connection. Check your connection and try again.") }
+        }
         .alert("Sorry, this user doesn't seem to exist.", isPresented: $tappedUserNotFound) {
             Button("OK", role: .cancel) {}
         }
@@ -2355,7 +2385,7 @@ struct ThreadView: View {
                 canPin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
                 isPinned: repo.pinnedMessageIds.contains(msg.id),
                 restricted: iAmMuted,
-                onResend: { m in resend(m) },
+                onResend: { m in failedActionTarget = m },   // 2026-09-24 decision D14: ask first
                 onJumpTo: { id in jumpTo(id) },
                 resolveReplyOriginal: { id in repo.items.first { $0.id == id } },
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
@@ -3237,7 +3267,9 @@ struct ThreadView: View {
                 if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
             },
             onTapRetry: { id in
-                if let m = repo.items.first(where: { $0.rowId == id }) { resend(m) }
+                // 2026-09-24 decision D14: the tap asks Resend / Delete; the automatic retries still
+                // call resend directly.
+                if let m = repo.items.first(where: { $0.rowId == id }) { failedActionTarget = m }
             },
             onCancelUpload: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { cancelMediaSend(m) }
@@ -5892,6 +5924,17 @@ struct ThreadView: View {
         }
     }
 
+    // 2026-09-24 decision D15: a 1:1 whose other person deleted their account (purged, or inside
+    // the deletion grace period) shows this in the composer's place, styled like the bars above.
+    private var otherAccountDeleted: Bool { !isGroup && repo.otherAccountDeleted }
+
+    private var deletedAccountBar: some View {
+        composerNotice {
+            Label("Deleted account", systemImage: "person.crop.circle.badge.xmark")
+                .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+        }
+    }
+
     // Do we already share this chat (either side has sent something)? If so, messaging
     // always stays open — the Messages-privacy gate only blocks COLD new chats.
     private var hasChatHistory: Bool {
@@ -8485,11 +8528,14 @@ struct MessageBubble: View, Equatable {
                         .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
                 }
             }
-        } else if message.isImage, message.viewOnce {
+        } else if message.viewOnce,
+                  message.isImage || (message.type == "image" && message.pendingMediaKind == nil && !message.deleted) {
             // View-once photo: never rendered inline — a "① Photo" pill. The recipient taps it
             // to open the full-screen viewer EXACTLY once; after that it reads "Viewed" and is inert.
             // The sender's own pill is always inert (senders can't reopen).
-            let viewed = isViewedOnce
+            // 2026-09-24 decision D12: once consumeOnceImage has burned it, the message has no
+            // imageUrl (so isImage is false); it still draws this pill, as "Viewed", on every device.
+            let viewed = isViewedOnce || !message.isImage
             HStack(spacing: 8) {
                 Image(systemName: viewed ? "circle.slash" : "1.circle")
                     .font(.system(size: 18, weight: .semibold))

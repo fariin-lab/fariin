@@ -161,6 +161,10 @@ final class ThreadRepository {
     var otherOnline = false
     var otherLastActive: Date?
     var otherPrivacy: [String: String] = [:]   // their per-field audience map (users doc)
+    /// 2026-09-24 decision D15: the other person's account is deleted — their users doc is gone
+    /// (purged) or carries `isHidden` (ProfileStore.scheduleDeletion sets it for the grace period).
+    /// Only set from a snapshot that actually arrived; a failed read leaves it false.
+    var otherAccountDeleted = false
     var otherLastReadMillis: Double = 0
     var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
@@ -568,6 +572,13 @@ final class ThreadRepository {
                 .addSnapshotListener { [weak self] snap, _ in
                     let privacy = (snap?.data()?["privacy"] as? [String: String]) ?? [:]
                     self?.otherPrivacy = privacy
+                    // 2026-09-24 decision D15: gone or hidden-for-deletion is a deleted account.
+                    // A missing doc counts only when the server said so: a cold cache also reports
+                    // "does not exist" on its first snapshot, which is not a deletion.
+                    if let snap, snap.exists || !snap.metadata.isFromCache {
+                        let deleted = !snap.exists || (snap.data()?["isHidden"] as? Bool) == true
+                        if self?.otherAccountDeleted != deleted { self?.otherAccountDeleted = deleted }
+                    }
                     // AND THE CALL BUTTON LEARNS IT ON THE SAME SNAPSHOT. This listener is already
                     // live on their user document, so the moment they set calls to No One we know —
                     // but `CallPrivacyIndex` was only ever filled by one-off profile FETCHES, and it

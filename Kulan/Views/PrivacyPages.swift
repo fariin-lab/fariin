@@ -207,6 +207,10 @@ struct AudiencePage: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        // 2026-09-24 decision D11: a change made on another device lands here while the page is open.
+        .onReceive(NotificationCenter.default.publisher(for: ProfileStore.privacySynced)) { _ in
+            selection = PrivacyPrefs.mine(key)
+        }
     }
 }
 

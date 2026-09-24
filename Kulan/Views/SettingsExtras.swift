@@ -507,10 +507,23 @@ struct DevicesView: View {
 
 // MARK: - Blocked Users (real)
 
+/// 2026-09-24 decision D8: one row of the Blocked Users page. Built from a chat's `blockedBy` OR from
+/// the account block list, so somebody blocked with no chat has a row too.
+private struct BlockedPerson: Identifiable, Equatable {
+    let id: String        // their uid
+    let cid: String       // the pair id; the chat may not exist
+    let name: String
+    let photoUrl: String?
+    let sortKey: Double   // when the block was made (ms), newest first
+}
+
 struct BlockedUsersView: View {
     private var repo = ConversationsRepository.shared
+    private var blockList = BlockList.shared   // 2026-09-24 decision D8
     @Environment(\.colorScheme) private var scheme
-    @State private var toUnblock: Conversation?   // row awaiting the "Unblock?" confirm
+    @State private var toUnblock: BlockedPerson?   // row awaiting the "Unblock?" confirm
+    /// 2026-09-24 decision D8: name and photo for people on the list with no chat to carry them.
+    @State private var profiles: [String: UserProfile] = [:]
     @State private var blockError: String?        // 2026-09-24 audit: a refused block / unblock
     @State private var search = ""
     @State private var showPicker = false
@@ -524,18 +537,35 @@ struct BlockedUsersView: View {
     @State private var handles: [String: String] = [:]
 
     private var me: String { AuthService.shared.uid ?? "" }
-    private var blocked: [Conversation] {
-        let all = repo.conversations.filter { $0.blockedBy[me] == true }
-            .sorted { $0.updatedAtMillis > $1.updatedAtMillis }
+    /// 2026-09-24 decision D8: the union of chats I blocked and my account block list.
+    private var allBlocked: [BlockedPerson] {
+        var rows: [String: BlockedPerson] = [:]
+        for c in repo.conversations where !c.isGroup && c.blockedBy[me] == true {
+            let uid = c.otherUid(me)
+            guard !uid.isEmpty else { continue }
+            rows[uid] = BlockedPerson(id: uid, cid: c.id, name: c.name(for: me), photoUrl: c.photoUrl(for: me),
+                                      sortKey: max(c.blockedAtMillis(me), blockList.entries[uid] ?? 0))
+        }
+        for (uid, at) in blockList.entries where rows[uid] == nil {
+            let p = profiles[uid]
+            let name = p.map { $0.name.isEmpty ? $0.handle : $0.name } ?? ""
+            rows[uid] = BlockedPerson(id: uid, cid: ChatService.convId(me, uid), name: name,
+                                      photoUrl: p?.photoUrl, sortKey: at)
+        }
+        return rows.values.sorted { $0.sortKey > $1.sortKey }
+    }
+
+    private var blocked: [BlockedPerson] {
+        let all = allBlocked
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return all }
         return all.filter {
-            $0.name(for: me).lowercased().contains(q)
-                || (handles[$0.otherUid(me)] ?? "").lowercased().contains(q)
+            $0.name.lowercased().contains(q)
+                || (handles[$0.id] ?? "").lowercased().contains(q)
         }
     }
 
-    private func blockedRow(_ conv: Conversation) -> some View {
+    private func blockedRow(_ conv: BlockedPerson) -> some View {
         HStack(spacing: 12) {
             // THE SWIPE IS INVISIBLE, and that was the hole. Swiping left has been the only way to
             // unblock anybody, so somebody who does not already know the gesture cannot undo a block
@@ -555,13 +585,13 @@ struct BlockedUsersView: View {
                 .buttonStyle(.borderless)
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 44)
+            AvatarView(name: conv.name, photoUrl: conv.photoUrl, size: 44)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(conv.name(for: me)).font(.body)
-                    VerifiedMark(uid: conv.otherUid(me), size: 13)
+                    Text(conv.name).font(.body)
+                    VerifiedMark(uid: conv.id, size: 13)
                 }
-                if let h = handles[conv.otherUid(me)], !h.isEmpty {
+                if let h = handles[conv.id], !h.isEmpty {
                     Text("@\(h)").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -573,11 +603,12 @@ struct BlockedUsersView: View {
     /// One fetch per blocked person, once. Anyone already known is skipped, so re-entering the page
     /// or a conversations refresh costs nothing.
     private func loadHandles() async {
-        for conv in repo.conversations where conv.blockedBy[me] == true {
-            let uid = conv.otherUid(me)
+        // 2026-09-24 decision D8: every blocked uid, list included; the profile also names the rows
+        // that have no chat.
+        for uid in allBlocked.map(\.id) {
             guard !uid.isEmpty, handles[uid] == nil else { continue }
             if let p = await ProfileStore.shared.fetch(uid) {
-                await MainActor.run { handles[uid] = p.handle }
+                await MainActor.run { handles[uid] = p.handle; profiles[uid] = p }
             }
         }
     }
@@ -656,20 +687,24 @@ struct BlockedUsersView: View {
             if empty { withAnimation(.snappy(duration: 0.22)) { editing = false } }
         }
         .sheet(isPresented: $showPicker) { BlockPickerView { blockError = $0 } }
-        .task(id: repo.conversations.count) { await loadHandles() }
+        .task(id: repo.conversations.count + blockList.entries.count) {
+            BlockList.shared.start()   // 2026-09-24 decision D8: idempotent
+            await loadHandles()
+        }
         .navigationTitle("Blocked Users")
         .navigationBarTitleDisplayMode(.inline)
         // Confirm before unblocking â€” an accidental row tap must not silently unblock someone.
-        .alert("Unblock \(toUnblock.map { $0.name(for: me) } ?? "")?",
+        .alert("Unblock \(toUnblock.map { $0.name } ?? "")?",
                isPresented: Binding(get: { toUnblock != nil }, set: { if !$0 { toUnblock = nil } })) {
             Button("Cancel", role: .cancel) {}
             Button("Unblock", role: .destructive) {
                 // 2026-09-24 audit: setBlocked already says whether the write landed; it was dropped.
                 if let conv = toUnblock {
-                    let name = conv.name(for: me)
+                    let name = conv.name
                     blockError = nil
                     Task {
-                        let ok = await ChatService.setBlocked(conv.id, false)
+                        // 2026-09-24 decision D8: the pair id; clears the list entry and the chat's copy.
+                        let ok = await ChatService.setBlocked(conv.cid, false)
                         if !ok { await MainActor.run { blockError = "\(name) could not be unblocked. Try again." } }
                     }
                 }
@@ -699,6 +734,8 @@ private struct BlockPickerView: View {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         return repo.conversations
             .filter { !$0.isGroup && $0.blockedBy[me] != true && !$0.otherUid(me).isEmpty }
+            // 2026-09-24 decision D8: nor somebody already on my account block list.
+            .filter { !BlockList.shared.contains($0.otherUid(me)) }
             .filter { q.isEmpty || $0.name(for: me).lowercased().contains(q) }
             .sorted { $0.updatedAtMillis > $1.updatedAtMillis }
     }

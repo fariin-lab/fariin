@@ -552,6 +552,22 @@ struct CallsView: View {
         let s = CallService.shared.state
         return s == .idle || s == .ended
     }
+    /// 2026-09-24 decision D26: a row tapped while a call is live brings that call's screen forward,
+    /// the way the floating card and the green bar do, instead of `startCall` refusing silently.
+    /// Returns false when there is no live call, and the row dials as before.
+    private func bringLiveCallForward() -> Bool {
+        let s = CallService.shared.state
+        if s == .outgoing || s == .active || s == .reconnecting {
+            CallService.shared.minimized = false   // what the floating card's tap does (CallView)
+            return true
+        }
+        let group = GroupCallService.shared
+        if group.isActive {
+            group.minimized = false   // CallContainer re-presents GroupCallView on this
+            return true
+        }
+        return false
+    }
     /// Is everything currently on screen already ticked? Drives the Select All button's two states.
     /// ⚠️ Compared against `shownRuns`, the same list the button acts on, so filtering or searching
     /// mid-selection cannot leave the button claiming "all" about rows that are no longer visible.
@@ -601,6 +617,7 @@ struct CallsView: View {
                                 count: run.entries.count,
                                 onProfile: { profileTarget = call },
                                 onCall: {   // the ROW: call back the same way (video stays video), no confirm
+                                    if bringLiveCallForward() { return }   // 2026-09-24 decision D26
                                     CallService.shared.startCall(to: call.otherUid, name: call.name,
                                                                  photo: call.photoUrl, video: call.video)
                                 }

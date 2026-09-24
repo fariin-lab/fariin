@@ -751,6 +751,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// per-message flag, for the same reason `lastRead` is one: one small field on a document the chat
     /// already listens to, instead of a write against every message. See `voicePlayedByOther`.
     var lastPlayedVoice: [String: Double]
+    /// 2026-09-24 decision D13: Mark as Unread is its own per-user flag, not a sign on `unreadCount`.
+    /// uid → true while that member has marked the chat unread by hand; cleared when they open it.
+    var markedUnread: [String: Bool]
     var pinnedMessageId: String        // a pinned message in this chat ("" = none)
     var disappearSeconds: Int          // auto-delete timer (0 = off), shared by both members
     var convType: String               // "group" = group chat; "" / "direct" = 1:1
@@ -815,6 +818,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.blockedAt = doubleMap(data["blockedAt"])
         self.pinOrder = doubleMap(data["pinOrder"])
         self.lastPlayedVoice = doubleMap(data["lastPlayedVoice"])
+        self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
         self.convType = data["type"] as? String ?? ""
@@ -935,12 +939,15 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func displayPhoto(_ me: String) -> String? { isGroup ? avatarUrl : photoUrl(for: me) }
     /// Group header subtitle, e.g. "7 members".
     var memberCountLabel: String { "\(users.count) member\(users.count == 1 ? "" : "s")" }
-    /// HOW MANY messages are waiting. Never negative: a negative value is the manual "mark as unread"
-    /// flag, which means a dot and no number — see `ChatService.markUnread`.
+    /// HOW MANY messages are waiting. Never negative: a negative value is the OLD manual "mark as
+    /// unread" flag (before 2026-09-24), which means a dot and no number — see `ChatService.markUnread`.
     func unread(_ me: String) -> Int { max(0, unreadCount[me] ?? 0) }
     /// You marked this chat unread yourself. A reminder, not a claim that somebody sent you something,
     /// so the list shows a plain dot rather than "1".
-    func manuallyUnread(_ me: String) -> Bool { (unreadCount[me] ?? 0) < 0 }
+    /// 2026-09-24 decision D13: read from its own `markedUnread` flag, so a new message (which bumps
+    /// `unreadCount`) no longer cancels it. A chat still carrying the old -1 counts as marked until
+    /// it is next opened, which writes the count back to 0.
+    func manuallyUnread(_ me: String) -> Bool { (markedUnread[me] ?? false) || (unreadCount[me] ?? 0) < 0 }
     /// Anything at all to show in the list's badge slot, of either kind.
     func hasUnreadMark(_ me: String) -> Bool { unread(me) > 0 || manuallyUnread(me) }
     func isMuted(_ me: String, now: Double) -> Bool { (mutedBy[me] ?? 0) > now }

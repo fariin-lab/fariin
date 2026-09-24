@@ -537,6 +537,22 @@ enum ChatService {
                     // Tell everyone who inherited admin (otherwise the heir never learns).
                     notice("\(names[heir] ?? "A member") is now an admin")
                 }
+                // 2026-09-24 decision D23: the OWNER leaving hands ownership on in this same write:
+                // to the longest-serving admin (`admins` keeps promotion order, arrayUnion appends),
+                // else the longest-serving member (`users` keeps join order), who was made admin just
+                // above. Before this `createdBy` kept naming the leaver, and the rules' keep-the-owner
+                // check then refused every other admin's write. The rules allow exactly this hand-off.
+                let owner = data["createdBy"] as? String ?? ""
+                if !owner.isEmpty, owner == me,
+                   let heir = admins.first(where: { $0 != me && users.contains($0) })
+                        ?? users.first(where: { $0 != me }) {
+                    convUpdate["createdBy"] = heir
+                    // The rules want the new owner in `admins` after the write.
+                    if !admins.contains(heir) { convUpdate["admins"] = admins.filter { $0 != me } + [heir] }
+                    // The owner holds every right; drop a limited-admin entry so no screen shows one.
+                    convUpdate["adminRights.\(heir)"] = FieldValue.delete()
+                    notice("\(names[heir] ?? "A member") is now the owner")
+                }
                 notice(left)
                 convUpdate["lastMessage"] = left
                 convUpdate["lastSender"] = me
@@ -2870,8 +2886,16 @@ enum ChatService {
 
     static func resetUnread(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markRead(); return }
-        try? await db.collection("conversations").document(cid)
-            .updateData(["unreadCount.\(uid)": 0])
+        let me = uid
+        var update: [String: Any] = ["unreadCount.\(me)": 0]
+        // 2026-09-24 decision D13: opening the chat also clears my Mark as Unread flag. Only when the
+        // list shows it set, so the many resets a chat does while open stay the one-field write
+        // they were. Writing the count to 0 also retires an old -1 flag.
+        let marked = await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }?.markedUnread[me] ?? false
+        }
+        if marked { update["markedUnread.\(me)"] = FieldValue.delete() }
+        try? await db.collection("conversations").document(cid).updateData(update)
     }
 
     /// Manually flag a chat as unread — shows a plain DOT until reopened, never a number.
@@ -2880,14 +2904,16 @@ enum ChatService {
     /// conversation you had just read to the end. Marking something unread is a reminder to yourself,
     /// not a claim that somebody sent you something.
     ///
-    /// MINUS ONE IS THE FLAG, rather than a new field, and deliberately: `conversations` is field-
-    /// whitelisted in the rules, so a new key would need a rules deploy to be writable at all, and
-    /// this needs none. Everything that reads a count already treats "how many" as `max(0, …)` (see
-    /// `Conversation.unread`), so the number this shows is zero and the dot comes from the sign.
+    /// 2026-09-24 decision D13: ITS OWN FLAG NOW, `markedUnread.<me> = true`. Minus one on
+    /// `unreadCount` was the flag before this, and it shared arithmetic with the real counter: the
+    /// other person's next message did -1 + 1 = 0 and wiped both the reminder and the new message.
+    /// The count stays a real number; the rules let a member write only their own key of this map
+    /// (needs the rules deploy first). An old -1 still reads as marked (see
+    /// `Conversation.manuallyUnread`) until the chat is next opened.
     static func markUnread(_ cid: String) async {
         if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.markUnread(); return }
         try? await db.collection("conversations").document(cid)
-            .updateData(["unreadCount.\(uid)": -1])
+            .updateData(["markedUnread.\(uid)": true])
     }
 
     /// Mark this conversation read up to now (drives the other person's read receipts).
@@ -3081,30 +3107,64 @@ enum ChatService {
     /// this merge write would CREATE one without `users`, the create rule refuses it, and `try?`
     /// hid that. Creating the chat here is not the fix — every new 1:1 is born a request to the
     /// other person. Where a block should live when no chat exists is a backend decision.
+    ///
+    /// 2026-09-24 decision D8: THAT DECISION. A block lives on my ACCOUNT, `users/{me}/blocked/{them}`,
+    /// so anyone can be blocked, chat or no chat; the rules read it to refuse their new chat, their
+    /// messages and their calls. When a chat exists its `blockedBy`/`blockedAt` are written too, as
+    /// before (the chat list, the thread and the push all read those). `cid` is still the pair id,
+    /// `convId(me, them)`, whether or not that chat exists. The conversation write is an UPDATE now,
+    /// so a missing chat is "not found" (fine) instead of a create the rules refuse.
     @discardableResult
     static func setBlocked(_ cid: String, _ value: Bool) async -> Bool {
-        var data: [String: Any] = ["blockedBy": [uid: value]]
-        let now = Date().timeIntervalSince1970 * 1000
-        // Stamp block start / unblock time so the blocker hides exactly the messages
-        // that arrived DURING the block — and keeps hiding them after unblock
-        // (never delivered, as standard messengers do). Older history stays visible.
-        if value { data["blockedAt"] = [uid: now] } else { data["blockClearedAt"] = [uid: now] }
-        var ok = true
-        do {
-            try await db.collection("conversations").document(cid).setData(data, merge: true)
-        } catch {
-            print("setBlocked(\(cid), \(value)) refused:", error)
-            ok = false
-        }
+        let me = uid
+        let other = cid.contains("_") ? (cid.split(separator: "_").map(String.init).first { $0 != me } ?? "") : ""
+        // Both at once: each await waits for the server, and one must not hold the other up.
+        async let listOK = setBlockListEntry(me: me, other: other, value)
+        async let convOK = setConversationBlocked(cid, me: me, hasPair: !other.isEmpty, value)
+        let listDone = await listOK
+        let convDone = await convOK
+        let ok = listDone && convDone
         // REVOKE MY ACTIVE STORIES FROM THEM (audit). The audience is frozen into recipientUids at
         // post time and nothing ever rewrote it, so blocking someone only affected FUTURE stories:
         // for up to 24h they kept the ring, kept watching, and kept landing in my Seen-by. Blocking
         // is the strongest "stop seeing me" action there is, so it has to reach back.
-        if value {
-            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
-            if !other.isEmpty { await StoriesRepository.shared.revokeAudience(for: other) }
-        }
+        if value, !other.isEmpty { await StoriesRepository.shared.revokeAudience(for: other) }
         return ok
+    }
+
+    /// 2026-09-24 decision D8: my account-level block list entry for `other` (set or removed).
+    private static func setBlockListEntry(me: String, other: String, _ value: Bool) async -> Bool {
+        guard !me.isEmpty, !other.isEmpty, other != me, !other.contains("/") else { return true }
+        let ref = db.collection("users").document(me).collection("blocked").document(other)
+        do {
+            if value { try await ref.setData(["at": FieldValue.serverTimestamp()]) }
+            else { try await ref.delete() }
+            return true
+        } catch {
+            print("block list (\(other), \(value)) refused:", error)
+            return false
+        }
+    }
+
+    /// 2026-09-24 decision D8: the chat's own copy of the block, when the chat exists.
+    private static func setConversationBlocked(_ cid: String, me: String, hasPair: Bool, _ value: Bool) async -> Bool {
+        guard !me.isEmpty else { return false }
+        var data: [String: Any] = ["blockedBy.\(me)": value]
+        let now = Date().timeIntervalSince1970 * 1000
+        // Stamp block start / unblock time so the blocker hides exactly the messages
+        // that arrived DURING the block — and keeps hiding them after unblock
+        // (never delivered, as standard messengers do). Older history stays visible.
+        if value { data["blockedAt.\(me)"] = now } else { data["blockClearedAt.\(me)"] = now }
+        do {
+            try await db.collection("conversations").document(cid).updateData(data)
+            return true
+        } catch {
+            let ns = error as NSError
+            // Not found: no chat with them yet, and the list entry is the whole block.
+            if hasPair, ns.domain == FirestoreErrorDomain, ns.code == 5 { return true }
+            print("setBlocked(\(cid), \(value)) refused:", error)
+            return false
+        }
     }
 
     /// File an abuse report. App Store Guideline 1.2 requires users to be able to

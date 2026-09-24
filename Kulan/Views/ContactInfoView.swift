@@ -2165,6 +2165,14 @@ struct ContactInfoView: View {
             mutedUntil = muteUntil
             blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
         }
+        // 2026-09-24 decision D8: somebody blocked with no chat (or before one) is on my account's
+        // block list only; the page must offer Unblock for them too.
+        if !blocked, !otherUid.isEmpty, !otherUid.contains("/"), let me = AuthService.shared.uid, !me.isEmpty,
+           let snap = try? await Firestore.firestore().collection("users").document(me)
+               .collection("blocked").document(otherUid).getDocument(),
+           snap.exists {
+            blocked = true
+        }
         // LOCAL FIRST, THE WAY THE REFERENCE APP DOES IT: its media gallery is a query over its own message
         // database, so it renders offline and instantly; it never asks the network for something it has
         // already received. Fariin has no SQLite store, but it does keep this chat's decrypted messages
