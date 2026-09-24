@@ -1490,6 +1490,17 @@ struct ChatsView: View {
     /// The query, once. Read from four places in a body that re-runs on every typing dot.
     private var searchTrimmed: String { chatSearch.trimmingCharacters(in: .whitespaces) }
 
+    /// 2026-09-24 feature-audit: a search or a filter other than All has to see EVERY chat, so the
+    /// repository keeps paging until there is nothing older (see `needWholeList`).
+    private var needsWholeList: Bool { chatFilter != 0 || !searchTrimmed.isEmpty }
+
+    /// 2026-09-24 feature-audit: the list is empty only for now. Older chats are still being fetched
+    /// for a search or filter, or the All list's newest page held nothing to show (all of it
+    /// archived or cleared) and there is more behind it. Holds back the empty state meanwhile.
+    private var olderChatsPending: Bool {
+        repo.loadingWholeList || (chatFilter == 0 && searchTrimmed.isEmpty && repo.canLoadOlder)
+    }
+
     /// Found people who are NOT already a row above. Somebody you chat with matching the query is
     /// already in the list; offering to "start" a chat you are in the middle of would be two rows
     /// for one person saying different things.
@@ -1554,7 +1565,8 @@ struct ChatsView: View {
                 query: searchTrimmed,
                 me: me,
                 dark: dark,
-                searching: searchingUsers,
+                // 2026-09-24 feature-audit: older chats still arriving is not "no results" yet either.
+                searching: searchingUsers || repo.loadingWholeList,
                 chats: { visible },
                 people: { newPeople },
                 personRow: { AnyView(newPersonRow($0)) },
@@ -2313,6 +2325,9 @@ struct ChatsView: View {
                 guard chatFilter == 0, searchTrimmed.isEmpty else { return }
                 repo.loadOlder()
             },
+            // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
+            // asked for by scrolling and for a search or filter fetching the whole list.
+            loadingMore: repo.loadingOlder || repo.loadingWholeList,
             // 2026-09-24 fix-all: pull past the search bar and let go flips All <-> Unread, the
             // reference app's gesture. The same `chatFilter` the title menu sets.
             // No `withAnimation`: an animation around a representable's update is a second clock
@@ -2487,7 +2502,16 @@ struct ChatsView: View {
                                 // branch, typing a name nobody has empties the list and the welcome
                                 // state below tells someone with two hundred chats that they have
                                 // none and offers to teach them how to start one.
-                                if !chatSearch.trimmingCharacters(in: .whitespaces).isEmpty {
+                                // 2026-09-24 feature-audit: NOT EMPTY YET. Older chats are still
+                                // coming (see `olderChatsPending`). The table's loading row shows;
+                                // this asks for the next page each time one lands and it is still
+                                // empty, which is what the All list's scroll trigger cannot do
+                                // with no row on screen to reach.
+                                if olderChatsPending, !repo.loadFailed {
+                                    Color.clear
+                                        .allowsHitTesting(false)
+                                        .task(id: repo.conversations.count) { repo.loadOlder() }
+                                } else if !chatSearch.trimmingCharacters(in: .whitespaces).isEmpty {
                                     ContentUnavailableView.search(text: chatSearch)
                                         .allowsHitTesting(false)
                                 } else if repo.loadFailed {
@@ -2637,6 +2661,8 @@ struct ChatsView: View {
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.
             .task(id: chatSearch) { await lookUpPeople(chatSearch) }
+            // 2026-09-24 feature-audit: search text or a filter other than All fetches the whole list.
+            .task(id: needsWholeList) { repo.needWholeList("chats", needsWholeList) }
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back
             // drag); reveal them only when we're fully back at the root list.
@@ -3245,7 +3271,11 @@ struct ArchivedChatsView: View {
 
     private var content: some View {
             Group {
-                if !hasAnyArchived && archivedStories.isEmpty {
+                if !hasAnyArchived && archivedStories.isEmpty && repo.loadingWholeList {
+                    // 2026-09-24 feature-audit: older chats are still arriving and may hold archived
+                    // ones; "Nothing archived" is only true once they have.
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !hasAnyArchived && archivedStories.isEmpty {
                     EmptyStateView(title: "Nothing archived", icon: "archivebox",
                                    text: "Chats you archive and stories you hide will show here.")
                 } else {
@@ -3365,11 +3395,14 @@ struct ArchivedChatsView: View {
                             // now, so an archived chat older than it arrives with the next page. A
                             // spinner at the end asks for pages while it is on screen; `.task(id:)`
                             // asks again each time a page lands and it is still showing.
-                            if repo.hasOlder {
+                            // 2026-09-24 feature-audit: the paging itself is the repository's now
+                            // (`needWholeList("archive")` below, one page per server answer, capped),
+                            // so this row is only the loading state. It used to page only once the
+                            // spinner scrolled into view, and never when the page opened empty.
+                            if repo.loadingWholeList {
                                 HStack { Spacer(); ProgressView(); Spacer() }
                                     .listRowSeparator(.hidden)
                                     .listRowBackground(Color.clear)
-                                    .task(id: repo.conversations.count) { repo.loadOlder() }
                             }
                         }
                         .listStyle(.plain)
@@ -3425,6 +3458,9 @@ struct ArchivedChatsView: View {
             }
             .navigationTitle("Archived")
             .navigationBarTitleDisplayMode(.inline)
+            // 2026-09-24 feature-audit: the archive needs every chat, not the newest page of them.
+            .onAppear { repo.needWholeList("archive", true) }
+            .onDisappear { repo.needWholeList("archive", false) }
             // THE TAB BAR HAS NO BUSINESS HERE (owner 2026-08-19, screenshot). The archive is a
             // PUSHED page of the chats stack, so it inherited the shell's tab bar and the floating
             // Chats/Calls/Settings pill sat under a sub page. Every other pushed page in the app

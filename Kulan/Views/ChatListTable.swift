@@ -405,6 +405,8 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// for the next page of older chats. Fires per display of that row; the repository ignores
     /// repeats while a page is on its way.
     var onReachEnd: () -> Void = {}
+    /// 2026-09-24 feature-audit: older chats are on their way; the end of the list shows a spinner.
+    var loadingMore: Bool = false
     /// 2026-09-24 fix-all (pull-down Unread filter): released after pulling well past the top, the
     /// reference app's gesture for flipping the list to Unread and back.
     var onPullFilter: () -> Void = {}
@@ -427,6 +429,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         // and a guarded comparison costs nothing. See `reassertNavChrome` for what it no longer
         // does.
         vc.reassertNavChrome()
+        vc.setLoadingMore(loadingMore)   // 2026-09-24 feature-audit
         vc.setSelecting(selecting)
         vc.apply(state: .make(pinned: pinned.map(\.id),
                               unpinned: unpinned.map(\.id),
@@ -536,8 +539,25 @@ final class ChatListSelfSizingTable: UITableView {
         }
     }
 
+    /// 2026-09-24 feature-audit: THE LOADING-OLDER ROW. Older chats are on their way (a page asked
+    /// for at the end of the list, or a search or filter fetching the whole list), so the end of the
+    /// list says so instead of looking like it stopped. It lives INSIDE the footer this view already
+    /// owns, because nothing else may assign `tableFooterView` (see above), and it is not a row, so
+    /// it never enters the row diff or the pin transaction.
+    static let loadingRowHeight: CGFloat = 56
+    private let spinner = UIActivityIndicatorView(style: .medium)
+    var showsLoadingRow = false {
+        didSet {
+            guard showsLoadingRow != oldValue else { return }
+            if showsLoadingRow { spinner.startAnimating() } else { spinner.stopAnimating() }
+            setNeedsLayout()   // `layoutSubviews` resizes the footer; nothing runs here directly
+        }
+    }
+
     override init(frame: CGRect, style: UITableView.Style) {
         super.init(frame: frame, style: style)
+        spinner.hidesWhenStopped = true
+        footer.addSubview(spinner)
         tableFooterView = footer
     }
     required init?(coder: NSCoder) { fatalError("ChatListSelfSizingTable is never built from a nib") }
@@ -563,7 +583,10 @@ final class ChatListSelfSizingTable: UITableView {
             available = max(0, available - rect(forSection: section).height)
         }
         let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 2
-        let target = available + 1 / scale
+        // 2026-09-24 feature-audit: room for the loading row under the last chat, and the spinner
+        // centred in it. Placed before the guard below so a width change still re-centres it.
+        spinner.center = CGPoint(x: bounds.width / 2, y: Self.loadingRowHeight / 2)
+        let target = max(available, showsLoadingRow ? Self.loadingRowHeight : 0) + 1 / scale
         guard abs(footer.frame.height - target) > 0.01 else { return }
         footer.frame.size.height = target
         // Re-assigned rather than only resized: the table caches the footer's height and will not
@@ -672,6 +695,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func setTint(_ color: UIColor) {
         guard tableView.tintColor != color else { return }
         tableView.tintColor = color
+    }
+
+    /// 2026-09-24 feature-audit: the loading-older row at the end of the list. See
+    /// `ChatListSelfSizingTable.showsLoadingRow`.
+    func setLoadingMore(_ on: Bool) {
+        (tableView as? ChatListSelfSizingTable)?.showsLoadingRow = on
     }
 
     /// ⛔ THE MODE IS TRACKED HERE, NOT READ BACK OFF THE TABLE — audit, 2026-09-11. `isEditing` is
@@ -1777,9 +1806,19 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     /// 2026-09-24 fix-all #6: the last row of the chats section is about to show, so ask for the
     /// next page of older chats. The repository drops the call when there is none or one is coming.
+    /// 2026-09-24 feature-audit: the last CHAT row, whichever section holds it. With every chat on
+    /// screen pinned the unpinned section is empty, its "last row" was -1, and nothing could ever
+    /// ask for the older chats behind them.
     func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        guard indexPath.section == ChatListSection.unpinned.rawValue,
-              indexPath.row == state.unpinned.count - 1 else { return }
+        let last: (section: Int, row: Int)
+        if !state.unpinned.isEmpty {
+            last = (ChatListSection.unpinned.rawValue, state.unpinned.count - 1)
+        } else if !state.pinned.isEmpty {
+            last = (ChatListSection.pinned.rawValue, state.pinned.count - 1)
+        } else {
+            return
+        }
+        guard indexPath.section == last.section, indexPath.row == last.row else { return }
         host?.parent.onReachEnd()
     }
 

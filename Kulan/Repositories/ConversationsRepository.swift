@@ -58,21 +58,54 @@ final class ConversationsRepository {
     // is scrolled to its end (`loadOlder`). Needs the composite index users(CONTAINS) +
     // updatedAt(DESC) in firestore.indexes.json, deployed before an app build that carries this.
     static let pageSize = 300
+    /// 2026-09-24 feature-audit: the ceiling on the window. One listener over this many documents is
+    /// already far past any real account; past it the paging stops instead of growing without end.
+    static let maxWindow = pageSize * 20
     @ObservationIgnored private var windowLimit = ConversationsRepository.pageSize
     /// The last snapshot filled the window, so there may be older chats on the server.
+    /// 2026-09-24 feature-audit: only a SERVER answer may lower this; see the listener.
     var hasOlder = false
     /// A bigger window has been asked for and its first snapshot has not landed yet.
     var loadingOlder = false
     @ObservationIgnored private var listenerUid: String?
 
+    /// 2026-09-24 feature-audit: there is an older page and the window may still grow to fetch it.
+    var canLoadOlder: Bool { hasOlder && windowLimit < Self.maxWindow }
+
     /// 2026-09-24 fix-all #6: the next page. The listener is re-attached with a bigger limit, so the
     /// chats already on screen come straight back from the local cache and only the older ones cost
     /// reads. A no-op while a page is already on its way or there is nothing older.
     func loadOlder() {
-        guard hasOlder, !loadingOlder, listener != nil, !DemoMode.active else { return }
+        guard canLoadOlder, !loadingOlder, listener != nil, !DemoMode.active else { return }
         loadingOlder = true
-        windowLimit += Self.pageSize
+        // 2026-09-24 feature-audit: one page at a time, never past the ceiling.
+        windowLimit = min(windowLimit + Self.pageSize, Self.maxWindow)
         attach()
+    }
+
+    // MARK: - Whole-list modes (2026-09-24 feature-audit)
+    //
+    // Nothing a person owns may become unreachable. A search, a filter other than All, the Message
+    // Requests page and the Archive page all need EVERY chat, not the newest page of them, so while
+    // any of them is showing the window keeps growing, one page per server answer, until the server
+    // says there is nothing older. The plain All list still pages only when scrolled to its end.
+    @ObservationIgnored private var wholeListHolders = Set<String>()
+    /// A screen needs the whole list and older pages are still coming in. The screens show a
+    /// loading row while this is true, and hold back an empty state that is not settled yet.
+    var loadingWholeList = false
+
+    /// `holder` names the screen (or mode) so two of them can overlap without one switching the
+    /// other off.
+    func needWholeList(_ holder: String, _ on: Bool) {
+        if on { wholeListHolders.insert(holder) } else { wholeListHolders.remove(holder) }
+        continueWholeList()
+    }
+
+    /// Asks for the next page while a holder still needs one. Called again after every server answer.
+    private func continueWholeList() {
+        let want = !wholeListHolders.isEmpty && canLoadOlder && !loadFailed && !DemoMode.active
+        if loadingWholeList != want { loadingWholeList = want }
+        if want { loadOlder() }
     }
 
     func start() {
@@ -147,14 +180,25 @@ final class ConversationsRepository {
                         self?.loadFailed = true
                         self?.hasLoaded = true
                         self?.loadingOlder = false
+                        self?.loadingWholeList = false   // 2026-09-24 feature-audit: no page is coming now
                     }
                     return
                 }
                 if self.loadFailed { self.loadFailed = false }
                 // 2026-09-24 fix-all #6: a full window means there may be more behind it. Only a
                 // server answer settles a page request; the cache can hand back fewer than exist.
-                self.hasOlder = snap.documents.count >= limit
-                if !snap.metadata.isFromCache { self.loadingOlder = false }
+                // 2026-09-24 feature-audit: and only a server answer may say "nothing older". A cache
+                // snapshot right after the window widened holds fewer than the limit, and used to
+                // flip this off, stop the paging and drop every pinned chat kept below the window.
+                let fromServer = !snap.metadata.isFromCache
+                let full = snap.documents.count >= limit
+                if fromServer || full { self.hasOlder = full }
+                if fromServer {
+                    self.loadingOlder = false
+                    // 2026-09-24 feature-audit: the next page for a whole-list screen, after this
+                    // snapshot has been published (hopped, so it never re-attaches from inside it).
+                    DispatchQueue.main.async { [weak self] in self?.continueWholeList() }
+                }
                 // ⚠️ REPORTED BEFORE THE GUARD BELOW, on purpose. The empty-cached case is exactly
                 // the offline cold start, and it is the one the header most needs to hear about —
                 // returning first would make this listener silent precisely when it has the most to
@@ -302,8 +346,13 @@ final class ConversationsRepository {
         // Hopped rather than called straight: this snapshot handler is not statically main-isolated,
         // and the preloader builds ThreadRepository objects, which belong to the main actor. Same
         // shape as the voice prefetch a few lines up.
-        let warmList = convs
+        // 2026-09-24 feature-audit: only the chats near the top. The window arrives newest first, so
+        // its first page is the top of the list; a chat that was only PAGED IN (a search, a filter,
+        // the archive) is not about to be opened and no longer queues a warm-up. It rejoins the
+        // first page the moment anything happens in it. A pinned chat counts as near the top.
         let warmMe = Auth.auth().currentUser?.uid ?? ""
+        let warmList = Array(convs.prefix(Self.pageSize))
+            + convs.dropFirst(Self.pageSize).filter { $0.isPinned(warmMe) }
         Task { @MainActor in ChatHistoryPreloader.shared.refresh(warmList, me: warmMe) }
         guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
@@ -379,7 +428,9 @@ final class ConversationsRepository {
         // Only a server answer may forget an id: a cold cache can hold fewer chats than exist.
         let keep = fromServer ? pinnedInWindow.union(outside) : pinnedInWindow.union(remembered)
         UserDefaults.standard.set(Array(keep), forKey: pinnedIdsKey(uid))
-        for id in Array(pinnedExtraListeners.keys) where !outside.contains(id) {
+        // 2026-09-24 feature-audit: and only a server answer may tear a listener down. A cache
+        // snapshot can only ADD pinned chats; it used to remove every one kept below the window.
+        for id in Array(pinnedExtraListeners.keys) where fromServer && !outside.contains(id) {
             pinnedExtraListeners.removeValue(forKey: id)?.remove()
             pinnedExtraDocs[id] = nil
         }
@@ -394,7 +445,10 @@ final class ConversationsRepository {
                         self.forgetPinnedExtra(id, uid: uid); return
                     }
                     let c = Conversation(id: snap.documentID, data: data)
-                    guard c.isPinned(uid) else { self.forgetPinnedExtra(id, uid: uid); return }
+                    // 2026-09-24 feature-audit: a cleared chat (delete for me) is off every list, so
+                    // its listener is released like an unpinned one. A new message un-clears it and
+                    // brings it back to the top of the window, where its pin is remembered again.
+                    guard c.isPinned(uid), !c.isCleared(uid) else { self.forgetPinnedExtra(id, uid: uid); return }
                     self.pinnedExtraDocs[id] = c
                     self.blockListChanged()   // re-publish the window with this chat merged in
                 }
@@ -446,6 +500,7 @@ final class ConversationsRepository {
         windowLimit = Self.pageSize
         hasOlder = false
         loadingOlder = false
+        loadingWholeList = false   // 2026-09-24 feature-audit
         pendingConvs = nil
         lastRaw = []   // 2026-09-24 decision D8
         conversations = []

@@ -77,7 +77,18 @@ struct MessageRequestsView: View {
             ForEach(requests) { conv in
                 requestRow(conv)
             }
+            // 2026-09-24 feature-audit: the loading state while older chats (and any request among
+            // them) are still being fetched. The Archive page's own row.
+            if repo.loadingWholeList {
+                HStack { Spacer(); ProgressView(); Spacer() }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
         }
+        // 2026-09-24 feature-audit: a request whose chat sits below the newest page was unreachable
+        // here. This page needs every chat, so the repository pages until there is nothing older.
+        .onAppear { repo.needWholeList("requests", true) }
+        .onDisappear { repo.needWholeList("requests", false) }
         // `.plain`, like the archive — the other pushed page that lists these same rows. A grouped
         // list paints every cell on `secondarySystemGroupedBackground`, and that grey card under a
         // chat row is the exact thing the owner had removed from the chat list on 2026-09-02.
@@ -161,7 +172,8 @@ struct MessageRequestsView: View {
 
     /// A line, not a picture. There is nothing to illustrate here and an empty inbox is good news.
     @ViewBuilder private var emptyLine: some View {
-        if requests.isEmpty {
+        // 2026-09-24 feature-audit: not while older chats are still arriving; the row above says so.
+        if requests.isEmpty, !repo.loadingWholeList {
             Text("No message requests.")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)

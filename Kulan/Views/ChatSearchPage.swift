@@ -298,6 +298,12 @@ struct ChatSearchPage: View {
                 onClearRecent: { recents.clear() })
 
             if model.isEmpty { emptyState }
+            // 2026-09-24 feature-audit: older chats are still being fetched for this search, so
+            // more matches may come. Under the results, out of the way of the rows.
+            if !model.isEmpty, !query.isEmpty, repo.loadingWholeList {
+                VStack { Spacer(); ProgressView().padding(.bottom, 16) }
+                    .allowsHitTesting(false)
+            }
         }
         .onAppear { recents.start() }
     }
@@ -450,6 +456,9 @@ struct ChatSearchPage: View {
             // never resolves is what his screenshot is complaining about in another form.
             EmptyStateView(title: "Search", icon: "magnifyingglass",
                            text: "Find your chats and groups, or a person by their username.")
+        } else if repo.loadingWholeList {
+            // 2026-09-24 feature-audit: not "no results" while older chats are still arriving.
+            ProgressView()
         } else if !searching {
             // ⚠️ NOT WHILE THE USERNAME LOOKUP IS STILL OUT. "No results" drawn over a person who
             // arrives 200ms later is the same bug the chat list's own overlay guards against.
