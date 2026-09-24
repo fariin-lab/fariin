@@ -1696,6 +1696,25 @@ service cloud.firestore {
           return mediaUrlOk('imageUrl') && mediaUrlOk('videoUrl') && mediaUrlOk('audioUrl')
             && mediaUrlOk('fileUrl') && mediaUrlOk('thumbUrl');
         }
+        // 2026-09-24 feature-audit: the link card gets the same limits as its siblings. It is a map
+        // (ChatService.sealLinkPreview): `url` sealed and required, `title`/`desc` sealed and
+        // optional, each under the ceiling `text` has; `imageUrl` an https address like every other
+        // media field; `imageEnc` the image's key map. Nothing else rides inside it.
+        function sealedOk(lp, k) {
+          return !(k in lp) || (lp[k] is string && lp[k].size() <= 700000);
+        }
+        function linkPreviewOk() {
+          let lp = request.resource.data.get('linkPreview', {});
+          return !('linkPreview' in request.resource.data)
+            || (request.resource.data.linkPreview is map
+                && lp.keys().hasOnly(['url', 'title', 'desc', 'imageUrl', 'imageEnc'])
+                && lp.get('url', null) is string
+                && sealedOk(lp, 'url') && sealedOk(lp, 'title') && sealedOk(lp, 'desc')
+                && (!('imageUrl' in lp)
+                    || (lp.imageUrl is string && lp.imageUrl.size() <= 2048
+                        && lp.imageUrl.matches('https://.+')))
+                && (!('imageEnc' in lp) || lp.imageEnc is map));
+        }
         allow read: if signedIn() && request.auth.uid in convData().users;
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
@@ -1732,6 +1751,7 @@ service cloud.firestore {
           // 2026-09-24 decision D-composer-3: text size and media-address shape, on every message.
           && textWithinCap()
           && mediaUrlsOk()
+          && linkPreviewOk()   // 2026-09-24 feature-audit: the card's own fields
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           && (convData().get('onlyAdminsSend', false) == false
               || request.auth.uid in convData().get('admins', []))

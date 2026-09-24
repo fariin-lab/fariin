@@ -135,8 +135,25 @@ enum MessageRequests {
     /// What it stops is a client that IS counting and keeps going. The existing `windowStart` is
     /// never written back at all (only `count` is incremented), because the rule compares it for
     /// equality and a round trip through seconds would lose the nanoseconds.
-    static func countKnock() async {
+    static func countKnock(clientId: String? = nil) async {
+        // 2026-09-24 feature-audit: once per message, not once per attempt. A first message that
+        // failed on a weak signal and went again (the queue's drain, a Resend) was counted again
+        // each time, so one knock could spend several of the day's twenty.
+        if let clientId, !claimKnock(clientId) { return }
         await countDaily("requests")
+    }
+
+    /// The clientIds already counted as a knock, on disk so a retry after a relaunch is still one
+    /// knock. Only the most recent are kept: a retry comes within days, not after 200 new knocks.
+    private static let knocksKey = "requests.countedKnocks.v1"
+    private static let knocksLock = NSLock()
+    private static func claimKnock(_ clientId: String) -> Bool {
+        knocksLock.lock(); defer { knocksLock.unlock() }
+        var ids = UserDefaults.standard.stringArray(forKey: knocksKey) ?? []
+        if ids.contains(clientId) { return false }
+        ids.append(clientId)
+        UserDefaults.standard.set(Array(ids.suffix(200)), forKey: knocksKey)
+        return true
     }
 
     /// 2026-09-24 fix-all: the same day counter under another name. `reports` and `glows` are read

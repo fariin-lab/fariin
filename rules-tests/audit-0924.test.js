@@ -447,6 +447,8 @@ function composerCases() {
   const poll = (flag) => [...gm, { function: 'get', args: [{ exactValue: msgPath }],
     result: { value: { data: { authorId: ADMIN, text: 'encg1:poll', ...(flag === undefined ? {} : { pollMulti: flag }) } } } }];
   const vote = (options, extra = {}) => ({ options, at: REQ_TIME, ...extra });
+  const card = (over = {}) => ({ url: 'encg1:u', title: 'encg1:t', desc: 'encg1:d', imageUrl: FILEURL,
+    imageEnc: { v: 1, n: 'n', k: 'k', kn: 'kn' }, ...over });
   return [
     ['OK      member sends a group text', 'ALLOW', 'ALLOW', ME, newMsg, 'create', text(40), null, gm],
     ['OK      member sends the longest legitimate sealed text (534k)', 'ALLOW', 'ALLOW',
@@ -474,6 +476,25 @@ function composerCases() {
       ME, msgPath, 'update', { ...mine, text: 'enc1:new', edited: true }, mine, gm],
     ['ATTACK  author edits their text to 800k characters', 'ALLOW', 'DENY',
       ME, msgPath, 'update', { ...mine, text: 'enc1:' + 'A'.repeat(800000), edited: true }, mine, gm],
+    // 2026-09-24 feature-audit: the link card's own fields (ChatService.sealLinkPreview's shape).
+    ['OK      group text with a full link card', 'ALLOW', 'ALLOW', ME, newMsg, 'create',
+      { ...text(40), linkPreview: card() }, null, gm],
+    ['OK      group text with a card that has only its url', 'ALLOW', 'ALLOW', ME, newMsg, 'create',
+      { ...text(40), linkPreview: { url: 'encg1:u' } }, null, gm],
+    ['ATTACK  link card title of 800k characters', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: card({ title: 'encg1:' + 'A'.repeat(800000) }) }, null, gm],
+    ['ATTACK  link card url that is not a string', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: card({ url: { big: 'map' } }) }, null, gm],
+    ['ATTACK  link card with no url', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: { title: 'encg1:t' } }, null, gm],
+    ['ATTACK  link card image over plain http', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: card({ imageUrl: 'http://tracker.example/p.jpg' }) }, null, gm],
+    ['ATTACK  link card image address of 3,000 characters', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: card({ imageUrl: 'https://x.example/' + 'a'.repeat(2982) }) }, null, gm],
+    ['ATTACK  link card carrying an extra field', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: card({ html: '<script>' }) }, null, gm],
+    ['ATTACK  link card that is a string, not a map', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), linkPreview: 'encg1:card' }, null, gm],
     // votes
     ['OK      one option on a single-answer poll', 'ALLOW', 'ALLOW', ME, votePath(ME), 'create', vote([1]), null, poll(false)],
     ['OK      change a single-answer vote', 'ALLOW', 'ALLOW', ME, votePath(ME), 'update', vote([0]), vote([1]), poll(false)],

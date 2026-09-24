@@ -238,6 +238,10 @@ struct ThreadView: View {
     @State private var linkDraft: LinkPreviewService.LinkDraft?
     @State private var suppressedLinkUrl: String?
     @State private var linkDetectTask: Task<Void, Never>?
+    // 2026-09-24 feature-audit: the link being fetched, so the card slot shows a spinner and the
+    // host while the page loads instead of nothing for up to 16 seconds (the reference app's
+    // loading state). Nil once the card lands or the fetch comes back empty.
+    @State private var linkLoadingUrl: URL?
     @State private var bulkForward: [Message]?
     @State private var showBulkDeleteConfirm = false
     /// The header's "Delete All" — the whole conversation, not the selection. See `navigationBar`.
@@ -1462,7 +1466,7 @@ struct ThreadView: View {
         // 2026-09-24 decision D14: a failed message offers Resend and Delete, one dialog for the
         // whole conversation like the link confirm above. Delete goes through deleteForMe, which
         // for an unsent message drops its queue entry, any upload in flight, and the bubble. The
-        // only reason we know per message is "no connection", so that is the one shown.
+        // message line: a server refusal (SendQueue.isRefused) first, else "no connection".
         .confirmationDialog("Message not sent",
                             isPresented: Binding(get: { failedActionTarget != nil },
                                                  set: { if !$0 { failedActionTarget = nil } }),
@@ -1470,8 +1474,14 @@ struct ThreadView: View {
             Button("Resend") { resend(m) }
             Button("Delete", role: .destructive) { deleteForMe(m) }
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            if !NetworkState.shared.isOnline { Text("No internet connection. Check your connection and try again.") }
+        } message: { m in
+            // 2026-09-24 feature-audit: a send the server refused says why, ahead of the network
+            // line (it was silent while online). The reason is read from what this screen knows now.
+            if SendQueue.isRefused(clientId: m.clientId ?? "") {
+                Text(refusedReason)
+            } else if !NetworkState.shared.isOnline {
+                Text("No internet connection. Check your connection and try again.")
+            }
         }
         .alert("Sorry, this user doesn't seem to exist.", isPresented: $tappedUserNotFound) {
             Button("OK", role: .cancel) {}
@@ -4636,9 +4646,11 @@ struct ThreadView: View {
         let clientId = UUID().uuidString
         // The composer's link-preview draft rides the send: the pending bubble carries the plaintext
         // card (its image under a local draft key), and the sealed copy travels with the message.
-        let draft = linkDraft
+        // 2026-09-24 feature-audit: not on a send the rules would refuse for it (see `linkCardAllowed`).
+        let draft = linkCardAllowed ? linkDraft : nil
         linkDetectTask?.cancel()
         linkDraft = nil
+        linkLoadingUrl = nil
         suppressedLinkUrl = nil
         var pendingPreview: Message.LinkPreviewData?
         if let d = draft {
@@ -5157,7 +5169,7 @@ struct ThreadView: View {
             // entry stays so the next chat open retries it automatically.
             // 2026-09-24 decision D-composer-2: unless the server refused it (a rule said no). That
             // one is flagged so nothing retries it by itself; it stays a failed bubble with Resend /
-            // Delete, and the bottom bar already says why when the reason is blocked/removed/admins-only.
+            // Delete, and its "Message not sent" sheet says why (`refusedReason`, 2026-09-24 feature-audit).
             if SendQueue.isPermanentRefusal(error) { SendQueue.markRefused(clientId: clientId) }
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
@@ -6081,6 +6093,28 @@ struct ThreadView: View {
         return MessageRequests.stance(c, myUid: me)
     }
 
+    /// 2026-09-24 feature-audit: why the server refused a send, for the "Message not sent" sheet.
+    /// The bars' own wording where one applies; a first message with none of those is the day's
+    /// request limit, the one refusal left on that path.
+    private var refusedReason: String {
+        if notAMember { return "You're no longer a member of this group" }
+        if cannotSendAnnouncement { return "Only admins can send messages" }
+        if iAmMuted { return "You're muted in this group" }
+        if cannotMessageThem { return "You can't message \(title)" }
+        if requestStance == .awaitingReply { return "You can send another message once \(title) replies." }
+        if requestStance == .firstMessage { return "That's today's limit for message requests. Try again tomorrow." }
+        return "This message can't be sent here."
+    }
+
+    /// 2026-09-24 feature-audit: whether a message sent now may carry a link card. The rules refuse
+    /// one on a request's first message (plain short text only) and count it as media in a group
+    /// (`sendMedia`). `ChatService` strips it on the same terms; this keeps the composer honest.
+    private var linkCardAllowed: Bool {
+        if requestStance == .firstMessage { return false }
+        guard isGroup, let conv = conversation else { return true }
+        return !conv.isRestricted(me, .sendMedia, now: Date().timeIntervalSince1970 * 1000)
+    }
+
     /// THEIR request, waiting for me. Accept or Delete, in the conversation itself — his spec was
     /// explicit that there is no separate requests inbox to go and find.
     private var requestBar: some View {
@@ -6229,9 +6263,17 @@ struct ThreadView: View {
             // preview card. Cleared when the text no longer holds a link; the X suppresses one URL.
             .onChange(of: input) { old, text in
                 linkDetectTask?.cancel()
+                // 2026-09-24 feature-audit: a spinner for a link no longer in the text goes with it.
+                if let l = linkLoadingUrl, l != LinkPreviewService.firstURL(in: text) { linkLoadingUrl = nil }
                 guard let url = LinkPreviewService.firstURL(in: text) else {
                     if linkDraft != nil { withAnimation(.easeInOut(duration: 0.2)) { linkDraft = nil } }
                     suppressedLinkUrl = nil
+                    return
+                }
+                // 2026-09-24 feature-audit: no card where the rules refuse one (a knock, or a group
+                // member kept from sending media). The link goes as plain text, as it will be sent.
+                guard linkCardAllowed else {
+                    if linkDraft != nil { linkDraft = nil }
                     return
                 }
                 if url.absoluteString == suppressedLinkUrl { return }
@@ -6252,9 +6294,16 @@ struct ThreadView: View {
                 linkDetectTask = Task {
                     if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
                     guard !Task.isCancelled else { return }
-                    let d = await LinkPreviewService.shared.draft(for: url)
-                    guard !Task.isCancelled, let d else { return }
+                    // 2026-09-24 feature-audit: the loading card, once typing has settled (so a
+                    // half-typed address does not flash one per keystroke).
                     await MainActor.run {
+                        if LinkPreviewService.firstURL(in: input) == url { linkLoadingUrl = url }
+                    }
+                    let d = await LinkPreviewService.shared.draft(for: url)
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        if linkLoadingUrl == url { linkLoadingUrl = nil }
+                        guard let d else { return }   // no card for this page: the spinner just goes
                         // The text may have changed while fetching — only show a still-current link.
                         guard LinkPreviewService.firstURL(in: input) == url else { return }
                         withAnimation(.easeInOut(duration: 0.2)) { linkDraft = d }
@@ -6559,6 +6608,11 @@ struct ThreadView: View {
         if let d = linkDraft, editingMessage == nil {
             out.append(ChatComposerBanner(id: "link:\(d.url.absoluteString)", style: .link, title: d.title,
                                           detail: .text(d.desc), thumb: d.image.map { .image($0) }, footnote: d.host))
+        } else if let u = linkLoadingUrl, editingMessage == nil {
+            // 2026-09-24 feature-audit: the page is still loading: a spinner in the image slot and
+            // the host, replaced by the card when it lands.
+            out.append(ChatComposerBanner(id: "link-loading", style: .link, title: u.host ?? u.absoluteString,
+                                          detail: .text(""), thumb: .loading, footnote: nil))
         }
         return out
     }
@@ -6607,8 +6661,11 @@ struct ThreadView: View {
             case .edit: cancelEdit()
             case .link:
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    suppressedLinkUrl = linkDraft?.url.absoluteString
+                    // 2026-09-24 feature-audit: the X on the loading card suppresses its link too.
+                    suppressedLinkUrl = (linkDraft?.url ?? linkLoadingUrl)?.absoluteString
                     linkDraft = nil
+                    linkDetectTask?.cancel()
+                    linkLoadingUrl = nil
                 }
             }
         }

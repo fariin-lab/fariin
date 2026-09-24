@@ -199,9 +199,33 @@ final class ThumbImageView: UIImageView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 2026-09-24 feature-audit: made on first use, only the link card's loading state needs it.
+    private var spinner: UIActivityIndicatorView?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        spinner?.center = CGPoint(x: bounds.midX, y: bounds.midY)
+    }
+
     func load(_ t: ChatComposerBanner.Thumb?) {
+        if case .loading? = t {
+            key = "loading"
+            image = nil
+            if spinner == nil {
+                let s = UIActivityIndicatorView(style: .medium)
+                s.hidesWhenStopped = true
+                addSubview(s)
+                spinner = s
+            }
+            spinner?.startAnimating()
+            setNeedsLayout()
+            return
+        }
+        spinner?.stopAnimating()
         guard let t else { key = ""; image = nil; return }
         switch t {
+        case .loading:
+            break   // handled above
         case .image(let img):
             key = "image"
             image = img

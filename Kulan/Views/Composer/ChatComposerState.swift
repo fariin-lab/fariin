@@ -91,6 +91,8 @@ struct ChatComposerBanner: Equatable {
         case gif(url: String)
         /// Already decoded (the link preview's image).
         case image(UIImage)
+        /// 2026-09-24 feature-audit: a spinner, for the link card while its page is still loading.
+        case loading
     }
     enum Detail: Equatable {
         case text(String)

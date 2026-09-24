@@ -822,7 +822,7 @@ enum ChatService {
         if knocking == nil, let d = (try? await convRef.getDocument())?.data() {
             knocking = MessageRequests.stance(Conversation(id: cid, data: d)) == .firstMessage
         }
-        if knocking == true { await MessageRequests.countKnock() }
+        if knocking == true { await MessageRequests.countKnock(clientId: clientId) }   // 2026-09-24 feature-audit: once per clientId
 
         // Brand-new chat? The "Disappearing Messages for new chats" default applies only to chats
         // born here. This asked the LOCAL mirror, which is EMPTY until the first conversations
@@ -861,7 +861,7 @@ enum ChatService {
         }
         try await convRef.setData(convSeed, merge: true)
         // ...and that first message is a knock, which the check above could not see (no document yet).
-        if isNewConv && knocking == nil { await MessageRequests.countKnock() }
+        if isNewConv && knocking == nil { await MessageRequests.countKnock(clientId: clientId) }
 
         let msgRef = convRef.collection("messages").document()
         let batch = db.batch()
@@ -875,7 +875,12 @@ enum ChatService {
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
         if forwarded { msg["forwarded"] = true }
-        if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: nil, msgId: msgRef.documentID) {
+        // 2026-09-24 feature-audit: a knock carries no link card. The rules take a request's one
+        // message as plain short text and refuse `linkPreview` on it, so the card turned every first
+        // message holding a link into a send that failed on every Resend. Stripped here rather than
+        // only in the composer, so a queued retry or a forward is covered too; the link stays in the text.
+        let knockPreview = (knocking == true || isNewConv) ? nil : preview
+        if let knockPreview, let lp = await sealLinkPreview(knockPreview, cid: cid, members: nil, msgId: msgRef.documentID) {
             msg["linkPreview"] = lp
         }
         batch.setData(msg, forDocument: msgRef)
@@ -949,7 +954,16 @@ enum ChatService {
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             msg["pollMulti"] = (obj["multi"] as? Bool) ?? false
         }
-        if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: msgRef.documentID) {
+        // 2026-09-24 feature-audit: a member an admin has kept from sending media sends the link as
+        // plain text. The rules count a link card as media (`sendMedia`), so it was refused on every
+        // Resend while the same words without a link went through.
+        let me = uid
+        let mediaBarred = await MainActor.run {
+            ConversationsRepository.shared.conversations.first { $0.id == cid }?
+                .isRestricted(me, .sendMedia, now: Date().timeIntervalSince1970 * 1000) ?? false
+        }
+        if !mediaBarred, let preview,
+           let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: msgRef.documentID) {
             msg["linkPreview"] = lp
         }
         batch.setData(msg, forDocument: msgRef)
