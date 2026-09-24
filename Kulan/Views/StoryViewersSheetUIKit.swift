@@ -1428,8 +1428,25 @@ struct StoryViewersSheet: UIViewRepresentable {
             lastTick = tick
             // The first tick is the listener attaching, which tells us nothing we did not just fetch.
             guard !first, !active.isEmpty, StoryViewerListCache.get(active) != nil else { return }
-            fill(active, force: true)
+            scheduleRefresh(active)
         }
         private var lastTick: Int?
+
+        /// 2026-09-24 audit: ONE RE-ASK PER BURST, NOT ONE PER VIEW. A story being watched by a crowd
+        /// moves its count several times a second, and each move re-read the whole list. Now a move
+        /// waits a moment for the next one and the list is read once for the lot. A tick that lands
+        /// while a read is still running used to be dropped (`fill` refuses a second task), which
+        /// could leave the newest viewer off the list; it now waits for that read and asks again.
+        private var refreshWork: DispatchWorkItem?
+        private func scheduleRefresh(_ id: String) {
+            refreshWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if self.tasks[id] != nil { self.scheduleRefresh(id); return }
+                self.fill(id, force: true)
+            }
+            refreshWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        }
     }
 }

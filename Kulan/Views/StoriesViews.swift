@@ -939,6 +939,12 @@ enum StoryPrefs {
             NotificationCenter.default.post(name: .storySeenChanged, object: id)
         }
     }
+    /// 2026-09-24 audit: the Settings "View Receipts" switch, read the same way every receipt write
+    /// in `StoriesService` reads it (missing = on). The heart rides on the receipt, so it is shown
+    /// and sent only while this is true.
+    static var viewReceiptsOn: Bool {
+        UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true
+    }
     // My own ❤️ on a story — persists so the heart is still red on reopen.
     static func isStoryLiked(_ id: String) -> Bool { stampedIds("likedStories").contains(id) }
     static func setStoryLiked(_ id: String, _ liked: Bool) {
@@ -1749,14 +1755,20 @@ struct StoryViewer: View {
                             // original's picture, and that composer takes a `UIImage`; a video
                             // repost would quietly post its poster frame, which is a worse answer
                             // than no button. Reposting a clip is its own piece of work.
+                            //
+                            // ⚠️ 2026-09-24 audit: NO HEART WITH VIEW RECEIPTS OFF. The heart lives
+                            // on my view receipt, and with receipts off I write none, so
+                            // `setStoryReaction` sends nothing, by design. The heart still turned
+                            // red and said "Reacted" while the author got nothing. Hidden, it
+                            // promises nothing; turning receipts back on brings it back.
                             storyType: g.isMine
                                 ? .plain()
                                 : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
-                                    ? .message(config: StoryInteractionConfig(showLikeButton: true,
+                                    ? .message(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
                                                                               showRepostButton: canPassOn),
                                                emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
-                                    : .plain(config: StoryInteractionConfig(showLikeButton: true,
+                                    : .plain(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
                                                                             showRepostButton: canPassOn)),
                             mediaType: s.isVideo ? .video : .image
                         )
@@ -4649,6 +4661,10 @@ struct StoryViewer: View {
         //   • an emoji, no text  → the react bar
         //   • text               → the reply field
         if typed == nil && emoji == nil {
+            // 2026-09-24 audit: the heart is hidden with receipts off (see `storyType`); this is the
+            // backstop for one tapped in a viewer opened before the switch was turned off. Nothing
+            // would be sent, so nothing is remembered and nothing says "Reacted".
+            guard StoryPrefs.viewReceiptsOn else { return }
             // Remembered locally so the heart is still red when the story is reopened. Un-liking
             // takes the reaction off the author's row and sends nothing at all.
             StoryPrefs.setStoryLiked(storyId, isLiked)

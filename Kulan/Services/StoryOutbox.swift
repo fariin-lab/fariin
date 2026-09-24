@@ -53,6 +53,11 @@ enum StoryOutbox {
         /// owner to check, so `resume` discards it rather than guessing — a day's worth of unfinished
         /// posts at the very worst, against publishing somebody's picture as somebody else.
         var ownerUid: String?
+        /// 2026-09-24 audit: a repost's credit (whose story, which one). Without it a repost the app
+        /// was killed in the middle of came back on the next launch as the person's OWN story, the
+        /// "Reposted" line and the original author gone. Optional for the reason `ownerUid` is: an
+        /// older ticket has no such key and must still decode, as an ordinary post, which it was.
+        var repostOf: StoryRepost?
     }
 
     /// Beside the story media cache rather than in `Caches`: the OS empties `Caches` under pressure,
@@ -83,7 +88,7 @@ enum StoryOutbox {
     static func remember(image: Data, caption: String, stickers: [StoryTapTarget],
                          excluded: Set<String>, included: Set<String>, everyone: Bool,
                          allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
-                         ownerUid: String) -> String {
+                         ownerUid: String, repostOf: StoryRepost? = nil) -> String {
         let id = UUID().uuidString
         lock.lock(); liveIds.insert(id); lock.unlock()
         let t = Ticket(id: id, caption: caption, stickers: stickers,
@@ -92,7 +97,8 @@ enum StoryOutbox {
                        tagLabel: tag.label, tagName: tag.name,
                        captureProtected: captureProtected,
                        startedAt: Date().timeIntervalSince1970,
-                       ownerUid: ownerUid)
+                       ownerUid: ownerUid,
+                       repostOf: repostOf)
         try? image.write(to: bytes(id), options: .atomic)
         if let d = try? JSONEncoder().encode(t) { try? d.write(to: meta(id), options: .atomic) }
         return id
@@ -167,7 +173,8 @@ enum StoryOutbox {
                 excluded: Set(t.excluded), included: Set(t.included),
                 everyone: t.everyone, allowsReplies: t.allowsReplies,
                 tag: StoryAudienceTag(label: t.tagLabel, name: t.tagName),
-                captureProtected: t.captureProtected)
+                captureProtected: t.captureProtected,
+                repostOf: t.repostOf)   // 2026-09-24 audit: a repost resumes as a repost
         }
     }
 }

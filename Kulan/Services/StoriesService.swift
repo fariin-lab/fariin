@@ -745,7 +745,10 @@ final class StoriesService {
                                               allowsReplies: allowsReplies, tag: tag,
                                               captureProtected: captureProtected,
                                               // Whose post this is. The folder outlives a sign-out.
-                                              ownerUid: me)
+                                              ownerUid: me,
+                                              // 2026-09-24 audit: and whose story it reposts, so a
+                                              // resumed repost keeps its credit.
+                                              repostOf: repostOf)
             // A CARD-SIZED thumbnail, not the whole photograph: this is drawn in a small rounded
             // rectangle in the row and nowhere else.
             return (UIImage(data: image)?.boundedForDisplay(maxPixels: 420), ticket)
@@ -2057,6 +2060,9 @@ final class StoriesService {
     /// NIL means the read failed and the question is still open; `[]` means nobody has watched it.
     /// See the note inside — one dropped request used to be indistinguishable from an empty list, and
     /// the sheet remembered it.
+    /// How many viewers the Seen-by list reads at most (2026-09-24 audit, see `fetchViewers`).
+    static let viewerListCap = 500
+
     func fetchViewers(storyId: String) async -> [StoryViewerInfo]? {
         guard !uid.isEmpty else { return [] }
         // RECIPROCAL, as the Stories settings footer promises ("If disabled, you won't see when
@@ -2075,8 +2081,17 @@ final class StoriesService {
         //
         // Nil now means "ask again". The callers decide what to draw for it; what they may not do is
         // remember it.
+        // 2026-09-24 audit: NEWEST FIRST AND CAPPED. This read every receipt the story had, and the
+        // open sheet asks again whenever the count moves, so a widely watched Everyone story pulled
+        // its whole viewer list again for each new view. The sheet already lists newest first (the
+        // sort below), so the cap only drops the oldest names past the first 500; the COUNT on the
+        // card comes from `meta/views`, not from this list, and stays the true total. Every receipt
+        // write sets `viewedAt`, so ordering by it leaves none out.
         guard let snap = try? await db.collection("stories").document(storyId)
-            .collection("views").getDocuments() else { return nil }
+            .collection("views")
+            .order(by: "viewedAt", descending: true)
+            .limit(to: Self.viewerListCap)
+            .getDocuments() else { return nil }
         let docs = snap.documents
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         return docs.map { d in
