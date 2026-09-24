@@ -215,6 +215,7 @@ struct ChatNavigationItem: UIViewRepresentable {
                 item.observe(\.titleView, options: [.new]) { [weak self] _, _ in self?.scheduleAssert() },
                 item.observe(\.rightBarButtonItems, options: [.new]) { [weak self] _, _ in self?.scheduleAssert() },
                 item.observe(\.leftBarButtonItem, options: [.new]) { [weak self] _, _ in self?.scheduleAssert() },
+                item.observe(\.title, options: [.new]) { [weak self] _, _ in self?.scheduleAssert() },
                 // The back button is the title area's left edge: when its visibility changes the
                 // header has to be re-seated, or it keeps the frame computed while the leading area
                 // was empty and sits under the chevron (the selection-exit bug, twice reported).
@@ -238,6 +239,10 @@ struct ChatNavigationItem: UIViewRepresentable {
             }
             if item.leftBarButtonItem !== leftItem { item.leftBarButtonItem = leftItem; changed = true }
             if item.hidesBackButton != hidesBack { item.hidesBackButton = hidesBack; changed = true }
+            // The plain `title` is set beside the custom `titleView`, as the reference app does: the
+            // bar never draws it while a title view is installed, but the back button on any screen
+            // pushed from this chat reads it, so its long-press menu shows the name.
+            if let name = lastModel?.name, item.title != name { item.title = name; changed = true }
             // Only a flag, never a synchronous layout: this can be reached from the KVO path.
             if changed { target?.navigationController?.navigationBar.setNeedsLayout() }
         }
