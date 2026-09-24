@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import LiveKit
 import FirebaseFunctions
 import FirebaseFirestore
@@ -36,8 +37,35 @@ final class GroupCallService: ObservableObject {
     @Published var connecting = false
     @Published var minimized = false        // swiped down → CallContainer shows the return bar
     @Published var callTitle = ""
+    /// 2026-09-24 decision D25: why a start did not become a call. GroupCallView shows it as an alert
+    /// and closes on OK. Before this a failed start left the call screen up on "1 in call", with
+    /// nobody in it and nothing saying why.
+    struct Notice: Equatable { let title: String; let message: String? }
+    @Published var notice: Notice?
 
     var isActive: Bool { activeCid != nil }
+
+    /// 2026-09-24 decision D25: a 1:1 call and a group call never run at once. Shared by both sides.
+    static let busyNotice = Notice(title: "Can't Call", message: "You're already in a call.")
+
+    /// 2026-09-24 decision D25: the 1:1 side's refusal. A 1:1 call can be placed from a dozen screens,
+    /// some of them sheets, and a SwiftUI alert cannot present from a covered view; so this is a UIKit
+    /// alert on whatever is on top. Waits out a presentation still moving (a menu or sheet closing
+    /// on the same tap) and never stacks on another alert.
+    static func presentOverTop(_ n: Notice, tries: Int = 4) {
+        guard let top = WebLink.topViewController(), !(top is UIAlertController) else { return }
+        if top.isBeingPresented || top.isBeingDismissed {
+            guard tries > 0 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                GroupCallService.presentOverTop(n, tries: tries - 1)
+            }
+            return
+        }
+        let alert = UIAlertController(title: n.title, message: n.message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        top.present(alert, animated: true)
+    }
 
     func start(cid: String, title: String, video: Bool) async {
         // `!connecting` too (audit): activeCid is only set AFTER connect succeeds, so a second tap
@@ -45,12 +73,17 @@ final class GroupCallService: ObservableObject {
         // room. Its connect threw "already connected", and its catch called disconnect() — which
         // tore down the live call the first tap had just established, for everyone in it.
         guard activeCid == nil, !connecting else { return }
+        notice = nil
+        // 2026-09-24 decision D25: refused while a 1:1 call is ringing, live or closing.
+        guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
         do {
             let res = try await Functions.functions(region: "me-central1")
                 .httpsCallable("groupCallToken").call(["cid": cid])
             guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
-                connecting = false; return
+                connecting = false
+                notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
+                return
             }
             try await room.connect(url: url, token: token)
             try await room.localParticipant.setMicrophone(enabled: true)
@@ -68,7 +101,10 @@ final class GroupCallService: ObservableObject {
             connecting = false
             // Only tear down if THIS task never established a call. Calling disconnect()
             // unconditionally is what let a losing second task kill the winner's live room.
-            if activeCid == nil { await disconnect() }
+            if activeCid == nil {
+                await disconnect()
+                notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
+            }
         }
     }
 

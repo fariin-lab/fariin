@@ -1840,6 +1840,16 @@ final class CallService: NSObject {
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false,
                    fromProfile: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
+        // 2026-09-24 decision D25: a 1:1 call and a group call never run at once. Refused with a
+        // message while a group call is live or joining. Every caller of startCall is a view, so this
+        // runs on the main actor, where GroupCallService lives.
+        let inGroupCall = MainActor.assumeIsolated { () -> Bool in
+            let group = GroupCallService.shared
+            guard group.isActive || group.connecting else { return false }
+            GroupCallService.presentOverTop(GroupCallService.busyNotice)
+            return true
+        }
+        if inGroupCall { return }
         // ONE central block gate (audit). The profile's call tiles learned to hide while blocked, but
         // every other dial site — the Calls tab row button, its long-press menu, New Call, Calls
         // search — still rang a person the user had blocked. Gating here covers all of them at once

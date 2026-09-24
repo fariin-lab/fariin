@@ -796,6 +796,12 @@ struct CallContainer<Content: View>: View {
         .fullScreenCover(isPresented: $showGroupRestore, onDismiss: {
             if group.isActive { group.minimized = true }
         }) { GroupCallView() }
+        // 2026-09-24 decision D26: clearing `minimized` from anywhere else (the Calls tab row) brings
+        // the group call forward the same way the bar's tap does. Only `disconnect()` also clears it,
+        // and by then the call is no longer active.
+        .onChange(of: group.minimized) { _, minimized in
+            if !minimized, group.isActive, !showGroupRestore { showGroupRestore = true }
+        }
     }
 }
 

@@ -59,8 +59,9 @@ enum WebLink {
     /// The controller anything presented has to sit on. Walks past whatever is already up — a sheet,
     /// a full-screen cover, the call screen — because presenting on a controller that is itself
     /// covered does nothing at all and looks like a dead tap.
+    /// 2026-09-24 decision D25: no longer private; GroupCallService.presentOverTop reuses it.
     @MainActor
-    private static func topViewController() -> UIViewController? {
+    static func topViewController() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let root = scenes.first(where: { $0.activationState == .foregroundActive })?.keyWindow?.rootViewController
             ?? scenes.first?.keyWindow?.rootViewController

@@ -30,7 +30,19 @@ struct GroupCallView: View {
         // dark ground whatever the phone is set to.
         .environment(\.colorScheme, .dark)
         .onChange(of: service.activeCid) { _, cid in if cid == nil { dismiss() } }
+        // 2026-09-24 decision D25: a start that failed or was refused says so, and OK closes the
+        // screen. Held until the cover has finished coming up: a refusal lands within the same beat
+        // as the tap, and an alert asked for mid-presentation is dropped by UIKit.
+        .task { try? await Task.sleep(nanoseconds: 500_000_000); settled = true }
+        .alert(service.notice?.title ?? "",
+               isPresented: Binding(get: { settled && service.notice != nil },
+                                    set: { if !$0 { service.notice = nil; dismiss() } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let m = service.notice?.message { Text(m) }
+        }
     }
+    @State private var settled = false
 
     private var header: some View {
         HStack {
