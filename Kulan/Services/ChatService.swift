@@ -424,10 +424,22 @@ enum ChatService {
     }
 
     /// Remove a member (admin) + system message.
+    ///
+    /// ONE BATCH (2026-09-24 audit), the same fix `leaveGroup` got. It was two awaited writes, the
+    /// "X removed Y" notice first, so a kill or a dropped signal between them left the notice in
+    /// the chat while Y was still a member and not banned. The removal goes through the admin
+    /// branch of the conversation rule (any field), so the notice's preview fields ride on the same
+    /// update; the message rule reads the conversation as it was before the batch.
     static func removeGroupMember(cid: String, uid removed: String, name: String) async throws {
         let convRef = db.collection("conversations").document(cid)
-        try await writeSystemMessage(cid: cid, text: "\(myName()) removed \(name)")
-        try await convRef.updateData([
+        let text = "\(myName()) removed \(name)"
+        let batch = db.batch()
+        batch.setData(["text": text, "authorId": uid, "type": "system",
+                       "createdAt": FieldValue.serverTimestamp()],
+                      forDocument: convRef.collection("messages").document())
+        batch.updateData([
+            "lastMessage": text,
+            "lastSender": uid,
             "users": FieldValue.arrayRemove([removed]),
             "admins": FieldValue.arrayRemove([removed]),
             // Ban the removed user so they can't rejoin via an invite link (a "kick" must stick). Re-adding
@@ -437,7 +449,8 @@ enum ChatService {
             "restrictedFlags.\(removed)": FieldValue.delete(),
             "restrictedUntil.\(removed)": FieldValue.delete(),
             "updatedAt": FieldValue.serverTimestamp(),
-        ])
+        ], forDocument: convRef)
+        try await batch.commit()
     }
 
     /// Leave a group (remove self). Writes the system message FIRST (while still a member,
@@ -2269,12 +2282,16 @@ enum ChatService {
 
     /// Set or clear my emoji reaction on a message. The emoji is E2E-encrypted
     /// (same as text) so the server never sees the reaction.
-    static func setReaction(cid: String, messageId: String, emoji: String?, toAuthor: String, group: [String]? = nil) async {
+    /// False when the reaction did not land (2026-09-24 audit): the callers had no way to tell, so a
+    /// refused reaction simply never appeared with nothing said. Offline is not false: the write
+    /// waits and lands on reconnect.
+    @discardableResult
+    static func setReaction(cid: String, messageId: String, emoji: String?, toAuthor: String, group: [String]? = nil) async -> Bool {
         let ref = db.collection("conversations").document(cid)
             .collection("messages").document(messageId)
         let convRef = db.collection("conversations").document(cid)
         guard let emoji else {
-            try? await ref.updateData(["reactions.\(uid)": FieldValue.delete()])
+            guard (try? await ref.updateData(["reactions.\(uid)": FieldValue.delete()])) != nil else { return false }
             // If MY reaction was the one being previewed in the chat list, retract it.
             let cs = try? await convRef.getDocument()
             if (cs?.data()?["lastReactionBy"] as? String) == uid {
@@ -2283,7 +2300,7 @@ enum ChatService {
                     "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
                 ])
             }
-            return
+            return true
         }
         // Group reactions are sealed for ALL members (so everyone sees the emoji); 1:1 to the other.
         var members = group
@@ -2295,10 +2312,11 @@ enum ChatService {
         if let members { enc = try? await Crypto.shared.encryptForGroup(emoji, members: members) }
         else { enc = try? await Crypto.shared.encryptForConversation(cid, emoji) }
         // Dotted field update — only touches my own key, so concurrent reactions never clobber.
-        if let enc {
+        guard let enc else { return false }
+        do {
             // Preview only once the reaction itself landed (2026-09-24 audit): reacting to a message
             // deleted meanwhile failed here, and the chat list still said "Reacted 🙏" about nothing.
-            guard (try? await ref.updateData(["reactions.\(uid)": enc])) != nil else { return }
+            guard (try? await ref.updateData(["reactions.\(uid)": enc])) != nil else { return false }
             // Surface it in the chat list ("Reacted 🙏") — a separate best-effort write, so the
             // reaction itself still lands even if this one is rejected. Deliberately does NOT
             // bump updatedAt: a reaction shouldn't reorder chats or re-arm unread; the list
@@ -2309,6 +2327,7 @@ enum ChatService {
                 "lastReactionAt": FieldValue.serverTimestamp(),
             ])
         }
+        return true
     }
 
     /// Write ONE call record into the shared chat, keyed by callId so the two ends converge on a single
@@ -2595,15 +2614,22 @@ enum ChatService {
     /// newest (or clear it when nothing is left). Best-effort: a failure here never fails the delete.
     private static func clearSummaryIfNewest(cid: String, deletedId: String) async {
         let convRef = db.collection("conversations").document(cid)
+        // 2026-09-24 audit: through `rewriteSummaryGuarded`, so a message sent while this was
+        // reading is not overwritten by the summary of the one before it.
+        await rewriteSummaryGuarded(convRef) { await summaryOfNewest(convRef) }
+    }
+
+    /// The summary fields for whatever message is newest right now. Split out of
+    /// `clearSummaryIfNewest` on 2026-09-24 (audit) so the guarded writer can recompute it.
+    private static func summaryOfNewest(_ convRef: DocumentReference) async -> [String: Any] {
         let newest = try? await convRef.collection("messages")
             .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
         guard let doc = newest?.documents.first else {
             // Nothing left at all.
-            try? await convRef.updateData([
+            return [
                 "lastMessage": "", "lastSender": "",
                 "lastImageUrl": FieldValue.delete(), "lastImageEnc": FieldValue.delete(),
-            ])
-            return
+            ]
         }
         let d = doc.data()
         // The tombstone is still the newest message now that deleting keeps the document, and its
@@ -2622,7 +2648,60 @@ enum ChatService {
             update["lastImageUrl"] = FieldValue.delete()
             update["lastImageEnc"] = FieldValue.delete()
         }
-        try? await convRef.updateData(update)
+        return update
+    }
+
+    /// Write a recomputed chat-list summary only if nothing newer landed while it was computed.
+    ///
+    /// 2026-09-24 audit: a delete or an edit read "the newest message" and then wrote its summary
+    /// with a plain update. A message sent in between had already set the summary correctly, and
+    /// this write then put the older text back, on both phones, until the next message. Now the
+    /// conversation's `updatedAt` (every send stamps it) is read before the recompute and checked
+    /// again inside a transaction; if it moved, the summary is recomputed against the new newest
+    /// message instead of written. `compute` returning nil means there is nothing to write.
+    ///
+    /// Offline, or if the transaction itself fails, it falls back to the plain write it replaces,
+    /// which still queues until the connection returns.
+    private static func rewriteSummaryGuarded(_ convRef: DocumentReference,
+                                              _ compute: () async -> [String: Any]?) async {
+        func version(_ d: [String: Any]?) -> String {
+            switch d?["updatedAt"] {
+            case let t as Timestamp: return "\(t.seconds).\(t.nanoseconds)"
+            case let n as NSNumber:  return n.stringValue
+            default:                 return ""
+            }
+        }
+        for _ in 0..<3 {
+            guard let before = try? await convRef.getDocument(source: .server) else {
+                if let update = await compute() { try? await convRef.updateData(update) }
+                return
+            }
+            let seen = version(before.data())
+            guard let update = await compute() else { return }
+            let wrote: Bool? = await withCheckedContinuation { (cont: CheckedContinuation<Bool?, Never>) in
+                convRef.firestore.runTransaction({ txn, errPtr -> Any? in
+                    do {
+                        let now = try txn.getDocument(convRef)
+                        guard version(now.data()) == seen else { return false }
+                    } catch {
+                        errPtr?.pointee = error as NSError
+                        return nil
+                    }
+                    txn.updateData(update, forDocument: convRef)
+                    return true
+                }, completion: { result, error in
+                    cont.resume(returning: error == nil ? (result as? Bool) : nil)
+                })
+            }
+            switch wrote {
+            case true?:  return
+            case false?: continue   // a newer message landed: recompute against it
+            case nil:
+                try? await convRef.updateData(update)
+                return
+            }
+        }
+        // Lost three times in a row: messages are still arriving, and each one set its own summary.
     }
 
     /// Remove ONE item from an album message, for everyone. Reads the RAW stored album array and
@@ -2678,10 +2757,12 @@ enum ChatService {
             .updateData(["text": cipher, "edited": true])
         // If this WAS the newest message, the chat list still shows the pre-edit text on both
         // phones until something else arrives (audit) — re-point the summary at the new wording.
-        let newest = try? await convRef.collection("messages")
-            .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
-        if newest?.documents.first?.documentID == messageId {
-            try? await convRef.updateData(["lastMessage": cipher])
+        // 2026-09-24 audit: guarded, so a message that arrives mid-edit keeps its own summary.
+        await rewriteSummaryGuarded(convRef) {
+            let newest = try? await convRef.collection("messages")
+                .order(by: "createdAt", descending: true).limit(to: 1).getDocuments()
+            guard newest?.documents.first?.documentID == messageId else { return nil }
+            return ["lastMessage": cipher]
         }
     }
 

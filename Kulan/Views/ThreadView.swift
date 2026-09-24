@@ -645,6 +645,14 @@ struct ThreadView: View {
                 // the read receipt was skipped (a standing contributor to the tick complaints), and a
                 // 3-message burst counted as "1" on the jump button. Fresh = genuinely newer than the
                 // newest we'd seen (prepends of old history never count).
+                // 2026-09-24 audit: the message being edited was deleted for everyone (tombstone) or
+                // burned by its timer (gone from inside the window, not trimmed off its old end) —
+                // leave edit mode instead of keeping an "Editing" banner over nothing.
+                if let e = editingMessage {
+                    let live = repo.items.first(where: { $0.id == e.id })
+                    let inWindow = repo.items.first.map { $0.createdAt <= e.createdAt } ?? false
+                    if live?.deleted == true || (live == nil && inWindow) { cancelEdit() }
+                }
                 let newestBefore = arrivalState.newestCreatedAt
                 let seeded = arrivalState.seeded
                 arrivalState.seeded = true
@@ -2305,7 +2313,7 @@ struct ThreadView: View {
                         imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerVideo = m } })
                 },
-                onReact: { emoji in Task { await ChatService.setReaction(cid: cid, messageId: msg.id, emoji: emoji, toAuthor: msg.authorId, group: isGroup ? groupMembers : nil) } },
+                onReact: { emoji in sendReaction(messageId: msg.id, emoji: emoji, toAuthor: msg.authorId) },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
                 // THE SELECTION BLUR, THIRD PASS — the first two were real but incomplete. Entering
@@ -3020,10 +3028,7 @@ struct ThreadView: View {
         case .more:
             morePickerTarget = m
         case .emoji(let e):
-            Task {
-                await ChatService.setReaction(cid: cid, messageId: m.id, emoji: e,
-                                              toAuthor: m.authorId, group: isGroup ? groupMembers : nil)
-            }
+            sendReaction(messageId: m.id, emoji: e, toAuthor: m.authorId)
         }
     }
 
@@ -3043,10 +3048,7 @@ struct ThreadView: View {
         // The user's chosen quick reaction, not a hard-coded heart (Settings > Appearance).
         let quick = QuickReaction.current
         let emoji: String? = m.reactions[me] == quick ? nil : quick
-        Task {
-            await ChatService.setReaction(cid: cid, messageId: m.id, emoji: emoji,
-                                          toAuthor: m.authorId, group: isGroup ? groupMembers : nil)
-        }
+        sendReaction(messageId: m.id, emoji: emoji, toAuthor: m.authorId)
     }
 
     /// Route a link tapped inside a UIKit row: a web url asks "Open link?" first, and
@@ -4460,6 +4462,31 @@ struct ThreadView: View {
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
+    /// The uids whose "@name" is really in the text being sent (2026-09-24 audit). The old check was
+    /// a bare `contains`, so a member picked and then erased ("@Sam") was still tagged and notified
+    /// when a longer name was mentioned instead ("@Samir" contains "@Sam"). Longest names are matched
+    /// first and taken out of the text, and a match must end at a word boundary.
+    private func resolveMentions(in text: String) -> [String] {
+        var rest = text
+        var uids: [String] = []
+        for (name, uid) in mentionMap.sorted(by: { $0.key.count > $1.key.count }) {
+            let token = "@\(name)"
+            var found = false
+            var from = rest.startIndex
+            while let r = rest.range(of: token, range: from..<rest.endIndex) {
+                if r.upperBound < rest.endIndex, rest[r.upperBound].isLetter || rest[r.upperBound].isNumber {
+                    from = r.upperBound                  // "@Sam" inside "@Samir": not this one
+                } else {
+                    found = true
+                    rest.replaceSubrange(r, with: " ")   // taken; a shorter name can't match inside it
+                    from = rest.startIndex
+                }
+            }
+            if found, !uids.contains(uid) { uids.append(uid) }
+        }
+        return uids
+    }
+
     private func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -4480,7 +4507,7 @@ struct ThreadView: View {
             return
         }
         // Resolve which inserted @mentions are still present in the final text.
-        let mentions = mentionMap.compactMap { text.contains("@\($0.key)") ? $0.value : nil }
+        let mentions = resolveMentions(in: text)
         mentionMap = [:]
         input = ""
         let reply = replyingTo.map {
@@ -4619,6 +4646,18 @@ struct ThreadView: View {
             repo.removePending(clientId: clientId)
             return
         }
+        // ⛔ ONE MEDIA SEND PER clientId AT A TIME (2026-09-24 audit). The auto-retry on reconnect and
+        // a Retry tap landing in the same moment both reached this line before either send's echo
+        // was in the window, and each send path writes a FRESH document: two uploads, two messages,
+        // two pushes. Same claim the text path takes in `deliver` (`SendQueue.beginSending`), plus
+        // the original send if it is still running here. Text is left to `deliver`, which claims
+        // for itself; a claim released below if nothing was handed off.
+        let mediaRetry = m.type != "text"
+        if mediaRetry {
+            guard !MediaSend.shared.isInFlight(clientId), SendQueue.beginSending(clientId) else { return }
+        }
+        var handedOff = false
+        defer { if mediaRetry && !handedOff { SendQueue.endSending(clientId) } }
         repo.removePending(clientId: clientId)
 
         if m.isVideo {
@@ -4638,7 +4677,9 @@ struct ThreadView: View {
                             authorId: me, clientId: clientId, sendState: .sending)
             p.localMediaURL = path; p.text = m.text
             repo.addPending(p)
+            handedOff = mediaRetry
             Task {
+                defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 do {
                     try await ChatService.sendVideo(cid: cid, video: data, thumbnail: m.localImageData ?? Data(),
                                                     duration: m.duration ?? 0, width: m.width ?? 1, height: m.height ?? 1,
@@ -4656,7 +4697,9 @@ struct ThreadView: View {
             // restart with nothing to try — the bug this branch exists to fix.
             again.localMediaURL = m.localMediaURL ?? AudioRecorder.parkInFlight(data, clientId: clientId)
             repo.addPending(again)
+            handedOff = mediaRetry
             Task {
+                defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 do {
                     try await ChatService.sendAudio(cid: cid, data: data, duration: m.duration ?? 0,
                                                     waveform: m.waveform, replyTo: m.replyTo,
@@ -4669,7 +4712,9 @@ struct ThreadView: View {
             repo.addPending(Message(localAlbum: m.localAlbum, caption: m.text,
                                     authorId: me, clientId: clientId, sendState: .sending))
             let album = m.localAlbum, text = m.text
+            handedOff = mediaRetry
             Task {
+                defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 await runRegisteredSend(clientId) {
                     try await ChatService.sendAlbum(cid: cid, images: album, caption: text,
                                                     clientId: clientId, group: isGroup ? groupMembers : nil)
@@ -4681,7 +4726,9 @@ struct ThreadView: View {
                             authorId: me, clientId: clientId, sendState: .sending)
             p.localMediaURL = path
             repo.addPending(p)
+            handedOff = mediaRetry
             Task {
+                defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 do {
                     try await ChatService.sendFile(cid: cid, data: data, fileName: m.fileName ?? "Document",
                                                    clientId: clientId, group: isGroup ? groupMembers : nil)
@@ -4694,7 +4741,9 @@ struct ThreadView: View {
                             authorId: me, clientId: clientId, sendState: .sending)
             p.text = m.text; p.viewOnce = m.viewOnce; p.replyTo = m.replyTo   // retry keeps the quote too
             repo.addPending(p)
+            handedOff = mediaRetry
             Task {
+                defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 do { try await ChatService.sendImage(cid: cid, data: data, replyTo: m.replyTo, clientId: clientId,
                                                      group: isGroup ? groupMembers : nil,
                                                      viewOnce: m.viewOnce, caption: m.text) }
@@ -5335,7 +5384,19 @@ struct ThreadView: View {
         guard m.sendState == nil else { return }   // can't react to a message that isn't on the server yet
         let new = m.reactions[me] == emoji ? nil : emoji
         if let e = new { ReactionRecents.add(e) }
-        Task { await ChatService.setReaction(cid: cid, messageId: m.id, emoji: new, toAuthor: m.authorId, group: isGroup ? groupMembers : nil) }
+        sendReaction(messageId: m.id, emoji: new, toAuthor: m.authorId)
+    }
+
+    /// Every reaction write in this screen goes through here (2026-09-24 audit): a refused one
+    /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
+    /// the forward and jump paths use.
+    private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        let members = isGroup ? groupMembers : nil
+        Task {
+            let ok = await ChatService.setReaction(cid: cid, messageId: messageId, emoji: emoji,
+                                                   toAuthor: toAuthor, group: members)
+            if !ok { await MainActor.run { showJumpToast("Couldn't update the reaction") } }
+        }
     }
 
 
@@ -6050,7 +6111,20 @@ struct ThreadView: View {
         // left the composer STUCK in edit mode with no way out.
         // Unchanged text = nothing to save; just leave edit mode.
         if !newText.isEmpty && newText != e.text {
-            Task { try? await ChatService.editMessage(cid: cid, messageId: e.id, newText: newText, group: isGroup ? groupMembers : nil) }
+            // 2026-09-24 audit: a refused edit (message deleted meanwhile, or the server said no) was
+            // dropped by `try?` and edit mode closed as if it had saved. Say so, the way Delete for
+            // Everyone does. The original text needs no restoring by hand: the edit is only a pending
+            // local write until the server answers, and a refused write is rolled back by the store.
+            // Offline is not a failure here: the write waits and lands on reconnect.
+            let mid = e.id, members = isGroup ? groupMembers : nil
+            Task {
+                do { try await ChatService.editMessage(cid: cid, messageId: mid, newText: newText, group: members) }
+                catch {
+                    await MainActor.run {
+                        sendError = "Couldn't save your edit. The message still has its original text for both of you."
+                    }
+                }
+            }
         }
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
         setInputSilently(Drafts.shared.text(cid))   // the pre-edit draft (if any) was never sent — restore it (no phantom typing)

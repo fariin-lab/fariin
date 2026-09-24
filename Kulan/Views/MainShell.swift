@@ -2750,6 +2750,16 @@ struct ChatsView: View {
         // it is a presented screen and the door takes it away. Same job, one call.
         StoryDoor.dismiss()
         profileGroup = nil
+        // 2026-09-24 audit: a notification for the chat that is ALREADY open (left on screen, then
+        // the app went to the background) rebuilt the path to the same chat, remounting it and
+        // throwing away its scroll position and composer state. The foreground-banner path already
+        // asks this same question (PushManager, `activeChatId`); the covers above still close.
+        if cid == router.activeChatId {
+            router.pendingChatId = nil
+            router.pendingChatName = nil
+            router.pendingChatPhoto = nil
+            return
+        }
         // Navigate even if the conv isn't cached yet (e.g. a brand-new 1:1 opened from a
         // group member sheet) — fall back to the name/photo the caller supplied.
         let conv = repo.conversations.first(where: { $0.id == cid })
