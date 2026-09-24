@@ -27,10 +27,12 @@ actor LinkPreviewService {
 
     private var cache: [String: LinkDraft?] = [:]     // value nil = fetched, no usable preview
     private var inFlight: [String: Task<LinkDraft?, Never>] = [:]
+    private var missAt: [String: Date] = [:]           // key → when a fetch last came back empty
 
     func draft(for url: URL) async -> LinkDraft? {
         let key = url.absoluteString
         if let cached = cache[key] { return cached }
+        if let t = missAt[key], Date().timeIntervalSince(t) < 60 { return nil }
         if let task = inFlight[key] { return await task.value }
         // ⛔ OUR OWN PROFILE LINKS ARE ANSWERED FROM THE ACCOUNT, NOT FROM THE WEB PAGE. Scraping
         // fariin.com/u/<handle> gets whatever the site serves, which knows nothing about the person
@@ -46,7 +48,10 @@ actor LinkPreviewService {
         inFlight[key] = task
         let result = await task.value
         inFlight[key] = nil
-        cache[key] = result
+        // A miss is only remembered for a minute (audit, 2026-09-24). Cached for the session, a link
+        // typed with no signal never got its card, even after the connection came back, because
+        // "no network" and "page has no preview" both come back as nil.
+        if result == nil { missAt[key] = Date() } else { cache[key] = result }
         return result
     }
 

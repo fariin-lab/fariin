@@ -87,6 +87,7 @@ struct VideoApprovalView: View {
     @State private var playhead: Double = 0        // live playback position (seconds) → scrubber line
     @State private var draggingPlayhead = false
     @State private var exporting = false
+    @State private var sent = false   // see send()
 
     private let stripHeight: CGFloat = 40   // 40px trim strip (user request)
     private let handleW: CGFloat = 12
@@ -407,6 +408,11 @@ struct VideoApprovalView: View {
     }
 
     private func send() {
+        // A double tap sent the clip twice (audit, 2026-09-24): an untrimmed send never disables
+        // the button, and a trimmed one turns `exporting` off just before handing over, so the
+        // button is live again during the dismiss. One send per screen.
+        guard !sent else { return }
+        sent = true
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         // MULTI: export every clip with ITS OWN trim (stashed per clip), deliver the batch in order.
         if let onSendMulti {

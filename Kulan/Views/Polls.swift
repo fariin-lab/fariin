@@ -15,6 +15,8 @@ enum PollService {
     }
 
     static func setVote(cid: String, messageId: String, options: [Int]) {
+        // `document("")` is a Firestore crash, and `me` is empty once signed out.
+        guard !me.isEmpty, !messageId.isEmpty else { return }
         let ref = votesRef(cid, messageId).document(me)
         Task {
             if options.isEmpty { try? await ref.delete() }
@@ -110,6 +112,11 @@ struct PollBubbleContent: View {
         } else {
             next = myVotes.contains(i) ? [] : [i]   // tapping the chosen one again clears it
         }
+        // Two quick taps on a multiple-answer poll kept only the second choice (audit, 2026-09-24):
+        // `myVotes` is read from the listener, which had not yet delivered the first tap, so the
+        // second tap built its list from nothing and overwrote the first. Record the choice locally
+        // straight away; the listener replaces it with the same thing a moment later.
+        if next.isEmpty { votes[me] = nil } else { votes[me] = next }
         PollService.setVote(cid: cid, messageId: messageId, options: next)
     }
 }
@@ -121,6 +128,7 @@ struct PollComposerSheet: View {
     @State private var question = ""
     @State private var options: [String] = ["", ""]
     @State private var multiple = false
+    @State private var sent = false
 
     private var trimmedOptions: [String] {
         options.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -159,6 +167,10 @@ struct PollComposerSheet: View {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Send") {
+                        // A second tap during the dismiss animation sent the poll twice (audit,
+                        // 2026-09-24). One send per sheet.
+                        guard !sent else { return }
+                        sent = true
                         let id = UUID().uuidString.prefix(12).lowercased()
                         let marker = Message.pollMarkerText(id: String(id),
                                                             question: question.trimmingCharacters(in: .whitespacesAndNewlines),

@@ -69,10 +69,24 @@ struct AnimatedGifView: UIViewRepresentable {
         guard let u = URL(string: url) else { return }
         // Memory (decoded) → instant.
         if let cached = Self.cache.object(forKey: url as NSString) { v.image = cached; return }
-        // Persistent disk (raw bytes) → decode, no download.
-        if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
-            Self.cache.setObject(img, forKey: url as NSString); v.image = img; return
+        let requested = url
+        // Persistent disk (raw bytes) → decode, no download. OFF the main thread (audit,
+        // 2026-09-24): this read the file and decoded EVERY frame on main, once per cell, so
+        // reopening the picker or scrolling a chat full of GIFs stalled on thirty decodes at once.
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let bytes = GifBytesCache.data(requested), let img = UIImage.animatedGif(data: bytes) {
+                Self.cache.setObject(img, forKey: requested as NSString)
+                DispatchQueue.main.async {
+                    guard coord.loadedURL == requested else { return }
+                    v.image = img
+                }
+                return
+            }
+            Self.download(u, requested, into: v, coord)
         }
+    }
+
+    private static func download(_ u: URL, _ url: String, into v: UIImageView, _ coord: Coordinator) {
         let requested = url
         URLSession.shared.dataTask(with: u) { data, _, _ in
             guard let data, let img = UIImage.animatedGif(data: data) else { return }

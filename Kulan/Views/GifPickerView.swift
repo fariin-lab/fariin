@@ -74,6 +74,8 @@ struct GifPickerView: View {
     @State private var gifs: [GiphyService.Gif] = []
     @State private var searchTask: Task<Void, Never>?   // debounce: don't hit Giphy on every keystroke
     @State private var category: GifCategory = .trending
+    /// The last Giphy fetch came back with nothing (no network, or nothing matched). See `refresh`.
+    @State private var fetchCameBackEmpty = false
 
     // The mood row — the standard GIF-picker categories (Giphy's own concept, every big messenger
     // has a version), drawn OUR way: our icons, accent tint, no copied glyph set. Each chip is a
@@ -145,6 +147,20 @@ struct GifPickerView: View {
                     ContentUnavailableView("No favourites yet", systemImage: "star",
                                            description: Text("Hold a GIF and choose Add to Favourites."))
                         .padding(.top, 40)
+                }
+                // A search or mood with no network used to leave a blank page with nothing on it
+                // (audit, 2026-09-24). A typed search says there were no results; a mood or
+                // Trending is never legitimately empty, so it says it could not load.
+                if fetchCameBackEmpty, gifs.isEmpty {
+                    let q = query.trimmingCharacters(in: .whitespaces)
+                    Group {
+                        if q.isEmpty {
+                            ContentUnavailableView("Could not load", systemImage: "wifi.slash")
+                        } else {
+                            ContentUnavailableView.search(text: q)
+                        }
+                    }
+                    .padding(.top, 40)
                 }
                 // Masonry (standard style): 2 columns, each GIF at its OWN natural aspect ratio,
                 // added to whichever column is currently shorter — no fixed card that stretches them.
@@ -224,6 +240,8 @@ struct GifPickerView: View {
                     Self.trendingCache = fresh
                     Self.saveTrendingToDisk(fresh)
                     if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
+                } else if gifs.isEmpty, category == .trending {
+                    fetchCameBackEmpty = true   // opened offline with nothing cached
                 }
             }
         }
@@ -242,15 +260,17 @@ struct GifPickerView: View {
         let q = query.trimmingCharacters(in: .whitespaces)
         // The two local tabs answer from the device, so they are instant and work offline.
         if q.isEmpty, category == .recent {
+            fetchCameBackEmpty = false
             gifs = GifRecents.all()
             return
         }
         if q.isEmpty, category == .favorites {
+            fetchCameBackEmpty = false
             gifs = GifFavorites.all()
             return
         }
         let results = await GiphyService.shared.search(q.isEmpty ? category.term : q)
-        if !Task.isCancelled { gifs = results }
+        if !Task.isCancelled { gifs = results; fetchCameBackEmpty = results.isEmpty }
     }
 
     private var categoryRow: some View {

@@ -58,6 +58,7 @@ struct MediaApprovalView: View {
     @State private var editCrop = false
     @State private var editPen = false
     @State private var exporting = false
+    @State private var sent = false   // see send()
     @FocusState private var captionFocused: Bool
 
     // Per-VIDEO trim state, keyed by item id (each video trims independently).
@@ -410,6 +411,11 @@ struct MediaApprovalView: View {
     }
 
     private func send() {
+        // A double tap on Send posted the album twice (audit, 2026-09-24): the photos path never
+        // disables the button, and the video path turns `exporting` off just before handing over,
+        // so the button is live again during the dismiss. One send per screen.
+        guard !sent else { return }
+        sent = true
         let cap = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         // PHOTOS ONLY → there is NO export work to do, so don't show the exporting overlay and don't
         // hop through a Task. Doing both flashed a full-screen dimmer + spinner on a send that only

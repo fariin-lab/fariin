@@ -172,7 +172,10 @@ final class BackgroundUploader: NSObject {
             // ⛔ THIS IS THE RESUME, and it is the reason for the whole file. Ask what landed, send
             // the rest. A dropped connection now costs the bytes that were in flight, not the ones
             // already delivered.
-            guard !(error is CancellationError) else { throw error }
+            // A Cancel arrives here as NSURLErrorCancelled, not CancellationError (the transfer is
+            // cancelled directly, see `send`), so the task's own flag is checked too. Without it a
+            // Cancel would be "resumed" straight back into a fresh upload.
+            guard !(error is CancellationError), !Task.isCancelled else { throw error }
             let received = try await receivedOffset(uploadURL, token: token)
             guard received < size else {
                 // Everything arrived and only the reply was lost. Finalising from the end is how the
@@ -267,6 +270,7 @@ final class BackgroundUploader: NSObject {
         r.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
         r.setValue(String(offset), forHTTPHeaderField: "X-Goog-Upload-Offset")
 
+        let box = CancelBox()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
                 let task = session.uploadTask(with: r, fromFile: body)
@@ -276,11 +280,34 @@ final class BackgroundUploader: NSObject {
                                                           base: offset, total: max(size, 1))
                 }
                 task.resume()
+                if box.set(task) { task.cancel() }   // cancelled before the task existed
             }
         } onCancel: {
-            // Deliberately does NOT cancel the transfer. A cancelled await means this screen stopped
-            // caring; the bytes already sent are still worth keeping, and `adopt()` clears anything
-            // genuinely orphaned at the next launch.
+            // ⛔ CANCEL NOW STOPS THE TRANSFER (audit, 2026-09-24). This used to do nothing, on the
+            // idea that a cancelled await only meant a screen stopped caring. But the only thing that
+            // cancels a media send is the person pressing Cancel (`MediaSend.cancel`), and with this
+            // engine on, Cancel then did nothing at all: the await kept waiting for the whole video
+            // to upload over their data, and its resume job stayed on disk, so a kill in that window
+            // had the next launch re-send it and try to attach it to the message Cancel had deleted.
+            // The cancelled task completes with NSURLErrorCancelled, which resumes the continuation.
+            box.cancel()
+        }
+    }
+
+    /// Hands the upload task to the cancellation handler, which can run before the task exists.
+    private final class CancelBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: URLSessionTask?
+        private var cancelled = false
+
+        /// Stores the task. True when the handler already ran, so the caller cancels it itself.
+        func set(_ t: URLSessionTask) -> Bool {
+            lock.withLock { task = t; return cancelled }
+        }
+
+        func cancel() {
+            let t: URLSessionTask? = lock.withLock { cancelled = true; return task }
+            t?.cancel()
         }
     }
 

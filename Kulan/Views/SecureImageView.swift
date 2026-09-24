@@ -94,8 +94,12 @@ struct SecureImageView: View {
             // Only intercepts while the policy is holding the download; a loaded image's
             // taps pass through to the bubble's own open-viewer gesture as before.
             if waitingTap { userRequested = true; waitingTap = false; Task { await load() } }
+            // A photo that failed with no signal wore the warning triangle for good, with nothing
+            // to press (audit, 2026-09-24). A tap on it tries again, the reference's
+            // `.failed → tapToDownload`.
+            else if failed { userRequested = true; Task { await load() } }
         }
-        .allowsHitTesting(waitingTap)   // transparent to taps unless the download is held
+        .allowsHitTesting(waitingTap || failed)   // transparent to taps unless held or failed
         .task(id: imageUrl) { await load() }
     }
 
@@ -217,6 +221,9 @@ struct SecureImageView: View {
             // surfaces here as a thrown error — without this the picture would wear the broken-image
             // triangle instead of the Download button it is actually waiting behind.
             if waitingTap { return }
+            // A task cancelled because the cell moved on to another photo is not a failure either;
+            // marking it failed put the triangle over the NEW photo while it loaded.
+            if Task.isCancelled { return }
             failed = true
         }
     }

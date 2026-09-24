@@ -39,6 +39,7 @@ struct ChatImageEditor: View {
     @State private var filterIndex = 0
     @State private var aspectIndex = 0
     @State private var hd = false
+    @State private var sent = false   // see send()
     @State private var canvasSize: CGSize = .zero
     @State private var bottomChromeH: CGFloat = 118   // measured live from the actual bottom bars (toolbar heights queried at runtime)
     @FocusState private var captionFocused: Bool
@@ -386,6 +387,10 @@ struct ChatImageEditor: View {
     }
 
     private func send() {
+        // A double tap on Send posted the photo twice (audit, 2026-09-24): nothing disabled the
+        // button while the screen was closing. One send per editor.
+        guard !sent else { return }
+        sent = true
         let data = flatten()
         onSend(data, caption.trimmingCharacters(in: .whitespacesAndNewlines), hd, viewOnce)
         if selfDismissOnSend { dismiss() }

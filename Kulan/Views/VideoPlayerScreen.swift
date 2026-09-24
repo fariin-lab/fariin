@@ -25,6 +25,8 @@ struct VideoPlayerScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
     @State private var unavailable = false
+    @State private var loadFailed = false   // transient (no network / server hiccup), retryable
+    @State private var loadAttempt = 0
     @State private var isPlaying = true
     @State private var progress: Double = 0        // 0…1 (bound to the scrubber)
     @State private var current: Double = 0         // seconds
@@ -108,7 +110,7 @@ struct VideoPlayerScreen: View {
         // and would look like different apps in light mode if only one were pinned.
         .environment(\.colorScheme, .dark)
         .statusBarHidden(true)
-        .task { await load() }
+        .task(id: loadAttempt) { await load() }   // Try Again bumps the id; closing still cancels it
         // noteClosed: the cover is gone for real, so a tap that arrived while it was leaving can run
         // now instead of waiting out a fixed guess. See MediaPresentGate.
         // A flying copy outlives this cover on purpose (it lands on the thumbnail after the viewer
@@ -166,6 +168,14 @@ struct VideoPlayerScreen: View {
                 Text("Video no longer available").font(.system(size: 15, weight: .medium))
                 Text("It was delivered and removed from the server.")
                     .font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
+            }
+            .foregroundStyle(.white)
+        } else if loadFailed {
+            VStack(spacing: 10) {
+                Image(systemName: "wifi.slash").font(.system(size: 34))
+                Text("Could not load").font(.system(size: 15, weight: .medium))
+                Button("Try Again") { loadFailed = false; loadAttempt += 1 }
+                    .font(.system(size: 15, weight: .semibold))
             }
             .foregroundStyle(.white)
         } else {
@@ -302,10 +312,18 @@ struct VideoPlayerScreen: View {
         guard let s = message.videoUrl, let url = URL(string: s), let meta = message.enc else {
             await MainActor.run { unavailable = true }; return
         }
+        // ⛔ A DROPPED CONNECTION IS NOT "NO LONGER AVAILABLE" (audit, 2026-09-24). Opening a video
+        // with no signal said "Video no longer available. It was delivered and removed from the
+        // server." and offered nothing else, though the clip was still there waiting. Transient
+        // failures now say they could not load and offer Try Again; only a 403/404 is terminal.
         guard let (cipher, resp) = try? await MediaSession.shared.data(from: url) else {
-            await MainActor.run { unavailable = true }; return   // transient network failure — NOT terminal
+            if Task.isCancelled { return }
+            await MainActor.run { loadFailed = true }; return   // transient network failure — NOT terminal
         }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if code != 200, code != 403, code != 404 {
+            await MainActor.run { loadFailed = true }; return   // server hiccup — also not terminal
+        }
         guard code == 200, let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
             if code == 403 || code == 404 { DeadMedia.mark(message.id) }   // object deleted → permanent, never re-fetch
             await MainActor.run { unavailable = true }
@@ -321,7 +339,10 @@ struct VideoPlayerScreen: View {
             await MainActor.run { unavailable = true }
             return
         }
-        await MainActor.run { startPlayer(local) }
+        // Closed while the clip was downloading or decrypting: `.task` is cancelled and `cleanup`
+        // has already run, so starting the player now played the sound with no screen and no way
+        // to stop it (audit, 2026-09-24). The clip is cached, so the next open is instant.
+        if !Task.isCancelled { await MainActor.run { startPlayer(local) } }
         if cid.contains("_"), message.authorId != AuthService.shared.uid {
             try? await Storage.storage().reference(forURL: s).delete()
         }
