@@ -85,6 +85,28 @@ service cloud.firestore {
     function adminCan(p) {
       return isAdmin() && (adminData().get('role', '') == 'owner' || p in adminData().get('perms', []));
     }
+    // 2026-09-24 audit: the checks every announcement write shares, wherever its record lives.
+    // Before, only /announcements applied them; a send to CHOSEN PEOPLE (announcementLog + the
+    // per-person copies under users/{uid}/announcements) was gated on `targetChosen` alone, so that
+    // one permission also let an admin send a security alert, schedule, edit, and skip every length
+    // cap. And `schedule` was checked only in the app. Same caps as before, now in one place.
+    function announcementWellFormed() {
+      return request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.body is string
+        && request.resource.data.body.size() > 0
+        && request.resource.data.body.size() <= 4000
+        && request.resource.data.get('buttons', []).size() <= 3;
+    }
+    // Security alerts need `security`; a future `publishAt` needs `schedule`. The app calls
+    // anything more than 60 s out "scheduled" (`Draft.isScheduled`); the rule allows 5 minutes so a
+    // phone clock a little fast is not refused for a send-now.
+    function announcementKindAndTimeAllowed() {
+      return (request.resource.data.get('kind', '') != 'security' || adminCan('security'))
+        && (request.resource.data.get('publishAt', request.time) <= request.time + duration.value(5, 'm')
+            || adminCan('schedule'));
+    }
 
     // Is the CALLER banned? Costs one document read, so it is used only where the thing being
     // created is public and permanent (a story), never on the message path where it would be a read
@@ -278,13 +300,24 @@ service cloud.firestore {
       // "Contact" here means what it means everywhere else in the app: you two have a conversation.
       // A 1:1 conversation id is the two uids sorted and joined with an underscore, which the rule can
       // rebuild, so this needs no extra field and no list to maintain.
+      //
+      // 2026-09-24 audit: A BLOCK NOW ENDS IT. Before, the conversation branch was a bare
+      // `exists()`, and blocking never deletes the conversation, so somebody you had blocked kept
+      // seeing your last seen for as long as the chat existed. Now the branch also requires that
+      // this person (`uid`) has not blocked the reader on that conversation. Still one read; `get`
+      // on a missing document is guarded by the `exists()` before it. (A pending request still
+      // counts as "a conversation" here, as the paragraph above defines it; that is unchanged.)
+      function presencePair() {
+        return /databases/$(database)/documents/conversations/$(
+          request.auth.uid < uid ? request.auth.uid + '_' + uid : uid + '_' + request.auth.uid);
+      }
       match /presence/state {
         allow read: if signedIn() && (
           request.auth.uid == uid
           || get(/databases/$(database)/documents/users/$(uid)).data
                .get('privacy', {}).get('lastSeen', 'everyone') == 'everyone'
-          || exists(/databases/$(database)/documents/conversations/$(
-               request.auth.uid < uid ? request.auth.uid + '_' + uid : uid + '_' + request.auth.uid))
+          || (exists(presencePair())
+              && get(presencePair()).data.get('blockedBy', {}).get(uid, false) != true)
         );
         allow write: if signedIn() && request.auth.uid == uid;
       }
@@ -481,7 +514,25 @@ service cloud.firestore {
       // broadcast document must never carry that list.
       match /announcements/{id} {
         allow read: if signedIn() && request.auth.uid == uid;
-        allow write: if adminCan('targetChosen');
+        // 2026-09-24 audit: was `allow write: if adminCan('targetChosen')` and nothing else - no
+        // length caps, no security/schedule/edit permission, and an admin holding `remove` without
+        // `targetChosen` could not withdraw one. Now split by what the app actually writes
+        // (AnnouncementAdmin.publish / .remove):
+        //   · a new copy: send + targetChosen + the shared caps and kind/time permissions
+        //   · an edit (merge onto the copy): edit + targetChosen + the same
+        //   · a withdrawal: `remove` alone, and only `deleted: true` may change. A copy that never
+        //     arrived (an earlier batch failed) is created as a bare tombstone, same permission.
+        allow create: if adminCan('send') && adminCan('targetChosen')
+          && announcementWellFormed() && announcementKindAndTimeAllowed();
+        allow create: if adminCan('remove')
+          && request.resource.data.keys().hasOnly(['deleted'])
+          && request.resource.data.deleted == true;
+        allow update: if adminCan('edit') && adminCan('targetChosen')
+          && announcementWellFormed() && announcementKindAndTimeAllowed();
+        allow update: if adminCan('remove')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'deletedAt'])
+          && request.resource.data.deleted == true;
+        allow delete: if false;
       }
     }
 
@@ -760,7 +811,19 @@ service cloud.firestore {
     // private copy, and without the list there is nothing to reach.
     match /announcementLog/{id} {
       allow read: if isAdmin();
-      allow create, update: if adminCan('targetChosen');
+      // 2026-09-24 audit: was `allow create, update: if adminCan('targetChosen')`. Same split and
+      // same reason as the per-person copies under users/{uid}/announcements: send/edit/remove are
+      // now checked here as they are on /announcements, with the same caps, and a withdrawal needs
+      // `remove`, not `targetChosen`. Only a chosen send may live here.
+      allow create: if adminCan('send') && adminCan('targetChosen')
+        && announcementWellFormed() && announcementKindAndTimeAllowed()
+        && request.resource.data.audience.get('scope', '') == 'chosen';
+      allow update: if (adminCan('edit') && adminCan('targetChosen')
+          && announcementWellFormed() && announcementKindAndTimeAllowed()
+          && request.resource.data.audience.get('scope', '') == 'chosen')
+        || (adminCan('remove')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted', 'deletedAt'])
+          && request.resource.data.deleted == true);
       allow delete: if false;
     }
 
@@ -785,8 +848,10 @@ service cloud.firestore {
       // The permissions that are not just "may send at all" are checked HERE too, not only in the
       // app. An admin limited to plain sends cannot reach for a country list or a security alert by
       // driving Firestore directly.
+      // 2026-09-24 audit: `announcementKindAndTimeAllowed()` adds the `schedule` check, which before
+      // this lived only in the app (an admin without it could write a future `publishAt` directly).
       function withinPermissions() {
-        return (request.resource.data.get('kind', '') != 'security' || adminCan('security'))
+        return announcementKindAndTimeAllowed()
           && (request.resource.data.audience.get('scope', '') != 'countries' || adminCan('targetCountry'))
           // A chosen send is REFUSED here outright, by anybody, including the owner. This collection
           // is world-readable, so putting one here would publish it - the privacy boundary is
@@ -809,9 +874,16 @@ service cloud.firestore {
       // HOW MANY people read it, never WHO. A hundred counter documents rather than one, because a
       // single counter would put every reader on earth in a queue behind one lock (Firestore holds a
       // document to roughly one write a second). Each phone may only ever add exactly one.
+      //
+      // 2026-09-24 audit: `{shard}` must be one of the app's hundred ("0" to "99",
+      // `OfficialChannel.shardCount`). Before, any id was accepted, so one account could create
+      // an unbounded number of counter documents under an announcement. What this does NOT stop:
+      // repeated +1s on a real shard. The count is anonymous by design (no uid is stored), so
+      // "once per person" cannot be checked here; it stays a phone-side promise.
       match /readShards/{shard} {
         allow read: if isAdmin();
         allow create: if signedIn()
+          && shard.matches('^[0-9]{1,2}$')
           && request.resource.data.keys().hasOnly(['count'])
           && request.resource.data.count == 1;
         allow update: if signedIn()
@@ -1023,6 +1095,12 @@ service cloud.firestore {
           // 1:1 ONLY (not a 2-member group): members unchanged as a SET, any field.
           (
             resource.data.get('type', '') != 'group'
+            // 2026-09-24 audit: and it must STAY a 1:1. "Any field" included `type`, so one member
+            // could write `type: 'group', admins: [me]` and walk into the group-admin branch below
+            // (add strangers, ban the other person). `rules-tests/conversation-escalation.test.js`
+            // has had this attack row since 2026-08-09 and it was still ALLOWED. No client write
+            // changes a 1:1's type: a group is always a new document.
+            && request.resource.data.get('type', '') != 'group'
             && resource.data.users.size() == 2
             && request.resource.data.users.hasAll(resource.data.users)
             && resource.data.users.hasAll(request.resource.data.users)
@@ -1107,6 +1185,15 @@ service cloud.firestore {
             // with no per-uid pin, so one member can write another member's copy of them. The 1:1
             // branch has been pinned since the block comment above it was written; this branch never
             // was. Worth its own pass, with every group call site checked first.
+            //
+            // 2026-09-24 audit: THAT PASS, DONE. Before this line a plain group member could write
+            // another member's `lastRead`, `mutedBy`, `pinnedBy`, `archivedBy`, `clearedAt`,
+            // `pinOrder` or `blockedBy`/`blockedAt` (forge their read receipt, mute them, wipe their
+            // copy). Every client write to those maps was checked (ChatService markRead, setPinned,
+            // setPinOrder, setArchived, setMuted, setMute, setBlocked, deleteForMe,
+            // flushVoicePlayed): each writes `[uid: ...]`,
+            // the caller's own key, and nothing else. So the 1:1 pin applies here unchanged.
+            && privateMapsUntouched()
             && (!('lastPlayedVoice' in request.resource.data.diff(resource.data).affectedKeys())
                 || request.resource.data.get('lastPlayedVoice', {}).diff(resource.data.get('lastPlayedVoice', {})).affectedKeys().hasOnly([request.auth.uid]))
             // A member may REMOVE pins, never add. The one honest need is the client's automatic
@@ -1138,11 +1225,28 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['users', 'names', 'photos', 'unreadCount', 'updatedAt'])
           )
           // Any group member may remove ONLY themselves (leave).
+          //
+          // ⚠️ 2026-09-24 audit: THIS BRANCH HAD NO FIELD LIST. It checked the `users` array and
+          // nothing else, so the same write that took a plain member out of the group could also
+          // rename it, rewrite `admins`, change `type`/`createdBy`, or set restrictions on the
+          // members who stayed. Now it may touch only what `ChatService.leaveGroup` writes: `users`,
+          // `admins`, `updatedAt`, and the "X left" preview (`lastMessage`, `lastSender` = me).
+          // `admins` may only lose the leaver, with ONE exception the client relies on: the LAST
+          // admin leaving hands the group to exactly one remaining member (`admins = [heir]`).
+          // (Every other admin leave already passes the admin branch above.)
           || (
             resource.data.get('type', '') == 'group'
             && resource.data.users.hasAll(request.resource.data.users)
             && !(request.auth.uid in request.resource.data.users)
             && resource.data.users.size() == request.resource.data.users.size() + 1
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['users', 'admins', 'updatedAt', 'lastMessage', 'lastSender'])
+            && request.resource.data.get('lastSender', '') in [request.auth.uid, resource.data.get('lastSender', '')]
+            && (request.resource.data.get('admins', []).toSet()
+                  == resource.data.get('admins', []).toSet().difference([request.auth.uid].toSet())
+                || (resource.data.get('admins', []).hasOnly([request.auth.uid])
+                    && request.resource.data.get('admins', []).size() == 1
+                    && request.resource.data.get('admins', [])[0] in request.resource.data.users))
           )
         );
       // DELETE exists only for declining a request. An accepted conversation still cannot be deleted
@@ -1268,10 +1372,17 @@ service cloud.firestore {
         // Participants may edit reactions; the AUTHOR may also edit their own text, and rewrite their
         // own album array (deleting ONE album item for everyone = removing it from the album; the
         // client deletes the whole message when the last item goes).
+        // 2026-09-24 audit: a reaction edit may change ONLY THE CALLER'S OWN KEY in `reactions`.
+        // Before, the check stopped at "only the `reactions` field changed", so any member could
+        // rewrite the whole map on anyone's message: invent a reaction in somebody else's name, or
+        // wipe everyone else's. `ChatService.setReaction` only ever writes `reactions.<my uid>`
+        // (set or delete); the author's delete-for-everyone clears the map through its own branch
+        // below, not this one.
         allow update: if signedIn()
           && request.auth.uid in convData().users
           && (
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+            (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+             && ownKeyOnly('reactions'))
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited']))
             || (request.auth.uid == resource.data.authorId

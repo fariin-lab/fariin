@@ -248,12 +248,22 @@ final class ProfileStore {
 
         // Fan the new name out to every conversation's names map (mirrors uploadPhoto's
         // photo fan-out) — chat lists read `names`, so contacts kept seeing the old name.
-        let snap = try await db.collection("conversations")
-            .whereField("users", arrayContains: uid).getDocuments()
-        if !snap.documents.isEmpty {
-            let batch = db.batch()
-            for d in snap.documents { batch.updateData(["names.\(uid)": n], forDocument: d.reference) }
-            try await batch.commit()
+        //
+        // BEST EFFORT AND CHUNKED (2026-09-24 audit). The name above is already saved; this is only
+        // the copy chat lists read. It was one batch with a bare `try`, so past 500 conversations
+        // (Firestore's batch cap) the commit threw and Save reported a failure for a name that had
+        // in fact changed. 450 per batch, like `clearMyMessages`; a failed chunk leaves a stale copy
+        // in those chats, not a wrong profile.
+        if let snap = try? await db.collection("conversations")
+            .whereField("users", arrayContains: uid).getDocuments() {
+            let docs = snap.documents
+            for start in stride(from: 0, to: docs.count, by: 450) {
+                let batch = db.batch()
+                for d in docs[start..<min(start + 450, docs.count)] {
+                    batch.updateData(["names.\(uid)": n], forDocument: d.reference)
+                }
+                try? await batch.commit()
+            }
         }
 
         me = await fetch(uid) ?? me   // nil on a failed read must not blank `me` — see refreshMe
@@ -583,10 +593,14 @@ final class ProfileStore {
         // 1:1 clears — the same split `uploadProfileImages` makes for the same reason.
         let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
         let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
-        if !oneToOnes.isEmpty {
+        // Chunked at 450 and best-effort (2026-09-24 audit): one batch threw past Firestore's
+        // 500-write cap and failed the removal after the profile itself was already cleared.
+        for start in stride(from: 0, to: oneToOnes.count, by: 450) {
             let batch = db.batch()
-            for d in oneToOnes { batch.updateData(fields, forDocument: d.reference) }
-            try await batch.commit()
+            for d in oneToOnes[start..<min(start + 450, oneToOnes.count)] {
+                batch.updateData(fields, forDocument: d.reference)
+            }
+            try? await batch.commit()
         }
         for d in groups { try? await d.reference.updateData(fields) }
 

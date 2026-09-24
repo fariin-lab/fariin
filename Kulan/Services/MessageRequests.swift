@@ -131,8 +131,8 @@ enum MessageRequests {
     /// BEST EFFORT, on purpose: a counter that cannot be written must not stop a real person's one
     /// message (the rule fails open on a missing counter, on the same terms as the story limits).
     /// What it stops is a client that IS counting and keeps going. The existing `windowStart` is
-    /// written back as the same `Timestamp` object, never through a `Date`, because the rule
-    /// compares it for equality and a round trip through seconds would lose the nanoseconds.
+    /// never written back at all (only `count` is incremented), because the rule compares it for
+    /// equality and a round trip through seconds would lose the nanoseconds.
     static func countKnock() async {
         let me = ChatService.uid
         guard !me.isEmpty else { return }
@@ -141,9 +141,11 @@ enum MessageRequests {
         let snap = try? await ref.getDocument()
         let data = snap?.data() ?? [:]
         let start = data["windowStart"] as? Timestamp
-        let count = (data["count"] as? Int) ?? 0
         if snap?.exists == true, let start, Date().timeIntervalSince(start.dateValue()) < 24 * 3600 {
-            try? await ref.setData(["windowStart": start, "count": count + 1])
+            // An increment, not `count + 1` from the read above (2026-09-24 audit): two knocks a
+            // moment apart both read the same count, and the second `setData` was refused by the
+            // rule's +1 ratchet and swallowed, so one knock went uncounted. Same as `bumpBudget`.
+            try? await ref.updateData(["count": FieldValue.increment(Int64(1))])
         } else {
             try? await ref.setData(["windowStart": FieldValue.serverTimestamp(), "count": 1])
         }
