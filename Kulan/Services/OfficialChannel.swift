@@ -499,10 +499,13 @@ final class OfficialChannelStore {
         stateListener = db.collection("users").document(uid)
             .collection("officialChannel").document("state")
             .addSnapshotListener { [weak self] snap, _ in
-                guard let self else { return }
+                // An ERROR is not a missing document (audit 2026-09-24). A nil snapshot used to fall
+                // through as `[:]`, wiping the read watermark (every announcement unread again) and
+                // the bell for as long as the error lasted. Keep what we have instead.
+                guard let self, let snap else { return }
                 // A missing document is the muted default, not an error. Nobody should have to pay a
                 // write to be left alone.
-                self.state = OfficialChannelState(data: snap?.data() ?? [:])
+                self.state = OfficialChannelState(data: snap.data() ?? [:])
                 self.recompute()
                 // THE ONLY PLACE THAT DECIDES WHAT THIS PHONE HEARS. Put here rather than in
                 // `setMuted` because this fires for all three ways the answer can change: the app

@@ -74,7 +74,8 @@ struct VerificationAdminView: View {
     }
 
     private func loadRecent() async {
-        do { recent = try await VerificationAdmin.recentActivity() }
+        // Cleared on success (audit 2026-09-24): one failed load left the warning up for good.
+        do { recent = try await VerificationAdmin.recentActivity(); loadFailed = nil }
         catch { loadFailed = error.localizedDescription }
     }
 
@@ -93,6 +94,7 @@ struct VerificationAdminView: View {
             guard generation == searchGeneration else { return }
             results = found
             searching = false
+            loadFailed = nil   // same as loadRecent: a later success takes the old warning down
         } catch {
             guard generation == searchGeneration else { return }
             loadFailed = error.localizedDescription
@@ -303,6 +305,7 @@ struct VerificationDetailView: View {
     }
 
     private func act(_ action: VerificationAdmin.Action, status: Verification.Status) {
+        guard !working else { return }   // a second tap before the first lands does nothing
         working = true
         failure = nil
         Task {
@@ -311,13 +314,22 @@ struct VerificationDetailView: View {
                     action, to: found.peer, status: status,
                     kind: status == .revoked ? current?.kind : kind,
                     reason: reason.trimmingCharacters(in: .whitespacesAndNewlines),
-                    peerName: found.name, peerHandle: found.handle
+                    peerName: found.name, peerHandle: found.handle,
+                    // What this screen is showing. If the server says otherwise, another admin got
+                    // there first and apply() refuses (audit 2026-09-24).
+                    expectedStatus: current?.status
                 )
                 reason = ""
                 current = VerificationIndex.of(found.peer)
                 history = (try? await VerificationAdmin.history(for: found.peer)) ?? history
             } catch {
                 failure = error.localizedDescription
+                // After a refusal the index holds the live value; redraw from it so the buttons
+                // match where the badge really stands. Reason is kept for the next try.
+                if case VerificationAdmin.VerifyError.changedElsewhere = error {
+                    current = VerificationIndex.of(found.peer)
+                    history = (try? await VerificationAdmin.history(for: found.peer)) ?? history
+                }
             }
             working = false
         }

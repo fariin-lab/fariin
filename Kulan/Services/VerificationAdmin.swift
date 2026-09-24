@@ -27,11 +27,13 @@ enum VerificationAdmin {
         case notAllowed
         case noSuchPeer
         case notSignedIn
+        case changedElsewhere
         var errorDescription: String? {
             switch self {
             case .notAllowed:  return "You do not have permission to verify accounts."
             case .noSuchPeer:  return "That account no longer exists."
             case .notSignedIn: return "You are signed out."
+            case .changedElsewhere: return "Another admin changed this account's verification. The screen now shows where it stands."
             }
         }
     }
@@ -157,16 +159,26 @@ enum VerificationAdmin {
         kind: Verification.Kind?,
         reason: String,
         peerName: String,
-        peerHandle: String
+        peerHandle: String,
+        expectedStatus: Verification.Status?
     ) async throws {
         guard AdminStore.shared.can(.verify) else { throw VerifyError.notAllowed }
         guard let adminUid = AuthService.shared.uid else { throw VerifyError.notSignedIn }
 
         let peerDoc = db.collection(peer.kind.collection).document(peer.id)
-        let existing = try await peerDoc.getDocument()
+        // From the SERVER, not the cache: the check below is only worth anything against the live value.
+        let existing = try await peerDoc.getDocument(source: .server)
         guard existing.exists else { throw VerifyError.noSuchPeer }
 
         let before = Verification((existing.data()?["verification"] as? [String: Any]))
+        // The screen chose this action from what IT last saw (`expectedStatus`, nil = no record).
+        // Audit 2026-09-24: when another admin had acted in between, this went ahead anyway, e.g. a
+        // second "Verify" over an existing grant, re-stamping the approved name. Refuse, and hand the
+        // real value to the index so the screen can redraw from it.
+        guard before?.status == expectedStatus else {
+            VerificationIndex.record(peer, before)
+            throw VerifyError.changedElsewhere
+        }
         let now = Date().timeIntervalSince1970 * 1000
         let adminHandle = AdminStore.shared.me?.handle ?? ""
 
@@ -293,7 +305,12 @@ enum VerificationAdmin {
 
         // An exact id first: an admin pasting a uid wants that one account, not everything starting
         // with those characters.
-        if q.count > 20, let doc = try? await db.collection("users").document(query).getDocument(),
+        // The id as pasted, trimmed, case kept (ids are case-sensitive). Audit 2026-09-24: the raw
+        // text went into `document()` untrimmed, and one with a "/" in it is read as a path there,
+        // which throws an exception that ends the app rather than an error.
+        let rawId = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.count > 20, !rawId.contains("/"),
+           let doc = try? await db.collection("users").document(rawId).getDocument(),
            doc.exists {
             return [FoundPeer(peer: .user(doc.documentID), data: doc.data() ?? [:])]
         }

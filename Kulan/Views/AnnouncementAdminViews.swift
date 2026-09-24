@@ -87,7 +87,10 @@ struct AnnouncementAdminView: View {
     private func reload() { Task { await load() } }
 
     private func load() async {
-        history = await AnnouncementAdmin.history()
+        // A failed load now raises the "Could not load" alert this screen always had but never set
+        // (audit 2026-09-24); the last good list stays on screen instead of being wiped.
+        do { history = try await AnnouncementAdmin.history() }
+        catch { self.error = error.localizedDescription }
         loading = false
     }
 }
@@ -233,6 +236,10 @@ private struct AnnouncementDetailView: View {
         d.mediaUrl = announcement.mediaUrl
         d.mediaWidth = announcement.mediaWidth
         d.mediaHeight = announcement.mediaHeight
+        // A chosen send's people (audit 2026-09-24). Left empty, Save stayed greyed out behind "Pick
+        // at least one person.", and re-picking by hand would have overwritten `recipients`, the only
+        // list a later Delete can reach. Only the uids are stored, so the rows carry no names.
+        d.chosen = announcement.recipients.map { UserProfile(id: $0, data: [:]) }
         return d
     }
 
@@ -415,7 +422,10 @@ struct AnnouncementComposeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
+                    // Not while sending (audit 2026-09-24): closing mid-send left the write running
+                    // with nobody to show its error, so a failed picture upload vanished silently.
                     Button("Cancel") { dismiss() }
+                        .disabled(sending)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(editing ? "Save" : (draft.isScheduled ? "Schedule" : "Send")) {
@@ -430,6 +440,7 @@ struct AnnouncementComposeView: View {
                     ZStack { Color.black.opacity(0.12).ignoresSafeArea(); ProgressView() }
                 }
             }
+            .interactiveDismissDisabled(sending)   // swipe-down mid-send, same reason as Cancel above
             .onChange(of: photoItem) { _, item in loadPicked(item) }
             .alert(confirmTitle, isPresented: $confirmSend) {
                 Button(editing ? "Save" : "Send") { send() }
@@ -547,6 +558,7 @@ struct AnnouncementComposeView: View {
     }
 
     private func send() {
+        guard !sending else { return }   // one publish per draft, even if the confirm fires twice
         sending = true
         Task {
             do {
@@ -802,7 +814,9 @@ private struct AnnouncementAudienceView: View {
 
     private func runSearch(_ q: String) {
         let query = q.trimmingCharacters(in: .whitespaces)
-        guard query.count >= 2 else { results = []; return }
+        // `searching = false` here too (audit 2026-09-24): cutting the search below two letters
+        // while one was in flight dropped that answer as stale and left the spinner up for good.
+        guard query.count >= 2 else { results = []; searching = false; return }
         searching = true
         Task {
             let found = await AnnouncementAdmin.searchPeople(query)
@@ -890,7 +904,9 @@ private struct AdminTeamView: View {
     private func reload() { Task { await load() } }
 
     private func load() async {
-        admins = await AnnouncementAdmin.admins()
+        // Same fix as the history list (audit 2026-09-24): a failed read showed an empty team.
+        do { admins = try await AnnouncementAdmin.admins() }
+        catch { self.error = error.localizedDescription }
         loading = false
     }
 }

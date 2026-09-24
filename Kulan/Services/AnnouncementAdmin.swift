@@ -362,14 +362,16 @@ enum AnnouncementAdmin {
 
     /// Everything, including scheduled, expired and deleted ones — the opposite of what a phone sees.
     /// Both homes, merged: broadcasts from `announcements` and chosen sends from `announcementLog`.
-    static func history(limit: Int = 60) async -> [Announcement] {
+    /// Throws when either read fails (audit 2026-09-24): both used to be `try?`, so no internet or a
+    /// refused read drew "Nothing sent yet." and the admin was told the channel was empty.
+    static func history(limit: Int = 60) async throws -> [Announcement] {
         async let broadcasts = db.collection("announcements")
             .order(by: "publishAt", descending: true).limit(to: limit).getDocuments()
         async let chosen = db.collection("announcementLog")
             .order(by: "publishAt", descending: true).limit(to: limit).getDocuments()
 
-        let a = (try? await broadcasts)?.documents ?? []
-        let b = (try? await chosen)?.documents ?? []
+        let a = (try await broadcasts).documents
+        let b = (try await chosen).documents
         return (a + b)
             .map { Announcement(id: $0.documentID, data: $0.data()) }
             .sorted { $0.sortAt > $1.sortAt }
@@ -377,9 +379,11 @@ enum AnnouncementAdmin {
             .map { $0 }
     }
 
-    static func admins() async -> [AdminRecord] {
-        let snap = try? await db.collection("admins").getDocuments()
-        return (snap?.documents ?? [])
+    /// Throws on a failed read (audit 2026-09-24): `try?` here showed a failed load as a team with
+    /// nobody on it, not even the owner.
+    static func admins() async throws -> [AdminRecord] {
+        let snap = try await db.collection("admins").getDocuments()
+        return snap.documents
             .map { AdminRecord(id: $0.documentID, data: $0.data()) }
             .sorted { a, b in
                 if a.isOwner != b.isOwner { return a.isOwner }

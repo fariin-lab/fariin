@@ -292,7 +292,14 @@ struct OfficialChatInfoView: View {
 
             Section {
                 Button("Clear Chat", role: .destructive) { confirmClear = true }
-                Button("Block", role: .destructive) { confirmBlock = true }
+                // Unblock when already blocked (audit 2026-09-24). The Block alert says "you can
+                // unblock it later", yet nothing in the app ever called setBlocked(false): a blocked
+                // channel still opens (security alerts stay) and offered only Block again.
+                if store.state.blocked {
+                    Button("Unblock") { store.setBlocked(false) }
+                } else {
+                    Button("Block", role: .destructive) { confirmBlock = true }
+                }
             } footer: {
                 Text("Blocking stops the updates. It does not stop us telling you if something happens to your account.")
             }
@@ -545,11 +552,15 @@ private struct AnnouncementImageViewer: View {
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
     @State private var zoom: CGFloat = 1
+    /// The download came back empty. Offline or a dead link used to leave the spinner up for ever.
+    @State private var failed = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let image {
+            if failed {
+                Image(systemName: "photo").font(.system(size: 40)).foregroundStyle(.white.opacity(0.5))
+            } else if let image {
                 Image(uiImage: image)
                     .resizable().scaledToFit()
                     .scaleEffect(zoom)
@@ -566,6 +577,7 @@ private struct AnnouncementImageViewer: View {
         .task {
             if let have = await DiskImageCache.shared.image(for: url) { image = have; return }
             image = await AnnouncementImage.fetch(url)   // same miss, same fix - see the note there
+            failed = image == nil   // audit 2026-09-24: stop the endless spinner, the X still closes it
         }
     }
 }
