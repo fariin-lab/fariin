@@ -9,6 +9,11 @@ import Foundation
 @MainActor
 enum SessionWipe {
     static func wipeAccountData() {
+        // A live call does not survive its account (2026-09-24 audit): signing out mid-call left
+        // the audio, the call record and CallKit running under nobody.
+        if CallService.shared.state != .idle { CallService.shared.hangUp() }
+        InAppNotify.shared.reset()
+        ChatService.clearSharedMediaCache()
         ConversationsRepository.shared.reset()
         StoriesRepository.shared.reset()
         CallsRepository.shared.reset()

@@ -2116,6 +2116,8 @@ enum ChatService {
     // in after a fresh Firestore round-trip each time ("coming late / not stable").
     @MainActor private static var sharedMediaCache: [String: [Message]] = [:]
     @MainActor static func cachedSharedMedia(_ cid: String) -> [Message]? { sharedMediaCache[cid] }
+    /// Sign-out: decrypted messages must not outlive the account in memory (2026-09-24 audit).
+    @MainActor static func clearSharedMediaCache() { sharedMediaCache = [:] }
 
     /// HOW MUCH MEDIA THIS CHAT HAD LAST TIME, remembered on disk per conversation.
     ///

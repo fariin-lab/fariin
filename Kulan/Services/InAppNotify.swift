@@ -69,6 +69,16 @@ import FirebaseAuth
         withAnimation(.spring(duration: 0.3)) { banner = nil }
     }
 
+    /// Sign-out. Without this the next account's first chat-list snapshot was compared with the
+    /// LAST account's unread counts, and every unread chat of the new account fired a banner, a
+    /// sound and a buzz at once (2026-09-24 audit).
+    func reset() {
+        hideWork?.cancel()
+        banner = nil
+        lastUnread = [:]
+        seeded = false
+    }
+
     private func hint(_ c: Conversation, me: String) -> String {
         let cipher = c.lastMessageCipher
         if cipher.hasPrefix("📷") { return "Photo" }
