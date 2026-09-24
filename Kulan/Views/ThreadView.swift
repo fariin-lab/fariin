@@ -114,6 +114,7 @@ struct ThreadView: View {
     @State private var viewerVideo: Message?   // tapped video bubble → full-screen player
     @State private var statusUnavailable = false     // tapped a status reply whose story expired
     @State private var sendError: String?
+    @State private var afterSendError: (() -> Void)?   // 2026-09-24 fix-all #149: runs when that alert is dismissed
     @State private var showCamera = false
     @State private var showAttachPanel = false
     // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
@@ -1124,7 +1125,15 @@ struct ThreadView: View {
         } message: { Text("Video calling is coming soon.") }
         .alert("Message not sent", isPresented: Binding(get: { sendError != nil },
                                                         set: { if !$0 { sendError = nil } })) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                // 2026-09-24 fix-all #149: what was waiting behind this alert (the approval screen
+                // for the items that did attach) opens once it is gone, a beat later so the sheet is
+                // not presented in the same pass the alert is dismissed in.
+                if let next = afterSendError {
+                    afterSendError = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { next() }
+                }
+            }
         } message: { Text(sendError ?? "") }
         // Hold-to-record with mic permission denied → deep-link to the app's Settings page.
         .alert("Microphone access is off", isPresented: $micDenied) {
@@ -2040,7 +2049,14 @@ struct ThreadView: View {
     /// shows nothing rather than a placeholder for a message it cannot resolve. Proven means a read
     /// came back saying the document does not exist, never a read that merely failed.
     private var visiblePinIds: [String] {
-        repo.pinnedMessageIds.filter { !HiddenMessages.isHidden($0) && !repo.pinnedGone.contains($0) }
+        // 2026-09-24 fix-all #206: also skip a pin whose live copy is a tombstone. The by-id fetch
+        // already treats a deleted message as gone, but the window copy wins in the bar, so a pin
+        // whose unpin lost a race with the delete (or a burned disappearing message) showed here.
+        repo.pinnedMessageIds.filter { id in
+            !HiddenMessages.isHidden(id) && !repo.pinnedGone.contains(id)
+                && repo.items.first(where: { $0.id == id })?.deleted != true
+                && repo.pinnedPreviews[id]?.deleted != true
+        }
     }
 
     // Liquid-Glass pinned-message bar below the nav (tap to scroll to it; pin.slash to unpin).
@@ -4861,8 +4877,10 @@ struct ThreadView: View {
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
             }
         } else if !m.text.isEmpty {
+            // 2026-09-24 fix-all #220: the retried bubble keeps its link card; `deliver` takes the
+            // mentions and the card to send from the queued entry.
             repo.addPending(Message(localText: m.text, authorId: me, clientId: clientId,
-                                    replyTo: m.replyTo, sendState: .sending))
+                                    replyTo: m.replyTo, sendState: .sending, linkPreview: m.linkPreview))
             Task { await deliver(text: m.text, reply: m.replyTo, clientId: clientId) }
         }
         // (empty text + no payload: nothing to resend — drop the pending rather than recreate a ghost)
@@ -5105,10 +5123,21 @@ struct ThreadView: View {
                          draft: LinkPreviewService.LinkDraft? = nil) async {
         // DURABLE: persist the send BEFORE the network call so a mid-send app kill doesn't lose the
         // message — it's re-driven on the next chat open (drainSendQueue). Removed once it lands.
-        // (A queue re-drive after an app kill sends WITHOUT the preview — the draft lives in memory
-        // only; the text always survives, which is the part that matters.)
+        // 2026-09-24 fix-all #220: a Retry or a re-drive used to send bare text, dropping the
+        // mentions and the link card. The queued entry now keeps both; a call without them (Retry,
+        // the reopen drain) takes them from the entry this same send wrote the first time.
+        let prior = SendQueue.entry(clientId: clientId)
+        let mentions = mentions.isEmpty ? (prior?.mentions ?? []) : mentions
+        var storedPreview: (url: String, title: String, desc: String)?
+        if let d = draft {
+            storedPreview = (url: d.url.absoluteString, title: d.title, desc: d.desc)
+        } else if let p = prior, let u = p.previewUrl {
+            storedPreview = (url: u, title: p.previewTitle ?? "", desc: p.previewDesc ?? "")
+        }
+        var priorPreview: ChatService.OutgoingLinkPreview?
+        if draft == nil, let p = prior { priorPreview = await SendQueue.outgoingPreview(for: p) }
         SendQueue.add(clientId: clientId, cid: cid, text: text, mentions: mentions, reply: reply,
-                      ts: Date().timeIntervalSince1970)
+                      ts: Date().timeIntervalSince1970, preview: storedPreview)
         // Already on its way (an offline send suspends, it does not fail): a Retry tap or a reopen
         // drain must not start a second copy (2026-09-24 audit, see `SendQueue.beginSending`). The
         // bubble stays; the original's echo or failure settles it.
@@ -5118,7 +5147,7 @@ struct ThreadView: View {
             let preview = draft.map {
                 ChatService.OutgoingLinkPreview(url: $0.url.absoluteString, title: $0.title,
                                                 desc: $0.desc, imageJPEG: $0.imageJPEG)
-            }
+            } ?? priorPreview   // 2026-09-24 fix-all #220
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
                                            preview: preview)
@@ -5158,8 +5187,14 @@ struct ThreadView: View {
                 // from its cache on open, so checking only the server list drew the same message twice.
                 if !repo.messages.contains(where: { $0.clientId == entry.clientId }),
                    !repo.pending.contains(where: { $0.clientId == entry.clientId }) {
+                    // 2026-09-24 fix-all #220: redraw the link card the queued send carries.
+                    let card = entry.previewUrl.map {
+                        Message.LinkPreviewData(url: $0, title: entry.previewTitle ?? "", desc: entry.previewDesc ?? "",
+                                                imageUrl: SendQueue.previewImageKey(entry.clientId), imageEnc: nil)
+                    }
                     repo.addPending(Message(localText: entry.text, authorId: me, clientId: entry.clientId,
-                                            replyTo: reply, sendState: entry.refused == true ? .failed : .sending))
+                                            replyTo: reply, sendState: entry.refused == true ? .failed : .sending,
+                                            linkPreview: card))
                 }
             }
             // 2026-09-24 decision D-composer-2: a refused send is drawn as failed and waits for the
@@ -5466,7 +5501,14 @@ struct ThreadView: View {
     // opening batch appears with zero movement and only genuinely-new messages slide in.
     private func enableSlideInAfterReveal() {
         guard !settled else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { settled = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            settled = true
+            // 2026-09-24 fix-all #75: the badge counted only live arrivals, so a chat that opened
+            // (or was restored) above the bottom with unread waiting showed a bare arrow. Seed it
+            // from the thread's real unread count, like the reference app; reaching the bottom
+            // zeroes it through the same isAtBottom path as live arrivals.
+            if !isAtBottom, unreadOnOpen > 0 { newWhileAway = max(newWhileAway, unreadOnOpen) }
+        }
     }
 
     // Anchor the unread divider above the first unread message and land there on open.
@@ -5617,26 +5659,38 @@ struct ThreadView: View {
                 items.append(.image(UUID().uuidString, ui))
             }
         }
-        // Said only when nothing else opens: the alert and the approval sheet presented in the same
-        // pass would drop one of them. With a partial selection the approval screen opens without
-        // the clip, which at least shows what is going.
+        // 2026-09-24 fix-all #149: said in the partial case too. The alert and the approval sheet
+        // presented in the same pass would drop one of them, so the alert goes first and the
+        // approval screen for what did attach opens when it is dismissed (`afterSendError`).
+        let what = droppedVideos == 1 ? "the video" : "\(droppedVideos) videos"
         if droppedVideos > 0, items.isEmpty {
-            let what = droppedVideos == 1 ? "the video" : "\(droppedVideos) videos"
             await MainActor.run {
                 sendError = "Couldn't attach \(what). Your phone may be low on storage."
             }
         }
         guard !items.isEmpty else { return }
-        await MainActor.run {
-            if items.count == 1, case .image(_, let ui) = items[0] {
-                editImage = EditImageWrap(image: ui)
-            } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
-                videoToApprove = VideoWrap(url: url)
-            } else if let clips = ThreadView.videoClips(from: items) {
-                multiVideoApprove = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
-            } else {
-                mediaToApprove = MediaWrap(items: items)
+        let ready = items
+        if droppedVideos > 0 {
+            await MainActor.run {
+                afterSendError = { presentApproval(ready) }
+                sendError = "Couldn't attach \(what). Your phone may be low on storage."
             }
+            return
+        }
+        await MainActor.run { presentApproval(ready) }
+    }
+
+    /// The approval step for picked media (split out 2026-09-24 fix-all #149 so it can wait for the
+    /// dropped-video alert).
+    private func presentApproval(_ items: [ApprovalMedia]) {
+        if items.count == 1, case .image(_, let ui) = items[0] {
+            editImage = EditImageWrap(image: ui)
+        } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
+            videoToApprove = VideoWrap(url: url)
+        } else if let clips = ThreadView.videoClips(from: items) {
+            multiVideoApprove = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
+        } else {
+            mediaToApprove = MediaWrap(items: items)
         }
     }
 

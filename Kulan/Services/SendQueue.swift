@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import FirebaseFirestore
 
 // Durable outgoing-TEXT queue (a durable job queue, minimal form). A text send is
@@ -33,6 +34,30 @@ enum SendQueue {
         /// automatic path sends it again. The entry is kept only so the chat can still draw it as a
         /// failed bubble with Resend / Delete; a Resend re-adds it without this flag.
         var refused: Bool? = nil
+        /// 2026-09-24 fix-all #220: the link card's text rides the entry, so a Retry or a re-drive
+        /// after a kill sends the card again instead of bare text. Its image is not stored here; it
+        /// is the composer's draft copy in DiskImageCache under `previewImageKey(clientId)`.
+        var previewUrl: String? = nil
+        var previewTitle: String? = nil
+        var previewDesc: String? = nil
+    }
+
+    /// Where the composer parks a link card's image for this send (see `Entry.previewUrl`).
+    static func previewImageKey(_ clientId: String) -> String { "lp-draft-\(clientId)" }
+
+    /// 2026-09-24 fix-all #220: the link card a queued send carries, image included when the
+    /// composer's parked copy is still on disk (the card goes without it otherwise).
+    static func outgoingPreview(for e: Entry) async -> ChatService.OutgoingLinkPreview? {
+        guard let url = e.previewUrl, !url.isEmpty else { return nil }
+        let image = await DiskImageCache.shared.image(for: previewImageKey(e.clientId))
+        return ChatService.OutgoingLinkPreview(url: url, title: e.previewTitle ?? "", desc: e.previewDesc ?? "",
+                                               imageJPEG: image?.jpegData(compressionQuality: 0.75))
+    }
+
+    /// 2026-09-24 fix-all #220: the stored entry, so a retry can reuse its mentions and link card.
+    static func entry(clientId: String) -> Entry? {
+        lock.lock(); defer { lock.unlock() }
+        return load()[clientId]
     }
 
     /// 2026-09-24 decision D-composer-2: a refusal that waiting cannot fix, told apart from
@@ -88,12 +113,16 @@ enum SendQueue {
         if let data = try? JSONEncoder().encode(map) { UserDefaults.standard.set(data, forKey: key) }
     }
 
-    static func add(clientId: String, cid: String, text: String, mentions: [String], reply: ReplyRef?, ts: Double) {
+    static func add(clientId: String, cid: String, text: String, mentions: [String], reply: ReplyRef?, ts: Double,
+                    preview: (url: String, title: String, desc: String)? = nil) {
         lock.lock(); defer { lock.unlock() }
         var map = load()
-        map[clientId] = Entry(clientId: clientId, cid: cid, text: text, mentions: mentions,
-                              replyId: reply?.id, replyAuthor: reply?.authorId, replyText: reply?.text,
-                              createdAt: ts)
+        var e = Entry(clientId: clientId, cid: cid, text: text, mentions: mentions,
+                      replyId: reply?.id, replyAuthor: reply?.authorId, replyText: reply?.text,
+                      createdAt: ts)
+        // 2026-09-24 fix-all #220: keep the link card's text with the queued send.
+        e.previewUrl = preview?.url; e.previewTitle = preview?.title; e.previewDesc = preview?.desc
+        map[clientId] = e
         save(map)
     }
 
@@ -164,8 +193,10 @@ enum SendQueue {
                     AudioRecorder.dropInFlight(clientId: e.clientId)
                 } else {
                     // group: nil → sendText resolves members from the conversation doc itself.
+                    // 2026-09-24 fix-all #220: with its link card, not bare text.
                     try await ChatService.sendText(cid: e.cid, text: e.text, replyTo: reply,
-                                                   clientId: e.clientId, group: nil, mentions: e.mentions)
+                                                   clientId: e.clientId, group: nil, mentions: e.mentions,
+                                                   preview: await outgoingPreview(for: e))
                 }
                 remove(clientId: e.clientId)
             } catch {

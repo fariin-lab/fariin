@@ -1093,16 +1093,38 @@ final class ThreadRepository {
             .getDocuments { [weak self] snap, _ in
                 guard let self else { return }
                 let docs = snap?.documents ?? []
-                for doc in docs { self.buildCached(doc) }
                 if let last = docs.last { self.oldestDoc = last }
                 // Only the SERVER can say history has ended (2026-09-24 audit). A failed fetch
                 // (snap nil) or an offline answer from the local cache (a partial page) used to
                 // switch paging off for the rest of the visit, so older messages never loaded
                 // again even after the signal came back.
                 if let snap, !snap.metadata.isFromCache, docs.count < self.pageSize { self.canLoadOlder = false }
-                self.loadingOlder = false
-                self.rebuild()
-                completion()
+                // 2026-09-24 fix-all #222: decrypt the page OFF the main thread, the same way
+                // `applyLiveSnapshot` does. A 40-message page (group unwraps included) was opened on
+                // main in the scroll-to-top callback and hitched the scroll. Only docs the cache does
+                // not already hold (or whose signature moved) are built; the merge is on main.
+                let sigs = Dictionary(docs.map { ($0.documentID, self.changeSig($0.data())) },
+                                      uniquingKeysWith: { a, _ in a })
+                let needBuild = docs.filter { doc in
+                    self.byId[doc.documentID] == nil || self.rawReactions[doc.documentID] != sigs[doc.documentID]
+                }
+                let finish = {
+                    self.loadingOlder = false
+                    self.rebuild()
+                    completion()
+                }
+                guard !needBuild.isEmpty else { finish(); return }
+                let cidLocal = self.cid
+                Task.detached(priority: .userInitiated) { [weak self] in
+                    let built: [(String, Message)] = needBuild.map { doc in
+                        (doc.documentID, Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
+                    }
+                    await MainActor.run {
+                        guard let self else { completion(); return }
+                        for (id, m) in built { self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? "" }
+                        finish()
+                    }
+                }
             }
     }
 

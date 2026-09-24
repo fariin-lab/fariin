@@ -55,6 +55,7 @@ struct MediaGalleryView: View {
     @State private var gridFrame: CGRect = .zero
     @State private var shareItems: [Any]?
     @State private var confirmDelete = false
+    @State private var deleteFailed = false   // 2026-09-24 fix-all #233
 
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
@@ -244,6 +245,12 @@ struct MediaGalleryView: View {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { deleteSelected() }
         } message: { Text("This removes the message from this chat.") }
+        // 2026-09-24 fix-all #233: the chat's own delete-for-everyone failure alert, reused.
+        .alert("Couldn't delete for everyone", isPresented: $deleteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The server refused the delete. The message is still there for both of you.")
+        }
     }
 
     // (The old custom header is gone â€” the native nav bar now carries the title + count.)
@@ -917,11 +924,20 @@ struct MediaGalleryView: View {
         for id in theirs { HiddenMessages.hide(id) }
         let ids = mine.union(theirs)
         Task {
-            for id in mine { await ChatService.deleteMessage(cid: cid, messageId: id) }
+            // 2026-09-24 fix-all #233: the result was thrown away, so a refused delete vanished
+            // from the grid as if it had worked and came back on the next open. A refused item
+            // stays in the grid and the chat's failure alert says so.
+            var refused = Set<String>()
+            for id in mine {
+                let ok = await ChatService.deleteMessage(cid: cid, messageId: id)
+                if !ok { refused.insert(id) }
+            }
+            let gone = ids.subtracting(refused)
             await MainActor.run {
-                all.removeAll { ids.contains($0.id) }
+                all.removeAll { gone.contains($0.id) }
                 GalleryCache.store[cid] = all   // keep the reopen cache in sync (no deleted-media flash)
                 exitSelection()
+                if !refused.isEmpty { deleteFailed = true }
             }
         }
     }

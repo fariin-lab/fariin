@@ -17,6 +17,7 @@ struct VerifyEncryptionView: View {
     @Environment(\.colorScheme) private var scheme
     @State private var number: String = ""          // the 60-digit safety number
     @State private var loadError = false            // peer hasn't published a key yet
+    @State private var offline = false              // 2026-09-24 fix-all #212: the server read failed
     @State private var verified = false
     @State private var showScanner = false
     @State private var scanOutcome: ScanOutcome?
@@ -56,6 +57,15 @@ struct VerifyEncryptionView: View {
                     VStack(spacing: 14) {
                         scanButton
                         note
+                        // 2026-09-24 fix-all #212: shown from the cached key while offline, so say
+                        // it could not be checked against the server.
+                        if offline {
+                            Text("Couldn't check for a newer key while offline. Connect to the internet to be sure this number is current.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: 320)
+                        }
                     }
                 }
             }
@@ -228,7 +238,9 @@ struct VerifyEncryptionView: View {
             Text("Can't show the safety number yet")
                 .font(.system(size: 17, weight: .semibold))
                 .multilineTextAlignment(.center)
-            Text("\(peerName) hasn't finished setting up encryption on their device. Try again once they've opened the chat.")
+            // 2026-09-24 fix-all #212: offline is not "they never set up encryption".
+            Text(offline ? "No internet connection. Check your connection and try again."
+                 : "\(peerName) hasn't finished setting up encryption on their device. Try again once they've opened the chat.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -241,9 +253,22 @@ struct VerifyEncryptionView: View {
 
     private func compute() async {
         try? await Crypto.shared.ensureReady()
+        // 2026-09-24 fix-all #212: read their key from the SERVER each time the page opens, so the
+        // number is never computed from a stale cached key. Offline is said as offline: with a cached
+        // key the number still shows (marked unconfirmed); with none, the page says to connect
+        // instead of claiming they never set up encryption.
+        let fresh = await Crypto.shared.fetchFreshKey(peerUid)
+        let unreachable: Bool
+        let theirKey: Data?
+        switch fresh {
+        case .key(let k): theirKey = Data(k); unreachable = false
+        case .noKey: theirKey = nil; unreachable = false
+        case .unreachable: theirKey = await Crypto.shared.publicKeyData(for: peerUid); unreachable = true
+        }
+        await MainActor.run { offline = unreachable }
         guard let me = AuthService.shared.uid,
               let myPub = Crypto.shared.myPublicKeyData,
-              let theirPub = await Crypto.shared.publicKeyData(for: peerUid) else {
+              let theirPub = theirKey else {
             await MainActor.run { loadError = true }
             return
         }

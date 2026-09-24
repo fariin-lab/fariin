@@ -110,6 +110,7 @@ final class CallService: NSObject {
                 // and a stale `mediaReady` would start a call the instant it is accepted, before any
                 // media exists. Both silent, both only visible on the SECOND call of a session.
                 preNegotiated = false; mediaReady = false
+                heldPreAnswer = nil   // 2026-09-24 fix-all #230: belongs to that call's connection
                 // Belongs to the peer connection that just died. Held across calls it would be a
                 // closed channel the next call quietly tries to send its accept down — the accept
                 // would silently never arrive and the blink would come back, on some calls only,
@@ -233,6 +234,8 @@ final class CallService: NSObject {
     private var mediaReady = false
     /// This side built its peer connection during the ring rather than at the tap.
     private var preNegotiated = false
+    /// 2026-09-24 fix-all #230: the answer made during the ring, written only when THIS device accepts.
+    private var heldPreAnswer: [String: Any]?
 
     /// Has this call actually been accepted by a person? The callee's own tap, or — on the caller —
     /// the callee's `acceptedAt` landing. Media being ready is not acceptance.
@@ -483,8 +486,38 @@ final class CallService: NSObject {
         let cid = [me, otherUid].sorted().joined(separator: "_")
         // No chat at all → a stranger, which is the safe reading: it is exactly the QR-code and
         // username case, where two people who have never spoken are connecting.
-        peerIsEstablishedContact =
-            ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.accepted ?? false
+        let known = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        peerIsEstablishedContact = known?.accepted ?? false
+        // 2026-09-24 fix-all #231: on a cold launch (a call that woke the app) the chat list has not
+        // loaded yet, so every contact read as a stranger and the call went relay-only. When the chat
+        // is not in the list, read the conversation itself; the connection-building paths wait for
+        // that answer (`awaitPeerTrust`, at most 1.5s) before `config` is read. No doc, a failed
+        // read or a timeout keeps the safe reading: stranger.
+        peerTrustPending = false
+        guard known == nil else { return }
+        peerTrustPending = true
+        let peer = otherUid
+        Task { [weak self] in
+            let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument()
+            await MainActor.run {
+                guard let self, self.otherUid == peer else { return }
+                if let data = snap?.data() {
+                    self.peerIsEstablishedContact = Conversation(id: cid, data: data).accepted
+                }
+                self.peerTrustPending = false
+            }
+        }
+    }
+
+    /// 2026-09-24 fix-all #231: true while `resolvePeerTrust` is still reading the conversation.
+    private var peerTrustPending = false
+
+    /// Wait (bounded) for the contact check above before anything reads `config`.
+    private func awaitPeerTrust(timeout: Double = 1.5) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while peerTrustPending, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     private var config: RTCConfiguration {
@@ -1897,6 +1930,7 @@ final class CallService: NSObject {
             // TURN creds must be in hand BEFORE makePeerConnection reads `config` — see awaitIceServers.
             Task { @MainActor in
                 await self.awaitIceServers()
+                await self.awaitPeerTrust()   // 2026-09-24 fix-all #231
                 await self.awaitRelayForStranger()
                 guard self.state == .outgoing else { return }   // cancelled while we waited
                 // 2026-09-24 audit: no relay for a stranger → fail, never go direct.
@@ -2385,6 +2419,7 @@ final class CallService: NSObject {
         mark("preNegotiateStart")
         Task { @MainActor in
             await self.awaitIceServers()
+            await self.awaitPeerTrust()   // 2026-09-24 fix-all #231
             // Still the same call, still nobody has answered or hung up.
             guard self.state == .incoming, self.callId == callId, self.pc == nil else { return }
             // 2026-09-24 audit: no relay yet for a stranger → skip pre-negotiation. Resetting the
@@ -2408,6 +2443,16 @@ final class CallService: NSObject {
             wasAccepted = true
             db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
             claimAnswer(db.collection("calls").document(id))   // 2026-09-24 audit: one device wins
+            // 2026-09-24 fix-all #230: the answer built during the ring goes out now, from the
+            // device that accepted, through the claim transaction (a loser stands down unsent).
+            // Not held yet (the SDP is still being made) → buildAnswer sees wasAccepted and writes it.
+            if let held = heldPreAnswer {
+                heldPreAnswer = nil
+                var data = held
+                data["status"] = "active"
+                data["cams.\(me)"] = cameraOn
+                writeAnswerWithRetry(ref: db.collection("calls").document(id), data: data, attempt: 1)
+            }
             ringingWatcher?.remove(); ringingWatcher = nil
             if cameraOn { prepareLocalVideo() }
             ensureMicPermission { [weak self] granted in
@@ -2485,6 +2530,7 @@ final class CallService: NSObject {
         mark("offerInHand")   // gap from answerTapped = what the offer fetch cost, if anything
         Task { @MainActor in
             await self.awaitIceServers()
+            await self.awaitPeerTrust()   // 2026-09-24 fix-all #231
             await self.awaitRelayForStranger()
             self.mark("relayCredsReady")   // gap from offerInHand = what the TURN fetch cost
             guard self.state == .active else { return }   // ended while we waited
@@ -2521,9 +2567,23 @@ final class CallService: NSObject {
                     // "declined" in the timeline, with the ring-time marks proving pre-negotiation
                     // had just run. The answer SDP itself is safe to publish early; the STATUS is a
                     // statement that a person picked up, and that was never true yet.
-                    var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"]]
-                    if self.wasAccepted { data["status"] = "active" }
-                    data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
+                    //
+                    // 2026-09-24 fix-all #230: and the answer SDP is no longer published before the
+                    // accept either. With two of my own devices ringing, BOTH pre-negotiated and
+                    // wrote an answer; the caller applies only the first one it sees, so if I
+                    // picked up on the other phone that phone's answer was ignored and the call had
+                    // no audio. A pre-negotiated answer is now held here and written by `answer()`
+                    // on the device that accepts (through the same claim transaction), and a device
+                    // that loses the claim stands down with its answer never sent. The cost is one
+                    // write round trip after the tap; the connection, the gathered candidates and
+                    // the published candidates are all still ready.
+                    DispatchQueue.main.async {
+                        var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"]]
+                        data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
+                        guard self.wasAccepted else { self.heldPreAnswer = data; return }
+                        data["status"] = "active"
+                        self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
+                    }
                     // NOT ENDED — deliberately no longer "== ringing" (his 3:48 AM two-phone
                     // report: he accepted, sat on Connecting… forever, and the CALLER kept
                     // ringing). The ringing status is written by markRinging AFTER the async
@@ -2535,7 +2595,6 @@ final class CallService: NSObject {
                     // must genuinely refuse an answer is "ended" (the caller cancelled — the case
                     // this transaction exists for, and it still holds); anything else is a live
                     // call being answered.
-                    self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
                 }
             }
         }
@@ -2920,6 +2979,8 @@ final class CallService: NSObject {
         callId = nil
         otherUid = ""
         peerIsEstablishedContact = false   // never inherited by the next call
+        peerTrustPending = false           // 2026-09-24 fix-all #231
+        heldPreAnswer = nil                // 2026-09-24 fix-all #230
         isCaller = false
 
         // Feedback tone for the non-initiating side / system-ended calls. Keep the audio

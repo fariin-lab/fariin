@@ -301,6 +301,31 @@ final class Crypto {
         return result
     }
 
+    /// 2026-09-24 fix-all #118: every member's key for a group seal, looked up in parallel with at
+    /// most 8 reads in flight. The seal awaited `preloadKey` one member at a time, so a cold cache
+    /// in a 30-member group was 30 round trips in a row before the message could leave. Cache hits
+    /// return at once; concurrent callers still share one fetch per uid (`keyFetches`).
+    func preloadKeys(_ uids: [String]) async -> [String: Bytes] {
+        let unique = Array(Set(uids.filter { !$0.isEmpty }))
+        var out: [String: Bytes] = [:]
+        await withTaskGroup(of: (String, Bytes?).self) { group in
+            var next = 0
+            let width = 8
+            while next < unique.count && next < width {
+                let uid = unique[next]; next += 1
+                group.addTask { (uid, await self.preloadKey(uid)) }
+            }
+            while let (uid, key) = await group.next() {
+                if let key { out[uid] = key }
+                if next < unique.count {
+                    let u = unique[next]; next += 1
+                    group.addTask { (u, await self.preloadKey(u)) }
+                }
+            }
+        }
+        return out
+    }
+
     /// KEY ROTATION RECOVERY (audit). Peer public keys were cached in memory AND on disk with no
     /// expiry, no listener and no refetch, so a contact who reinstalls or moves to a new phone
     /// (their per-device Keychain key does not migrate, so `initKeys` publishes a fresh pair) broke
@@ -310,8 +335,21 @@ final class Crypto {
     /// render heals — at most one extra read per peer per rotation, and never a loop, because a
     /// genuinely undecryptable message keeps its placeholder after the refreshed key still fails.
     private var keyRefreshInFlight = Set<String>()
-    func refreshKeyAfterFailure(_ uid: String) {
+    /// 2026-09-24 fix-all #70: items (uid + the ciphertext's nonce) that have already paid for one
+    /// refetch this session. A message sealed to a peer's OLD key never opens again, and every new
+    /// snapshot (each chat reopen) rebuilt it and fired another `users/{uid}` read and disk rewrite.
+    /// The first failure of an item still refetches (that is how a rotation heals); a repeat of the
+    /// same item is known-unreadable and is left alone until the app restarts.
+    private var refreshedItems = Set<String>()
+    func refreshKeyAfterFailure(_ uid: String, item: String? = nil) {
         guard !uid.isEmpty else { return }
+        if let item {
+            let first: Bool = lock.withLock {
+                if refreshedItems.count > 5000 { refreshedItems.removeAll() }   // bounded
+                return refreshedItems.insert(uid + "|" + item).inserted
+            }
+            guard first else { return }
+        }
         let start: Bool = lock.withLock {
             if keyRefreshInFlight.contains(uid) { return false }
             keyRefreshInFlight.insert(uid)
@@ -331,27 +369,50 @@ final class Crypto {
         }
     }
 
+    /// 2026-09-24 fix-all #212: the safety-number page must show the key the SERVER holds now, not
+    /// whatever was cached when the chat last failed a decrypt. A server-only read, so offline is a
+    /// thrown error the page can name instead of a silent stale number. On success the key goes
+    /// through the same cache + change log as every other fetch (`fetchKey`).
+    enum FreshKey { case key(Bytes), noKey, unreachable }
+    func fetchFreshKey(_ uid: String) async -> FreshKey {
+        guard !uid.isEmpty else { return .noKey }
+        do {
+            let snap = try await db.collection("users").document(uid).getDocument(source: .server)
+            guard let b64 = snap.data()?["publicKey"] as? String,
+                  let data = Data(base64Encoded: b64) else { return .noKey }
+            return .key(adoptKey(uid, data))
+        } catch {
+            return .unreachable
+        }
+    }
+
     private func fetchKey(_ uid: String) async -> Bytes? {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
             if let b64 = snap.data()?["publicKey"] as? String,
                let data = Data(base64Encoded: b64) {
-                let key = Bytes(data)
-                lock.withLock { pubCache[uid] = key }
-                persistPubKey(uid, key)   // disk cache → decrypt works on the next cold launch's first render
-                // AND SAY SO WHEN IT IS A DIFFERENT KEY THAN LAST TIME. This is the one place every
-                // peer key enters the app, so it is the only place that can notice. See SafetyKeyLog:
-                // the working caches above are cleared on purpose when a decrypt fails, so they can
-                // never answer "what did we use to see?" — the log is separate for exactly that.
-                if SafetyKeyLog.note(uid: uid, key: data) {
-                    NotificationCenter.default.post(name: .peerKeyChanged, object: uid)
-                }
-                return key
+                return adoptKey(uid, data)
             }
         } catch {
             print("crypto: preloadKey failed:", error)
         }
         return nil
+    }
+
+    /// Every fetched peer key enters the app here (split out of `fetchKey` 2026-09-24 fix-all #212 so
+    /// the server-only read shares it).
+    private func adoptKey(_ uid: String, _ data: Data) -> Bytes {
+        let key = Bytes(data)
+        lock.withLock { pubCache[uid] = key }
+        persistPubKey(uid, key)   // disk cache → decrypt works on the next cold launch's first render
+        // AND SAY SO WHEN IT IS A DIFFERENT KEY THAN LAST TIME. This is the one place every
+        // peer key enters the app, so it is the only place that can notice. See SafetyKeyLog:
+        // the working caches above are cleared on purpose when a decrypt fails, so they can
+        // never answer "what did we use to see?" — the log is separate for exactly that.
+        if SafetyKeyLog.note(uid: uid, key: data) {
+            NotificationCenter.default.post(name: .peerKeyChanged, object: uid)
+        }
+        return key
     }
 
     // MARK: - cid helpers (cid = "uidA_uidB")
@@ -418,7 +479,8 @@ final class Crypto {
               let text = String(bytes: opened, encoding: .utf8) else {
             // Most likely their key rotated (new phone / reinstall) and ours is stale — refetch once
             // so the next render heals instead of showing this lock forever. See refreshKeyAfterFailure.
-            refreshKeyAfterFailure(otherUid(cid))
+            // Keyed by this message's nonce (2026-09-24 fix-all #70): once per message per session.
+            refreshKeyAfterFailure(otherUid(cid), item: parts[1])
             return "🔒"
         }
         return text
@@ -500,8 +562,9 @@ final class Crypto {
             throw NSError(domain: "Crypto", code: 12, userInfo: [NSLocalizedDescriptionKey: "group file seal failed"])
         }
         var wraps: [String: String] = [:]
+        let keys = await preloadKeys(members)   // 2026-09-24 fix-all #118: fetched together, not one by one
         for uid in Set(members) {
-            guard let pub = await preloadKey(uid) else { continue }   // skip keyless members
+            guard let pub = keys[uid] else { continue }   // skip keyless members
             guard let w: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
                     sodium.box.seal(message: fileKey, recipientPublicKey: pub, senderSecretKey: sk) else { continue }
             wraps[uid] = Data(w.authenticatedCipherText).base64EncodedString()
@@ -551,7 +614,8 @@ final class Crypto {
                                             nonce: Bytes(keyNonce)) else {
             // Same key-rotation recovery the text path uses: a wrap that will not open is the
             // signature of a stale peer key, so drop it and refetch for the next attempt.
-            refreshKeyAfterFailure(otherUid(cid))
+            // Once per file per session (2026-09-24 fix-all #70), keyed by its wrap nonce.
+            refreshKeyAfterFailure(otherUid(cid), item: meta.kn)
             return nil
         }
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(cipher),
@@ -583,10 +647,11 @@ final class Crypto {
         }
         let me = currentUid() ?? ""
         var wraps: [String: String] = [:]
+        let keys = await preloadKeys(members)   // 2026-09-24 fix-all #118: fetched together, not one by one
         for uid in Set(members) {
             // Skip members who haven't published a key yet — they'll see "…" until they do.
             // One keyless member must NOT block the whole group (unlike a 1:1 chat).
-            guard let pub = await preloadKey(uid) else { continue }
+            guard let pub = keys[uid] else { continue }
             guard let w: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
                     sodium.box.seal(message: msgKey, recipientPublicKey: pub, senderSecretKey: sk) else { continue }
             wraps[uid] = Data(w.authenticatedCipherText).base64EncodedString()
