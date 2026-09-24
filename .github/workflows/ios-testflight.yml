@@ -74,25 +74,23 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            EIGHT FIXES. Please read the last two lines, they matter more than the rest.
+            THE FULL AUDIT BUILD. About 200 fixes across the whole app. Check these first:
 
-            THE PROFILE PHOTO SCROLL IS NOW THEIRS, NOT AN IMITATION. I read the reference app's source. Their whole rule is: one point of upward scroll collapses it, thirty-two points of PULLING DOWN past the top expands it again, over a 0.35 second spring. Ours used 24 and 4, a narrow band around the same point in the same direction, which is exactly why the picture could sit in the middle arguing with your finger. Expanding also now needs a real finger on the glass, so a hard flick that bounces past the top no longer springs the photo open with nobody touching it. And it works on other people's profiles too.
+            HEADERS: the Chats list and the chat screen use the plain iOS 26 glass bar, like the reference app. Chats has your photo menu on the left and camera plus compose on the right. The search bar folds away as you scroll. Pull down past it to switch to Unread.
 
-            THE CHAT LIST HEADER HAS ITS BLUR BACK, and that one was my fault. Removing the line last build also removed the surface the blur was drawn on. The line is still gone.
+            CLOSED PHOTO: swiping a photo closed should now put it back in its bubble every time. Two real causes were found and fixed.
 
-            THE CHAT HEADER BLUR ARRIVES WITH THE PUSH instead of a beat after it.
+            STORIES: swiping past the last person closes the viewer. Repost no longer freezes, shows who you reposted with their photo (tap it to open their story), is gone from the top menu, and the icon gap is smaller.
 
-            THE REACTION PILL no longer touches the bottom of the bubble, and sits on the same side on every message, which is what you asked for over the reference app's own split.
+            MESSAGES: offline messages no longer send twice. Polls and locations work offline. A failed message offers Resend or Delete. Pasting a picture opens the photo editor.
 
-            TAPPING AN EMPTY AVATAR no longer opens an empty picture. With no photo it opens the editor.
+            CALLS: mute tapped while it rings now really mutes. Group calls show errors and reconnecting.
 
-            GLOWING STORY RINGS go grey after you watch, like the Friends ones always did.
+            BLOCKING works on anyone, even with no chat, and stays silent.
 
-            NO PROFILE PICTURE now shows the person silhouette instead of a blank grey card that looked like it was still loading.
+            ACCOUNT: two-step now asks for the extra password on every new sign-in. Forgot password has a page to type the code. Passkey sign-in works.
 
-            SETTINGS, HELP CENTER now opens the new help site at fariin.com/help. 31 articles, searchable.
+            ⚠️ NOT LIVE YET: the new server rules. Until they are, some protections are app-side only.
 
-            ⚠️ STILL BROKEN AND NOT A BUG IN THE APP: your photo will not upload, passkeys and two-step say "Not found", and profile pictures are missing. All three are the same thing: BILLING IS OFF on the Firebase project, so its storage quota is full. Nothing I can change in the app fixes any of them.
-
-            ⚠️ AND STILL NOT FIXED: closing a photo does not return it to its bubble. I found where it goes wrong but not yet why, and three guesses have already failed, so I am not shipping a fourth.
+            ⚠️ If the chat list shows Try Again right after installing, wait a few minutes: a new server index is still building.
         run: fastlane beta
