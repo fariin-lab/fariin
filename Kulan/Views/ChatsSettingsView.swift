@@ -1,4 +1,5 @@
 import SwiftUI
+import Photos
 
 // Settings > Chats. Sits between Appearance and Stories, on the owner's layout (2026-08-04).
 //
@@ -16,6 +17,7 @@ struct ChatsSettingsView: View {
     @AppStorage("linkPreviewsEnabled") private var linkPreviews = true
     @State private var confirmClear = false
     @State private var clearing = false
+    @State private var photosDenied = false
     /// ⛔ SO THE ROW HEARS ABOUT A NEW KEY — audit L1. `ChatPin.isSet` / `.mine` are statics over
     /// UserDefaults and the Keychain, which publish nothing; reading `version` here is what makes
     /// SwiftUI ask again after the key page has been and gone.
@@ -43,7 +45,19 @@ struct ChatsSettingsView: View {
             }
 
             Section {
-                Toggle("Save to Photos", isOn: $saveToPhotos).tint(.green)
+                // Audit 2026-09-24: the switch only wrote the flag. Photos access was asked for later,
+                // from a background task in the middle of opening some chat, and if it was refused
+                // the switch stayed ON while nothing was ever saved. It is asked here now, on the tap.
+                Toggle("Save to Photos", isOn: Binding(get: { saveToPhotos }, set: { on in
+                    saveToPhotos = on
+                    guard on else { return }
+                    Task { @MainActor in
+                        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+                        guard status != .authorized, status != .limited else { return }
+                        saveToPhotos = false
+                        photosDenied = true
+                    }
+                })).tint(.green)
             } footer: {
                 Text("Automatically save received photos and videos to your Photos library.")
             }
@@ -105,6 +119,13 @@ struct ChatsSettingsView: View {
         } message: {
             Text("Are you sure you want to permanently delete all chat history, including messages, photos, videos, documents, voice messages, and call history, from all of your devices? This action cannot be undone.")
         }
+        // Same shape as the app's other "access is off" alerts (microphone, location).
+        .alert("Photos access is off", isPresented: $photosDenied) {
+            Button("Open Settings") {
+                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Allow Photos access in Settings to save received photos and videos.") }
     }
 
     /// Clears every chat the way the per-chat Delete does — `clearedAt` on the conversation, which

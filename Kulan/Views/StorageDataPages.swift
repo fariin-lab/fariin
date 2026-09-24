@@ -293,9 +293,15 @@ struct ManageStoragePage: View {
         .alert("Clear media?", isPresented: $confirmMedia) {
             Button("Cancel", role: .cancel) {}
             Button("Delete Forever", role: .destructive) {
-                VideoCache.removeAll()
-                AudioCache.removeAll()
-                refresh()
+                // Off the main thread (audit 2026-09-24): deleting a phone's worth of videos froze
+                // the page until the last file was gone.
+                Task {
+                    await Task.detached(priority: .userInitiated) {
+                        VideoCache.removeAll()
+                        AudioCache.removeAll()
+                    }.value
+                    refresh()
+                }
             }
         } message: {
             Text("This permanently deletes the videos and voice notes stored on this phone. They exist nowhere else and cannot be downloaded again.")
@@ -304,34 +310,50 @@ struct ManageStoragePage: View {
             Button("Cancel", role: .cancel) {}
             Button("Clear", role: .destructive) {
                 DiskImageCache.shared.clear()
-                let fm = FileManager.default
-                if let items = try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil) {
-                    for u in items { try? fm.removeItem(at: u) }
+                // Off the main thread, same reason as Delete Forever above.
+                Task {
+                    await Task.detached(priority: .userInitiated) {
+                        let fm = FileManager.default
+                        if let items = try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil) {
+                            for u in items { try? fm.removeItem(at: u) }
+                        }
+                        URLCache.shared.removeAllCachedResponses()
+                    }.value
+                    // The image cache empties on its own queue, so give it the same beat as before.
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    refresh()
                 }
-                URLCache.shared.removeAllCachedResponses()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { refresh() }
             }
         } message: {
             Text("Photos and avatars re-download as you use the app. Nothing is lost.")
         }
     }
 
+    /// Audit 2026-09-24: this walked four folders file by file ON THE MAIN THREAD, every time the
+    /// page opened — with a big cache the push animation stalled and the page froze before it drew.
+    /// The measuring runs in the background now and the rows fill in when it is done.
     private func refresh() {
-        photoBytes = DiskImageCache.shared.diskBytes()
-        videoBytes = VideoCache.diskBytes()
-        voiceBytes = AudioCache.diskBytes()
-        let fm = FileManager.default
-        var t = 0
-        if let en = fm.enumerator(at: fm.temporaryDirectory, includingPropertiesForKeys: [.fileSizeKey]) {
-            for case let url as URL in en {
-                t += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            }
+        Task {
+            let sizes = await Task.detached(priority: .userInitiated) { () -> (Int, Int, Int, Int) in
+                let fm = FileManager.default
+                var t = 0
+                if let en = fm.enumerator(at: fm.temporaryDirectory, includingPropertiesForKeys: [.fileSizeKey]) {
+                    for case let url as URL in en {
+                        t += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    }
+                }
+                // STORY MEDIA counts too (audit). It lives in the app's 1 GB persistent URLCache, which
+                // none of the rows measured — so a heavy story watcher saw "Zero KB" everywhere and a
+                // greyed-out Clear Cache while up to a gigabyte sat on disk. Clear Cache already
+                // empties it, so counting it here is what makes the number honest AND the button
+                // reachable.
+                t += URLCache.shared.currentDiskUsage
+                return (DiskImageCache.shared.diskBytes(), VideoCache.diskBytes(), AudioCache.diskBytes(), t)
+            }.value
+            photoBytes = sizes.0
+            videoBytes = sizes.1
+            voiceBytes = sizes.2
+            tmpBytes = sizes.3
         }
-        // STORY MEDIA counts too (audit). It lives in the app's 1 GB persistent URLCache, which none
-        // of the rows measured — so a heavy story watcher saw "Zero KB" everywhere and a greyed-out
-        // Clear Cache while up to a gigabyte sat on disk. Clear Cache already empties it, so counting
-        // it here is what makes the number honest AND the button reachable.
-        t += URLCache.shared.currentDiskUsage
-        tmpBytes = t
     }
 }

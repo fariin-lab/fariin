@@ -94,6 +94,10 @@ struct SoundsNotificationsView: View {
         callSound = SoundStore.sound(cid, .call)
     }
     private func loadMute() async {
+        // Audit 2026-09-24: `setMute` keeps the official channel's mute on this device, not on the
+        // conversation document, but this read only asked the document — so a muted Fariin channel
+        // still said "Not muted" here.
+        if OfficialChannel.isOfficial(cid) { muted = OfficialChannelStore.shared.state.muted; return }
         let me = AuthService.shared.uid ?? ""
         if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
            let until = ((snap.data()?["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue {

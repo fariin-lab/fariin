@@ -1596,6 +1596,7 @@ struct EditProfileView: View {
     @State private var origHandle = ""
     @State private var origAbout = ""
     @State private var confirmDiscard = false
+    @State private var fieldsLoaded = false
     @FocusState private var bioFocused: Bool
     private static let bioAnchor = "bio.field"   // the row the scroller pulls above the keyboard
     /// The gap the bio card keeps above the keys (owner 2026-08-22: "there's no space between card
@@ -1930,6 +1931,11 @@ struct EditProfileView: View {
             // to the form: attached here they vanished the moment you switched to the Large tab,
             // leaving a preview with no way to save it and no way out.
             .onAppear {
+                // ONCE. Audit 2026-09-24: `onAppear` fires again on the way back from the Links page
+                // (a push inside this sheet), and it re-read every field from the saved profile — so
+                // a name or bio typed before opening Links was silently put back.
+                guard !fieldsLoaded else { return }
+                fieldsLoaded = true
                 let parts = (profile.me?.name ?? "").split(separator: " ", maxSplits: 1).map(String.init)
                 firstName = parts.first ?? ""
                 lastName = parts.count > 1 ? parts[1] : ""
@@ -2029,6 +2035,12 @@ struct EditProfileView: View {
         guard !n.isEmpty else { error = "Enter your name"; return }
         guard ChatService.isValidHandle(h) else {
             error = "Username: letters, numbers and _ only, 3–30 characters"; return
+        }
+        // Audit 2026-09-24: offline, the name write does not fail, it waits for the server, so Save
+        // greyed out and the sheet just sat there with nothing said. Refuse up front with the words
+        // the sign-in screens already use. A photo-only change needs no network here.
+        if hasUnsavedText, !NetworkState.shared.isOnline {
+            error = "No internet connection. Check your connection and try again."; return
         }
         saving = true; error = nil
         do {

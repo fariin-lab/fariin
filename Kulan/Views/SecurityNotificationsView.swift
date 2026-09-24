@@ -23,9 +23,14 @@ struct SecurityNotificationsView: View {
     var body: some View {
         List {
             Section {
-                Toggle("Sign-in alerts", isOn: $alerts)
+                // Audit 2026-09-24: this was `onChange(of: alerts)`, which also fired for the two
+                // writes that are NOT the person — the value arriving from `load`, and the put-back
+                // in `save`'s catch. The put-back then saved the old value, and if that failed too it
+                // put back again: a failing write flipped the switch back and forth for ever. Only a
+                // tap saves now.
+                Toggle("Sign-in alerts", isOn: Binding(get: { alerts },
+                                                       set: { on in alerts = on; Task { await save(on) } }))
                     .disabled(loading)
-                    .onChange(of: alerts) { _, on in Task { await save(on) } }
             } footer: {
                 Text("Email me when my account is signed in to on a device it has not been used on before. These emails are how you would find out about a sign-in that was not you.")
             }
@@ -55,6 +60,13 @@ struct SecurityNotificationsView: View {
 
     private func save(_ on: Bool) async {
         guard !loading, let uid else { return }
+        // Offline, `setData` does not fail, it waits for the server — so the switch sat on a value
+        // nothing had accepted, with no word said. Refuse up front, the way the sign-in doors do.
+        guard NetworkState.shared.isOnline else {
+            alerts = !on
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
         do {
             try await Firestore.firestore().collection("users").document(uid)
                 .setData(["securityAlerts": on], merge: true)

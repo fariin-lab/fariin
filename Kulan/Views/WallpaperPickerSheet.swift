@@ -252,6 +252,10 @@ struct WallpaperPickerSheet: View {
                         if let id = store.addToLibrary(img) { preview(.photo(id)) }
                         photoItem = nil   // reset so re-picking (even the same item) fires again
                     }
+                } else {
+                    // Audit 2026-09-24: the failure path skipped that reset, so after one photo that
+                    // would not load, picking it again did nothing.
+                    await MainActor.run { photoItem = nil }
                 }
             }
         }

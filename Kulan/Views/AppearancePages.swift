@@ -177,6 +177,10 @@ struct ChatWallpaperPage: View {
                    let img = UIImage(data: data),
                    let id = await MainActor.run(body: { store.addToLibrary(img) }) {
                     await MainActor.run { previewing = .photo(id); photoItem = nil }
+                } else {
+                    // Audit 2026-09-24: a photo that failed to load left the selection set, so
+                    // picking the same photo again changed nothing and the picker looked dead.
+                    await MainActor.run { photoItem = nil }
                 }
             }
         }

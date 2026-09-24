@@ -84,6 +84,19 @@ enum ChatColors {
         persistCustoms()
     }
 
+    /// SIGN-OUT (audit 2026-09-24). Same problem as `WallpaperStore.reset`: per-chat colours, the
+    /// all-chats default and the custom swatches are device-wide keys, so the next account inherited
+    /// them. Called from `SessionWipe`.
+    func reset() {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("chatColor.") {
+            d.removeObject(forKey: k)
+        }
+        cache = [:]
+        customColors = []
+        version &+= 1
+    }
+
     private func persistCustoms() {
         UserDefaults.standard.set(customColors.map(\.stored), forKey: "chatColor.customLibrary.v1")
     }

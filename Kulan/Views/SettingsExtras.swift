@@ -1,5 +1,6 @@
 ﻿import SwiftUI
 import UIKit
+import UserNotifications
 import FirebaseFirestore
 
 // Settings subviews. Real where the backend exists (Blocked Users, push toggle, Devices);
@@ -26,6 +27,11 @@ struct NotificationsSettingsView: View {
     @AppStorage("notif.inAppPreview") private var inAppPreview = true
     @State private var confirmReset = false
     @State private var resetting = false
+    /// iOS itself has notifications off for the app. Audit 2026-09-24: the page never asked, so with
+    /// them denied in iOS Settings every switch here read ON while nothing could ever arrive, and
+    /// turning Show Notifications on did nothing either (`Push.register` gets a silent refusal).
+    @State private var osDenied = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private var me: String { AuthService.shared.uid ?? "" }
 
@@ -43,6 +49,20 @@ struct NotificationsSettingsView: View {
 
     var body: some View {
         List {
+            // Only while iOS has them off. Same shape as the other "access is off" prompts in the app
+            // (microphone, location): say it, and one tap to the app's page in iOS Settings.
+            if osDenied {
+                Section {
+                    Button("Open Settings") {
+                        if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                    }
+                } header: {
+                    Text("Notifications are off")
+                } footer: {
+                    Text("Allow notifications in Settings to be told about new messages.")
+                }
+            }
+
             Section {
                 Toggle("Show Notifications", isOn: $pushOn)
                     .tint(.green)
@@ -130,12 +150,44 @@ struct NotificationsSettingsView: View {
         }
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await checkSystemPermission()
+            await adoptServerPrefs()
+        }
+        // Coming back from iOS Settings is a return to the foreground, not a new appear.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await checkSystemPermission() } }
+        }
         .alert("Reset all notifications?", isPresented: $confirmReset) {
             Button("Cancel", role: .cancel) {}
             Button("Reset", role: .destructive) { Task { await resetAll() } }
         } message: {
             Text("Every muted chat goes back to normal notifications, and custom chat sounds return to the default.")
         }
+    }
+
+    private func checkSystemPermission() async {
+        let s = await UNUserNotificationCenter.current().notificationSettings()
+        osDenied = s.authorizationStatus == .denied
+    }
+
+    /// Audit 2026-09-24: Message Preview and Sound are written to `users/{uid}` (the push server
+    /// reads them there) but were never read back. Sign-out wipes the local copies, so after signing
+    /// in again, or on a new phone, this page showed Preview ON and the default tone while the server
+    /// kept sending with the old choice. Same rule as `ProfileStore.adoptServerPrivacy`: only a value
+    /// this device does not hold is filled in, so a change made here is never overwritten.
+    private func adoptServerPrefs() async {
+        guard !me.isEmpty else { return }
+        let d = UserDefaults.standard
+        let previewMissing = d.object(forKey: "notif.preview") == nil
+        let soundMissing = d.object(forKey: "notif.sound") == nil
+        guard previewMissing || soundMissing,
+              let data = try? await Firestore.firestore().collection("users").document(me).getDocument().data()
+        else { return }
+        if previewMissing, d.object(forKey: "notif.preview") == nil,
+           let p = data["notifPreview"] as? Bool { messagePreview = p }
+        if soundMissing, d.object(forKey: "notif.sound") == nil,
+           let s = data["notifSound"] as? String, !s.isEmpty { soundName = s }
     }
 
     private func resetAll() async {

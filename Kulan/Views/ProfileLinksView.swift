@@ -20,6 +20,7 @@ struct ProfileLinksView: View {
     @State private var links: [ProfileLink] = []
     @State private var editMode: EditMode = .inactive
     @State private var error: String?
+    @State private var loaded = false
 
     private var atCeiling: Bool { links.count >= ProfileLink.maxPerUser }
 
@@ -77,7 +78,15 @@ struct ProfileLinksView: View {
             }
         }
         .environment(\.editMode, $editMode)
-        .onAppear { links = profile.me?.links ?? [] }
+        // ONCE. Audit 2026-09-24: this also ran on the way back from Add/Edit Link, straight after
+        // `add` had appended the new link and before its save had come back — so the new link
+        // vanished from the list, and offline (where the save waits) it stayed gone. The onChange
+        // below still follows the saved profile.
+        .onAppear {
+            guard !loaded else { return }
+            loaded = true
+            links = profile.me?.links ?? []
+        }
         // The store is the truth; if it publishes while this page is open (another device, or the
         // write below landing) the page follows. Not while editing, so rows do not move under a
         // finger that is dragging one.

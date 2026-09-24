@@ -361,8 +361,14 @@ struct ScanQRView: View {
         notFound = false
         noCodeInPhoto = false
         Task {
+            // Audit 2026-09-24: a photo that would not load returned without clearing the selection
+            // or saying anything, so the tap looked dead and the same photo could not be re-picked.
+            // It now gets the same answer as a photo with no code in it.
             guard let data = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else { return }
+                  let image = UIImage(data: data) else {
+                await MainActor.run { noCodeInPhoto = true; photoItem = nil }
+                return
+            }
             guard let code = qrString(in: image) else {
                 await MainActor.run { noCodeInPhoto = true; photoItem = nil }
                 return

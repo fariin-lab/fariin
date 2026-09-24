@@ -401,6 +401,23 @@ enum ChatWallpapers {
         version &+= 1
     }
 
+    /// SIGN-OUT (audit 2026-09-24). Everything here is a plain device-wide key or file, so the next
+    /// account to sign in on this phone got the last one's imported photos in its picker and the
+    /// last one's wallpaper behind its chats. Clears the per-chat picks, the all-chats default, the
+    /// library list and the library files. Called from `SessionWipe`.
+    func reset() {
+        let d = UserDefaults.standard
+        for k in d.dictionaryRepresentation().keys where k.hasPrefix("wallpaper.") {
+            d.removeObject(forKey: k)
+        }
+        try? FileManager.default.removeItem(at: Self.base.appendingPathComponent("Wallpapers"))
+        cache = [:]
+        imageCache = [:]
+        hashes = [:]
+        libraryIds = []
+        version &+= 1
+    }
+
     private func persistLibrary() {
         UserDefaults.standard.set(libraryIds, forKey: "wallpaper.library.v1")
         UserDefaults.standard.set(hashes, forKey: "wallpaper.libraryHashes.v1")
