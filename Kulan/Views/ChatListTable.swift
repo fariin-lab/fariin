@@ -401,6 +401,13 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// already has. Typing it as the element protocol is what lets the nested one through.
     var menuActions: (Conversation) -> [UIMenuElement]
     var peek: (Conversation) -> UIViewController
+    /// 2026-09-24 fix-all #6: the last chat row came on screen, so the screen can ask the repository
+    /// for the next page of older chats. Fires per display of that row; the repository ignores
+    /// repeats while a page is on its way.
+    var onReachEnd: () -> Void = {}
+    /// 2026-09-24 fix-all (pull-down Unread filter): released after pulling well past the top, the
+    /// reference app's gesture for flipping the list to Unread and back.
+    var onPullFilter: () -> Void = {}
 
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
@@ -1752,6 +1759,28 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         guard let table = scrollView as? UITableView else { return }
         clearStuckHighlights(in: table)
+    }
+
+    /// 2026-09-24 fix-all (pull-down Unread filter): let go after pulling the list well past its
+    /// top, search bar included, and the list flips between All and Unread, the reference app's
+    /// gesture. Measured against `adjustedContentInset.top`, which already counts a revealed search
+    /// bar, so revealing the bar alone never fires it. Not in Select mode, not while searching.
+    static let pullFilterDistance: CGFloat = 90
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
+                                   targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard let parent = host?.parent, !parent.selecting, parent.people.isEmpty else { return }
+        let pulled = -(scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
+        guard pulled > Self.pullFilterDistance else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        parent.onPullFilter()
+    }
+
+    /// 2026-09-24 fix-all #6: the last row of the chats section is about to show, so ask for the
+    /// next page of older chats. The repository drops the call when there is none or one is coming.
+    func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        guard indexPath.section == ChatListSection.unpinned.rawValue,
+              indexPath.row == state.unpinned.count - 1 else { return }
+        host?.parent.onReachEnd()
     }
 
     private func clearStuckHighlights(in tableView: UITableView) {

@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseAuth
 import FirebaseFunctions
+import AuthenticationServices   // 2026-09-24 fix-all #203: SignInAgainSection's Apple button
 
 // ⛔ ACCOUNT SECURITY — the screens for his 2026-09-16 Account page: Email address, Password and
 // Two-step verification. The server for all three is `functions-account` in the backend repo, and
@@ -72,6 +73,87 @@ enum AccountCall {
     }
 }
 
+// MARK: - Sign in again (2026-09-24 fix-all #203)
+
+/// 2026-09-24 fix-all #203: WHAT `.needsReauth` NOW OFFERS. The screens printed "For your security,
+/// sign in again to continue." in red and stopped there, with no door to do it through. This section
+/// sits under that line and runs the re-auth the app already has (`AuthService.reauthApple/Google/
+/// Email`, the same three Delete Account and Password use), then calls `onVerified` so the screen can
+/// retry what was refused. Wording is Password's "One more check" section.
+struct SignInAgainSection: View {
+    var onVerified: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    @State private var password = ""
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        Section {
+            let methods = AuthService.shared.reauthMethods
+            if methods.contains(.apple) {
+                SignInWithAppleButton(.continue) { request in
+                    AuthService.shared.prepareAppleRequest(request)
+                } onCompletion: { result in
+                    switch result {
+                    case .success(let auth):
+                        reauth { try await AuthService.shared.reauthApple(authorization: auth) }
+                    case .failure(let e):
+                        if (e as NSError).code != ASAuthorizationError.canceled.rawValue {
+                            error = "Apple couldn't verify you. Please try again."
+                        }
+                    }
+                }
+                .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
+                .id(scheme)
+                .frame(height: 44)
+            }
+            if methods.contains(.google) {
+                Button("Continue with Google") {
+                    reauth { try await AuthService.shared.reauthGoogle() }
+                }
+            }
+            if methods.contains(.email) {
+                SecureField("Your current password", text: $password)
+                    .textContentType(.password)
+                Button("Verify") {
+                    reauth { try await AuthService.shared.reauthEmail(password: password) }
+                }
+                .disabled(password.isEmpty)
+            }
+            if busy { ProgressView() }
+            if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+        } header: {
+            Text("One more check")
+        } footer: {
+            Text("You have been signed in a while, so we need to confirm it is really you before changing this.")
+        }
+        .disabled(busy)
+    }
+
+    private func reauth(_ work: @escaping () async throws -> Void) {
+        busy = true; error = nil
+        Task {
+            do {
+                try await work()
+                busy = false; password = ""
+                onVerified()
+            } catch {
+                busy = false
+                // A cancel comes back nil from plainMessage and says nothing, as on Password.
+                self.error = AuthService.plainMessage(error)
+            }
+        }
+    }
+}
+
+extension AccountCall.Failure {
+    /// 2026-09-24 fix-all #203: is this the server's "sign in again" refusal?
+    static func isReauth(_ error: Error) -> Bool {
+        if case .needsReauth? = error as? AccountCall.Failure { return true }
+        return false
+    }
+}
+
 // MARK: - 5. Email address
 
 /// "Change email" — his first screenshot: the current connection in one card, the new address in
@@ -82,6 +164,7 @@ struct ChangeEmailView: View {
     @State private var newEmail = ""
     @State private var sending = false
     @State private var error: String?
+    @State private var needsReauth = false   // 2026-09-24 fix-all #203
     /// Set once the server has accepted the request, which pushes the code screen.
     @State private var awaitingCode = false
 
@@ -145,6 +228,13 @@ struct ChangeEmailView: View {
             if let error {
                 Section { Text(error).font(.footnote).foregroundStyle(.red) }
             }
+            // 2026-09-24 fix-all #203: the door the "sign in again" line asks for, then a retry.
+            if needsReauth {
+                SignInAgainSection {
+                    needsReauth = false; error = nil
+                    Task { await send() }
+                }
+            }
         }
         .navigationTitle("Change email")
         .navigationBarTitleDisplayMode(.inline)
@@ -188,6 +278,7 @@ struct ChangeEmailView: View {
             awaitingCode = true
         } catch {
             self.error = error.localizedDescription
+            needsReauth = AccountCall.Failure.isReauth(error)   // 2026-09-24 fix-all #203
         }
     }
 }
@@ -201,6 +292,7 @@ struct EmailCodeView: View {
     @State private var code = ""
     @State private var working = false
     @State private var error: String?
+    @State private var needsReauth = false   // 2026-09-24 fix-all #203
 
     private var canConfirm: Bool { !working && code.count == 6 }
 
@@ -225,6 +317,13 @@ struct EmailCodeView: View {
 
             if let error {
                 Section { Text(error).font(.footnote).foregroundStyle(.red) }
+            }
+            // 2026-09-24 fix-all #203: the door the "sign in again" line asks for, then a retry.
+            if needsReauth {
+                SignInAgainSection {
+                    needsReauth = false; error = nil
+                    Task { await confirm() }
+                }
             }
         }
         .navigationTitle("Change email")
@@ -265,6 +364,7 @@ struct EmailCodeView: View {
             onDone()
         } catch {
             self.error = error.localizedDescription
+            needsReauth = AccountCall.Failure.isReauth(error)   // 2026-09-24 fix-all #203
         }
     }
 }

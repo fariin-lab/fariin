@@ -156,9 +156,31 @@ final class DiskImageCache {
 
     private static func isOwned(_ u: URL) -> Bool { u.pathExtension == ownedExt }
 
+    // 2026-09-24 fix-all #209: a MEMORY hit refreshes the file's LRU date too. Only the disk-read
+    // path touched it, so a photo seen every day but always served from memory kept its first
+    // date and was the first thing the 250 MB trim deleted. Throttled to once per url per hour per
+    // launch, and the file write goes to the serial `io` queue, so a scroll pays one dictionary
+    // lookup per hit on the main thread and nothing else.
+    private var lastTouch: [String: Date] = [:]
+    private let touchLock = NSLock()
+    private func touchOnHit(_ url: String) {
+        let now = Date()
+        touchLock.lock()
+        if let t = lastTouch[url], now.timeIntervalSince(t) < 3600 { touchLock.unlock(); return }
+        lastTouch[url] = now
+        touchLock.unlock()
+        guard isCached(url) else { return }
+        io.async {
+            try? FileManager.default.setAttributes([.modificationDate: now],
+                                                   ofItemAtPath: self.existingFileURL(url).path)
+        }
+    }
+
     /// Synchronous MEMORY-only lookup (instant; safe on the main thread).
     func memoryImage(_ url: String) -> UIImage? {
-        mem.object(forKey: url as NSString)
+        let m = mem.object(forKey: url as NSString)
+        if m != nil { touchOnHit(url) }   // 2026-09-24 fix-all #209
+        return m
     }
 
     /// SYNCHRONOUS first-frame read, for SMALL images only. Blocks the caller.
@@ -174,11 +196,12 @@ final class DiskImageCache {
     /// launch and every later row hits memory. Do NOT use this for full-size photos or video
     /// posters: those are big enough that reading them on the main thread would stutter a scroll.
     func smallImageSync(_ url: String) -> UIImage? {
-        if let m = mem.object(forKey: url as NSString) { return m }
+        if let m = mem.object(forKey: url as NSString) { touchOnHit(url); return m }   // 2026-09-24 fix-all #209
         guard isCached(url), let data = try? Data(contentsOf: existingFileURL(url)),
               let raw = UIImage(data: data) else { return nil }
         let img = raw.boundedForDisplay() ?? raw
         mem.setObject(img, forKey: url as NSString)
+        touchOnHit(url)   // 2026-09-24 fix-all #209: a disk read is an access too
         return img
     }
 
@@ -186,12 +209,16 @@ final class DiskImageCache {
     /// below costs at least one frame even on a hit, and one frame of placeholder is a visible flash
     /// on anything that animates out of something already on screen. NSCache is thread-safe, so this
     /// is safe to call from a view's initialiser.
-    func memoryImage(for url: String) -> UIImage? { mem.object(forKey: url as NSString) }
+    func memoryImage(for url: String) -> UIImage? {
+        let m = mem.object(forKey: url as NSString)
+        if m != nil { touchOnHit(url) }   // 2026-09-24 fix-all #209
+        return m
+    }
 
     /// Memory hit → instant. Otherwise read from disk off-main, decode, and promote
     /// to memory. Returns nil if not cached anywhere (caller should then download).
     func image(for url: String) async -> UIImage? {
-        if let m = mem.object(forKey: url as NSString) { return m }
+        if let m = mem.object(forKey: url as NSString) { touchOnHit(url); return m }   // 2026-09-24 fix-all #209
         return await withCheckedContinuation { cont in
             read.async {
                 let f = self.existingFileURL(url)

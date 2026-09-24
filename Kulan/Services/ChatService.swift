@@ -119,9 +119,14 @@ enum ChatService {
         do {
             try await ref.setData(seed, merge: true)
         } catch {
-            guard seed["startedBy"] != nil else { throw error }
+            // 2026-09-24 fix-all: the creation seeds go too. The rules now refuse lowering another
+            // member's badge, and a seed written over a chat that already exists sets their
+            // `unreadCount` back to 0, so on this path it would refuse the retry as well.
+            guard seed["unreadCount"] != nil else { throw error }
             seed.removeValue(forKey: "startedBy")
             seed.removeValue(forKey: "accepted")
+            seed.removeValue(forKey: "unreadCount")
+            seed.removeValue(forKey: "typing")
             try await ref.setData(seed, merge: true)
         }
         // 2026-09-24 decision D8: opening a chat with somebody on MY account block list gives the chat
@@ -428,6 +433,7 @@ enum ChatService {
     static func addGroupMembers(cid: String, add: [String]) async throws -> [String] {
         let newOnes = add.filter { !$0.isEmpty }
         guard !newOnes.isEmpty else { return [] }
+        forgetSealMembers(cid)   // 2026-09-24 fix-all #111: the next seal re-reads the member list
         let convRef = db.collection("conversations").document(cid)
         // Enforce the 30-member cap on growth (the rules only cap it at create time).
         var currentCount = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.users.count ?? 0
@@ -464,10 +470,29 @@ enum ChatService {
             }
             update["unreadCount.\(u)"] = 0
         }
-        try await convRef.updateData(update)
-        if !addedNames.isEmpty {
-            try await writeSystemMessage(cid: cid, text: "\(myName()) added \(addedNames.joined(separator: ", "))")
+        // 2026-09-24 fix-all: ONE BATCH, the fix `removeGroupMember` and `leaveGroup` already got. The
+        // add and its "X added Y" notice were two awaited writes, so a kill or a dropped signal between
+        // them left new members in the group with no notice ever shown. The notice's preview rides on
+        // the same update (the membersCanAdd rule branch admits `lastMessage`/`lastSender` = me); the
+        // message rule reads the conversation as it was before the batch, where I am already a member.
+        // A member the message rule would refuse (announcement mode, or muted) still adds, without the
+        // notice, exactly as before, instead of the refused notice taking the whole add down with it.
+        let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        let canNotice = conv?.canSend(uid, now: Date().timeIntervalSince1970 * 1000) ?? true
+        let batch = db.batch()
+        if canNotice, !addedNames.isEmpty {
+            let text = "\(myName()) added \(addedNames.joined(separator: ", "))"
+            batch.setData(["text": text, "authorId": uid, "type": "system",
+                           "createdAt": FieldValue.serverTimestamp()],
+                          forDocument: convRef.collection("messages").document())
+            update["lastMessage"] = text
+            update["lastSender"] = uid
         }
+        batch.updateData(update, forDocument: convRef)
+        try await batch.commit()
+        // Again once the add has landed: a send between the top of this function and the commit
+        // would have cached the old list for its ten seconds, leaving the new members without wraps.
+        forgetSealMembers(cid)
         return keyless
     }
 
@@ -479,6 +504,7 @@ enum ChatService {
     /// branch of the conversation rule (any field), so the notice's preview fields ride on the same
     /// update; the message rule reads the conversation as it was before the batch.
     static func removeGroupMember(cid: String, uid removed: String, name: String) async throws {
+        forgetSealMembers(cid)   // 2026-09-24 fix-all #111: the next seal re-reads the member list
         let convRef = db.collection("conversations").document(cid)
         let text = "\(myName()) removed \(name)"
         let batch = db.batch()
@@ -761,7 +787,7 @@ enum ChatService {
         // Resolve members even if the caller didn't pass them (e.g. the very first message
         // right after creation, before the conversations listener has the doc). A group cid
         // is a random id with no "_", so that distinguishes it from a 1:1 "uidA_uidB" cid.
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -861,6 +887,31 @@ enum ChatService {
         if countsAsUnread { convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1)) }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+    }
+
+    /// 2026-09-24 fix-all #111: the member list a group message is sealed to, read from the SERVER
+    /// rather than taken from the screen's cached conversation. A member removed on another device
+    /// stayed in that cache until this phone's listener caught up, and anything sent in that window
+    /// was still wrapped for them. One server read per group, reused for 10 seconds so a burst of
+    /// sends (an album, a forward to one group) pays once. Offline, the cached list is used: the
+    /// send is queued either way. A 1:1 cid ("uidA_uidB") passes straight through.
+    private static let sealMembersLock = NSLock()
+    private static var sealMembersConfirmed: [String: (users: [String], at: Date)] = [:]
+    static func freshGroupMembers(_ cid: String, _ cached: [String]?) async -> [String]? {
+        guard !cid.contains("_") else { return cached }
+        if let hit = sealMembersLock.withLock({ sealMembersConfirmed[cid] }),
+           Date().timeIntervalSince(hit.at) < 10 {
+            return hit.users
+        }
+        guard let snap = try? await db.collection("conversations").document(cid).getDocument(source: .server),
+              let users = snap.data()?["users"] as? [String] else { return cached }
+        sealMembersLock.withLock { sealMembersConfirmed[cid] = (users, Date()) }
+        return users
+    }
+
+    /// Drop the reused list when this device changes membership itself.
+    static func forgetSealMembers(_ cid: String) {
+        _ = sealMembersLock.withLock { sealMembersConfirmed.removeValue(forKey: cid) }
     }
 
     /// Group text send: encrypt once per member, fan out the unread increment to everyone
@@ -1048,7 +1099,7 @@ enum ChatService {
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
         let data = sendJPEG(rawData)
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -1218,7 +1269,7 @@ enum ChatService {
     /// E2EE'd + uploaded separately; a single message doc carries the array of {imageUrl, enc, w, h}.
     static func sendAlbum(cid: String, images: [Data], caption: String, clientId: String? = nil, group: [String]? = nil) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -1440,7 +1491,7 @@ enum ChatService {
     static func sendMixedAlbum(cid: String, items: [AlbumSendItem], caption: String,
                                clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the uploads
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -1636,7 +1687,7 @@ enum ChatService {
     /// are sealed and the ciphertext uploaded; the server never hears the audio.
     static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false, viewOnce: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -1744,7 +1795,7 @@ enum ChatService {
                               caption: String = "", clientId: String? = nil, group: [String]? = nil,
                               forwarded: Bool = false) async throws -> String {
         let clientTs = Date().timeIntervalSince1970 * 1000   // when SEND was tapped, not when it landed
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -1826,7 +1877,7 @@ enum ChatService {
     /// the transcode and this upload.
     static func attachVideo(cid: String, messageId: String, video: Data,
                             clientId: String? = nil, group: [String]? = nil) async throws {
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -1871,7 +1922,7 @@ enum ChatService {
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
                           width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -2000,7 +2051,7 @@ enum ChatService {
     /// NAME is metadata stored in the clear (like image dimensions) so the bubble can label it.
     static func sendFile(cid: String, data rawData: Data, fileName: String, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -2103,7 +2154,7 @@ enum ChatService {
 
     /// Send a GIF (a public Giphy URL — public content, so NOT E2EE; we store the url directly).
     static func sendGif(cid: String, url: String, width: Double, height: Double, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -2406,7 +2457,7 @@ enum ChatService {
             return true
         }
         // Group reactions are sealed for ALL members (so everyone sees the emoji); 1:1 to the other.
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -2846,7 +2897,7 @@ enum ChatService {
     static func editMessage(cid: String, messageId: String, newText: String, group: [String]? = nil) async throws {
         let t = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        var members = group
+        var members = await freshGroupMembers(cid, group)   // 2026-09-24 fix-all #111
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
@@ -3203,7 +3254,10 @@ enum ChatService {
         ]
         if let messageId { data["messageId"] = messageId }
         if let messageText, !messageText.isEmpty { data["messageText"] = messageText }
-        try? await db.collection("reports").addDocument(data: data)
+        // 2026-09-24 fix-all: counted for the rules' daily report limit, only once it has landed.
+        if (try? await db.collection("reports").addDocument(data: data)) != nil {
+            await MessageRequests.countDaily("reports")
+        }
     }
 
     /// "Delete for me" — hides the thread until a newer message arrives (clearedAt).

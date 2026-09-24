@@ -220,6 +220,8 @@ private struct GlowEventRow: View {
     let dark: Bool
     private var glow = GlowService.shared
     @State private var showProfile = false
+    /// 2026-09-24 fix-all #196: a refused glow write; the button has already rolled back.
+    @State private var glowWriteFailed = false
 
     init(event: GlowEvent, unread: Bool, dark: Bool) {
         self.event = event
@@ -258,6 +260,12 @@ private struct GlowEventRow: View {
             Circle().fill(unread ? GlowStyle.accent : .clear)
                 .frame(width: 6, height: 6)
                 .offset(x: -11)
+        }
+        // 2026-09-24 fix-all #196: same alert as the profile's refused glow write.
+        .alert("Couldn't update", isPresented: $glowWriteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Try again in a moment.")
         }
         // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
         // profile is my own page and nobody else's.
@@ -339,7 +347,7 @@ private struct GlowEventRow: View {
                 // 2026-09-24 decision D21: removing a Glow asks first (his 2026-09-02 ruling). A
                 // menu with the profile's red "Remove Glowing" row, not a remove on touch.
                 Menu {
-                    Button(role: .destructive) { glow.remove(to: event.person.id) } label: {
+                    Button(role: .destructive) { glow.remove(to: event.person.id) { if $0 != nil { glowWriteFailed = true } } } label: {   // 2026-09-24 fix-all #196
                         Label { Text("Remove Glowing") } icon: { GlowStyle.mark(20, filled: true) }
                     }
                 } label: {
@@ -352,7 +360,7 @@ private struct GlowEventRow: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Button { glow.give(to: event.person.id) } label: {
+                Button { glow.give(to: event.person.id) { if $0 != nil { glowWriteFailed = true } } } label: {   // 2026-09-24 fix-all #196
                     Text("Glow back")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(GlowStyle.onAccent(dark))

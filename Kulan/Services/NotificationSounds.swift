@@ -1,6 +1,8 @@
 import Foundation
 import AudioToolbox
 import AVFoundation
+import FirebaseAuth
+import FirebaseFirestore
 
 // A notification tone the user can pick for a chat's message / call alerts.
 //
@@ -213,6 +215,24 @@ enum SoundStore {
     static func set(_ cid: String, _ kind: Kind, _ sound: NotificationSound) {
         let stored = sound.customPath.map { "custom:\($0)" } ?? sound.id
         UserDefaults.standard.set(stored, forKey: key(cid, kind))
+        if kind == .message { syncPushSound(cid, sound) }
+    }
+
+    /// 2026-09-24 fix-all #174: a push that arrives while the app is in the background plays the
+    /// sound NAMED IN THE PAYLOAD, which the server set to "default" for every chat, so a per-chat
+    /// tone only ever played in the foreground. The choice is mirrored to `users/{me}/push/sounds`
+    /// (owner-only, like the push tokens beside it; the public user doc would reveal my chat ids),
+    /// one field per chat: the tone's bundle filename, "none" for silence, or no field for the
+    /// default. onNewMessage reads it for the recipient. The system tones have no file in our bundle
+    /// that APNs can name, so they (and the Note default) stay "default".
+    private static func syncPushSound(_ cid: String, _ sound: NotificationSound) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let ref = Firestore.firestore().document("users/\(uid)/push/sounds")
+        let value: Any
+        if sound.id == NotificationSound.none.id { value = "none" }
+        else if let file = sound.bundleFile { value = file }
+        else { value = FieldValue.delete() }
+        Task { try? await ref.setData([cid: value], merge: true) }
     }
     /// Any chat carrying a custom message/call tone. "Reset All Notifications" promises to undo
     /// every custom notification setting but only ever unmuted, and it was disabled whenever
@@ -223,6 +243,10 @@ enum SoundStore {
     static func clearAllCustom() {
         let d = UserDefaults.standard
         for k in d.dictionaryRepresentation().keys where k.hasPrefix("sound_") { d.removeObject(forKey: k) }
+        // 2026-09-24 fix-all #174: and the server's copy, so background pushes go back to default too.
+        if let uid = Auth.auth().currentUser?.uid {
+            Task { try? await Firestore.firestore().document("users/\(uid)/push/sounds").delete() }
+        }
     }
 
     // Save an imported audio file into app support and return its stored path.

@@ -33,7 +33,13 @@ service firebase.storage {
       // change their picture at all (owner 2026-08-19). The fix keeps the ownership rule exactly as
       // strict; it just knows about the second name.
       allow write: if request.auth != null
-        && (file == request.auth.uid + '.jpg' || file == request.auth.uid + '-poster.jpg')
+        && (file == request.auth.uid + '.jpg' || file == request.auth.uid + '-poster.jpg'
+            // 2026-09-24 fix-all: A GROUP'S PHOTO, `group_<cid>.jpg` (ChatService.uploadGroupAvatar).
+            // Nothing matched it, so every group photo upload was refused and swallowed by the app's
+            // `try?`. Allowed for the people the Firestore rule lets set `avatarUrl`: an admin, or
+            // any member while "members can edit info" is on. Same firestore.get() the chat-media
+            // membership check below uses; the group doc always exists before its photo is set.
+            || groupPhotoEditor(file))
         && request.resource.size < 8 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
       // You may delete your OWN profile photos (both crops) — used on account deletion.
@@ -97,7 +103,7 @@ service firebase.storage {
       // warning above). Emulator or one real group photo right after deploying, before trusting it.
       allow write: if request.auth != null
         && request.resource.size < 64 * 1024 * 1024
-        && resource == null
+        && (resource == null || sameBytesRetry())   // 2026-09-24 fix-all: a lost-answer retry
         && chatMember(cid);
 
       // ⛔ DELETE FOR EVERYONE NEVER DELETED THE MEDIA (audit, 2026-09-24). There was no delete
@@ -119,6 +125,29 @@ service firebase.storage {
       allow delete: if request.auth != null
         && chatMessage(cid, file).data.authorId == request.auth.uid
         && chatMessage(cid, file).data.get('deleted', false) == true;
+    }
+
+    // 2026-09-24 fix-all: the caller may set this group's photo. `file` is `group_<cid>.jpg`, and a
+    // group id is a Firestore auto-id (letters and digits only).
+    function groupPhotoEditor(file) {
+      return file.matches('group_[A-Za-z0-9]{1,64}[.]jpg')
+        && (request.auth.uid in groupDoc(file.split('[_.]')[1]).data.get('admins', [])
+            || (groupDoc(file.split('[_.]')[1]).data.get('membersCanEditInfo', false) == true
+                && request.auth.uid in groupDoc(file.split('[_.]')[1]).data.get('users', [])));
+    }
+
+    function groupDoc(cid) {
+      return firestore.get(/databases/(default)/documents/conversations/$(cid));
+    }
+
+    // 2026-09-24 fix-all: A RETRIED UPLOAD OF THE SAME BYTES. The media paths are create-only
+    // (`resource == null`), so an upload that landed but whose answer was lost was refused when the
+    // app sent it again. Writing identical bytes over an object is no vandalism (nothing changes),
+    // so the same size and checksum pass.
+    function sameBytesRetry() {
+      return resource != null
+        && request.resource.size == resource.size
+        && request.resource.md5Hash == resource.md5Hash;
     }
 
     function chatMember(cid) {
@@ -168,7 +197,7 @@ service firebase.storage {
       // 25 MB: a story video may be 90 seconds, and 90 seconds at the 540p we export to is roughly
       // 17 MB. Matches the chat limit, which is the same kind of media.
       allow write: if request.auth != null
-        && resource == null
+        && (resource == null || sameBytesRetry())   // 2026-09-24 fix-all: a lost-answer retry
         && request.resource.size < 25 * 1024 * 1024
         && (
              (file == 'photo.jpg' && request.resource.contentType.matches('image/.*'))
@@ -192,7 +221,8 @@ service firebase.storage {
       // announcement that POINTS at them, and an unreferenced object is never fetched by anything.
       allow write: if request.auth != null
         && request.resource.size < 10 * 1024 * 1024
-        && resource == null                                    // create-only: no overwriting a live announcement's picture
+        && (resource == null || sameBytesRetry())              // create-only: no overwriting a live announcement's picture
+                                                               // (2026-09-24 fix-all: except a same-bytes retry)
         && request.resource.contentType.matches('image/.*')    // images only — not an arbitrary file host
         // 2026-09-24 decision D-admin-media: one new file per upload (image-<32 hex>.jpg) so a picture
         // edit never replaces what a live announcement shows. Still one flat, named file per upload.

@@ -50,11 +50,45 @@ final class ConversationsRepository {
         if !UserDefaults.standard.bool(forKey: key) { UserDefaults.standard.set(true, forKey: key) }
     }
 
+    // MARK: - Window (2026-09-24 fix-all #6)
+    //
+    // The query used to have no bound at all: every conversation this account was ever a member of
+    // (cleared, declined, long dead) was downloaded on every attach, for the life of the account.
+    // It is now the newest `pageSize` by `updatedAt`, and the list asks for the next page when it
+    // is scrolled to its end (`loadOlder`). Needs the composite index users(CONTAINS) +
+    // updatedAt(DESC) in firestore.indexes.json, deployed before an app build that carries this.
+    static let pageSize = 300
+    @ObservationIgnored private var windowLimit = ConversationsRepository.pageSize
+    /// The last snapshot filled the window, so there may be older chats on the server.
+    var hasOlder = false
+    /// A bigger window has been asked for and its first snapshot has not landed yet.
+    var loadingOlder = false
+    @ObservationIgnored private var listenerUid: String?
+
+    /// 2026-09-24 fix-all #6: the next page. The listener is re-attached with a bigger limit, so the
+    /// chats already on screen come straight back from the local cache and only the older ones cost
+    /// reads. A no-op while a page is already on its way or there is nothing older.
+    func loadOlder() {
+        guard hasOlder, !loadingOlder, listener != nil, !DemoMode.active else { return }
+        loadingOlder = true
+        windowLimit += Self.pageSize
+        attach()
+    }
+
     func start() {
         // The full demo takeover (the demo login) has already put its data in; there is no account
         // to listen to. This is NOT the "Demo chats" switch, which leaves the real listener running
         // and has its rows added in `publish`.
         if DemoMode.active { hasLoaded = true; return }
+        // 2026-09-24 fix-all #57: ONE LISTENER FOR THE APP, NOT ONE PER SCREEN. The Chats tab, the
+        // Archive, and both search pages each call this from their own `onAppear`, and every call
+        // used to tear the running listener down and attach a fresh one (a full re-fetch, just for
+        // pushing a screen that reads the same data). Decision: the listener lives for the signed-in
+        // session (the tab badge and the unread total read it on every tab), so no screen releases
+        // it and a count of holders would never reach zero; `start()` is simply idempotent. It
+        // re-attaches only when nothing is attached, the account changed, or the last one failed
+        // (Firestore ends a listener for good on an error, which is what "Try Again" relies on).
+        if listener != nil, !loadFailed, let uid = Auth.auth().currentUser?.uid, uid == listenerUid { return }
         // Safety net FIRST — before the uid guard / listener — so the chat-list skeleton can NEVER spin
         // forever: even if auth isn't ready yet, or Firestore's realtime channel is blocked/slow (a cloud
         // simulator like Appetize, or a brand-new user on a poor connection). Real chats clear it sooner.
@@ -84,12 +118,26 @@ final class ConversationsRepository {
                 hasLoaded = true
             }
         }
+        // 2026-09-24 fix-all #6: a new account (or the first attach) starts from one page again.
+        if listenerUid != uid { windowLimit = Self.pageSize; hasOlder = false; loadingOlder = false }
+        attach()
+        Task { try? await Crypto.shared.ensureReady() }   // key setup in the background
+    }
+
+    /// 2026-09-24 fix-all #6: the listener itself, split out of `start()` so `loadOlder` can widen
+    /// the window without re-running the launch-only work above.
+    private func attach() {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
+        listenerUid = uid
+        let limit = windowLimit
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
         // Cached chats render instantly (hasLoaded flips on the first non-empty snapshot);
         // a true cold start shows the skeleton until the server responds.
         listener = db.collection("conversations")
             .whereField("users", arrayContains: uid)
+            .order(by: "updatedAt", descending: true)
+            .limit(to: limit)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else {
                     if let error {
@@ -98,10 +146,15 @@ final class ConversationsRepository {
                         // back, and it is what takes the skeleton down so the error can show.
                         self?.loadFailed = true
                         self?.hasLoaded = true
+                        self?.loadingOlder = false
                     }
                     return
                 }
                 if self.loadFailed { self.loadFailed = false }
+                // 2026-09-24 fix-all #6: a full window means there may be more behind it. Only a
+                // server answer settles a page request; the cache can hand back fewer than exist.
+                self.hasOlder = snap.documents.count >= limit
+                if !snap.metadata.isFromCache { self.loadingOlder = false }
                 // ⚠️ REPORTED BEFORE THE GUARD BELOW, on purpose. The empty-cached case is exactly
                 // the offline cold start, and it is the one the header most needs to hear about —
                 // returning first would make this listener silent precisely when it has the most to
@@ -128,7 +181,9 @@ final class ConversationsRepository {
                 // in a snapshot that changes nothing else. No-op while the setting is off.
                 // 2026-09-24 decision D8: the raw list is kept so a block list change can re-filter it.
                 self.lastRaw = convs
-                let visible = self.hideAccountBlocked(convs, me: uid)
+                // 2026-09-24 fix-all #6: a pinned chat older than the window stays on the list.
+                self.syncPinnedExtras(convs, uid: uid, fromServer: !snap.metadata.isFromCache)
+                let visible = self.hideAccountBlocked(self.withPinnedExtras(convs), me: uid)
                 UnknownChatArchiver.sweep(visible)
                 self.publish(visible)
 
@@ -176,7 +231,6 @@ final class ConversationsRepository {
                     await MainActor.run { self.republishForKeys() }
                 }
             }
-        Task { try? await Crypto.shared.ensureReady() }   // key setup in the background
     }
 
     // Coalesced publish (change-observer idea): the conversations query fires on EVERY
@@ -256,6 +310,8 @@ final class ConversationsRepository {
             lastPublish = Date()
             conversations = convs
             hasLoaded = true
+            // 2026-09-24 fix-all #166: the app badge follows the list, so a read on another device lowers it.
+            Task { @MainActor in NotificationCleaner.syncBadgeFromList() }
             // Drop anything the flush was still holding (audit): an immediate publish left an older
             // buffered snapshot armed, and the scheduled flush then assigned it OVER this newer one —
             // the list regressed up to 150ms and stayed wrong until the next server event, which on a
@@ -273,6 +329,7 @@ final class ConversationsRepository {
                     self.lastPublish = Date()
                     if p != self.conversations { self.conversations = p }
                     self.hasLoaded = true
+                    Task { @MainActor in NotificationCleaner.syncBadgeFromList() }   // 2026-09-24 fix-all #166
                 }
             }
         }
@@ -298,7 +355,65 @@ final class ConversationsRepository {
     /// Called by `BlockList` when my list changes, so a block or unblock applies to the list at once.
     func blockListChanged() {
         guard listener != nil, !lastRaw.isEmpty, let me = Auth.auth().currentUser?.uid else { return }
-        publish(hideAccountBlocked(lastRaw, me: me))
+        publish(hideAccountBlocked(withPinnedExtras(lastRaw), me: me))
+    }
+
+    // MARK: - Pinned chats older than the window (2026-09-24 fix-all #6)
+    //
+    // The window is the newest `pageSize` chats, and a pin does not bump `updatedAt`, so on a big
+    // account a chat pinned long ago can sit below the window and would drop off the top of the
+    // list. The pinned ids are remembered per account; any that a FULL window does not contain get
+    // a listener of their own on that one document (pins are few, so this is a handful at most).
+    // A window that is not full holds every chat there is, so a remembered id missing from it was
+    // unpinned, left or deleted and is forgotten.
+    @ObservationIgnored private var pinnedExtraListeners: [String: ListenerRegistration] = [:]
+    @ObservationIgnored private var pinnedExtraDocs: [String: Conversation] = [:]
+
+    private func pinnedIdsKey(_ uid: String) -> String { "pinnedChatIds-\(uid)" }
+
+    private func syncPinnedExtras(_ window: [Conversation], uid: String, fromServer: Bool) {
+        let inWindow = Set(window.map(\.id))
+        let pinnedInWindow = Set(window.filter { $0.isPinned(uid) }.map(\.id))
+        let remembered = Set(UserDefaults.standard.stringArray(forKey: pinnedIdsKey(uid)) ?? [])
+        let outside = hasOlder ? remembered.subtracting(inWindow) : []
+        // Only a server answer may forget an id: a cold cache can hold fewer chats than exist.
+        let keep = fromServer ? pinnedInWindow.union(outside) : pinnedInWindow.union(remembered)
+        UserDefaults.standard.set(Array(keep), forKey: pinnedIdsKey(uid))
+        for id in Array(pinnedExtraListeners.keys) where !outside.contains(id) {
+            pinnedExtraListeners.removeValue(forKey: id)?.remove()
+            pinnedExtraDocs[id] = nil
+        }
+        for id in outside where pinnedExtraListeners[id] == nil {
+            pinnedExtraListeners[id] = db.collection("conversations").document(id)
+                .addSnapshotListener { [weak self] snap, _ in
+                    guard let self else { return }
+                    // Offline and not cached yet says nothing about the chat; wait for the server.
+                    if let snap, snap.metadata.isFromCache, !snap.exists { return }
+                    guard let snap, snap.exists, let data = snap.data(with: .estimate),
+                          (data["users"] as? [String] ?? []).contains(uid) else {
+                        self.forgetPinnedExtra(id, uid: uid); return
+                    }
+                    let c = Conversation(id: snap.documentID, data: data)
+                    guard c.isPinned(uid) else { self.forgetPinnedExtra(id, uid: uid); return }
+                    self.pinnedExtraDocs[id] = c
+                    self.blockListChanged()   // re-publish the window with this chat merged in
+                }
+        }
+    }
+
+    private func forgetPinnedExtra(_ id: String, uid: String) {
+        pinnedExtraListeners.removeValue(forKey: id)?.remove()
+        let had = pinnedExtraDocs.removeValue(forKey: id) != nil
+        let kept = (UserDefaults.standard.stringArray(forKey: pinnedIdsKey(uid)) ?? []).filter { $0 != id }
+        UserDefaults.standard.set(kept, forKey: pinnedIdsKey(uid))
+        if had { blockListChanged() }
+    }
+
+    /// The window plus any pinned chat that sits below it (never twice: the window wins).
+    private func withPinnedExtras(_ window: [Conversation]) -> [Conversation] {
+        guard !pinnedExtraDocs.isEmpty else { return window }
+        let inWindow = Set(window.map(\.id))
+        return window + pinnedExtraDocs.values.filter { !inWindow.contains($0.id) }
     }
 
     func stop() {
@@ -323,6 +438,14 @@ final class ConversationsRepository {
     /// empty-cache guard in the listener then preserved it for the NEW user forever.
     func reset() {
         stop()
+        // 2026-09-24 fix-all #6: the per-document pin listeners and the window belong to the old account.
+        pinnedExtraListeners.values.forEach { $0.remove() }
+        pinnedExtraListeners = [:]
+        pinnedExtraDocs = [:]
+        listenerUid = nil
+        windowLimit = Self.pageSize
+        hasOlder = false
+        loadingOlder = false
         pendingConvs = nil
         lastRaw = []   // 2026-09-24 decision D8
         conversations = []

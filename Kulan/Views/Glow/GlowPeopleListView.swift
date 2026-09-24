@@ -196,6 +196,8 @@ private struct GlowPersonRow: View {
     let side: GlowPeopleListView.Side
     private var glow = GlowService.shared
     @State private var showProfile = false
+    /// 2026-09-24 fix-all #196: a refused glow write; GlowService has already rolled the row back.
+    @State private var glowWriteFailed = false
     /// ⚠️ READ FOR THE BUTTON LABELS, and it is not cosmetic. `GlowStyle.accent` is `Color.primary`,
     /// which is WHITE at night — so a filled button needs `onAccent`, and a hardcoded white label on
     /// it is invisible. See the note on `GlowStyle.accent`.
@@ -249,6 +251,12 @@ private struct GlowPersonRow: View {
             action
             dismissX
         }
+        // 2026-09-24 fix-all #196: a refused glow write; same alert as the profile's.
+        .alert("Couldn't update", isPresented: $glowWriteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Try again in a moment.")
+        }
         // ⛔ THE ORDINARY PROFILE, NOT THE GLOW ONE — owner, 2026-09-02: "when I click a profile
         // you're showing me Glowers and Posted stories; that's wrong, that's the one I see when I
         // enter MY profile. Show a normal profile like the chat profile: call, mute, disappearing
@@ -279,15 +287,20 @@ private struct GlowPersonRow: View {
     /// mutual, which is three states rather than two — "Glow back" would be a lie on somebody you
     /// have already glowed.
     @ViewBuilder private var action: some View {
+        // 2026-09-24 fix-all #196: every write reports a refusal to the row's alert.
         if side == .glowers {
             if glow.isGlowing(person.id) {
-                outlined("Glowing") { glow.remove(to: person.id) }
+                outlined("Glowing") { glow.remove(to: person.id, completion: reportGlowFailure) }
             } else {
-                filled("Glow back") { glow.give(to: person.id) }
+                filled("Glow back") { glow.give(to: person.id, completion: reportGlowFailure) }
             }
         } else {
-            outlined("Glowing") { glow.remove(to: person.id) }
+            outlined("Glowing") { glow.remove(to: person.id, completion: reportGlowFailure) }
         }
+    }
+
+    private func reportGlowFailure(_ error: (any Error)?) {
+        if error != nil { glowWriteFailed = true }
     }
 
     /// ⛔ THE LABEL TAKES ITS COLOUR FROM `onAccent` — owner, 2026-09-02: "fix Glow back, the text
@@ -338,7 +351,7 @@ private struct GlowPersonRow: View {
         if side == .glowers {
             Menu {
                 Button("Remove this Glower", role: .destructive) {
-                    glow.removeGlower(person.id)
+                    glow.removeGlower(person.id, completion: reportGlowFailure)   // 2026-09-24 fix-all #196
                 }
             } label: {
                 Image(systemName: "xmark")

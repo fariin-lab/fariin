@@ -383,7 +383,12 @@ struct GroupInfoView: View {
         Section(conv?.memberCountLabel.capitalized ?? "Members") {
             if canAdd {
                 Button { showAdd = true } label: { rowLabel("person.badge.plus", "Add Members", .blue) }
-                Button { showInvite = true } label: { rowLabel("link", "Invite via Link", .teal) }
+                // 2026-09-24 fix-all #226: invite links are an admin right ("Add Members" permission
+                // lets a member add people directly, not mint or revoke the group's links), so a plain
+                // member no longer sees a row whose sheet the server refuses.
+                if can(.inviteUsers) {
+                    Button { showInvite = true } label: { rowLabel("link", "Invite via Link", .teal) }
+                }
             }
             ForEach(sortedMembers, id: \.self) { uid in memberRow(uid) }
         }
@@ -700,6 +705,10 @@ struct GroupMemberSheet: View {
 
     @State private var busy = false
     @State private var actionError: String?
+    // 2026-09-24 fix-all #124
+    @State private var showBlock = false
+    @State private var showReport = false
+    @State private var memberBlocked = false
 
     /// Every member action goes through here (audit, 2026-09-24). Each one was `try?` then dismiss:
     /// a refused Make Admin / Remove closed the sheet as if it had worked, and a second tap while the
@@ -778,6 +787,29 @@ struct GroupMemberSheet: View {
                             dismiss()
                         } label: { Label("Message", systemImage: "message") }
                     }
+                    // 2026-09-24 fix-all #124: Block and Report on the member card, the way the
+                    // person's own profile always shows them (ContactInfoView's `dangerCard`: "a user
+                    // who feels unsafe must see the way out"). Same glyphs, same confirms, same
+                    // `ChatService` calls. The block goes on our 1:1 id (the account block list covers
+                    // a chat that does not exist yet); the report names THIS group as where it happened.
+                    Section {
+                        if memberBlocked {
+                            Button {
+                                memberBlocked = false
+                                let other = member.id
+                                Task { await ChatService.setBlocked(ChatService.convId(me, other), false) }
+                            } label: {
+                                Label { Text("Unblock \(member.name)") } icon: { Image(systemName: "checkmark.circle") }
+                            }
+                        } else {
+                            Button(role: .destructive) { showBlock = true } label: {
+                                Label { Text("Block \(member.name)") } icon: { Image("ic_block").renderingMode(.template) }
+                            }
+                        }
+                        Button(role: .destructive) { showReport = true } label: {
+                            Label { Text("Report \(member.name)") } icon: { Image("ic_report").renderingMode(.template) }
+                        }
+                    }
                 }
                 // The owner is protected: no admin can demote or remove them. Promote/demote needs the
                 // Add-admins right; removing a member needs the Restrict-members right.
@@ -850,6 +882,37 @@ struct GroupMemberSheet: View {
                                                               set: { if !$0 { actionError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(actionError ?? "") }
+            // 2026-09-24 fix-all #124: ContactInfoView's two confirms, word for word.
+            .darkAlert("Block \(member.name)?",
+                       message: "Blocked users will not be able to call you or send you messages.",
+                       isPresented: $showBlock,
+                       actions: [
+                        .cancel(),
+                        .destructive("Block") { blockMember(report: false) },
+                        .destructive("Block and Report") { blockMember(report: true) },
+                       ])
+            .darkAlert("Report \(member.name)?",
+                       message: "Reported accounts are reviewed by our team. They are not told.",
+                       isPresented: $showReport,
+                       actions: [
+                        .cancel(),
+                        .destructive("Report") {
+                            let other = member.id, group = cid
+                            Task { await ChatService.report(reportedUid: other, cid: group, reason: "user") }
+                        },
+                        .destructive("Report and Block") { blockMember(report: true) },
+                       ])
+            .onAppear { memberBlocked = BlockList.shared.contains(member.id) }
+        }
+    }
+
+    /// 2026-09-24 fix-all #124: flipped first, as on the profile, so an offline tap does not read dead.
+    private func blockMember(report: Bool) {
+        memberBlocked = true
+        let other = member.id, group = cid, mine = me
+        Task {
+            await ChatService.setBlocked(ChatService.convId(mine, other), true)
+            if report { await ChatService.report(reportedUid: other, cid: group, reason: "user") }
         }
     }
 }

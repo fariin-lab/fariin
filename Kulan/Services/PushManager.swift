@@ -35,6 +35,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
                                       .appendingPathComponent("URLCache", isDirectory: true))
         URLCache.shared = storyCache
 
+        // 2026-09-24 fix-all #161: App Check provider, installed before configure (see AppCheckSetup).
+        AppCheckSetup.install()
         FirebaseApp.configure()
 
         // ⚠️ A DEAD UPLOAD MUST FAIL, NOT HANG. Firebase Storage's default `maxUploadRetryTime` is
@@ -252,12 +254,34 @@ enum NotificationCleaner {
         // unread, but every surface in the app shows 0 for that chat, so the springboard badge landed
         // on a number the user could neither see nor clear — and it leaked that their messages arrive.
         // Hidden legacy groups are excluded for the same reason.
+        let total = badgeTotal(excluding: cid)
+        lastSetBadge = total
+        center.setBadgeCount(total)
+    }
+
+    /// The springboard badge as the chat list sees it. One filter for both callers, so the number a
+    /// read sets and the number a snapshot sets cannot disagree.
+    private static func badgeTotal(excluding cid: String?) -> Int {
         let me = Auth.auth().currentUser?.uid ?? ""
+        guard !me.isEmpty else { return 0 }
         let total = ConversationsRepository.shared.conversations
             .filter { $0.id != cid && !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                       && (Flags.groupsEnabled || !$0.isGroup) }
             .reduce(0) { $0 + $1.unread(me) }
-        center.setBadgeCount(max(0, total))
+        return max(0, total)
+    }
+
+    /// 2026-09-24 fix-all #166: reading a chat on another device lowers `unreadCount` there, and that
+    /// lands here through the chat-list listener, but only a read ON THIS device used to reset the
+    /// badge, so it overstated until the next push. The list now calls this on every published
+    /// snapshot. Skipped while nothing changed, so a typing flag does not touch the badge at all.
+    nonisolated(unsafe) private static var lastSetBadge: Int?
+    @MainActor static func syncBadgeFromList() {
+        guard ConversationsRepository.shared.hasLoaded else { return }
+        let total = badgeTotal(excluding: nil)
+        guard total != lastSetBadge else { return }
+        lastSetBadge = total
+        UNUserNotificationCenter.current().setBadgeCount(total)
     }
 }
 

@@ -59,7 +59,11 @@ struct GroupCallView: View {
                 // 2026-09-24 audit: `connecting` was published and never read, so a join still in
                 // flight showed "1 in call", identical to a live call nobody else is in. Same word
                 // the 1:1 call screen uses.
-                Text(service.connecting ? "Connecting…" : "\(participants.count) in call")
+                // 2026-09-24 fix-all #105: a joined call that loses its connection said "N in call"
+                // over frozen tiles. The room's own state drives it now, in the 1:1 screen's word.
+                Text(service.connecting ? "Connecting…"
+                     : room.connectionState == .reconnecting ? "Reconnecting…"
+                     : "\(participants.count) in call")
                     .font(.caption).foregroundStyle(.white.opacity(0.7))
             }
             Spacer()

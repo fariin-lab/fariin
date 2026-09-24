@@ -37,6 +37,8 @@ function mocksFor(uid, { banned = false } = {}) {
     { function: 'get', args: [{ exactValue: `${D}/users/${uid}` }],
       result: { value: { data: { banned } } } },
     { function: 'exists', args: [{ exactValue: `${D}/admins/${uid}` }], result: { value: false } },
+    // 2026-09-24 fix-all: the create rule reads the day counter; none written yet.
+    { function: 'exists', args: [{ exactValue: `${D}/users/${uid}/limits/glows` }], result: { value: false } },
   ];
 }
 

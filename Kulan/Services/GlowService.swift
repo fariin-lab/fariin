@@ -217,6 +217,8 @@ import FirebaseFirestore
                 self.lastWriteError = error
             } else {
                 self.lastWriteError = nil
+                // 2026-09-24 fix-all: counted for the rules' daily glow limit, only once it has landed.
+                Task { await MessageRequests.countDaily("glows") }
             }
             completion?(error)
         }

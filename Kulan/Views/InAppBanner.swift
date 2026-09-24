@@ -47,10 +47,23 @@ final class InAppBannerCenter {
         // and only one item is ever tracked.
         let next = Item(cid: cid, title: title, body: body, photoUrl: cid.flatMap(Self.photo(forCid:)))
         withAnimation(Self.slide) { item = next }
+        armHide()
+    }
+
+    @MainActor private func armHide() {
         hideTask?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.dismiss() }
         hideTask = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.visibleFor, execute: work)
+    }
+
+    /// 2026-09-24 fix-all #223: the clock used to keep running under a finger, so a banner being
+    /// dragged could slide away mid-gesture. A drag holds it; a drag that lets it snap back home
+    /// starts a fresh clock.
+    @MainActor func holdWhileDragging() { hideTask?.cancel(); hideTask = nil }
+    @MainActor func releaseAfterDrag() {
+        guard item != nil, hideTask == nil else { return }
+        armHide()
     }
 
     @MainActor
@@ -128,8 +141,12 @@ struct InAppBannerCard: View {
     ///
     /// Ours had NO top padding at all and sat flush under the island. The safe-area top is the same
     /// measurement SwiftUI has on hand, so it is read from there instead of from UIKit.
+    ///
+    /// 2026-09-24 fix-all #223: the island test was `>= 39`, which every notch phone (safe top 44
+    /// to 50) also passes, so the notch branch below it could never run. Island phones report 54 or
+    /// more, notch phones 44 to 50, so the island test is `>= 51` and the notch branch is live.
     private func topInset(safeTop: CGFloat) -> CGFloat {
-        if safeTop >= 39 { return safeTop + 6 }     // Dynamic Island
+        if safeTop >= 51 { return safeTop + 6 }     // Dynamic Island
         if safeTop >= 44 { return 42 }              // notch
         return 37                                    // everything older
     }
@@ -206,6 +223,7 @@ struct InAppBannerCard: View {
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { v in
+                center.holdWhileDragging()   // 2026-09-24 fix-all #223
                 dragY = v.translation.height
                 // ⛔ THE HAPTIC PREVIEWS THE PULL-DOWN AT 24 POINTS, which is their number and is
                 // deliberately NOT the same as the 20 that commits it: the tap is felt slightly
@@ -235,6 +253,7 @@ struct InAppBannerCard: View {
                 }
                 // Neither: home again on their own snap-back, 0.3s and the same curve.
                 withAnimation(.easeInOut(duration: 0.3)) { dragY = 0 }
+                center.releaseAfterDrag()   // 2026-09-24 fix-all #223
             }
     }
 

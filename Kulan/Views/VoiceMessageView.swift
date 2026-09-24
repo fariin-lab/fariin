@@ -199,6 +199,10 @@ struct VoiceMessageView: View {
 
     @State private var playing = false
     @State private var loading = false
+    /// 2026-09-24 fix-all #232: the engine's last load of this note failed. The disc shows the same
+    /// warning mark the chat's UIKit voice bubble shows (`VoiceNotePlayer.loadFailed`), and the tap
+    /// is unchanged, so tapping it tries again.
+    @State private var failed = false
     @State private var progress: Double = 0
     @State private var rate: Float = 1
     /// How long the tap's own answer outranks the engine's — see `sync`.
@@ -225,6 +229,8 @@ struct VoiceMessageView: View {
         if playing != p, Date() >= holdIconUntil { playing = p }
         let l = engine.isLoading(message.id)
         if loading != l { loading = l }
+        let f = !l && engine.loadFailed(message.id)   // 2026-09-24 fix-all #232
+        if failed != f { failed = f }
         let pr = engine.progress(for: message.id)
         if progress != pr { progress = pr }
         let r = engine.rate(for: cid)
@@ -385,7 +391,8 @@ struct VoiceMessageView: View {
                 Circle().fill(tint)
                     .frame(width: Self.discSize, height: Self.discSize)
                     .overlay {
-                        Image(systemName: playing ? "pause.fill" : "play.fill")
+                        // 2026-09-24 fix-all #232: the failed mark, as on the chat's voice bubble.
+                        Image(systemName: failed ? "exclamationmark.triangle" : (playing ? "pause.fill" : "play.fill"))
                             // Scaled with the disc: 14 was sized for a 32 circle and read as a
                             // triangle lost inside the larger one. Same ratio as his image 2.
                             .font(.system(size: 17))

@@ -126,6 +126,7 @@ final class ConnectionStatus {
     func noteSnapshot(fromCache: Bool) {
         guard !fromCache else { armSettle(); return }
         lastServerAnswer = Date()
+        retryDelay = Self.settle   // 2026-09-24 fix-all #216
         pending?.cancel(); pending = nil
         if hasRoute { state = .online }
     }
@@ -193,9 +194,26 @@ final class ConnectionStatus {
             _ = try await Firestore.firestore().collection("users").document(uid)
                 .getDocument(source: .server)
             lastServerAnswer = Date()
+            retryDelay = Self.settle   // 2026-09-24 fix-all #216
             if hasRoute { state = .online }
         } catch {
-            if hasRoute { state = .connecting }
+            if hasRoute { state = .connecting; scheduleRetry() }
+        }
+    }
+
+    /// 2026-09-24 fix-all #216: a failed probe used to set "Connecting" and arm nothing, so the
+    /// header stayed on it until some other listener happened to hear from the server, which on a
+    /// quiet account could be never. It now probes again with a doubling wait (2.5s, 5s, 10s, 20s,
+    /// then every 30s) until one answers; any server answer resets the wait.
+    private var retryDelay: TimeInterval = ConnectionStatus.settle
+    private func scheduleRetry() {
+        guard hasRoute, pending == nil else { return }
+        let delay = retryDelay
+        retryDelay = min(retryDelay * 2, 30)
+        pending = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await self?.settleExpired()
         }
     }
 }
@@ -222,5 +240,31 @@ struct ConnectionTitleLabel: View {
         // Announced as one phrase; the spinner is decoration and has nothing to say on its own.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
+    }
+}
+
+/// 2026-09-24 fix-all #173: the connection state on EVERY tab's header, not only Chats. Same rule
+/// as the Chats header: a `.principal` item replaces the title, so it is added only while there
+/// is something to say, and an ordinary header is untouched. Apply it inside the tab's
+/// NavigationStack, on the root screen. Decision: a tab whose principal slot already holds a
+/// control (the Calls All/Missed pill) gives it up while the status shows, the way the Chats
+/// title does; the filter is back the moment the connection is.
+/// `suppressed`: the screen's own title owns the slot right now (Select mode's "N Selected", as on
+/// the Chats header, or a full-screen photo).
+struct ConnectionTitleToolbar: ViewModifier {
+    var suppressed = false
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if !suppressed, let status = ConnectionStatus.shared.state.label {
+                ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
+            }
+        }
+    }
+}
+
+extension View {
+    /// See `ConnectionTitleToolbar`.
+    func connectionTitle(suppressed: Bool = false) -> some View {
+        modifier(ConnectionTitleToolbar(suppressed: suppressed))
     }
 }

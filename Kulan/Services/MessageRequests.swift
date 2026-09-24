@@ -95,7 +95,9 @@ enum MessageRequests {
         // commits both or neither, which is the ordering promise above made exact.
         let batch = db.batch()
         if let sender = cid.split(separator: "_").map(String.init).first(where: { $0 != me }) {
-            batch.setData(["at": FieldValue.serverTimestamp()],
+            // 2026-09-24 fix-all #227: `sender` names them in a FIELD as well as the id, so the account
+            // purge can find every cooldown held against a deleted account with one indexed query.
+            batch.setData(["at": FieldValue.serverTimestamp(), "sender": sender],
                           forDocument: db.collection("requestDeclines").document(me)
                               .collection("from").document(sender))
         }
@@ -134,10 +136,17 @@ enum MessageRequests {
     /// never written back at all (only `count` is incremented), because the rule compares it for
     /// equality and a round trip through seconds would lose the nanoseconds.
     static func countKnock() async {
+        await countDaily("requests")
+    }
+
+    /// 2026-09-24 fix-all: the same day counter under another name. `reports` and `glows` are read
+    /// by their create rules the way `requests` is read by the message rule (24h window in the
+    /// `limits` rule). Best effort for the same reason as the knock.
+    static func countDaily(_ name: String) async {
         let me = ChatService.uid
         guard !me.isEmpty else { return }
         let ref = Firestore.firestore().collection("users").document(me)
-            .collection("limits").document("requests")
+            .collection("limits").document(name)
         let snap = try? await ref.getDocument()
         let data = snap?.data() ?? [:]
         let start = data["windowStart"] as? Timestamp

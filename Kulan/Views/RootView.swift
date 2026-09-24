@@ -1,6 +1,7 @@
 import SwiftUI
 import LocalAuthentication
 import UIKit
+import PhotosUI
 
 struct RootView: View {
     // Equatable must be DECLARED now: Swift synthesises it automatically only for enums with no
@@ -24,6 +25,7 @@ struct RootView: View {
     // Someone signed this phone out from Settings › Devices on another phone.
     @ObservedObject private var devices = DeviceRegistry.shared
     @State private var showRevokedNotice = false
+    @State private var userLinkAlert: String?   // 2026-09-24 fix-all #167
 
     var body: some View {
         ZStack {
@@ -215,6 +217,11 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("This device was signed out from another device.")
+        }
+        // 2026-09-24 fix-all #167: see `openPendingUserLink`.
+        .alert(userLinkAlert ?? "", isPresented: Binding(get: { userLinkAlert != nil },
+                                                         set: { if !$0 { userLinkAlert = nil } })) {
+            Button("OK", role: .cancel) {}
         }
         .onChange(of: scenePhase) { _, new in
             if new == .background {
@@ -428,8 +435,17 @@ struct RootView: View {
         AppRouter.shared.pendingUserHandle = nil
         guard !DemoMode.active else { return }
         Task {
-            guard let user = await ChatService.findByHandle(handle),
-                  let cid = try? await ChatService.openConversation(other: user) else { return }
+            // 2026-09-24 fix-all #167: a dead link (renamed, deleted, mistyped) used to do nothing at
+            // all. It now says so, in the QR scanner's words; a chat that will not open says the
+            // app's usual "Try again in a moment."
+            guard let user = await ChatService.findByHandle(handle) else {
+                await MainActor.run { userLinkAlert = "No Fariin user found" }
+                return
+            }
+            guard let cid = try? await ChatService.openConversation(other: user) else {
+                await MainActor.run { userLinkAlert = "Try again in a moment." }
+                return
+            }
             await MainActor.run { AppRouter.shared.pendingChatId = cid }
         }
     }
@@ -520,10 +536,19 @@ struct LockScreen: View {
     }
 }
 
+/// 2026-09-24 fix-all (onboarding photo): a picked image waiting for the cropper.
+private struct OnboardingCropItem: Identifiable { let id = UUID(); let image: UIImage }
+
 struct OnboardingView: View {
     var onDone: () -> Void
     @State private var name = ""
     @State private var handle = ""
+    // 2026-09-24 fix-all (onboarding photo)
+    @State private var showPhotoPicker = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var cropCandidate: OnboardingCropItem?
+    @State private var pickedAvatar: UIImage?
+    @State private var pickedPoster: UIImage?
     @State private var saving = false
     @State private var error: String?
     private enum Field { case name, handle }
@@ -601,9 +626,27 @@ struct OnboardingView: View {
 
                     // Live avatar preview: their initials + hashed color, exactly how they'll appear
                     // to everyone else. Fills in as they type, so the profile feels theirs immediately.
-                    AvatarView(name: name.isEmpty ? "?" : name, size: 84)
+                    // 2026-09-24 fix-all (onboarding photo): OPTIONAL, on this same screen, the way
+                    // the reference app's registration asks for a name and a picture together.
+                    // Decision: not a separate step, so the quickest sign-up is exactly as short as
+                    // before; the avatar and the line under it open the Settings flow's own picker
+                    // and cropper, and the picture is set only once Continue has saved the profile.
+                    Button { showPhotoPicker = true } label: {
+                        Group {
+                            if let pickedAvatar {
+                                Image(uiImage: pickedAvatar).resizable().scaledToFill()
+                                    .frame(width: 84, height: 84).clipShape(Circle())
+                            } else {
+                                AvatarView(name: name.isEmpty ? "?" : name, size: 84)
+                            }
+                        }
                         .overlay(Circle().strokeBorder(AuthPalette.hairline, lineWidth: 1))
                         .animation(.easeOut(duration: 0.2), value: name)
+                    }
+                    .buttonStyle(.plain)
+                    Button(pickedAvatar == nil ? "Add a Photo" : "Edit Photo") { showPhotoPicker = true }
+                        .font(.subheadline.weight(.semibold)).tint(.primary)
+                        .padding(.top, 8)
 
                     Text("Create your profile")
                         .font(.system(size: 23, weight: .bold)).foregroundStyle(.primary)
@@ -742,6 +785,27 @@ struct OnboardingView: View {
                 scheduleHandleCheck()
             }
         }
+        // 2026-09-24 fix-all (onboarding photo): Settings' picker -> ProfilePhotoCropper hand-off,
+        // held here until Continue (see `save`).
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let img = UIImage(data: data) else { photoItem = nil; return }
+                await MainActor.run { cropCandidate = OnboardingCropItem(image: img); photoItem = nil }
+            }
+        }
+        .fullScreenCover(item: $cropCandidate) { c in
+            ProfilePhotoCropper(image: c.image,
+                                onDone: { avatar, poster in
+                                    cropCandidate = nil
+                                    pickedAvatar = avatar
+                                    pickedPoster = poster
+                                },
+                                onCancel: { cropCandidate = nil })
+                .ignoresSafeArea()
+        }
     }
 
     // Labelled field box, same shape language as the email sign-up screen.
@@ -799,6 +863,13 @@ struct OnboardingView: View {
             // a false sense that it was the thing deciding.
             try await ProfileStore.shared.updateProfile(name: n, handle: h)
             await Crypto.shared.publishPublicKey()   // doc now exists — ensure key is live
+            // 2026-09-24 fix-all (onboarding photo): the Settings path's own optimistic upload, now
+            // that the profile it attaches to exists. It shows at once and reports its own failure.
+            if let pickedAvatar {
+                await MainActor.run {
+                    ProfileStore.shared.setPhotoLocallyThenUpload(circle: pickedAvatar, poster: pickedPoster)
+                }
+            }
             onDone()
         } catch {
             // The server's own words when it has any — "Sorry, this username is already taken." reads

@@ -101,6 +101,10 @@ targets:
         NSMicrophoneUsageDescription: "Fariin needs microphone access so you can send voice messages."
         NSFaceIDUsageDescription: "Fariin uses Face ID to unlock the app."
         NSLocationWhenInUseUsageDescription: "Fariin uses your location to share it in a chat and to suggest nearby places for a story."
+        # 2026-09-24 fix-all #210: the one-time precise-location ask when Approximate Location is on.
+        # The key name is the purpose key LocationFetcher passes; change both together.
+        NSLocationTemporaryUsageDescriptionDictionary:
+          ShareLocation: "Fariin needs your precise location to share where you are in this chat."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         CFBundleURLTypes:
@@ -109,6 +113,12 @@ targets:
           # Google sign-in OAuth redirect (the reversed client id from GoogleService-Info).
           - CFBundleURLName: com.kulan.messenger.google
             CFBundleURLSchemes: [com.googleusercontent.apps.522284693527-teio4ph7vaedv5s59l3u589sjdfnavt2]
+        # 2026-09-24 fix-all (decision): NO background refresh ("fetch" / BGTaskScheduler), on purpose.
+        # Pushes (onNewMessage, with the badge) tell the phone what arrived while it was closed, and
+        # the live listeners plus Firestore's disk cache bring every screen current the moment the
+        # app opens. A refresh task would spend battery and reads to fetch data those two already
+        # deliver, on a schedule iOS may not honour. Revisit only if something must change while
+        # the app is closed that a push cannot carry.
         UIBackgroundModes: [voip, audio]
     settings:
       base:
@@ -132,6 +142,9 @@ targets:
         product: FirebaseMessaging
       - package: Firebase
         product: FirebaseFunctions
+      # 2026-09-24 fix-all #161: App Check (App Attest, DeviceCheck fallback). See AppCheckSetup.swift.
+      - package: Firebase
+        product: FirebaseAppCheck
       - package: Sodium
         product: Sodium
       - package: WebRTC

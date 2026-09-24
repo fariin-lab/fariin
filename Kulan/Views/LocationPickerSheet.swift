@@ -7,6 +7,14 @@ import CoreLocation
 final class LocationFetcher: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var location: CLLocationCoordinate2D?
     @Published var denied = false
+    /// 2026-09-24 fix-all #210: the phone only allows Approximate Location for this app, and the
+    /// one-time request for a precise fix was declined (or not answered). A fix under reduced
+    /// accuracy can be kilometres off, so the picker says so and does not name it as a place.
+    @Published var approximate = false
+    /// 2026-09-24 fix-all #210: set by the chat's location picker only. Sharing where you are needs
+    /// metres; the story sticker's "places near you" does not, so it never asks.
+    var wantsFullAccuracy = false
+    private var askedFullAccuracy = false
     private let manager = CLLocationManager()
 
     override init() {
@@ -38,13 +46,37 @@ final class LocationFetcher: NSObject, ObservableObject, CLLocationManagerDelega
         switch manager.authorizationStatus {
         case .notDetermined:        manager.requestWhenInUseAuthorization()   // → callback below fetches
         case .denied, .restricted:  denied = true
-        default:                    manager.requestLocation()
+        default:                    askFullAccuracyThenLocate()   // 2026-09-24 fix-all #210
+        }
+    }
+
+    /// 2026-09-24 fix-all #210: with Approximate Location on, ask ONCE per picker for a precise fix
+    /// (purpose key `ShareLocation` in Info.plist's NSLocationTemporaryUsageDescriptionDictionary),
+    /// then fetch. A decline is final for this sheet: the fix is used, marked approximate.
+    private func askFullAccuracyThenLocate() {
+        guard wantsFullAccuracy, manager.accuracyAuthorization == .reducedAccuracy else {
+            approximate = wantsFullAccuracy && manager.accuracyAuthorization == .reducedAccuracy
+            manager.requestLocation()
+            return
+        }
+        guard !askedFullAccuracy else {
+            approximate = true
+            manager.requestLocation()
+            return
+        }
+        askedFullAccuracy = true
+        manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "ShareLocation") { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.approximate = self.manager.accuracyAuthorization == .reducedAccuracy
+                self.manager.requestLocation()
+            }
         }
     }
 
     func locationManagerDidChangeAuthorization(_ m: CLLocationManager) {
         switch m.authorizationStatus {
-        case .authorizedWhenInUse, .authorizedAlways: m.requestLocation()
+        case .authorizedWhenInUse, .authorizedAlways: askFullAccuracyThenLocate()   // 2026-09-24 fix-all #210
         case .denied, .restricted:                    denied = true
         default: break
         }
@@ -75,6 +107,12 @@ struct LocationPickerSheet: View {
     @State private var center: CLLocationCoordinate2D?
     @State private var query = ""
     @State private var results: [MKMapItem] = []
+    /// 2026-09-24 fix-all #211: what the last search came back with when it was not a list:
+    /// "No results", or the offline line. Nil while there is a list or nothing was searched.
+    @State private var searchNote: String?
+    /// 2026-09-24 fix-all #211: bumped by every search; an answer for an older one is dropped, so
+    /// a slow first search can no longer land on top of the second one's results.
+    @State private var searchSeq = 0
     @State private var selectedName: String?
     @State private var userMovedMap = false   // the user actually panned the map to a spot
     /// ⛔ MAP · SATELLITE · HYBRID — owner, 2026-08-24, as a thing he expected and did not find.
@@ -101,7 +139,18 @@ struct LocationPickerSheet: View {
 
     /// The name that travels with the share: what he picked out of search if he did, otherwise
     /// whatever the pin resolved to. Nil only while a fresh spot is still being looked up.
-    private var sendName: String? { selectedName ?? resolvedName }
+    private var sendName: String? {
+        // 2026-09-24 fix-all #210: an approximate GPS fix is not named after whatever it landed on,
+        // which can be a street kilometres away; the bubble says it is approximate instead.
+        if sendsApproximateFix { return "Approximate location" }
+        return selectedName ?? resolvedName
+    }
+
+    /// 2026-09-24 fix-all #210: Send would ship the phone's own fix, and that fix is approximate.
+    /// A spot the person panned to or picked from search is their choice and stays exact.
+    private var sendsApproximateFix: Bool {
+        fetcher.approximate && !userMovedMap && selectedName == nil
+    }
 
     /// One reverse-geocode for wherever the pin is now, debounced, because the camera reports
     /// continuously while a finger is moving and CLGeocoder rate-limits hard — a request per frame
@@ -290,6 +339,20 @@ struct LocationPickerSheet: View {
                         }
                     }
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                } else if let searchNote {
+                    // 2026-09-24 fix-all #211: the empty and offline answers, in the results' place.
+                    Text(searchNote)
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14).padding(.vertical, 12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                // 2026-09-24 fix-all #210: the phone's own fix is approximate; say so before Send.
+                if sendsApproximateFix && results.isEmpty {
+                    Label("Approximate location", systemImage: "location.circle")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.regularMaterial, in: Capsule())
                 }
                 // Send Location — outputs the chosen (or current GPS) coordinates.
                 Button {
@@ -314,6 +377,9 @@ struct LocationPickerSheet: View {
                         .focused($searchFocused)
                         .submitLabel(.search)
                         .onSubmit { runSearch() }
+                        // 2026-09-24 fix-all #211: an edited query retires the answer in flight
+                        // and the note about the old one.
+                        .onChange(of: query) { _, _ in searchSeq += 1; searchNote = nil }
                 }
                 .padding(.horizontal, 14).frame(height: 48)
                 .liquidGlass(Capsule(), interactive: true)
@@ -326,7 +392,10 @@ struct LocationPickerSheet: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Allow location access in Settings to share where you are.") }
-        .onAppear { fetcher.request() }
+        .onAppear {
+            fetcher.wantsFullAccuracy = true   // 2026-09-24 fix-all #210: sharing a spot needs metres
+            fetcher.request()
+        }
     }
 
     private func pick(_ item: MKMapItem) {
@@ -348,13 +417,31 @@ struct LocationPickerSheet: View {
     private func runSearch() {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
+        // 2026-09-24 fix-all #211: offline says so instead of an empty nothing, and only the
+        // newest search may write its answer.
+        searchSeq += 1
+        let seq = searchSeq
+        searchNote = nil
+        guard NetworkState.shared.isOnline else {
+            results = []
+            searchNote = "No internet connection. Check your connection and try again."
+            return
+        }
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = q
         if let c = sendCoordinate {
             req.region = MKCoordinateRegion(center: c, span: MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1))
         }
         MKLocalSearch(request: req).start { resp, _ in
-            results = resp?.mapItems ?? []
+            guard seq == searchSeq else { return }   // a newer search owns the list now
+            let items = resp?.mapItems ?? []
+            results = items
+            if items.isEmpty {
+                // MapKit answers "no match" as an error too; offline is the one worth telling apart.
+                searchNote = NetworkState.shared.isOnline
+                    ? "No results"
+                    : "No internet connection. Check your connection and try again."
+            }
         }
     }
 }

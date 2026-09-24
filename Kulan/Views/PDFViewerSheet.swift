@@ -12,11 +12,19 @@ struct PDFViewerSheet: View {
     @State private var pageCount = 0
     @State private var showShare = false
     @State private var failed = false
+    // 2026-09-24 fix-all #213: a password-protected PDF opened as a blank reader. PDFKit hands back a
+    // LOCKED document whose pages draw nothing until it is unlocked, so the reader now asks.
+    @State private var locked = false          // reported by PDFKitView while the file is still shut
+    @State private var showUnlock = false
+    @State private var passwordField = ""
+    @State private var submittedPassword = ""  // what PDFKitView tries; cleared after a wrong one
+    @State private var wrongPassword = false
 
     var body: some View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
-            PDFKitView(url: url, currentPage: $page, pageCount: $pageCount, failed: $failed)
+            PDFKitView(url: url, currentPage: $page, pageCount: $pageCount, failed: $failed,
+                       locked: $locked, password: submittedPassword, wrongPassword: $wrongPassword)
                 .ignoresSafeArea()
             if failed {
                 Text("Couldn't open the file.")
@@ -26,6 +34,20 @@ struct PDFViewerSheet: View {
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { if pageCount > 1 { pageBar } }
         .sheet(isPresented: $showShare) { ActivityView(items: [url]) }
+        // 2026-09-24 fix-all #213: the unlock prompt, again after a wrong password.
+        .onChange(of: locked) { _, isLocked in if isLocked { showUnlock = true } }
+        .onChange(of: wrongPassword) { _, wrong in
+            guard wrong else { return }
+            submittedPassword = ""; passwordField = ""
+            showUnlock = true
+        }
+        .alert("Password protected", isPresented: $showUnlock) {
+            SecureField("Password", text: $passwordField)
+            Button("Open") { wrongPassword = false; submittedPassword = passwordField }
+            Button("Cancel", role: .cancel) { dismiss() }
+        } message: {
+            Text(wrongPassword ? "That password is not right." : "Enter the password to open this file.")
+        }
     }
 
     private var topBar: some View {
@@ -65,6 +87,10 @@ struct PDFKitView: UIViewRepresentable {
     @Binding var currentPage: Int
     @Binding var pageCount: Int
     @Binding var failed: Bool
+    // 2026-09-24 fix-all #213: the locked-file handshake with PDFViewerSheet.
+    @Binding var locked: Bool
+    var password: String
+    @Binding var wrongPassword: Bool
 
     func makeUIView(context: Context) -> PDFView {
         let v = PDFView()
@@ -75,7 +101,12 @@ struct PDFKitView: UIViewRepresentable {
         v.pageShadowsEnabled = false
         // A file named .pdf that PDFKit cannot read (damaged, cut short, not really a PDF) used to
         // leave a blank white reader with nothing to say why. Report it so the sheet can say so.
-        if let doc = PDFDocument(url: url), doc.pageCount > 0 {
+        let parsed = PDFDocument(url: url)
+        if let doc = parsed, doc.isLocked {
+            // 2026-09-24 fix-all #213: held back until `updateUIView` unlocks it with a password.
+            context.coordinator.pending = doc
+            DispatchQueue.main.async { locked = true }
+        } else if let doc = parsed, doc.pageCount > 0 {
             v.document = doc
             DispatchQueue.main.async { pageCount = doc.pageCount }
         } else {
@@ -87,7 +118,25 @@ struct PDFKitView: UIViewRepresentable {
                                                name: .PDFViewPageChanged, object: v)
         return v
     }
-    func updateUIView(_ v: PDFView, context: Context) {}
+    func updateUIView(_ v: PDFView, context: Context) {
+        // 2026-09-24 fix-all #213: try each submitted password once. An empty one resets the
+        // memory, so retyping the same password after a wrong answer is tried again.
+        let c = context.coordinator
+        guard let doc = c.pending else { return }
+        if password.isEmpty { c.tried = ""; return }
+        guard password != c.tried else { return }
+        c.tried = password
+        if doc.unlock(withPassword: password) {
+            c.pending = nil
+            v.document = doc
+            DispatchQueue.main.async {
+                locked = false
+                if doc.pageCount > 0 { pageCount = doc.pageCount } else { failed = true }
+            }
+        } else {
+            DispatchQueue.main.async { wrongPassword = true }
+        }
+    }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     static func dismantleUIView(_ v: PDFView, coordinator: Coordinator) {
         NotificationCenter.default.removeObserver(coordinator)
@@ -96,6 +145,8 @@ struct PDFKitView: UIViewRepresentable {
     final class Coordinator: NSObject {
         let parent: PDFKitView
         weak var view: PDFView?
+        var pending: PDFDocument?   // 2026-09-24 fix-all #213: a locked file waiting for its password
+        var tried = ""              // 2026-09-24 fix-all #213: the password last tried on it
         init(_ p: PDFKitView) { parent = p }
         @objc func pageChanged() {
             guard let v = view, let cur = v.currentPage, let doc = v.document else { return }

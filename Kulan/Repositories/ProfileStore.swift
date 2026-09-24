@@ -32,6 +32,14 @@ final class ProfileStore {
         me = fresh ?? me
         Self.adoptServerPrivacy(me?.privacy)
         startPrivacySync()   // 2026-09-24 decision D11: keep them in step with my other devices
+        // 2026-09-24 fix-all #136: a photo change the app was killed in the middle of is finished
+        // now, through the same optimistic path, so it shows at once and uploads again.
+        if me != nil, let pending = PendingProfilePhoto.load(uid: uid) {
+            await MainActor.run {
+                guard !self.photoUploading, Auth.auth().currentUser?.uid == uid else { return }
+                self.setPhotoLocallyThenUpload(circle: pending.circle, poster: pending.poster)
+            }
+        }
     }
 
     /// BRING MY OWN PRIVACY SETTINGS BACK WITH ME (owner 2026-08-04: "after I close the app and sign
@@ -229,9 +237,16 @@ final class ProfileStore {
         photoUploading = true
         Task { [weak self] in
             guard let self else { return }
+            // 2026-09-24 fix-all #136: kept on disk until the upload lands, so a kill mid-upload is
+            // resumed by the next launch's `loadMine` instead of silently losing the change.
+            await Task.detached(priority: .utility) {
+                PendingProfilePhoto.save(uid: uid, circle: circle, poster: poster)
+            }.value
             do {
                 try await self.uploadProfileImages(circle: circle, poster: poster)
+                PendingProfilePhoto.clear()   // 2026-09-24 fix-all #136
             } catch {
+                PendingProfilePhoto.clear()   // 2026-09-24 fix-all #136: reverted and reported, not resumed
                 await MainActor.run {
                     // 2026-09-24 audit: only if this is still the account that started the upload
                     // (same guard as loadMine), or a sign-out mid-upload gets its profile put back.
@@ -252,6 +267,7 @@ final class ProfileStore {
     @MainActor
     func removePhotoLocallyThenSync() {
         guard let uid = Auth.auth().currentUser?.uid, me != nil else { return }
+        PendingProfilePhoto.clear()   // 2026-09-24 fix-all #136: a removal supersedes an unfinished change
         let previous = me
         me?.photoUrl = ""
         me?.posterUrl = ""
@@ -607,10 +623,15 @@ final class ProfileStore {
                     .whereField("users", arrayContains: uid).getDocuments()
                 let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
                 let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
-                if !oneToOnes.isEmpty {
+                // 2026-09-24 fix-all #228: chunked at 450 like `removePhoto` and the name fan-out.
+                // One batch past Firestore's 500-write cap threw, and the throw also skipped every
+                // group below. Best-effort per chunk: a failed chunk leaves a stale copy only.
+                for start in stride(from: 0, to: oneToOnes.count, by: 450) {
                     let batch = self.db.batch()
-                    for d in oneToOnes { batch.updateData(fields, forDocument: d.reference) }
-                    try await batch.commit()
+                    for d in oneToOnes[start..<min(start + 450, oneToOnes.count)] {
+                        batch.updateData(fields, forDocument: d.reference)
+                    }
+                    try? await batch.commit()
                 }
                 // Concurrently, not one after another. A member of fifteen groups was waiting for
                 // fifteen sequential round trips; they do not depend on each other.
@@ -689,5 +710,53 @@ final class ProfileStore {
         // 2026-09-24 audit: same-account guard as loadMine; a sign-out during the sweep wiped `me`.
         guard Auth.auth().currentUser?.uid == uid else { return }
         me = fresh ?? me   // nil on a failed read must not blank `me` — see refreshMe
+    }
+}
+
+/// 2026-09-24 fix-all #136: THE PHOTO CHANGE THAT HAS NOT LANDED YET, ON DISK. The optimistic path
+/// shows the new picture at once and uploads behind it; a kill in between used to lose the change
+/// with no error, because the only copy was in memory. Written before the upload starts, cleared
+/// when it lands or is reported as failed, and replayed by `ProfileStore.loadMine` on the next
+/// launch for the same account only. Application Support, excluded from backup, like the image cache.
+enum PendingProfilePhoto {
+    private static var dir: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PendingProfilePhoto", isDirectory: true)
+    }
+    private static var uidFile: URL { dir.appendingPathComponent("uid.txt") }
+    private static var circleFile: URL { dir.appendingPathComponent("circle.jpg") }
+    private static var posterFile: URL { dir.appendingPathComponent("poster.jpg") }
+
+    static func save(uid: String, circle: UIImage, poster: UIImage?) {
+        guard let c = circle.jpegData(compressionQuality: 0.9) else { return }
+        let fm = FileManager.default
+        try? fm.removeItem(at: dir)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            var d = dir
+            var rv = URLResourceValues(); rv.isExcludedFromBackup = true
+            try? d.setResourceValues(rv)
+            try c.write(to: circleFile, options: .atomic)
+            if let p = poster?.jpegData(compressionQuality: 0.9) { try p.write(to: posterFile, options: .atomic) }
+            // The uid goes last: its presence is what marks the set complete.
+            try Data(uid.utf8).write(to: uidFile, options: .atomic)
+        } catch {
+            try? fm.removeItem(at: dir)
+        }
+    }
+
+    /// The pending change for `uid`, or nil. A set left by another account is dropped.
+    static func load(uid: String) -> (circle: UIImage, poster: UIImage?)? {
+        guard let owner = try? String(contentsOf: uidFile, encoding: .utf8) else { return nil }
+        guard owner == uid,
+              let circle = (try? Data(contentsOf: circleFile)).flatMap(UIImage.init(data:)) else {
+            clear(); return nil
+        }
+        let poster = (try? Data(contentsOf: posterFile)).flatMap(UIImage.init(data:))
+        return (circle, poster)
+    }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: dir)
     }
 }

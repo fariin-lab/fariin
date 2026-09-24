@@ -23,6 +23,10 @@ struct DeleteAccountView: View {
     @State private var step: Step = .confirm
     @State private var error: String?
     @State private var password = ""
+    /// 2026-09-24 fix-all #144: true from the moment a re-auth is confirmed until it succeeds or
+    /// fails. The page stays on the verify screen with a spinner under the doors, instead of
+    /// `.working` swapping back to the step-one form while the request runs.
+    @State private var verifying = false
 
     private var handle: String { profile.me?.handle ?? "" }
 
@@ -31,7 +35,7 @@ struct DeleteAccountView: View {
             // The verify step is ONE focused security gate, so it gets a centred page of its own. As a
             // Form section it stacked at the top and left two thirds of the screen empty under a bare
             // white bar, which is what looked unfinished.
-            if step == .verify {
+            if step == .verify || verifying {   // 2026-09-24 fix-all #144
                 verifyPage
             } else {
                 deleteForm
@@ -73,6 +77,12 @@ struct DeleteAccountView: View {
                 VStack(spacing: 12) { verifyControls }
                     .padding(.horizontal, 20)
                     .padding(.top, 32)
+                    .opacity(verifying ? 0.5 : 1)   // 2026-09-24 fix-all #144
+
+                // 2026-09-24 fix-all #144: progress in place while the re-auth and the scheduling run.
+                if verifying {
+                    ProgressView().padding(.top, 16)
+                }
 
                 // IT CONTRADICTED THE PREVIOUS SCREEN, about the most consequential action in the
                 // app. Step one says the account is hidden at once and deleted for good after the
@@ -248,8 +258,10 @@ struct DeleteAccountView: View {
     /// Re-verify, then delete. Any verification failure stops BEFORE data is touched.
     private func run(_ work: @escaping () async throws -> Void) {
         step = .working
+        verifying = true   // 2026-09-24 fix-all #144: stay on this page while it runs
         error = nil
         Task {
+            defer { verifying = false }   // 2026-09-24 fix-all #144
             do {
                 try await work()
                 await performScheduling()

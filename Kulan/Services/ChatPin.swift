@@ -207,7 +207,7 @@ enum ChatPin {
     static func verify(uid other: String, pin: String) async throws -> String {
         guard isValid(pin) else { throw Failure(message: genericFailure) }
         if let until = lockedUntil { throw Failure(message: lockSentence(until), lockedUntil: until) }
-        let r = try await call("verifyChatPin", ["uid": other, "pin": pin])
+        let r = try await call("verifyChatPin", ["uid": other, "pin": pin], timeout: 10)   // 2026-09-24 fix-all #214
         guard r["ok"] as? Bool == true, let cid = r["cid"] as? String, !cid.isEmpty else {
             throw Failure(message: genericFailure)
         }
@@ -226,9 +226,15 @@ enum ChatPin {
     /// `onFailure` is the sentence for everything the server did not word itself: the verify
     /// sentence by default (it must give nothing away), a plain "couldn't save" for my own pin.
     private static func call(_ name: String, _ data: [String: Any],
-                             onFailure: String = genericFailure) async throws -> [String: Any] {
+                             onFailure: String = genericFailure,
+                             timeout: TimeInterval? = nil) async throws -> [String: Any] {
         do {
-            let result = try await functions.httpsCallable(name).call(data)
+            let callable = functions.httpsCallable(name)
+            // 2026-09-24 fix-all #214: the SDK's own deadline is 70s, so an offline verify spun for
+            // over a minute. A shorter one ends in `deadlineExceeded`, which `sentence` already turns
+            // into "Try again in a moment."
+            if let timeout { callable.timeoutInterval = timeout }
+            let result = try await callable.call(data)
             return result.data as? [String: Any] ?? [:]
         } catch {
             // A lockout carries its deadline in `details`; latch it so the sheet can refuse before

@@ -174,7 +174,11 @@ struct GlowProfileView: View {
         return .light
     }
 
-    private var isMe: Bool { uid == (AuthService.shared.uid ?? "") }
+    // 2026-09-24 fix-all #90: `isMe` and every "somebody else's profile" branch are gone. The page's
+    // one caller (SettingsView) always passes the signed-in uid, so those branches (the Glow button,
+    // document counts, the fetched-story door, "No live stories.") could never run. Somebody else's
+    // profile is ContactInfoView. If this page is ever opened for another uid, bring them back from
+    // history rather than re-deriving them.
     private var pageColor: Color { palette.map { Color($0.page) } ?? Theme.bg(true) }
     private var cardColor: Color { palette.map { Color($0.card) } ?? Color.white.opacity(0.10) }
 
@@ -401,7 +405,7 @@ struct GlowProfileView: View {
     /// material's sake (see `barScheme`), and a label left to follow that would go black on a
     /// photograph. Only the letters are ours; the capsule behind them is the system's.
     @ToolbarContentBuilder private var editItem: some ToolbarContent {
-        if isMe {
+            // 2026-09-24 fix-all #90: this was wrapped in `if isMe`, which was always true.
             // ⛔ SHARE, BESIDE EDIT — owner, 2026-09-11, with the gap between the back chevron and
             // Edit ringed in red: "right side in my profile add new button for share profile; when I
             // click, open sheet looks like image 2". It opens `ShareProfileSheet`.
@@ -433,7 +437,6 @@ struct GlowProfileView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showEdit = true }.tint(.white)
             }
-        }
     }
 
     /// Name, tick, @handle, bio — his screenshot's stack, centred.
@@ -498,7 +501,6 @@ struct GlowProfileView: View {
                     .background(cardColor, in: Capsule())
                     .padding(.top, 8)
             }
-            if !isMe { glowButton.padding(.top, 12) }
         }
         // The name tucks up into the photograph's fade. With no photograph there is no fade and
         // nothing to tuck into, so the pull-up is proportional to whichever hero is actually there.
@@ -506,30 +508,8 @@ struct GlowProfileView: View {
         .padding(.top, heroCircle ? 0 : -heroHeight * 0.10)
     }
 
-    /// GIVE OR TAKE BACK A GLOW — the one action this page has, and the only place in the app where
-    /// a glow can be given (his flow starts "User A gives User B a Glow").
-    private var glowButton: some View {
-        Button {
-            if glow.isGlowing(uid) { glow.remove(to: uid) } else { glow.give(to: uid) }
-        } label: {
-            Label {
-                Text(glow.isGlowing(uid) ? "Glowing" : "Glow")
-            } icon: {
-                // The tick stays for "already glowing" — his mockup shows a tick there, and a mark
-                // that is the same drawing in both states says nothing about which state it is in.
-                if glow.isGlowing(uid) {
-                    Image(systemName: "checkmark")
-                } else {
-                    GlowStyle.mark(18)
-                }
-            }
-            .font(.headline)
-            .frame(minWidth: 150)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(glow.isGlowing(uid) ? Color.white.opacity(0.18) : Color.white)
-        .controlSize(.large)
-    }
+    // 2026-09-24 fix-all #90: the Glow / Glowing button lived here, drawn only on somebody else's
+    // profile, which this page never shows. Giving a glow is on ContactInfoView.
 
     // MARK: - The two cards
 
@@ -551,15 +531,12 @@ struct GlowProfileView: View {
         // `onGlowWrite` is deployed. They cannot be counted here for the reason the whole privacy
         // model rests on: the rules refuse to list anybody's glows but your own, so a client CANNOT
         // count a stranger's glowers. That is the design working, not a gap in it.
-        let glowers = isMe ? glow.displayGlowers.count : (profile?.glowerCount ?? 0)
-        let glowing = isMe ? glow.displayGlowing.count : (profile?.glowingCount ?? 0)
+        // 2026-09-24 fix-all #90: own counts only (the document-count branch was for other people).
+        let glowers = glow.displayGlowers.count
+        let glowing = glow.displayGlowing.count
         return Group {
-            if isMe {
-                NavigationLink { GlowPeopleListView(side: .glowers, title: profile?.handle ?? profile?.name ?? "Glow") } label: { statsCardBody(glowers, glowing) }
-                    .buttonStyle(.plain)
-            } else {
-                statsCardBody(glowers, glowing)
-            }
+            NavigationLink { GlowPeopleListView(side: .glowers, title: profile?.handle ?? profile?.name ?? "Glow") } label: { statsCardBody(glowers, glowing) }
+                .buttonStyle(.plain)
         }
     }
 
@@ -617,14 +594,13 @@ struct GlowProfileView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
-            if isMe {
-                // The grouped-list disclosure indicator, at the weight and colour the system draws
-                // it. `.secondary` rather than a mixed white so it sits at the same weight as the
-                // line beside it whatever colour the photograph gives the card.
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
+            // The grouped-list disclosure indicator, at the weight and colour the system draws
+            // it. `.secondary` rather than a mixed white so it sits at the same weight as the
+            // line beside it whatever colour the photograph gives the card.
+            // 2026-09-24 fix-all #90: no longer behind `if isMe` (always true).
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
         // ⛔ THE PILL IS FLATTER — owner, 2026-09-11: this card is "too tall", with his reference
         // beside it showing a pill whose two lines of text sit close together over tight vertical
@@ -751,11 +727,11 @@ struct GlowProfileView: View {
     /// The faces on the stats card — a few of the people in the glow relationship. Only ever drawn
     /// on MY OWN profile, because those are the only names the rules will hand over (his ruling:
     /// counts public, names private), and the card is the door to my own lists.
-    private var facePeople: [GlowPerson] { isMe ? (faces.state.value ?? []) : [] }
+    private var facePeople: [GlowPerson] { faces.state.value ?? [] }   // 2026-09-24 fix-all #90
 
     private var byLine: String {
         let names = facePeople.prefix(2).map(\.name).filter { !$0.isEmpty }
-        if names.isEmpty { return isMe ? "See who glowed you" : "Glow activity" }
+        if names.isEmpty { return "See who glowed you" }   // 2026-09-24 fix-all #90
         return "by " + names.joined(separator: ", ")
     }
 
@@ -809,7 +785,7 @@ struct GlowProfileView: View {
                 // as wrong there.
                 if hasPostedStories {
                     NavigationLink {
-                        PostedStoriesView(uid: uid, isMe: isMe,
+                        PostedStoriesView(uid: uid, isMe: true,   // 2026-09-24 fix-all #90
                                           title: profile?.name ?? initialName)
                     } label: {
                         HStack(spacing: 3) {
@@ -832,7 +808,7 @@ struct GlowProfileView: View {
                 case .failed:
                     cardMessage("Could not load stories", retry: true)
                 case .loaded(let rows) where rows.isEmpty:
-                    cardMessage(isMe ? "You have no live stories." : "No live stories.", retry: false)
+                    cardMessage("You have no live stories.", retry: false)   // 2026-09-24 fix-all #90
                 case .loaded(let rows):
                     // Three across, each taking an equal share of what the card's padding leaves,
                     // so the row ends flush with the heading above it however wide the screen is.
@@ -936,11 +912,7 @@ struct GlowProfileView: View {
         //             first frame for anyone we've loaded before, instead of the bio arriving a
         //             moment later and shoving the whole page down".
         if profile == nil {
-            if isMe {
-                profile = ProfileStore.shared.me
-            } else if let hit = await ProfileStore.shared.cachedPeer(uid) {
-                profile = hit
-            }
+            profile = ProfileStore.shared.me   // 2026-09-24 fix-all #90: own profile only
         }
         if let p = await ProfileStore.shared.fetch(uid) {
             profile = p
@@ -976,11 +948,10 @@ struct GlowProfileView: View {
     /// relationship arrived a moment later nothing asked again. Keyed on the relationship instead,
     /// so the arrival IS the trigger — the same fix the Stories page's `hasGlowGrid` needed.
     private var faceKey: String {
-        isMe ? Array(glow.glowRelationship).sorted().prefix(3).joined(separator: ",") : ""
+        Array(glow.glowRelationship).sorted().prefix(3).joined(separator: ",")   // 2026-09-24 fix-all #90
     }
 
     private func loadFaces() async {
-        guard isMe else { return }
         let ids = Array(glow.glowRelationship).sorted().prefix(3)
         await faces.load(Array(ids), key: "faces-" + faceKey)
     }
@@ -1004,17 +975,10 @@ struct GlowProfileView: View {
     /// the SAME stories, so one id filed by both would make the flight land on whichever registered
     /// last — see `Self.tileKey`.
     private func openPosted(_ story: PostedStory) {
-        if isMe {
-            guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
-            StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
-                           pinned: true, deliveredToMe: true)
-        } else {
-            let p = GlowPerson(id: uid,
-                               name: profile?.name ?? initialName,
-                               handle: profile?.handle ?? "",
-                               photoUrl: profile?.photoUrl ?? initialPhoto)
-            Task { await GlowStoryOpen.open(p, from: Self.tileKey(story.id)) }
-        }
+        // 2026-09-24 fix-all #90: own stories only; the fetched-story door was for other people.
+        guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
+        StoryDoor.open(mine, among: [mine], from: Self.tileKey(story.id),
+                       pinned: true, deliveredToMe: true)
     }
 
     /// This card's own key namespace for a tile's rectangle — see `openPosted`.
@@ -1022,7 +986,7 @@ struct GlowProfileView: View {
 
     private func loadStories() async {
         await stories.load(uid: uid)
-        await stories.loadViewCounts(isMe: isMe)
+        await stories.loadViewCounts(isMe: true)   // 2026-09-24 fix-all #90
     }
 }
 

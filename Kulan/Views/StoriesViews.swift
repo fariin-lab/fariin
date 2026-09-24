@@ -5333,51 +5333,9 @@ struct StoryOwnerBarView: View {
     }
 }
 
-// "Seen by" sheet — who viewed my status (premium).
-struct SeenBySheet: View {
-    let storyId: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var viewers: [StoryViewerInfo] = []
-    @State private var loading = true
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if loading {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewers.isEmpty {
-                    EmptyStateView(title: "No views yet", icon: "eye",
-                                   text: "When people view your status, they'll appear here.")
-                } else {
-                    List(viewers) { v in
-                        HStack(spacing: 12) {
-                            AvatarView(name: v.name, photoUrl: v.photoUrl, size: 42)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(v.name).font(.body)
-                                Text(v.viewedAt, format: .relative(presentation: .named))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if let r = v.reaction, !r.isEmpty { Text(r).font(.title3) }
-                        }
-                        .listRowSeparator(.hidden)
-                    }
-                    .listStyle(.plain)
-                }
-            }
-            .navigationTitle(viewers.isEmpty ? "Seen by" : "Seen by \(viewers.count)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-        }
-        .presentationDetents([.medium, .large])
-        .task {
-            // Nil is a failed read, not an empty list: leave the list alone and stop the spinner, so
-            // the sheet says nothing rather than saying nobody watched. See `fetchViewers`.
-            if let v = await StoriesService.shared.fetchViewers(storyId: storyId) { viewers = v }
-            loading = false
-        }
-    }
-}
+// 2026-09-24 fix-all #92: the unused SwiftUI `SeenBySheet` was removed (no call site). The viewers
+// list the story viewer actually shows is UIKit (StoryViewersPanelView), whose "No views yet" is
+// now the only copy of that empty state.
 
 
 // Carousel of ALL my posted stories, shown above the open viewers sheet (per the user mockup):

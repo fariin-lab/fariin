@@ -147,6 +147,9 @@ struct ContactInfoView: View {
     /// What the share sheet said it did, shown briefly after it closes. Empty = nothing to say.
     @State private var shareToast = ""
     @State private var shareToastShown = false
+    /// 2026-09-24 fix-all #196: a glow give/remove the server refused. GlowService already rolls
+    /// the button back; this says why it moved back instead of leaving it silent.
+    @State private var glowWriteFailed = false
     @State private var openChat = false
     @State private var showAllMedia = false
     @State private var showVerify = false
@@ -697,6 +700,12 @@ struct ContactInfoView: View {
         } message: {
             Text("This person restricts who can call them.")
         }
+        // 2026-09-24 fix-all #196: a refused glow write, same wording as the other "Couldn't update" alerts.
+        .alert("Couldn't update", isPresented: $glowWriteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Try again in a moment.")
+        }
     }
 
     /// ⛔ THE BAR'S ITEMS LIVE IN THEIR OWN PROPERTIES, AND THE TYPE CHECKER IS WHY.
@@ -1034,7 +1043,7 @@ struct ContactInfoView: View {
                 // The name you gave them wins over the one they gave themselves, the same order
                 // every other label on this page uses. `localName` is optional, not empty-string.
                 GlowIntroSheet(name: localName ?? name) {
-                    glow.give(to: otherUid)
+                    glow.give(to: otherUid) { if $0 != nil { glowWriteFailed = true } }   // 2026-09-24 fix-all #196
                 }
             }
             .sheet(isPresented: $showRename) {
@@ -1917,7 +1926,7 @@ struct ContactInfoView: View {
                 // anything happens — his rule that removing is never a bare tap. The mark is a
                 // template image, so it takes that red the same way the ✕ did; the wording and the
                 // action are untouched and only the glyph changed.
-                Button(role: .destructive) { glow.remove(to: otherUid) } label: {
+                Button(role: .destructive) { glow.remove(to: otherUid) { if $0 != nil { glowWriteFailed = true } } } label: {   // 2026-09-24 fix-all #196
                     Label { Text("Remove Glowing") } icon: { GlowStyle.mark(20, filled: true) }
                 }
             } label: {
@@ -1955,7 +1964,7 @@ struct ContactInfoView: View {
             // Same row as the button's menu, down to the glyph — see `glowActionButton`. Two doors
             // to one action means two rows that have to read identically, or the second door looks
             // like a different action.
-            Button(role: .destructive) { glow.remove(to: otherUid) } label: {
+            Button(role: .destructive) { glow.remove(to: otherUid) { if $0 != nil { glowWriteFailed = true } } } label: {   // 2026-09-24 fix-all #196
                 Label { Text("Remove Glowing") } icon: { GlowStyle.mark(20, filled: true) }
             }
         } else {

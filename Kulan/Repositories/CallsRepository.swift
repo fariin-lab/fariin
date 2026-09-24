@@ -83,6 +83,10 @@ final class CallsRepository {
             // unread badges, no reordering — but their timed-out call still wrote a shared record,
             // so the Calls tab showed "Missed call" and badged it red (audit).
             .filter { !$0.isBlockedByMe(me) }
+            // 2026-09-24 fix-all #97: groups carry call records now (GroupCallService.writeRecord),
+            // but every row here calls ONE person back, and a group's "other uid" is just some
+            // member. Group call history is the bubble in the group's own chat.
+            .filter { !$0.isGroup }
 
         // Fetch every chat's call records CONCURRENTLY (was sequential = N round-trips in
         // series). Each task builds its own CallEntry list off-main; results merged after.

@@ -181,6 +181,9 @@ struct InviteLinkSheet: View {
                         ShareLink(item: URL(string: inv.url) ?? URL(string: "https://fariin.com")!) {
                             Label("Share Link", systemImage: "square.and.arrow.up")
                         }
+                        // 2026-09-24 fix-all #126: the link as a code to hold up for someone in the
+                        // room, drawn by the profile QR's own generator (`qrImage(from:)`).
+                        Button { showQR = true } label: { Label("QR Code", systemImage: "qrcode") }
                     } footer: {
                         Text(inv.usageLimit > 0 ? "Used \(inv.usedCount) of \(inv.usageLimit)." : "Anyone with this link can join.")
                     }
@@ -229,8 +232,28 @@ struct InviteLinkSheet: View {
             .navigationTitle("Invite via Link").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
             .task { await load() }
+            // 2026-09-24 fix-all #126: the code, white behind it so any camera reads it in either theme.
+            .sheet(isPresented: $showQR) {
+                VStack(spacing: 16) {
+                    Text(groupTitle).font(.headline)
+                    if let url = invite?.url, let img = qrImage(from: url) {
+                        Image(uiImage: img)
+                            .interpolation(.none).resizable().scaledToFit()
+                            .padding(16)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .frame(maxWidth: 292)
+                    }
+                    if let url = invite?.url {
+                        Text(url).font(.footnote.monospaced()).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(24)
+                .presentationDetents([.medium])
+            }
         }
     }
+    @State private var showQR = false   // 2026-09-24 fix-all #126, private like the sheet's other state
 
     private func expiryLabel(_ at: Double) -> String {
         guard at > 0 else { return "Never" }

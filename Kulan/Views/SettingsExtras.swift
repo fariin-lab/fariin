@@ -270,6 +270,9 @@ struct DevicesView: View {
     @State private var pendingSignOut: DeviceSession?
     @State private var error: String?
     @State private var working = false
+    /// 2026-09-24 fix-all #143: devices whose sign-out is in flight. Their rows show a spinner and
+    /// dim until the write returns (the listener then drops the row, or the error line explains).
+    @State private var signingOut: Set<String> = []
     @State private var autoDays = DeviceRegistry.autoSignOutDefaultDays
     @State private var autoLoaded = false
 
@@ -407,7 +410,11 @@ struct DevicesView: View {
                isPresented: Binding(get: { pendingSignOut != nil },
                                     set: { if !$0 { pendingSignOut = nil } })) {
             Button("Sign out", role: .destructive) {
-                if let s = pendingSignOut { run { try await DeviceRegistry.shared.signOut(deviceId: s.id) } }
+                if let s = pendingSignOut {
+                    // 2026-09-24 fix-all #143: the row shows progress until the write returns.
+                    signingOut.insert(s.id)
+                    run(clearing: [s.id]) { try await DeviceRegistry.shared.signOut(deviceId: s.id) }
+                }
                 pendingSignOut = nil
             }
             Button("Cancel", role: .cancel) { pendingSignOut = nil }
@@ -417,7 +424,10 @@ struct DevicesView: View {
         .alert("Sign out all other devices?", isPresented: $confirmSignOutAll) {
             Button("Sign out all", role: .destructive) {
                 let list = others
-                run { try await DeviceRegistry.shared.signOutAllOthers(list) }
+                // 2026-09-24 fix-all #143: every row being signed out shows progress.
+                let ids = Set(list.map(\.id))
+                signingOut.formUnion(ids)
+                run(clearing: ids) { try await DeviceRegistry.shared.signOutAllOthers(list) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -448,8 +458,14 @@ struct DevicesView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 statusLine(s)
             }
+            // 2026-09-24 fix-all #143: this device's sign-out is in flight.
+            if signingOut.contains(s.id) {
+                Spacer()
+                ProgressView()
+            }
         }
         .padding(.vertical, 4)
+        .opacity(signingOut.contains(s.id) ? 0.5 : 1)   // 2026-09-24 fix-all #143
     }
 
     // "Active now" is the one piece of good news on this page â€” it gets the live green dot.
@@ -495,12 +511,13 @@ struct DevicesView: View {
         return "Last active \(last) · signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
     }
 
-    private func run(_ op: @escaping () async throws -> Void) {
+    /// `clearing`: 2026-09-24 fix-all #143, the device ids whose row spinner ends with this op.
+    private func run(clearing: Set<String> = [], _ op: @escaping () async throws -> Void) {
         working = true; error = nil
         Task {
             do { try await op() }
             catch { let m = error.localizedDescription; await MainActor.run { self.error = m } }
-            await MainActor.run { working = false }
+            await MainActor.run { working = false; signingOut.subtract(clearing) }
         }
     }
 }

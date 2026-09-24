@@ -18,7 +18,9 @@ private func fariinLink(_ handle: String) -> String { KulanApp.userLink(handle: 
 /// sitting in the middle of the finished code covers roughly a fifth of it, so at M the code would
 /// scan on a good day and fail on a bad one — the worst kind of broken, because it works while you
 /// are testing it. H tolerates 30%, which is the room the mark actually takes.
-private func qrImage(from string: String) -> UIImage? {
+/// 2026-09-24 fix-all #126: internal (was private) so the group invite sheet draws its link with
+/// this same generator rather than a second one.
+func qrImage(from string: String) -> UIImage? {
     let filter = CIFilter.qrCodeGenerator()
     filter.message = Data(string.utf8)
     filter.correctionLevel = "H"

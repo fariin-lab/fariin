@@ -89,14 +89,21 @@ final class GroupCallService: ObservableObject {
             try await room.localParticipant.setMicrophone(enabled: true)
             if video { try await room.localParticipant.setCamera(enabled: true) }
             activeCid = cid; micOn = true; cameraOn = video; connecting = false
+            // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
+            // joined one, and the starter writes the call's record into the chat.
+            let startedHere = room.remoteParticipants.isEmpty
+            let recordId = startedHere ? "gcall_\(UUID().uuidString)" : nil
             // Mark the call active so other members see a "Join call" bar + get rung.
-            try? await Firestore.firestore().collection("groupCalls").document(cid).setData([
+            var callDoc: [String: Any] = [
                 "active": true,
                 "startedBy": Auth.auth().currentUser?.uid ?? "",
                 "video": video,
                 "title": title,
                 "startedAt": FieldValue.serverTimestamp(),
-            ])
+            ]
+            if let recordId { callDoc["recordId"] = recordId }
+            try? await Firestore.firestore().collection("groupCalls").document(cid).setData(callDoc)
+            if let recordId { await Self.writeRecord(cid: cid, id: recordId, video: video) }
         } catch {
             connecting = false
             // Only tear down if THIS task never established a call. Calling disconnect()
@@ -106,6 +113,31 @@ final class GroupCallService: ObservableObject {
                 notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
             }
         }
+    }
+
+    /// 2026-09-24 fix-all #97: a group call left no trace anywhere. It now leaves a call bubble in the
+    /// group, the same `type: "call"` message the 1:1 path writes (`ChatService.recordCall`), opened
+    /// "ongoing" by whoever started the room and closed "answered" with its length by the last one
+    /// out (`disconnect`). The chat list gets the same plain marker a 1:1 call writes. Decision: the
+    /// Calls tab does not list group calls (its call-back button dials one person), so the history
+    /// lives in the group's chat.
+    private static func writeRecord(cid: String, id: String, video: Bool) async {
+        guard let me = Auth.auth().currentUser?.uid else { return }
+        let convRef = Firestore.firestore().collection("conversations").document(cid)
+        try? await convRef.collection("messages").document(id).setData([
+            "type": "call",
+            "authorId": me,
+            "callerUid": me,
+            "callOutcome": "ongoing",
+            "callVideo": video,
+            "text": "",
+            "createdAt": FieldValue.serverTimestamp(),
+        ])
+        try? await convRef.setData([
+            "lastMessage": video ? "📹 Video call" : "📞 Call",
+            "lastSender": me,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ], merge: true)
     }
 
     func toggleMic() {
@@ -128,8 +160,17 @@ final class GroupCallService: ObservableObject {
         let wasLast = room.remoteParticipants.isEmpty   // I'm the only one → end the call for the group
         await room.disconnect()
         if let cid, wasLast {
-            try? await Firestore.firestore().collection("groupCalls").document(cid)
-                .setData(["active": false], merge: true)
+            let ref = Firestore.firestore().collection("groupCalls").document(cid)
+            // 2026-09-24 fix-all #97: the last one out closes the call's record with its length.
+            let snap = try? await ref.getDocument()
+            try? await ref.setData(["active": false], merge: true)
+            if let d = snap?.data(), d["active"] as? Bool == true, let recordId = d["recordId"] as? String,
+               let started = (d["startedAt"] as? Timestamp)?.dateValue() {
+                let secs = max(0, Int(Date().timeIntervalSince(started)))
+                try? await Firestore.firestore().collection("conversations").document(cid)
+                    .collection("messages").document(recordId)
+                    .updateData(["callOutcome": "answered", "callDuration": secs])
+            }
         }
         activeCid = nil; micOn = true; cameraOn = false; isVideo = false; callTitle = ""
         minimized = false

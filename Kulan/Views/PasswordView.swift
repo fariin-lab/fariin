@@ -1,6 +1,7 @@
 import SwiftUI
 import LocalAuthentication
 import FirebaseAuth
+import AuthenticationServices   // 2026-09-24 fix-all #204: Apple's re-auth button
 
 // Settings › Password. Set one if you have none, change the one you have.
 //
@@ -71,6 +72,7 @@ struct PasswordView: View {
     @State private var resetCodeOpen = false
     @State private var resetAddress = ""
     @State private var busy = false
+    @Environment(\.colorScheme) private var scheme   // 2026-09-24 fix-all #204: Apple button style
     @State private var error: String?
     @State private var done = false
     @FocusState private var focused: Bool
@@ -297,12 +299,27 @@ struct PasswordView: View {
                         }
                     }
                     if AuthService.shared.isConnected(.apple) {
-                        Button("Continue with Apple") {
-                            // Apple's own button is required for a real Apple re-auth, and it does
-                            // not belong inside a Form row. Sending them the long way round would
-                            // be worse than saying so plainly.
-                            error = "Open Sign-in Methods to verify with Apple, then come back."
+                        // 2026-09-24 fix-all #204: this row was a dead "Continue with Apple" that
+                        // only told you to go elsewhere. It is Apple's own button now, wired to the
+                        // same re-auth Delete Account uses (`reauthApple(authorization:)`), styled
+                        // and rebuilt on a scheme change exactly as that page does.
+                        SignInWithAppleButton(.continue) { request in
+                            AuthService.shared.prepareAppleRequest(request)
+                        } onCompletion: { result in
+                            switch result {
+                            case .success(let auth):
+                                reauth { try await AuthService.shared.reauthApple(authorization: auth) }
+                            case .failure(let e):
+                                // Only a real cancel is silent, as on Delete Account.
+                                if (e as NSError).code != ASAuthorizationError.canceled.rawValue {
+                                    error = "Apple couldn't verify you. Please try again."
+                                }
+                            }
                         }
+                        .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
+                        .id(scheme)
+                        .frame(height: 44)
+                        .disabled(busy)
                     }
                 } else {
                     // Changing, not recovering: they know the current one by definition.

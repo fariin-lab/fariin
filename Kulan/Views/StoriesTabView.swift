@@ -143,6 +143,7 @@ struct StoriesTabView: View {
                     ToolbarItem(placement: .topBarTrailing) { notificationsButton }
                     ToolbarItem(placement: .topBarTrailing) { addStoryButton }
                 }
+                .connectionTitle()   // 2026-09-24 fix-all #173: "Connecting" / "Waiting for network" here too
                 // ⛔ THE SAME CALL THE CHAT LIST AND THE CALLS PAGE MAKE, placement and all — owner,
                 // 2026-09-02: "make the story search bar exactly like the one on the chat list or
                 // the calls page".

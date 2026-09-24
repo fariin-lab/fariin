@@ -11,6 +11,21 @@ struct LinkPreviewCard: View {
     let isMe: Bool
     let dark: Bool
 
+    /// 2026-09-24 fix-all #207: Send Message said nothing when it could not open the chat (offline,
+    /// or the lookup failed). While it works the button shows a spinner; a failure replaces its
+    /// label for a moment with the reason, in the same 40pt slot so the bubble never changes height.
+    @State private var opening = false
+    @State private var openFailure: String?
+
+    /// The explicit init the private `@State` above needs: a struct with any private stored
+    /// property gets a PRIVATE memberwise init, and ThreadView builds this card from another file.
+    init(preview: Message.LinkPreviewData, cid: String, isMe: Bool, dark: Bool) {
+        self.preview = preview
+        self.cid = cid
+        self.isMe = isMe
+        self.dark = dark
+    }
+
     private var fg: Color { isMe ? Theme.onAccent(dark) : (dark ? .white : .black) }
 
     /// The handle this card is about, when it is one of our own profile links. Read from the URL
@@ -76,13 +91,22 @@ struct LinkPreviewCard: View {
             if !profileUnavailable {
                 Divider().overlay(fg.opacity(0.12))
                 Button { openChat(with: handle) } label: {
-                    Text("Send Message")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(fg)
-                        .frame(maxWidth: .infinity).frame(height: 40)
-                        .contentShape(Rectangle())
+                    // 2026-09-24 fix-all #207: progress and failure in the button's own slot.
+                    Group {
+                        if opening {
+                            ProgressView().tint(fg)
+                        } else {
+                            Text(openFailure ?? "Send Message")
+                                .font(.system(size: 14, weight: openFailure == nil ? .semibold : .regular))
+                                .foregroundStyle(openFailure == nil ? fg : fg.opacity(0.75))
+                                .lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 40)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(opening)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -97,10 +121,30 @@ struct LinkPreviewCard: View {
     /// The same two steps the deep link takes, so a tap here and a tap on the link itself land in
     /// exactly one place. `AppRouter.pendingChatId` is what the shell watches.
     private func openChat(with handle: String) {
+        // 2026-09-24 fix-all #207: offline is said at once rather than after a lookup that cannot
+        // answer; any other failure says the existing "Couldn't connect". Existing wording both.
+        guard NetworkState.shared.isOnline else { showOpenFailure("No internet connection. Try again."); return }
+        opening = true
+        openFailure = nil
         Task {
             guard let user = await ChatService.findByHandle(handle),
-                  let cid = try? await ChatService.openConversation(other: user) else { return }
-            await MainActor.run { AppRouter.shared.pendingChatId = cid }
+                  let cid = try? await ChatService.openConversation(other: user) else {
+                await MainActor.run {
+                    opening = false
+                    showOpenFailure(NetworkState.shared.isOnline ? "Couldn't connect"
+                                                                 : "No internet connection. Try again.")
+                }
+                return
+            }
+            await MainActor.run { opening = false; AppRouter.shared.pendingChatId = cid }
+        }
+    }
+
+    /// 2026-09-24 fix-all #207: the reason sits in the button for three seconds, then the label returns.
+    private func showOpenFailure(_ text: String) {
+        openFailure = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if openFailure == text { openFailure = nil }
         }
     }
 

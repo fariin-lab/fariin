@@ -760,19 +760,24 @@ struct CallsView: View {
                             Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
                         }
                     }
-                    ToolbarItem(placement: .principal) {
-                        Picker("", selection: $filter) {
-                            Text("All").tag(0)
-                            Text("Missed").tag(1)
+                    // 2026-09-24 fix-all #173: the pill steps aside while `connectionTitle()` below
+                    // is showing the connection in this same slot.
+                    if ConnectionStatus.shared.state.label == nil {
+                        ToolbarItem(placement: .principal) {
+                            Picker("", selection: $filter) {
+                                Text("All").tag(0)
+                                Text("Missed").tag(1)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 150)   // compact All/Missed pill, not full-width
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 150)   // compact All/Missed pill, not full-width
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showNew = true } label: { Image(systemName: "phone.badge.plus") }
                     }
                 }
             }
+            .connectionTitle(suppressed: selecting)   // 2026-09-24 fix-all #173
             .task { await repo.load() }
             .refreshable { await repo.load(force: true) }
             .confirmationDialog("Delete \(selection.count) call\(selection.count == 1 ? "" : "s")?",
@@ -2300,7 +2305,19 @@ struct ChatsView: View {
                 vc.view.layer.cornerRadius = CMActionsCard.cardCorner
                 vc.view.layer.cornerCurve = .continuous
                 return vc
-            }
+            },
+            // 2026-09-24 fix-all #6: the next page of older chats when the list is scrolled to its
+            // end. Only under the All filter with no search: a filtered list's last row is not the
+            // end of the window, and paging for it would pull pages the person never sees.
+            onReachEnd: {
+                guard chatFilter == 0, searchTrimmed.isEmpty else { return }
+                repo.loadOlder()
+            },
+            // 2026-09-24 fix-all: pull past the search bar and let go flips All <-> Unread, the
+            // reference app's gesture. The same `chatFilter` the title menu sets.
+            // No `withAnimation`: an animation around a representable's update is a second clock
+            // over the table's own row transaction (see the chat list's UIKit migration notes).
+            onPullFilter: { chatFilter = chatFilter == 1 ? 0 : 1 }
         )
     }
 
@@ -3344,6 +3361,16 @@ struct ArchivedChatsView: View {
                                     ChatPeekPreview(cid: conv.id, me: me)
                                 }
                             }
+                            // 2026-09-24 fix-all #6: the chat list is a window of the newest chats
+                            // now, so an archived chat older than it arrives with the next page. A
+                            // spinner at the end asks for pages while it is on screen; `.task(id:)`
+                            // asks again each time a page lands and it is still showing.
+                            if repo.hasOlder {
+                                HStack { Spacer(); ProgressView(); Spacer() }
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+                                    .task(id: repo.conversations.count) { repo.loadOlder() }
+                            }
                         }
                         .listStyle(.plain)
                         // ⛔ THE GREY THAT SURVIVES A ROUND TRIP (owner 2026-08-22: "I click a chat,
@@ -3445,6 +3472,9 @@ struct ArchivedChatsView: View {
                         // the chat list's `ic_archive` and drawn in a different hand — two bottom bars
                         // that do the opposite halves of one action, looking like two different apps.
                         // Same asset, same 22pt, same template rendering as the chat list's.
+                        // 2026-09-24 fix-all #57: bulk Mute, first, the same menu the main list's bar has.
+                        bulkMuteMenu
+                        Spacer()
                         Button { unarchiveSelected() } label: {
                             Image("ic_archive").renderingMode(.template).resizable().scaledToFit()
                                 .frame(width: 22, height: 22)
@@ -3521,6 +3551,29 @@ struct ArchivedChatsView: View {
     }
 
     private func exitSelect() { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } }
+    /// 2026-09-24 fix-all #57: the main list's bulk Mute (`ChatsView.bulkMuteMenu`), same durations,
+    /// same icon, same `setMute` per selected chat, Unmute offered when any of them is muted now.
+    private var bulkMuteMenu: some View {
+        let anyMuted = repo.conversations.contains {
+            selection.contains($0.id) && $0.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
+        }
+        return Menu {
+            if anyMuted { Button("Unmute") { muteSelected(until: 0) } }
+            Button("Mute for 1 hour") { muteSelected(until: ChatService.muteUntil(1)) }
+            Button("Mute for 8 hours") { muteSelected(until: ChatService.muteUntil(8)) }
+            Button("Mute for 1 week") { muteSelected(until: ChatService.muteUntil(168)) }
+            Button("Mute Always") { muteSelected(until: ChatService.muteUntil(nil)) }
+        } label: {
+            Image("ic_menu_mute").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 22, height: 22)
+        }
+        .tint(.primary).disabled(selection.isEmpty)
+    }
+    private func muteSelected(until: Double) {
+        let ids = selection
+        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setMute(id, until: until) } } } }
+        exitSelect()
+    }
     private func unarchiveSelected() {
         let ids = selection
         Task { for id in ids { await ChatService.setArchived(id, false) } }

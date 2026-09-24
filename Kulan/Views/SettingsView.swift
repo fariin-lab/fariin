@@ -264,6 +264,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            // 2026-09-24 fix-all #173: the connection state on this tab's header too (not over the photo).
+            .connectionTitle(suppressed: showPhoto || !asTab)
             // The same in-place morph a contact's photo uses: grows out of the circle, drag melts
             // the page away, closes back into it. It LANDS SQUARE (owner order) — a circle is how
             // the avatar is framed in a list, not how you look at your own picture, and the round
@@ -1199,15 +1201,18 @@ struct PrivacySettingsView: View {
                 // ⚠️ TWO TITLES ARE HIS SPELLING, NOT OURS: "Last seen & online" and "Profile photo"
                 // (we said "Last Seen & Online" and "Profile Picture"). The storage keys are
                 // untouched — `lastSeen` and `photo` — so nobody's setting moves.
+                // 2026-09-24 fix-all #145: every audience page now explains each of its choices, in
+                // the pattern the Calls and Messages footers set ("Who can… Everyone: … Nobody: …").
+                // Only these three-choice rows lacked it; the shared tail is `Self.threeChoiceFooter`.
                 audienceRow("Last seen & online", key: "lastSeen", value: privLastSeen,
-                            footerText: "Who can see when you're online and when you were last active.")
+                            footerText: "Who can see when you're online and when you were last active. " + Self.threeChoiceFooter)
                 audienceRow("Profile photo", key: "photo", value: privPhoto,
-                            footerText: "Who can see your profile photo when they find you on Fariin.")
+                            footerText: "Who can see your profile photo when they find you on Fariin. " + Self.threeChoiceFooter)
                 audienceRow("Bio", key: "bio", value: privBio,
-                            footerText: "Who can see the few words about you.")
+                            footerText: "Who can see the few words about you. " + Self.threeChoiceFooter)
                 if Flags.groupsEnabled {
                     audienceRow("Groups", key: "groups", value: privGroups,
-                                footerText: "Who can add you to groups.")
+                                footerText: "Who can add you to groups. " + Self.threeChoiceFooter)
                 }
                 // Shows its value like every other row here. It was the one row with a bare title, so
                 // it read as broken next to five rows that each state their setting (user: "messages
@@ -1302,6 +1307,11 @@ struct PrivacySettingsView: View {
             DisappearingMessagesView(cid: "", current: defaultDisappear) { defaultDisappear = $0 }
         }
     }
+
+    /// 2026-09-24 fix-all #145: the three choices `Audience` offers on every key but Calls and
+    /// Messages, named with their on-screen labels ("My Chats", "No One").
+    private static let threeChoiceFooter =
+        "Everyone: anyone on Fariin. My Chats: only people already in your chats. No One: nobody."
 
     private func audienceRow(_ title: String, key: String, value: String, footerText: String) -> some View {
         NavigationLink { AudiencePage(title: title, key: key, footer: footerText) } label: {

@@ -113,7 +113,10 @@ struct CallView: View {
         // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…" — the
         // standard messenger order — while the SDP answer is still being built on their phone.
         case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
-        case .incoming:     return "Incoming…"
+        // 2026-09-24 fix-all #107: no `.incoming` label. This screen is never up while a call is
+        // incoming (`CallContainer.isActive` leaves that state out on purpose: the system's own
+        // incoming-call screen answers it), so "Incoming…" could not be drawn. Decision: incoming
+        // stays the system's screen; the dead label is removed rather than half-building a second one.
         // The weak-signal notice displaces the duration deliberately: while the camera is down, WHY it
         // is down is the only thing the user actually wants, and without it a paused camera reads as
         // the app being broken. The timer comes straight back when the link recovers.
@@ -1211,7 +1214,7 @@ struct FloatingCallWindow: View {
     private var stageLabel: String? {
         switch call.state {
         case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
-        case .incoming:     return "Incoming…"
+        // 2026-09-24 fix-all #107: `.incoming` removed here too; the card is never shown in that state.
         case .reconnecting: return "Reconnecting…"
         case .ended:        return "Call ended"
         default:            return nil   // .active — the two faces carry it

@@ -294,7 +294,13 @@ struct DisableAdditionalPasswordView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
-            try await AccountCall.run("disableAdditionalPassword", ["password": password])
+            let reply = try await AccountCall.run("disableAdditionalPassword", ["password": password])
+            // 2026-09-24 fix-all #54: turning it off now signs out every other device, this one's
+            // refresh token included; the server hands back a session minted after that revoke, the
+            // same way confirmEmailChange does (decision D3), and this phone signs in with it.
+            if let token = reply["customToken"] as? String {
+                _ = try? await Auth.auth().signIn(withCustomToken: token)
+            }
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
             dismiss()
         } catch { self.error = error.localizedDescription }
@@ -313,7 +319,12 @@ struct DisableAdditionalPasswordView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
-            try await AccountCall.run("confirmTwoStepRecovery", ["code": recoveryCode])
+            let reply = try await AccountCall.run("confirmTwoStepRecovery", ["code": recoveryCode])
+            // 2026-09-24 fix-all #54: every other session is ended; this phone continues on the
+            // session the server minted after the revoke (see turnOff above).
+            if let token = reply["customToken"] as? String {
+                _ = try? await Auth.auth().signIn(withCustomToken: token)
+            }
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
             dismiss()
         } catch { self.error = error.localizedDescription }
@@ -477,7 +488,12 @@ struct TwoStepSignInView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
-            try await AccountCall.run("confirmTwoStepRecovery", ["code": recoveryCode])
+            let reply = try await AccountCall.run("confirmTwoStepRecovery", ["code": recoveryCode])
+            // 2026-09-24 fix-all #54: every other session is ended; this phone continues on the
+            // session the server minted after the revoke.
+            if let token = reply["customToken"] as? String {
+                _ = try? await Auth.auth().signIn(withCustomToken: token)
+            }
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
             onPassed()
         } catch { self.error = error.localizedDescription }

@@ -259,7 +259,177 @@ const cases = [
 
   // ── composer (2026-09-24 decision D-composer-3): text ceiling, media address shape, vote shape ──
   ...composerCases(),
+
+  // ── 2026-09-24 fix-all, group A: retries, badge values, crossed opens, unpin, restriction flags ──
+  ...fixAllCases(),
+
+  // ── 2026-09-24 fix-all, group B (#227): decline records may carry `sender`, only the id's own ──
+  ...declineSenderCases(),
 ];
+
+// 2026-09-24 fix-all #227: the recipient's decline record gains an optional `sender` field so the
+// account purge can find records held against a deleted account. Old shape keeps working.
+function declineSenderCases() {
+  const path = `${D}/requestDeclines/${ME}/from/${THIRD}`;
+  const m = notAdmin(ME);
+  return [
+    ['OK      decline record, old shape (at only)', 'ALLOW', 'ALLOW',
+      ME, path, 'create', { at: REQ_TIME }, null, m],
+    ['OK      decline record names its sender (#227)', 'DENY', 'ALLOW',
+      ME, path, 'create', { at: REQ_TIME, sender: THIRD }, null, m],
+    ['GUARD   decline record names somebody else as sender (#227)', 'DENY', 'DENY',
+      ME, path, 'create', { at: REQ_TIME, sender: ADMIN }, null, m],
+    ['GUARD   decline record with any other field (#227)', 'DENY', 'DENY',
+      ME, path, 'create', { at: REQ_TIME, sender: THIRD, note: 'x' }, null, m],
+    ['GUARD   the sender writes the record about themselves (#227)', 'DENY', 'DENY',
+      THIRD, path, 'create', { at: REQ_TIME, sender: THIRD }, null, notAdmin(THIRD)],
+  ];
+}
+
+// 2026-09-24 fix-all, group A. Fixtures kept inside the function, like groupCases.
+function fixAllCases() {
+  const NEW = 'uidNew';
+  const m = [ME, ADMIN, THIRD, NEW].flatMap(notAdmin);
+  const lim = (name) => `${D}/users/${ME}/limits/${name}`;
+  const noConfig = { function: 'exists', args: [{ exactValue: `${D}/config/limits` }], result: { value: false } };
+  const counter = (name, count) => ([
+    { function: 'exists', args: [{ exactValue: lim(name) }], result: { value: true } },
+    { function: 'get', args: [{ exactValue: lim(name) }],
+      result: { value: { data: { windowStart: iso(now - 3600e3), count } } } },
+    noConfig,
+  ]);
+  const meProfile = [
+    { function: 'exists', args: [{ exactValue: `${D}/users/${ME}` }], result: { value: true } },
+    { function: 'get', args: [{ exactValue: `${D}/users/${ME}` }], result: { value: { data: { banned: false } } } },
+  ];
+  const glowPath = `${D}/glows/${ME}_${THIRD}`;
+  const glow = { from: ME, to: THIRD, createdAt: REQ_TIME };
+  const report = { reporterUid: ME, reportedUid: THIRD, cid: PAIR, reason: 'user', createdAt: now, handled: false };
+  const pair = { users: [ME, THIRD], unreadCount: { [ME]: 0, [THIRD]: 0 }, lastMessage: 'hi', lastSender: THIRD };
+  // A pending request THIRD opened a moment ago, nothing sent yet.
+  const crossed = { users: [ME, THIRD], startedBy: THIRD, accepted: false, lastSender: '',
+    unreadCount: { [ME]: 0, [THIRD]: 0 }, names: { [ME]: 'Me', [THIRD]: 'Third' } };
+  const crossMocks = (messages) => ([
+    ...m,
+    { function: 'exists', args: [{ exactValue: `${D}/users/${THIRD}` }], result: { value: true } },
+    { function: 'get', args: [{ exactValue: `${D}/users/${THIRD}` }], result: { value: { data: { privacy: { messages } } } } },
+    { function: 'exists', args: [{ exactValue: `${D}/requestDeclines/${THIRD}/from/${ME}` }], result: { value: false } },
+  ]);
+  const until = now + 3600e3;
+  const restricted = (flags, over = {}) => ({ ...group, restrictedFlags: { [ME]: flags }, restrictedUntil: { [ME]: until }, ...over });
+  const send = (data, flags) => [ME, `${convPath}/messages/m9`, 'create', { authorId: ME, createdAt: REQ_TIME, ...data }, null,
+    [...m, ...convGet(restricted(flags))]];
+  const big30 = Array.from({ length: 30 }, (_, i) => (i === 0 ? ME : `uidM${i}`));
+  const g30 = { ...group, users: big30, admins: [big30[1]], createdBy: big30[1],
+    unreadCount: Object.fromEntries(big30.map((u) => [u, 0])) };
+  const noPins = { ...group }; delete noPins.pinnedMessageIds;
+  const canAdd = { ...group, membersCanAdd: true };
+  const added = { ...canAdd, users: [...group.users, NEW], names: { [NEW]: 'New' },
+    unreadCount: { ...group.unreadCount, [NEW]: 0 }, updatedAt: REQ_TIME };
+  return [
+    // #12 retry after a lost answer: create judged as update
+    ['FIX     retried window-open on the requests counter', 'DENY', 'ALLOW',
+      ME, lim('requests'), 'update', { windowStart: REQ_TIME, count: 1 }, { windowStart: iso(now - 5000), count: 1 }, m],
+    ['GUARD   a spent counter cannot be reopened inside its window', 'DENY', 'DENY',
+      ME, lim('requests'), 'update', { windowStart: REQ_TIME, count: 1 }, { windowStart: iso(now - 3600e3), count: 20 }, m],
+    ['FIX     retried glow (same edge, fresh stamp, a minute later)', 'DENY', 'ALLOW',
+      ME, glowPath, 'update', glow, { ...glow, createdAt: iso(now - 60e3) }, m],
+    ['GUARD   a day-old glow is re-stamped to the top', 'DENY', 'DENY',
+      ME, glowPath, 'update', glow, { ...glow, createdAt: iso(now - 86400e3) }, m],
+    ['GUARD   the receiver re-stamps a glow', 'DENY', 'DENY',
+      THIRD, glowPath, 'update', glow, { ...glow, createdAt: iso(now - 60e3) }, m],
+    ['OK      a retried read-shard +1 lands as an update', 'ALLOW', 'ALLOW',
+      ME, `${D}/announcements/b1/readShards/42`, 'update', { count: 2 }, { count: 1 }, m],
+
+    // #31 daily limits on reports and glows
+    ['OK      a glow under the day limit', 'ALLOW', 'ALLOW',
+      ME, glowPath, 'create', glow, null, [...m, ...meProfile, ...counter('glows', 5)]],
+    ['ATTACK  the 201st glow of the day', 'ALLOW', 'DENY',
+      ME, glowPath, 'create', glow, null, [...m, ...meProfile, ...counter('glows', 200)]],
+    ['OK      a report under the day limit', 'ALLOW', 'ALLOW',
+      ME, `${D}/reports/r1`, 'create', report, null, [...m, ...counter('reports', 3)]],
+    ['ATTACK  the 51st report of the day', 'ALLOW', 'DENY',
+      ME, `${D}/reports/r1`, 'create', report, null, [...m, ...counter('reports', 50)]],
+
+    // #11 a conversation deleted mid-flight reads as empty, not as an error
+    ['GUARD   a message of a deleted conversation is refused cleanly', 'DENY', 'DENY',
+      ME, msgPath, 'get', null, msg,
+      [...m, { function: 'exists', args: [{ exactValue: convPath }], result: { value: false } }]],
+
+    // #8 unreadCount values
+    ['OK      1:1 send bumps the other badge by one', 'ALLOW', 'ALLOW',
+      ME, pairPath, 'update', { ...pair, lastSender: ME, unreadCount: { [ME]: 0, [THIRD]: 1 } }, pair, m],
+    ['OK      I mark my own chat unread (-1)', 'ALLOW', 'ALLOW',
+      ME, pairPath, 'update', { ...pair, unreadCount: { [ME]: -1, [THIRD]: 0 } }, pair, m],
+    ['ATTACK  1:1 member sets the other badge to 500', 'ALLOW', 'DENY',
+      ME, pairPath, 'update', { ...pair, unreadCount: { [ME]: 0, [THIRD]: 500 } }, pair, m],
+    // Groups are checked by shape, not per key (the engine's 1,000-expression ceiling, see the rule).
+    ['ATTACK  group member sets ADMIN\'s badge to 999 without sending', 'ALLOW', 'DENY',
+      ME, convPath, 'update', { ...group, updatedAt: REQ_TIME, unreadCount: { [ME]: 0, [ADMIN]: 999, [THIRD]: 0 } }, group, m],
+    ['ATTACK  group member wipes THIRD\'s badge', 'ALLOW', 'DENY',
+      ME, convPath, 'update', { ...group, unreadCount: { [ME]: 0, [ADMIN]: 0, [THIRD]: 0 } },
+      { ...group, unreadCount: { [ME]: 0, [ADMIN]: 0, [THIRD]: 5 } }, m],
+    ['OK      a send in a 30-member group bumps 29 badges', 'ALLOW', 'ALLOW',
+      ME, convPath, 'update',
+      { ...g30, lastSender: ME, lastMessage: 'enc', updatedAt: REQ_TIME, unreadCount: Object.fromEntries(big30.map((u) => [u, u === ME ? 0 : 1])) },
+      g30, m],
+    ['OK      admin re-adds a removed member with an old badge (back to 0)', 'ALLOW', 'ALLOW',
+      ADMIN, convPath, 'update', { ...group, users: [...group.users, NEW], unreadCount: { ...group.unreadCount, [NEW]: 0 } },
+      { ...group, unreadCount: { ...group.unreadCount, [NEW]: 7 } }, m],
+    ['OK      a group is created with every badge at 0', 'ALLOW', 'ALLOW',
+      ME, `${D}/conversations/grpNew`, 'create', { ...group, admins: [ME], createdBy: ME, unreadCount: { [ME]: 0, [ADMIN]: 0, [THIRD]: 0 } }, null, m],
+    ['ATTACK  a group is created with THIRD\'s badge at 50', 'ALLOW', 'DENY',
+      ME, `${D}/conversations/grpNew`, 'create', { ...group, admins: [ME], createdBy: ME, unreadCount: { [ME]: 0, [ADMIN]: 0, [THIRD]: 50 } }, null, m],
+
+    // #13 two strangers open the same 1:1 at once
+    ['FIX     the second opener\'s create lands as an update', 'DENY', 'ALLOW',
+      ME, pairPath, 'update', { ...crossed, startedBy: ME, updatedAt: REQ_TIME }, crossed, crossMocks('everyone')],
+    ['GUARD   ...not once THIRD\'s request message is sent', 'DENY', 'DENY',
+      ME, pairPath, 'update', { ...crossed, lastSender: THIRD, startedBy: ME }, { ...crossed, lastSender: THIRD }, crossMocks('everyone')],
+    ['GUARD   ...not past THIRD\'s My Friends setting', 'DENY', 'DENY',
+      ME, pairPath, 'update', { ...crossed, startedBy: ME, updatedAt: REQ_TIME }, crossed, crossMocks('contacts')],
+
+    // #14 unpin no-ops
+    ['FIX     member unpin on a chat with no pin list (arrayRemove makes it empty)', 'DENY', 'ALLOW',
+      ME, convPath, 'update', { ...noPins, pinnedMessageIds: [] }, noPins, m],
+    ['OK      member unpins one of two', 'ALLOW', 'ALLOW',
+      ME, convPath, 'update', { ...group, pinnedMessageIds: ['m2'] }, { ...group, pinnedMessageIds: ['m1', 'm2'] }, m],
+    ['GUARD   member pins through the member branch', 'DENY', 'DENY',
+      ME, convPath, 'update', { ...group, pinnedMessageIds: ['m1', 'm3'] }, { ...group, pinnedMessageIds: ['m1'] }, m],
+
+    // #112 restriction flags beyond sendText
+    ['OK      media-restricted member sends a text', 'ALLOW', 'ALLOW', ...send({ text: 'enc1:x' }, ['sendMedia'])],
+    ['ATTACK  media-restricted member sends a photo', 'ALLOW', 'DENY',
+      ...send({ type: 'image', text: '', imageUrl: 'https://x/y' }, ['sendMedia'])],
+    ['ATTACK  media-restricted member sends a link card', 'ALLOW', 'DENY',
+      ...send({ text: 'enc1:x', linkPreview: { u: 'enc' } }, ['sendMedia'])],
+    ['ATTACK  voice-restricted member sends a voice note', 'ALLOW', 'DENY',
+      ...send({ type: 'audio', text: '', audioUrl: 'https://x/y' }, ['sendVoice'])],
+    ['ATTACK  sticker-restricted member sends a sticker', 'ALLOW', 'DENY',
+      ...send({ type: 'gif', text: '', imageUrl: 'sticker://pack/1' }, ['sendStickers'])],
+    ['OK      voice-restricted member sends a photo', 'ALLOW', 'ALLOW',
+      ...send({ type: 'image', text: '', imageUrl: 'https://x/y' }, ['sendVoice'])],
+    ['ATTACK  reaction-restricted member reacts', 'ALLOW', 'DENY',
+      ME, msgPath, 'update', { ...msg, reactions: { [THIRD]: 'r3', [ME]: 'r1' } }, msg,
+      [...m, ...convGet(restricted(['sendReactions']))]],
+    ['OK      reaction-restricted member takes their reaction back', 'ALLOW', 'ALLOW',
+      ME, msgPath, 'update', { ...msg, reactions: { [THIRD]: 'r3' } }, { ...msg, reactions: { [THIRD]: 'r3', [ME]: 'r1' } },
+      [...m, ...convGet(restricted(['sendReactions']))]],
+    ['ATTACK  add-restricted member adds through membersCanAdd', 'ALLOW', 'DENY',
+      ME, convPath, 'update', { ...added, restrictedFlags: { [ME]: ['addMembers'] }, restrictedUntil: { [ME]: until } },
+      { ...canAdd, restrictedFlags: { [ME]: ['addMembers'] }, restrictedUntil: { [ME]: until } }, m],
+    ['ATTACK  info-restricted member renames through membersCanEditInfo', 'ALLOW', 'DENY',
+      ME, convPath, 'update', restricted(['changeInfo'], { membersCanEditInfo: true, title: 'X' }),
+      restricted(['changeInfo'], { membersCanEditInfo: true }), m],
+
+    // #2 addGroupMembers: add + "X added Y" preview in one write
+    ['OK      member adds through membersCanAdd (no notice)', 'ALLOW', 'ALLOW', ME, convPath, 'update', added, canAdd, m],
+    ['FIX     member adds with the "X added Y" preview in the same write', 'DENY', 'ALLOW',
+      ME, convPath, 'update', { ...added, lastMessage: 'Me added New', lastSender: ME }, canAdd, m],
+    ['GUARD   member adds and writes a preview in THIRD\'s name', 'DENY', 'DENY',
+      ME, convPath, 'update', { ...added, lastMessage: 'Third says hi', lastSender: THIRD }, canAdd, m],
+  ];
+}
 
 // 2026-09-24 decision D-composer-3.
 function composerCases() {

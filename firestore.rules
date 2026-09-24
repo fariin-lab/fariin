@@ -541,7 +541,9 @@ service cloud.firestore {
         function windowLength() {
           // `requests` is the day's knocks on strangers (owner's spec, 2026-09-11 §25), read by
           // the message rule the way `storiesDaily` is read by the story rule.
-          return (name == 'storiesDaily' || name == 'requests') ? duration.value(24, 'h') : duration.value(1, 'h');
+          // 2026-09-24 fix-all: `reports` and `glows` are day counters too, read by those two rules.
+          return (name == 'storiesDaily' || name == 'requests' || name == 'reports' || name == 'glows')
+            ? duration.value(24, 'h') : duration.value(1, 'h');
         }
         // ⛔ `storiesActive` IS THE SERVER'S AND NO CLIENT MAY TOUCH IT. It is not a window counter
         // like the two below — it is how many of this account's stories are alive right now, kept by
@@ -566,6 +568,14 @@ service cloud.firestore {
                || (request.resource.data.windowStart == request.time
                    && request.resource.data.count == 1
                    && resource.data.windowStart < request.time - windowLength())
+               // 2026-09-24 fix-all: a RETRIED window-opening write. When the first `setData` landed
+               // but its answer was lost, the SDK sends it again and the database now judges it as an
+               // update, which neither shape above accepts (the window is fresh, the count already 1).
+               // Re-opening at a count of 1 over a count of 1 gains nothing: the count stays 1 and
+               // the window only moves later, which is the stricter direction.
+               || (request.resource.data.windowStart == request.time
+                   && request.resource.data.count == 1
+                   && resource.data.count == 1)
              );
         allow delete: if false;
       }
@@ -764,7 +774,10 @@ service cloud.firestore {
       allow create, update: if signedIn()
         && request.auth.uid == recipient
         && sender != recipient
-        && request.resource.data.keys().hasOnly(['at'])
+        // 2026-09-24 fix-all #227: optional `sender`, and only ever the id's own sender, so the
+        // account purge can query these by the declined person. Older builds still write `at` alone.
+        && request.resource.data.keys().hasOnly(['at', 'sender'])
+        && request.resource.data.get('sender', sender) == sender
         && request.resource.data.at == request.time;
       // Taking it back early is the recipient's to do: it only ever lets somebody knock sooner.
       allow delete: if signedIn() && request.auth.uid == recipient;
@@ -780,7 +793,18 @@ service cloud.firestore {
     // field must be themselves. No client can read, edit, or delete reports — the
     // operator reviews them in the Firebase console and acts within 24 hours.
     match /reports/{reportId} {
-      allow create: if signedIn() && request.auth.uid == request.resource.data.reporterUid;
+      allow create: if signedIn() && request.auth.uid == request.resource.data.reporterUid
+        // 2026-09-24 fix-all: a day's reports, on the counter pattern `requests` uses
+        // (`users/{me}/limits/reports`, bumped by the app after each report, 24h window). 50 a day,
+        // or `reports_per_day_default` in `config/limits`. Fails open on a missing counter, the same
+        // terms as every other limit here.
+        && (
+             !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/reports)
+             || get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/reports).data
+                  .get('windowStart', request.time) < request.time - duration.value(24, 'h')
+             || get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/reports).data
+                  .get('count', 0) < appLimit('reports_per_day_default', 50)
+           );
       // Readable by moderators, and by nobody else - a report names the person who filed it, and a
       // reported user being able to look up who reported them is how reporting stops being used.
       allow read: if adminCan('moderate');
@@ -836,9 +860,31 @@ service cloud.firestore {
         // `windowStart == request.time` on the rate counter above, and the same reasoning: a field
         // the client chooses is a field the client can invent.
         && request.resource.data.createdAt == request.time
-        && !isBanned();
+        && !isBanned()
+        // 2026-09-24 fix-all: a day's glows, on the counter pattern `requests` uses
+        // (`users/{me}/limits/glows`, bumped by the app after each glow, 24h window). 200 a day, or
+        // `glows_per_day_default` in `config/limits`. A person does not start following hundreds of
+        // people a day; a script does. Fails open on a missing counter, like every limit here.
+        && (
+             !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/glows)
+             || get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/glows).data
+                  .get('windowStart', request.time) < request.time - duration.value(24, 'h')
+             || get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/glows).data
+                  .get('count', 0) < appLimit('glows_per_day_default', 200)
+           );
       // No update: a glow has nothing to edit. Give again after a remove is a fresh create.
-      allow update: if false;
+      // 2026-09-24 fix-all: ...except the SAME glow sent twice. A create whose answer was lost is
+      // retried by the SDK and judged as an update once the first copy exists, and `if false` refused
+      // a glow that had in fact landed. The retry may only restate the same edge with a fresh server
+      // stamp, and only within ten minutes of the first, so it cannot be used to keep a glow at the
+      // top of somebody's notifications.
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.from
+        && request.resource.data.from == resource.data.from
+        && request.resource.data.to == resource.data.to
+        && request.resource.data.keys().hasOnly(['from', 'to', 'createdAt'])
+        && request.resource.data.createdAt == request.time
+        && resource.data.createdAt > request.time - duration.value(10, 'm');
       // EITHER END may sever the edge: the giver taking it back, or the receiver removing a glower
       // from their own list — his requirement that a relationship change is handleable from both
       // sides.
@@ -1053,8 +1099,14 @@ service cloud.firestore {
 
     // A conversation belongs to exactly two users.
     match /conversations/{cid} {
+      // 2026-09-24 fix-all: GUARDED BY exists(), the file's own idiom. A bare `get` of a conversation
+      // deleted mid-flight (a declined request while a queued send or an open listener is still on
+      // its messages) ERRORED instead of answering. A missing conversation now reads as one with no
+      // members, so every message rule under it is a clean `false`.
       function convData() {
-        return get(/databases/$(database)/documents/conversations/$(cid)).data;
+        return exists(/databases/$(database)/documents/conversations/$(cid))
+          ? get(/databases/$(database)/documents/conversations/$(cid)).data
+          : {'users': []};
       }
       // MESSAGE REQUESTS (owner spec, 2026-08-04). Two fields carry the whole thing: `startedBy`
       // marks a conversation as belonging to the request era at all, and `accepted` says whether the
@@ -1154,6 +1206,73 @@ service cloud.firestore {
       function otherExistingMember() {
         return resource.data.users[0] == request.auth.uid ? resource.data.users[1] : resource.data.users[0];
       }
+      // 2026-09-24 fix-all: TWO STRANGERS OPENING THE SAME 1:1 AT ONCE. The id is the two uids, so
+      // both phones write the same document; one create lands and the other arrives as an update
+      // carrying `startedBy` = its own sender, which the `startedBy` pin refused. Decision: the second
+      // opener's create-shaped write is accepted as if it had won the race, on exactly the terms a
+      // create would have met (the other person's privacy, the decline cooldown), and only while the
+      // request is still unspent on both sides (no message yet). Both people reached for each other;
+      // who is on record as asking first is not worth a refused chat.
+      function isCrossedOpen() {
+        return resource.data.get('type', '') != 'group'
+          && isRequestPending()
+          && resource.data.get('startedBy', '') == otherExistingMember()
+          && resource.data.get('lastSender', '') == ''
+          && request.resource.data.get('startedBy', '') == request.auth.uid
+          && request.resource.data.get('accepted', true) == false
+          && request.resource.data.get('lastSender', '') == ''
+          && acceptsFromStrangers(otherExistingMember())
+          && !declinedRecently(otherExistingMember());
+      }
+      // 2026-09-24 fix-all: IS THE CALLER UNDER A LIVE RESTRICTION `flag` in the conversation data
+      // `d`. The client's model (`Conversation.Restrict`, `activeRestrictions`): admins and the owner
+      // are never restricted, and a restriction ends when `restrictedUntil` passes.
+      function restrictedIn(d, flag) {
+        return !(request.auth.uid in d.get('admins', []))
+          && request.auth.uid != d.get('createdBy', '')
+          && flag in d.get('restrictedFlags', {}).get(request.auth.uid, [])
+          && d.get('restrictedUntil', {}).get(request.auth.uid, 0) > request.time.toMillis();
+      }
+      // 2026-09-24 fix-all: WHAT A WRITE MAY DO TO `unreadCount`. It is the one per-member map the
+      // sender legitimately writes on OTHER people's keys, so it could not join the own-key pin, and
+      // it had no check at all: any member could set anyone's badge to any number. Every client write
+      // was checked: another member's key only ever goes up by exactly one (a send's increment), or
+      // is seeded at 0 for someone who was not a member before (create, add members); my own key may
+      // be anything numeric (read resets it, Mark as Unread's old -1). A key may be removed only by
+      // its owner, or with its member leaving the list.
+      //
+      // ⚠️ EXACT FOR A 1:1, STRUCTURAL FOR A GROUP. Rules have no loops, and walking a 30-member list
+      // key by key was measured against the rules test service: it runs out of the engine's 1,000
+      // evaluated expressions per request at 15 members, which would have refused every send in a
+      // bigger group. So a group gets what is affordable: another member's badge moves only in a
+      // write that is a send by me (`lastSender` = me, `updatedAt` stamped) or grows the member
+      // list. That closes "set somebody's badge without sending anything"; the size of the number
+      // inside a send in a group stays unchecked. At CREATE every badge is 0 or 1, exactly, cheaply.
+      // Cheapest test first: a send's +1 is by far the most common write.
+      function unreadKeyOk(n, o, oldUsers, k) {
+        return (k in n)
+          ? (n[k] == o.get(k, 0) + 1
+             || (k in o && n[k] == o[k])
+             || (k == request.auth.uid && n[k] is int)
+             || (n[k] == 0 && (!(k in o) || !(k in oldUsers))))
+          : (!(k in o) || k == request.auth.uid);
+      }
+      function unreadUpdateOk() {
+        let n = request.resource.data.get('unreadCount', {});
+        let o = resource.data.get('unreadCount', {});
+        let keys = request.resource.data.diff(resource.data).affectedKeys();
+        return !('unreadCount' in keys)
+          || (resource.data.get('type', '') != 'group' && resource.data.users.size() == 2
+              ? (unreadKeyOk(n, o, resource.data.users, resource.data.users[0])
+                 && unreadKeyOk(n, o, resource.data.users, resource.data.users[1]))
+              : (n.diff(o).affectedKeys().hasOnly([request.auth.uid])
+                 || (request.resource.data.get('lastSender', '') == request.auth.uid && 'updatedAt' in keys)
+                 || request.resource.data.users.size() > resource.data.users.size()));
+      }
+      function unreadCreateOk() {
+        return !('unreadCount' in request.resource.data)
+          || request.resource.data.unreadCount.values().hasOnly([0, 1]);
+      }
       // REMOVE FRIEND — owner's spec, 2026-09-11 §23. Direct access is taken back by putting the
       // conversation back where it started: pending, with the OTHER person as the one who has to
       // ask, and their one message unspent. The history stays; nothing is deleted. They are then
@@ -1213,6 +1332,7 @@ service cloud.firestore {
       // creator must be in its admins list.
       allow create: if signedIn()
         && request.auth.uid in request.resource.data.users
+        && unreadCreateOk()   // 2026-09-24 fix-all: others' badges are born at 0 (or 1 with a first send)
         && (
           // THE GROUP BRANCH GOES FIRST, on purpose. A two-member group also satisfies `size() == 2`,
           // and evaluating the 1:1 branch would send it through a privacy lookup it has no business
@@ -1325,6 +1445,7 @@ service cloud.firestore {
       //   • a member is removing ONLY THEMSELVES (leaving the group).
       // The set-equal branch preserves the original 1:1 behaviour exactly.
       allow update: if signedIn() && request.auth.uid in resource.data.users
+        && unreadUpdateOk()   // 2026-09-24 fix-all: badge values checked on every branch (see unreadKeyOk)
         && (
           // 1:1 ONLY (not a 2-member group): members unchanged as a SET, any field.
           (
@@ -1374,7 +1495,8 @@ service cloud.firestore {
                )
             && (resource.data.get('startedBy', '') == ''
                 || request.resource.data.get('startedBy', '') == resource.data.startedBy
-                || isUnfriend())
+                || isUnfriend()
+                || isCrossedOpen())   // 2026-09-24 fix-all: the second of two simultaneous openers
             // The other member cannot rewrite YOUR block, mute, clear or read state. See above.
             && privateMapsUntouched()
           )
@@ -1451,9 +1573,12 @@ service cloud.firestore {
             // the unpinned message is not checkable here; the boundary is subset-and-smaller
             // instead: the new list must be contained in the old and strictly shorter, so nothing
             // can ever be pinned through this branch. Pinning stays admin-only, as the UI promises.
+            // 2026-09-24 fix-all: SUBSET ONLY, no longer "and strictly shorter". Two devices unpinning
+            // at once, or an unpin on a chat whose list was never written (the `arrayRemove` then
+            // creates it empty), changed nothing, and the strict test refused that no-op. A subset
+            // still can never pin anything.
             && (!('pinnedMessageIds' in request.resource.data.diff(resource.data).affectedKeys())
-                || (resource.data.get('pinnedMessageIds', []).hasAll(request.resource.data.get('pinnedMessageIds', []))
-                    && request.resource.data.get('pinnedMessageIds', []).size() < resource.data.get('pinnedMessageIds', []).size()))
+                || resource.data.get('pinnedMessageIds', []).hasAll(request.resource.data.get('pinnedMessageIds', [])))
           )
           // Group NON-admin may EDIT INFO only when the admin enabled membersCanEditInfo.
           || (
@@ -1462,6 +1587,7 @@ service cloud.firestore {
             && request.resource.data.users.hasAll(resource.data.users)
             && resource.data.users.hasAll(request.resource.data.users)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'avatarUrl', 'desc', 'updatedAt'])
+            && !restrictedIn(resource.data, 'changeInfo')   // 2026-09-24 fix-all: the per-member flag
           )
           // Group NON-admin may ADD members (only additions, max 30) when membersCanAdd is on.
           || (
@@ -1470,7 +1596,13 @@ service cloud.firestore {
             && request.resource.data.users.hasAll(resource.data.users)
             && request.resource.data.users.size() > resource.data.users.size()
             && request.resource.data.users.size() <= 30
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['users', 'names', 'photos', 'unreadCount', 'updatedAt'])
+            // 2026-09-24 fix-all: plus the "X added Y" preview (`lastMessage`, `lastSender` = me), which
+            // `addGroupMembers` now writes in the same batch as the add, so the two cannot disagree.
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['users', 'names', 'photos', 'unreadCount', 'updatedAt',
+                 'lastMessage', 'lastSender'])
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage', 'lastSender'])
+                || request.resource.data.get('lastSender', '') == request.auth.uid)
+            && !restrictedIn(resource.data, 'addMembers')   // 2026-09-24 fix-all: the per-member flag
           )
           // Any group member may remove ONLY themselves (leave).
           //
@@ -1656,18 +1788,24 @@ service cloud.firestore {
                        )
                   )
              )
-          // Restricted member (Telegram-style timed mute): a member whose restrictedFlags contains
+          // Restricted member (the reference app's timed mute): a member whose restrictedFlags contains
           // 'sendText' with restrictedUntil still in the future cannot create ANY message. Admins and
           // the owner are ALWAYS exempt in-rule (so a rogue admin can't grief a co-admin/owner by
           // writing a restriction for them). Auto-lifts when the timeout passes.
-          && (
-               request.auth.uid in convData().get('admins', [])
-               || request.auth.uid == convData().get('createdBy', '')
-               || !(
-                    'sendText' in convData().get('restrictedFlags', {}).get(request.auth.uid, [])
-                    && convData().get('restrictedUntil', {}).get(request.auth.uid, 0) > request.time.toMillis()
-                  )
-             );
+          && !restrictedIn(convData(), 'sendText')
+          // 2026-09-24 fix-all: THE OTHER SEND FLAGS, one per kind of message, as the client's
+          // `Conversation.Restrict` names them. Only `sendText` was ever checked, so a single-flag
+          // restriction (media only, say) did nothing on the server. What the server can see:
+          //   photo, album, video, file, and a text carrying a link card → sendMedia
+          //   voice note (`audio`)                                        → sendVoice
+          //   sticker or GIF (`gif`, both ride the one send path)         → sendStickers
+          // Polls, locations and contacts are sealed inside the text, so the server cannot tell them
+          // from a text; `sendText` covers them, and the client gates `sendPolls` itself.
+          && (!(request.resource.data.get('type', '') in ['image', 'album', 'video', 'file']
+                || 'linkPreview' in request.resource.data)
+              || !restrictedIn(convData(), 'sendMedia'))
+          && (request.resource.data.get('type', '') != 'audio' || !restrictedIn(convData(), 'sendVoice'))
+          && (request.resource.data.get('type', '') != 'gif' || !restrictedIn(convData(), 'sendStickers'));
         // Participants may edit reactions; the AUTHOR may also edit their own text, and rewrite their
         // own album array (deleting ONE album item for everyone = removing it from the album; the
         // client deletes the whole message when the last item goes).
@@ -1681,7 +1819,11 @@ service cloud.firestore {
           && request.auth.uid in convData().users
           && (
             (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
-             && ownKeyOnly('reactions'))
+             && ownKeyOnly('reactions')
+             // 2026-09-24 fix-all: `sendReactions` restricts ADDING or changing a reaction; taking my
+             // own back stays allowed.
+             && (!(request.auth.uid in request.resource.data.get('reactions', {}))
+                 || !restrictedIn(convData(), 'sendReactions')))
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited'])
                 && textWithinCap())   // 2026-09-24 decision D-composer-3: an edit has the same ceiling
