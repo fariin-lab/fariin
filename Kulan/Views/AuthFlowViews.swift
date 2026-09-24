@@ -266,8 +266,12 @@ struct AuthMethodView: View {
                         run { try await AuthService.shared.completeApple(authorization: auth,
                                                                          requireExistingAccount: mode == .login,
                                                                          requireNewAccount: mode == .create) }
-                    case .failure:
-                        break   // user cancelled the sheet — not an error worth showing
+                    case .failure(let e):
+                        // A cancel says nothing. Every OTHER failure also said nothing (audit
+                        // 2026-09-24): the sheet closed and the page sat there as if never tapped.
+                        if !AuthService.isCancellation(e) {
+                            error = AuthFlowError.appleFailed.errorDescription
+                        }
                     }
                 }
                 // SOLID FILL, NOT `.whiteOutline`. The outline style draws a 1pt border on the button's
@@ -293,6 +297,8 @@ struct AuthMethodView: View {
                 .frame(height: 50)              // matches authDoorPill exactly
                 .clipShape(Capsule())
                 .lastUsedBadge(lastDoor == .apple)
+                // Same lock as Google below (audit 2026-09-24): this one was tappable mid sign-in.
+                .disabled(busy)
 
                 Button {
                     run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login,
@@ -313,6 +319,9 @@ struct AuthMethodView: View {
                         .authDoorPill()
                         .lastUsedBadge(lastDoor == .email)
                 }
+                // And the email door: pushing it mid Google sign-in left that sign-in finishing
+                // behind the email page and calling onAuthed from a screen no longer in front.
+                .disabled(busy)
 
                 if busy { ProgressView().padding(.top, 6) }
                 if let error {
@@ -358,6 +367,10 @@ struct AuthMethodView: View {
     }
 
     private func run(_ op: @escaping () async throws -> Void) {
+        // One sign-in at a time (audit 2026-09-24). Only the Google button was disabled while busy,
+        // so the Apple sheet could be finished on top of a Google sign-in still in flight, and two
+        // credentials raced to sign in on the same screen.
+        guard !busy else { return }
         // Refuse OFFLINE up front, before any sheet opens (user reference: "Network connection
         // issue"). Without this, an offline Continue-with-Google opened the web sign-in straight
         // into Safari's own connection-error page — the worst possible way to learn you are offline.
@@ -676,6 +689,10 @@ struct EmailAuthView: View {
     }
 
     private func submit() {
+        // The keyboard's return key calls this too (audit 2026-09-24). The button is disabled while
+        // busy but the return key was not, so a second press sent a second createUser / signIn while
+        // the first was still running; on sign-up the second one came back "already has an account".
+        guard !busy else { return }
         // Same early offline refusal as the social doors — say it plainly before trying.
         guard NetworkState.shared.isOnline else {
             error = "No internet connection. Check your connection and try again."

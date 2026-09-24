@@ -154,7 +154,11 @@ struct DisconnectSignInView: View {
                     working = false
                     // A cancelled provider sheet is not a failure and must not be dressed as one.
                     if AuthService.isCancellation(error) { return }
-                    self.error = error.localizedDescription
+                    // Through the shared table, same wording Delete Account uses (audit 2026-09-24).
+                    // The raw text put Firebase's "The supplied auth credential is malformed or has
+                    // expired" on screen for a mistyped password.
+                    self.error = AuthService.plainMessage(error,
+                                                          credentialHint: "That password is not right.")
                 }
             }
         }

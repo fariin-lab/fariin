@@ -44,6 +44,10 @@ enum SessionWipe {
         GlowStoriesCache.clear()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         ProfileStore.shared.me = nil
+        // The name Apple handed over at the last sign-up (audit 2026-09-24). Nothing cleared it, so
+        // an account that signed up with Apple and left before onboarding had its real name prefilled
+        // into the NEXT account's onboarding on this phone.
+        AuthService.shared.pendingDisplayName = nil
         Drafts.shared.clear()                   // unsent plaintext
         PlayedVoice.shared.clear()
         ContactNames.shared.clear()

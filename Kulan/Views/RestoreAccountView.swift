@@ -121,7 +121,20 @@ struct RestoreAccountView: View {
         .alert("Delete now?", isPresented: $confirmDeleteNow) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                act { try await ProfileStore.shared.deleteAccount(); onDeletedNow() }
+                act {
+                    // Stop watching our own device record first (audit 2026-09-24). deleteAccount
+                    // removes the `devices` records, and a live watcher read that as a remote
+                    // sign-out and showed "This device was signed out from another device".
+                    // `await` because both are main-actor and this closure's isolation is not
+                    // spelled out; on the main actor already it is only a no-op warning.
+                    await DeviceRegistry.shared.stopWatching()
+                    try await ProfileStore.shared.deleteAccount()
+                    // And wipe this phone's copy, as Delete Account and Sign Out both do. This door
+                    // never did, so the next account on the phone inherited the deleted one's cached
+                    // chats, drafts, photos and settings.
+                    await SessionWipe.wipeAccountData()
+                    onDeletedNow()
+                }
             }
         } message: {
             Text("This finishes the deletion straight away instead of waiting until \(dueText). It cannot be undone.")
@@ -133,7 +146,8 @@ struct RestoreAccountView: View {
         Task {
             do { try await work() }
             catch {
-                self.error = error.localizedDescription
+                // Plain words, not Firebase's raw text (audit 2026-09-24).
+                self.error = AuthService.plainMessage(error)
             }
             working = false
         }

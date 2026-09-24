@@ -20,11 +20,25 @@ struct TwoStepVerificationView: View {
     @State private var error: String?
     @State private var setting = false
     @State private var confirmingOff = false
+    /// True once the server has answered at least once; until then `enabled` means nothing.
+    @State private var loadedOnce = false
 
     var body: some View {
         Group {
             if loading {
                 ProgressView().controlSize(.large)
+            } else if !loadedOnce {
+                // THE STATUS NEVER ARRIVED (audit 2026-09-24). A failed first load fell through to
+                // the intro, so an account WITH two-step on was told it was off and offered "Set
+                // Additional Password". Say it failed and let them ask again instead.
+                ContentUnavailableView {
+                    Label("Two-step verification", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error ?? "Something went wrong. Try again.")
+                } actions: {
+                    Button("Try Again") { Task { await load() } }
+                        .buttonStyle(.borderedProminent)
+                }
             } else if enabled {
                 onState
             } else {
@@ -130,6 +144,7 @@ struct TwoStepVerificationView: View {
             enabled = d["enabled"] as? Bool ?? false
             hint = d["hint"] as? String ?? ""
             maskedRecovery = d["recoveryEmail"] as? String ?? ""
+            loadedOnce = true
             error = nil
         } catch {
             self.error = error.localizedDescription

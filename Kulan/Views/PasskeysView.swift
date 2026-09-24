@@ -275,7 +275,11 @@ struct PasskeysView: View {
     }
 
     private func remove(_ row: Row) async {
+        // The swipe's Remove is not covered by `.disabled(working)` (audit 2026-09-24), so a second
+        // swipe during a slow delete sent a second delete, and one during an Add raced its reload.
+        guard !working else { return }
         working = true
+        error = nil
         defer { working = false }
         do {
             try await AccountCall.run("deletePasskey", ["id": row.id])
