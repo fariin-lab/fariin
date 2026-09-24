@@ -113,7 +113,7 @@ actor LinkPreviewService {
     // (twitter:* and <title> as fallbacks). Bounded: https only, 8s timeout, image capped at 3 MB and
     // downscaled to ≤800px before it ever touches a message.
     private static func fetch(_ url: URL) async -> LinkDraft? {
-        guard url.scheme == "https" else { return nil }
+        guard url.scheme == "https", !isPrivateHost(url) else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
         req.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
@@ -134,7 +134,8 @@ actor LinkPreviewService {
 
         var image: UIImage?
         if let raw = metaContent(html, property: "og:image") ?? metaContent(html, property: "twitter:image"),
-           let imgUrl = URL(string: raw, relativeTo: url)?.absoluteURL, imgUrl.scheme == "https" {
+           let imgUrl = URL(string: raw, relativeTo: url)?.absoluteURL, imgUrl.scheme == "https",
+           !isPrivateHost(imgUrl) {   // 2026-09-24 decision D-composer-6: a page cannot aim us inward
             image = await fetchImage(imgUrl, pageURL: url)
         }
         return LinkDraft(url: url, title: decodeEntities(title), desc: decodeEntities(desc), image: image)
@@ -146,6 +147,41 @@ actor LinkPreviewService {
     /// ships a browser UA for exactly this reason.
     private static let browserUA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+
+    /// 2026-09-24 decision D-composer-6: no preview fetch to this phone's own network. A link (or a
+    /// page's og:image) naming localhost, a private, loopback, link-local or carrier-shared address
+    /// would otherwise make the sender's device call a router or printer on the local network just
+    /// because a message was typed. Only literal hosts are judged; nothing is resolved here.
+    static func isPrivateHost(_ url: URL) -> Bool {
+        guard var host = url.host?.lowercased(), !host.isEmpty else { return true }
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local")
+            || host.hasSuffix(".internal") || host.hasSuffix(".lan") || host.hasSuffix(".home.arpa") {
+            return true
+        }
+        // IPv4 literal (also the tail of an IPv4-mapped IPv6 address, ::ffff:a.b.c.d).
+        let v4 = host.hasPrefix("::ffff:") ? String(host.dropFirst(7)) : host
+        let parts = v4.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.count == 4 {
+            let o = parts.compactMap { Int($0) }
+            if o.count == 4, o.allSatisfy({ (0...255).contains($0) }) {
+                switch (o[0], o[1]) {
+                case (0, _), (10, _), (127, _): return true
+                case (169, 254), (192, 168): return true
+                case (172, 16...31): return true
+                case (100, 64...127): return true   // carrier-grade NAT
+                default: return false
+                }
+            }
+        }
+        // IPv6 literal: loopback, unspecified, link-local fe80::/10, unique-local fc00::/7.
+        if host.contains(":") {
+            if host == "::1" || host == "::" { return true }
+            if host.hasPrefix("fe8") || host.hasPrefix("fe9") || host.hasPrefix("fea") || host.hasPrefix("feb") { return true }
+            if host.hasPrefix("fc") || host.hasPrefix("fd") { return true }
+        }
+        return false
+    }
 
     private static func fetchImage(_ url: URL, pageURL: URL) async -> UIImage? {
         var req = URLRequest(url: url, timeoutInterval: 8)

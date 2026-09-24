@@ -29,6 +29,32 @@ enum SendQueue {
         /// so this only has to remember that the file is waiting and what to send it as.
         var audioDuration: Double? = nil
         var audioWaveform: [Int]? = nil
+        /// 2026-09-24 decision D-composer-2: the server refused this send (a rule said no), so no
+        /// automatic path sends it again. The entry is kept only so the chat can still draw it as a
+        /// failed bubble with Resend / Delete; a Resend re-adds it without this flag.
+        var refused: Bool? = nil
+    }
+
+    /// 2026-09-24 decision D-composer-2: a refusal that waiting cannot fix, told apart from
+    /// "offline". Same wire numbers `StoriesService.isPermanentPostFailure` uses (3 invalidArgument ·
+    /// 7 permissionDenied · 9 failedPrecondition · 16 unauthenticated).
+    static func isPermanentRefusal(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == FirestoreErrorDomain && [3, 7, 9, 16].contains(ns.code)
+    }
+
+    static func isRefused(clientId: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return load()[clientId]?.refused == true
+    }
+
+    /// Keeps the entry but takes it out of every automatic retry (see `Entry.refused`).
+    static func markRefused(clientId: String) {
+        lock.lock(); defer { lock.unlock() }
+        var map = load()
+        guard map[clientId] != nil else { return }
+        map[clientId]?.refused = true
+        save(map)
     }
 
     private static let key = "sendQueue.v1"
@@ -114,7 +140,8 @@ enum SendQueue {
     @MainActor
     static func drainAll() async {
         let open = AppRouter.shared.activeChatId
-        let entries = allPending().filter { $0.cid != open }
+        // 2026-09-24 decision D-composer-2: a refused send is never re-driven automatically.
+        let entries = allPending().filter { $0.cid != open && $0.refused != true }
         for e in entries {
             // The chat may have been opened since this loop started; its own drain then owns it.
             guard beginSending(e.clientId) else { continue }
@@ -142,7 +169,10 @@ enum SendQueue {
                 }
                 remove(clientId: e.clientId)
             } catch {
-                // Still offline / still refused: leave it queued for the next launch.
+                // Still offline: leave it queued for the next launch. 2026-09-24 decision
+                // D-composer-2: a rule refusal is flagged instead, so it stops being retried for ever
+                // and the chat shows it as failed.
+                if isPermanentRefusal(error) { markRefused(clientId: e.clientId) }
             }
         }
     }

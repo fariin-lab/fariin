@@ -274,6 +274,12 @@ final class ChatComposerView: UIView {
         micGlass.addSubview(micGlyph)
         container.contentView.addSubview(micButton)
         textView.delegate = self
+        // 2026-09-24 decision D-composer-5: pasted pictures, not on a text-only request.
+        textView.onPasteImages = { [weak self] imgs in
+            guard let self, !self.shown.textOnly else { return false }
+            self.actions.pasteImages(imgs)
+            return true
+        }
         // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
         // brightness but don't touch the voice recording icon"). The mic is the button people
         // reach for without looking; the stickers are a browse.
@@ -500,6 +506,10 @@ final class ChatComposerView: UIView {
     private func syncText(_ s: ChatComposerState, wasFocused: Bool) {
         if textView.text != s.text {
             textView.text = s.text
+            // 2026-09-24 decision D-composer-5: a mention inserted mid-text keeps the caret after it.
+            if let c = s.caret, c <= (s.text as NSString).length {
+                textView.selectedRange = NSRange(location: c, length: 0)
+            }
             textView.refreshPlaceholder()
         }
         textView.placeholder = s.placeholder
@@ -633,7 +643,9 @@ final class ChatComposerView: UIView {
         // ...and never on a text-only request (`textOnly`): a voice note is not text.
         micButton.alpha = (s.hasText || s.recordLocked || s.editing || s.textOnly) ? 0 : 1
         // The capsule and its glyph fade as one — the glyph is its subview now.
-        micGlass.alpha = (s.hasText || s.recordLocked || s.recordingHeld || s.textOnly) ? 0 : 1
+        // 2026-09-24 decision D-composer-5: `editing` too, as on the button above; the capsule
+        // was left drawn as a dead mic when an edit's text was emptied.
+        micGlass.alpha = (s.hasText || s.recordLocked || s.recordingHeld || s.textOnly || s.editing) ? 0 : 1
         for (_, v) in bannerViews { v.alpha = s.recordingActive ? 0 : 1 }
     }
 
@@ -1169,6 +1181,14 @@ extension ChatComposerView: UITextViewDelegate {
     func textViewDidEndEditing(_ tv: UITextView) {
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(false) }
     }
+
+    // 2026-09-24 decision D-composer-5: the caret, for @mentions typed in the middle of a message.
+    // A turn later for the same reason as the focus reports: `syncText` moves the caret from inside
+    // a SwiftUI update, and a state write there is the "modifying state during view update" warning.
+    func textViewDidChangeSelection(_ tv: UITextView) {
+        let at = tv.selectedRange.location
+        DispatchQueue.main.async { [weak self] in self?.actions.caretChanged(at) }
+    }
 }
 
 extension ChatComposerView: UIGestureRecognizerDelegate {
@@ -1228,6 +1248,31 @@ final class ComposerTextView: UITextView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func refreshPlaceholder() { placeholderLabel.isHidden = !text.isEmpty }
+
+    /// 2026-09-24 decision D-composer-5: a pasted picture goes to the photo approval flow, as in the
+    /// reference app. A stock text view pastes only text, so an image on the clipboard did nothing.
+    /// Returns false when pictures are not accepted here (a first message to a stranger is text only).
+    var onPasteImages: (([UIImage]) -> Bool)?
+
+    /// Pictures win unless the clipboard also carries real text: an image copied from a web page
+    /// comes with its address, which is not what the person meant to paste.
+    private var pastedImages: [UIImage]? {
+        let pb = UIPasteboard.general
+        guard pb.hasImages, let imgs = pb.images, !imgs.isEmpty else { return nil }
+        if let s = pb.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty,
+           URL(string: s)?.scheme == nil { return nil }
+        return imgs
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), onPasteImages != nil, UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        if let imgs = pastedImages, onPasteImages?(imgs) == true { return }
+        super.paste(sender)
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()

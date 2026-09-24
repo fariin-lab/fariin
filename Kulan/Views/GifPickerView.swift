@@ -71,6 +71,7 @@ struct GifPickerView: View {
     let onPick: (GiphyService.Gif) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var picked = false   // 2026-09-24 decision D-composer-5: see `pick`
     @State private var gifs: [GiphyService.Gif] = []
     @State private var searchTask: Task<Void, Never>?   // debounce: don't hit Giphy on every keystroke
     @State private var category: GifCategory = .trending
@@ -249,6 +250,10 @@ struct GifPickerView: View {
 
     // One exit for every pick: remember it for the Recently-used row, hand it over, close.
     private func pick(_ g: GiphyService.Gif) {
+        // 2026-09-24 decision D-composer-5: one send per open, like PollComposerSheet.sent. A second
+        // tap during the dismiss animation sent a second GIF.
+        guard !picked else { return }
+        picked = true
         GifRecents.note(g)
         onPick(g)
         dismiss()

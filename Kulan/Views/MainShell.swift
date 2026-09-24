@@ -1573,6 +1573,10 @@ struct ChatsView: View {
         let q = raw.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else { userHits = []; searchingUsers = false; return }
         searchingUsers = true
+        // 2026-09-24 decision D3: wait 300ms first, as lookupHandle does. `.task(id:)` cancels this on
+        // the next keystroke, so a typed name costs one server lookup instead of one per character.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        if Task.isCancelled { return }
         var found = await ChatService.searchUsers(prefix: q)
         if found.isEmpty, let exact = await ChatService.findByHandle(q) { found = [exact] }
         guard chatSearch.trimmingCharacters(in: .whitespaces) == q else { return }

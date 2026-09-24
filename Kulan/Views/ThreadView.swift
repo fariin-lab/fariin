@@ -54,6 +54,11 @@ struct ThreadView: View {
     @State private var repo: ThreadRepository
     @State private var input = ""
     @State private var mentionMap: [String: String] = [:]   // inserted "@name" -> uid (groups)
+    // 2026-09-24 decision D-composer-5: the composer's caret (UTF-16 offset), so the @mention popup
+    // and insertion follow the cursor, not the end of the text; and where to put the caret after an
+    // insertion, valid only for the exact text it was computed with (never stale on another text).
+    @State private var composerCaret: Int?
+    @State private var caretAfterMention: (text: String, at: Int)?
     @State private var showGroupAdd = false
     @State private var showGroupCall = false
     @State private var groupCallActive = false
@@ -985,6 +990,14 @@ struct ThreadView: View {
             && !keyAccepted
     }
 
+    /// 2026-09-24 decision D-composer-5: the reasons in `canShowComposer` that mean "you cannot send
+    /// here now" (not selection, search or the key notice, which are only a moment).
+    private var sendingClosed: Bool {
+        notAMember || cannotSendAnnouncement || iAmMuted || repo.iBlocked
+            || requestStance == .incoming || requestStance == .awaitingReply
+            || cannotMessageThem || otherAccountDeleted
+    }
+
     @ViewBuilder private var bottomBarContent: some View {
         Group {
             if selecting {
@@ -1378,15 +1391,10 @@ struct ThreadView: View {
                 // location row: the marker is one short string, so the echo lands almost at once,
                 // and this is the same wire the down-arrow uses.
                 nativeScrollTarget = "BOTTOM"
-                Task {
-                    try? await ChatService.sendText(
-                        cid: cid,
-                        text: Message.locationMarkerText(lat: lat, lon: lon, label: label),
-                        group: isGroup ? groupMembers : nil)
-                    // Again once it has actually landed: the first ask moves to today's bottom, and
-                    // the new row is below that.
-                    await MainActor.run { nativeScrollTarget = "BOTTOM" }
-                }
+                // 2026-09-24 decision D-composer-1: now the optimistic row the note above describes
+                // exists (sendMarker), so the glide fires like any text send, and an offline location
+                // is queued and shown as failed instead of vanishing.
+                sendMarker(Message.locationMarkerText(lat: lat, lon: lon, label: label))
             }
         }
         // DELETED HERE: the Share Contact picker sheet, with the attach tile that opened it. Contact
@@ -1396,7 +1404,7 @@ struct ThreadView: View {
         .sheet(isPresented: $showPollComposer) {
             PollComposerSheet { marker in
                 showAttachPanel = false
-                Task { try? await ChatService.sendText(cid: cid, text: marker, group: isGroup ? groupMembers : nil) }
+                sendMarker(marker)   // 2026-09-24 decision D-composer-1: same pipeline as text
             }
         }
         // One picker, one presentation: its own full page, which is what it was before tonight and
@@ -1719,6 +1727,14 @@ struct ThreadView: View {
             guard !UserDefaults.standard.bool(forKey: asked) else { return }
             UserDefaults.standard.set(true, forKey: asked)
             showKeyAsk = true
+        }
+        // 2026-09-24 decision D-composer-5: sending became impossible mid-recording (blocked,
+        // removed, muted, admins-only, account gone): the bar swaps to a notice that has no
+        // recording controls, so the mic kept running with nothing on screen to stop it. The note
+        // could not be sent here anyway, so it is cancelled and the partial discarded.
+        .onChange(of: sendingClosed) { _, closed in
+            guard closed, recordLocked || holdStarted || reviewingNote || recorder.isRecording else { return }
+            cancelRecording()
         }
         // Both retry triggers, as ONE modifier taking two method references — see `RetrySweep`.
         .modifier(RetrySweep(itemCount: repo.items.count,
@@ -3831,14 +3847,19 @@ struct ThreadView: View {
         searchJumpSeq += 1
         let seq = searchJumpSeq
         Task {
-            await repo.ensureLoaded(id)   // page older history in until the match is in the window
+            // 2026-09-24 decision D5: page far enough to reach ANY match the search can return. The
+            // corpus is the newest 1000 messages (loadChat) and a page is 60, so 18 pages covers it;
+            // the default 12 stopped ~720 back and the arrow silently did nothing.
+            await repo.ensureLoaded(id, maxPages: 18)
             await MainActor.run {
                 guard seq == searchJumpSeq else { return }   // a newer jump superseded this one
                 // THE REFERENCE APP'S RESULT NAVIGATION (user spec): jump to the match AND mark the found bubble —
                 // the emphasis stays ~2s so the eye can land on which result was found, then fades
-                // smoothly. flashAndScroll also translates id → rowId (the native list keys by rowId;
-                // a deleted match resolves to no row and gracefully no-ops).
-                flashAndScroll(id)
+                // smoothly. flashAndScroll also translates id → rowId (the native list keys by rowId).
+                // 2026-09-24 decision D5: still out of reach (or deleted meanwhile) says so, in the
+                // wording the other jumps already use, instead of a silent no-op.
+                if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
+                else { showJumpToast("That message isn't available") }
             }
         }
     }
@@ -4488,10 +4509,23 @@ struct ThreadView: View {
 
     // MARK: - @mentions (groups)
 
-    // The "@token" currently being typed at the end of the input, or nil.
+    // The "@token" currently being typed just before the caret, or nil.
+    // 2026-09-24 decision D-composer-5: at the CARET, not the end of the whole text, so a mention
+    // can be added to a message already written. With no caret report yet it is the end, as before.
     private var mentionQuery: String? {
-        guard isGroup, let r = input.range(of: "@[^\\s@]*$", options: .regularExpression) else { return nil }
-        return String(input[r].dropFirst())
+        guard isGroup else { return nil }
+        let head = mentionSplit.head
+        guard let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) else { return nil }
+        return String(head[r].dropFirst())
+    }
+
+    /// The input cut at the caret (2026-09-24 decision D-composer-5). The caret is reported a turn
+    /// late, so it is clamped to the text and rounded to a character boundary.
+    private var mentionSplit: (head: String, tail: String) {
+        let n = input.utf16.count
+        let c = min(max(composerCaret ?? n, 0), n)
+        let i = String.Index(utf16Offset: c, in: input).samePosition(in: input) ?? input.endIndex
+        return (String(input[..<i]), String(input[i...]))
     }
 
     // Members matching the current @query (excluding me).
@@ -4506,8 +4540,15 @@ struct ThreadView: View {
     }
 
     private func insertMention(_ uid: String, _ name: String) {
-        if let r = input.range(of: "@[^\\s@]*$", options: .regularExpression) {
-            input.replaceSubrange(r, with: "@\(name) ")
+        // 2026-09-24 decision D-composer-5: replaced at the caret, and the caret lands after it.
+        let split = mentionSplit
+        var head = split.head
+        let tail = split.tail
+        if let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) {
+            head.replaceSubrange(r, with: tail.first?.isWhitespace == true ? "@\(name)" : "@\(name) ")
+            input = head + tail
+            caretAfterMention = (input, head.utf16.count)
+            composerCaret = head.utf16.count
         }
         mentionMap[name] = uid
         UISelectionFeedbackGenerator().selectionChanged()
@@ -4558,7 +4599,9 @@ struct ThreadView: View {
             return
         }
         // Resolve which inserted @mentions are still present in the final text.
-        let mentions = resolveMentions(in: text)
+        // 2026-09-24 decision D-composer-5: only people still in the group. A member picked and then
+        // gone before Send was still tagged and notified.
+        let mentions = resolveMentions(in: text).filter { groupMembers.contains($0) }
         mentionMap = [:]
         input = ""
         let reply = replyingTo.map {
@@ -4602,6 +4645,22 @@ struct ThreadView: View {
         Task {
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft)
         }
+    }
+
+    /// 2026-09-24 decision D-composer-1: a poll or location marker goes through the same pipeline as
+    /// typed text: an optimistic bubble at once (which is also what makes the list glide down), the
+    /// durable SendQueue entry, and the failed state with Resend / Delete. They used to call
+    /// `sendText` straight and throw the error away, so an offline poll or location vanished.
+    private func sendMarker(_ marker: String) {
+        guard !marker.isEmpty else { return }
+        impact(.light)
+        sendTick &+= 1
+        lastSendAt = Date()
+        if DemoMode.isDemoConversation(cid) { repo.addDemoMessage(marker, from: me); return }   // as send()
+        let clientId = UUID().uuidString
+        repo.addPending(Message(localText: marker, authorId: me, clientId: clientId, replyTo: nil,
+                                sendState: .sending))
+        Task { await deliver(text: marker, reply: nil, clientId: clientId) }
     }
 
     /// Delete-for-me that also CANCELS an unsent message (audit): a pending or failed text has
@@ -4652,6 +4711,7 @@ struct ThreadView: View {
         guard NetworkState.shared.isOnline else { return }
         for m in repo.items where m.sendState == .failed {
             guard m.type != "text", let key = m.clientId, !autoRetried.contains(key) else { continue }
+            if SendQueue.isRefused(clientId: key) { continue }   // 2026-09-24 decision D-composer-2
             autoRetried.insert(key)
             resend(m)
         }
@@ -5066,6 +5126,10 @@ struct ThreadView: View {
         } catch {
             // Keep the message as a failed bubble (tap to retry); flag the encryption case. The queue
             // entry stays so the next chat open retries it automatically.
+            // 2026-09-24 decision D-composer-2: unless the server refused it (a rule said no). That
+            // one is flagged so nothing retries it by itself; it stays a failed bubble with Resend /
+            // Delete, and the bottom bar already says why when the reason is blocked/removed/admins-only.
+            if SendQueue.isPermanentRefusal(error) { SendQueue.markRefused(clientId: clientId) }
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
                 if error is MissingRecipientKeyError {
@@ -5081,6 +5145,10 @@ struct ThreadView: View {
     // ones that actually landed (clientId already on the server) to avoid duplicates.
     private func drainSendQueue() async {
         for entry in SendQueue.pending(for: cid) {
+            // 2026-09-24 decision D-composer-2: a queued VOICE note is not text. This loop read its
+            // empty `text`, sent it as an empty text message and overwrote the voice entry. Voice is
+            // re-driven by the launch drain and by the failed-media retry on reconnect.
+            if entry.audioDuration != nil { continue }
             // Already reconciled in this session's window? skip.
             if repo.messages.contains(where: { $0.clientId == entry.clientId }) { SendQueue.remove(clientId: entry.clientId); continue }
             if await SendQueue.alreadySent(cid: cid, clientId: entry.clientId) { SendQueue.remove(clientId: entry.clientId); continue }
@@ -5091,8 +5159,14 @@ struct ThreadView: View {
                 if !repo.messages.contains(where: { $0.clientId == entry.clientId }),
                    !repo.pending.contains(where: { $0.clientId == entry.clientId }) {
                     repo.addPending(Message(localText: entry.text, authorId: me, clientId: entry.clientId,
-                                            replyTo: reply, sendState: .sending))
+                                            replyTo: reply, sendState: entry.refused == true ? .failed : .sending))
                 }
+            }
+            // 2026-09-24 decision D-composer-2: a refused send is drawn as failed and waits for the
+            // user's Resend or Delete; it is not sent again by itself.
+            if entry.refused == true {
+                await MainActor.run { repo.markFailed(clientId: entry.clientId) }
+                continue
             }
             await deliver(text: entry.text, reply: reply, clientId: entry.clientId, mentions: entry.mentions)
         }
@@ -6139,8 +6213,16 @@ struct ThreadView: View {
             .onChange(of: input) { _, v in
                 // A first message to a stranger is capped. Trimmed as it is typed rather than
                 // refused on send, so you can see the limit instead of losing what you wrote to it.
-                if requestStance == .firstMessage, v.count > MessageRequests.firstMessageLimit {
-                    input = String(v.prefix(MessageRequests.firstMessageLimit))
+                // 2026-09-24 decision D-composer-4: and by bytes too. The rules measure the SEALED
+                // text (880), which 150 of the widest single characters fit, but 150 joined emoji
+                // (a family, a flag with a tag) are several times that and were refused only after
+                // Send. 4 bytes a character is exactly what the rule's 880 was sized for.
+                let byteCap = MessageRequests.firstMessageLimit * 4
+                if requestStance == .firstMessage,
+                   v.count > MessageRequests.firstMessageLimit || v.utf8.count > byteCap {
+                    var t = String(v.prefix(MessageRequests.firstMessageLimit))
+                    while t.utf8.count > byteCap { t.removeLast() }
+                    input = t
                     return
                 }
                 // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
@@ -6372,6 +6454,8 @@ struct ThreadView: View {
     private var composerState: ChatComposerState {
         var s = ChatComposerState()
         s.text = input
+        // 2026-09-24 decision D-composer-5: only for the very text the insertion produced.
+        if let m = caretAfterMention, m.text == input { s.caret = m.at }
         s.placeholder = requestStance == .firstMessage ? "Say hello" : "Message"
         s.focused = inputFocused
         s.editing = editingMessage != nil
@@ -6429,6 +6513,17 @@ struct ThreadView: View {
     private var composerActions: ChatComposerActions {
         var a = ChatComposerActions()
         a.textChanged = { input = $0 }
+        a.caretChanged = { composerCaret = $0 }   // 2026-09-24 decision D-composer-5
+        // 2026-09-24 decision D-composer-5: a pasted picture opens the same approval the picker
+        // does (one → the photo editor, several → the pager), after the keyboard is down, as "+".
+        a.pasteImages = { imgs in
+            let pick = Array(imgs.prefix(Limits.mediaPerMessage))
+            inputFocused = false
+            keyboard.onceHidden {
+                if pick.count == 1 { editImage = EditImageWrap(image: pick[0]) }
+                else { mediaToApprove = MediaWrap(items: pick.map { ApprovalMedia.image(UUID().uuidString, $0) }) }
+            }
+        }
         a.focusChanged = { inputFocused = $0 }
         a.barTouched = { composerTouch.last = Date() }
         a.attach = {
@@ -6926,6 +7021,8 @@ struct ThreadView: View {
             // works, this just means nobody HAS to.
             SendQueue.addAudio(clientId: clientId, cid: cid, duration: dur, waveform: viewOnce ? [] : wf,
                                reply: reply, ts: Date().timeIntervalSince1970)
+            // 2026-09-24 decision D-composer-2: a rule refusal is not re-driven at every launch.
+            if SendQueue.isPermanentRefusal(error) { SendQueue.markRefused(clientId: clientId) }
             await MainActor.run { repo.markFailed(clientId: clientId) }
         }
     }
@@ -7414,18 +7511,15 @@ struct MessageBubble: View, Equatable {
         // bubble. Applied before the plain-text fast path so text-only messages highlight too.
         // Gated at 2+ chars (the search floor) and matched case/diacritic/width-insensitively, so the
         // highlight finds exactly what the search matched (café highlights for "cafe").
+        // 2026-09-24 decision D2: each query term, not the whole query as one string (see ChatSearch).
         if searchTerm.count >= 2 {
-            var from = full.startIndex
-            while let r = full.range(of: searchTerm,
-                                     options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                                     range: from..<full.endIndex) {
+            for r in ChatSearch.highlightRanges(in: full, query: searchTerm) {
                 let startOff = full.distance(from: full.startIndex, to: r.lowerBound)
                 let len = full.distance(from: r.lowerBound, to: r.upperBound)
                 let lo = str.index(str.startIndex, offsetByCharacters: startOff)
                 let hi = str.index(lo, offsetByCharacters: len)
                 str[lo..<hi].backgroundColor = Color.yellow
                 str[lo..<hi].foregroundColor = Color.black
-                from = r.upperBound
             }
         }
         // Fast path: plain text with no links/@/mentions skips ALL regex work (the common case).
@@ -8701,7 +8795,8 @@ struct MessageBubble: View, Equatable {
             // POLL: question + options with live vote bars. Content is E2EE (rides the encrypted text
             // marker); votes live in a per-voter subcollection. Renders in a normal bubble.
             VStack(alignment: .leading, spacing: 8) {
-                PollBubbleContent(poll: poll, cid: cid, messageId: message.id, isMe: isMe, dark: dark)
+                PollBubbleContent(poll: poll, cid: cid, messageId: message.id, isMe: isMe, dark: dark,
+                                  canVote: message.sendState == nil)   // 2026-09-24 decision D-composer-1
                 HStack { Spacer(); metaRow }
             }
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))

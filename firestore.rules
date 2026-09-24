@@ -207,6 +207,8 @@ service cloud.firestore {
     // 2026-09-24 decision D8: `u` has blocked the caller. Either on `u`'s account-level block list
     // (users/{u}/blocked/{caller}, which works with no chat at all) or, for a block made before that
     // list existed, on the chat the two share. GUARDED BY exists() (a get on a missing doc errors).
+    // Used by /calls create ONLY. Messages and new chats never refuse a blocked sender: blocking
+    // is silent there (2026-09-24 decision D8 correction).
     function isBlockedByUser(u) {
       return exists(/databases/$(database)/documents/users/$(u)/blocked/$(request.auth.uid))
         || (exists(/databases/$(database)/documents/conversations/$(pairCid(u)))
@@ -629,8 +631,8 @@ service cloud.firestore {
 
       // 2026-09-24 decision D8: MY BLOCK LIST, one document per person I blocked, so blocking works
       // for anyone, chat or no chat. Owner only, both ways: the blocked person must never be able to
-      // read that they are on it. The rules read it through `isBlockedByUser` (conversation create,
-      // message create, call create), which ignores these read rules. The document carries only
+      // read that they are on it. The rules read it through `isBlockedByUser` (call create only;
+      // messages and new chats stay silent, 2026-09-24 decision D8), which ignores these read rules. The document carries only
       // `at`, the server's time of the block.
       match /blocked/{other} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
@@ -1227,8 +1229,9 @@ service cloud.firestore {
             // ...and not somebody who deleted my last request this week (§10). Same guard shape
             // as the privacy read above; the document is theirs and this is the only reader.
             && (request.auth.uid == otherMember() || !declinedRecently(otherMember()))
-            // 2026-09-24 decision D8: not somebody who has blocked me, chat or no chat.
-            && !isBlockedByUser(otherMember())
+            // 2026-09-24 decision D8: NO block check here, on purpose. Blocking is SILENT: a refused
+            // create would tell the blocked person they are blocked. The blocker's app hides the
+            // chat (`BlockList`) and `onNewMessage` skips the push instead.
             // EVERY NEW 1:1 IS BORN AS A REQUEST, and the database is what says so.
             //
             // Without this there was a way around the whole feature: the media send paths touch the
@@ -1513,8 +1516,9 @@ service cloud.firestore {
         // blocked them. `startedBy` is the one who has to ask (Remove Friend sets it too).
         && request.auth.uid != resource.data.get('startedBy', '');
 
-      // 2026-09-24 decision D8: the paragraph below is HISTORY for 1:1 chats. The message create
-      // rule now refuses a blocked person's message (see `isBlockedByUser`).
+      // 2026-09-24 decision D8: the paragraph below STANDS for the account block list too
+      // (users/{blocker}/blocked/{sender}): the write lands, the blocker's app hides it and the push
+      // function skips it. Only /calls create refuses (see `isBlockedByUser`).
       // Messages: only the two members. Blocking is SILENT — a blocked person's
       // message still writes (it looks "sent" to them), but the blocker's client
       // hides it and the push function skips their notification. You may delete
@@ -1536,15 +1540,36 @@ service cloud.firestore {
                  'type', 'authorId', 'callerUid', 'callOutcome', 'callVideo', 'text', 'createdAt'
                ]);
         }
+        // 2026-09-24 decision D-composer-3: a ceiling on `text` for EVERY message, not only a
+        // request's first one. The app stops at 65,536 UTF-16 units (Limits.messageMaxChars), at
+        // most 196,608 UTF-8 bytes; sealed for a full 1,024-member group (every member's key wrap
+        // rides inside the same string) that is about 534,000 characters, and a 1:1 seal about
+        // 262,000. 700,000 clears the largest legitimate message with room and still refuses
+        // anything near the 1 MiB document ceiling.
+        function textWithinCap() {
+          return !('text' in request.resource.data)
+            || (request.resource.data.text is string
+                && request.resource.data.text.size() <= 700000);
+        }
+        // 2026-09-24 decision D-composer-3: a media address is a string, https (or the app's own
+        // `sticker://` for a built-in sticker, see BuiltInStickers.scheme), and a sane length. Storage
+        // download addresses run to a few hundred characters; GIF-service addresses less.
+        function mediaUrlOk(k) {
+          return !(k in request.resource.data)
+            || (request.resource.data[k] is string
+                && request.resource.data[k].size() <= 2048
+                && request.resource.data[k].matches('(https|sticker)://.+'));
+        }
+        function mediaUrlsOk() {
+          return mediaUrlOk('imageUrl') && mediaUrlOk('videoUrl') && mediaUrlOk('audioUrl')
+            && mediaUrlOk('fileUrl') && mediaUrlOk('thumbUrl');
+        }
         allow read: if signedIn() && request.auth.uid in convData().users;
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
           && request.auth.uid in convData().users
-          // 2026-09-24 decision D8: a 1:1 message is refused when the other person has blocked me
-          // (their account block list, or the chat's `blockedBy`). This REPLACES the old silent
-          // block at write time (see the note above this match): the blocked person's message no
-          // longer lands at all. Groups are not blockable per person and are unaffected.
-          && (convData().get('type', '') == 'group' || !isBlockedByUser(otherHalf()))
+          // 2026-09-24 decision D8: no block check at write time, on purpose (silent block, see the
+          // note above this match).
           // ⛔ `expiresAt` BELONGS TO THE SERVER. It is the disappearing-message timer, written by
           // `onNewMessage` out of the conversation's own `disappearSeconds` the moment a message
           // lands, and swept by `cleanupExpiringMessages`. A client that could set it could send a
@@ -1572,6 +1597,9 @@ service cloud.firestore {
                || get(/databases/$(database)/documents/stories/$(request.resource.data.replyTo.id))
                     .data.get('allowsReplies', true) == true
              )
+          // 2026-09-24 decision D-composer-3: text size and media-address shape, on every message.
+          && textWithinCap()
+          && mediaUrlsOk()
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           && (convData().get('onlyAdminsSend', false) == false
               || request.auth.uid in convData().get('admins', []))
@@ -1655,7 +1683,8 @@ service cloud.firestore {
             (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
              && ownKeyOnly('reactions'))
             || (request.auth.uid == resource.data.authorId
-                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited']))
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited'])
+                && textWithinCap())   // 2026-09-24 decision D-composer-3: an edit has the same ceiling
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['album']))
             // FINISHING AN UPLOAD. A photo message is now written the moment Send is tapped,
@@ -1675,7 +1704,8 @@ service cloud.firestore {
                 && request.resource.data.get('uploading', false) == false
                 && request.resource.data.diff(resource.data).affectedKeys()
                      .hasOnly(['imageUrl', 'enc', 'album', 'uploading',
-                               'audioUrl', 'fileUrl', 'videoUrl', 'thumbUrl', 'thumbEnc']))
+                               'audioUrl', 'fileUrl', 'videoUrl', 'thumbUrl', 'thumbEnc'])
+                && mediaUrlsOk())   // 2026-09-24 decision D-composer-3: the attached address too
             // "Delete for Everyone": the AUTHOR may turn their own message into a tombstone -
             // deleted:true, text emptied, type back to 'text', every content field REMOVED.
             // The end state is pinned (no content key may remain and text/type are fixed), so
@@ -1714,7 +1744,22 @@ service cloud.firestore {
         // The poll's question/options stay E2EE in the message text; a vote is just option indices.
         match /votes/{voter} {
           allow read: if signedIn() && request.auth.uid in convData().users;
-          allow write: if signedIn() && request.auth.uid == voter && request.auth.uid in convData().users;
+          // 2026-09-24 decision D-composer-3: a vote has a shape. Only `options` (1 to 10 indices,
+          // the composer's own ceiling) and `at`; and when the poll says it takes one answer
+          // (`pollMulti == false`, written in the clear by the app from today) exactly one option.
+          // A poll from before today carries no flag and keeps accepting any count. The vote doc is
+          // already the voter's own (`voter == auth.uid`); a vote on a message that does not exist
+          // is refused by the read of it.
+          allow delete: if signedIn() && request.auth.uid == voter && request.auth.uid in convData().users;
+          allow create, update: if signedIn() && request.auth.uid == voter
+            && request.auth.uid in convData().users
+            && request.resource.data.keys().hasOnly(['options', 'at'])
+            && request.resource.data.options is list
+            && request.resource.data.options.size() >= 1
+            && request.resource.data.options.size() <= 10
+            && (get(/databases/$(database)/documents/conversations/$(cid)/messages/$(mid)).data
+                  .get('pollMulti', true) != false
+                || request.resource.data.options.size() == 1);
         }
       }
 

@@ -44,6 +44,10 @@ struct PollBubbleContent: View {
     let messageId: String
     let isMe: Bool
     let dark: Bool
+    /// 2026-09-24 decision D-composer-1: a poll now shows as a pending bubble before the server has
+    /// it, under its clientId. A vote there would land on a message that never exists, so the
+    /// options wait until the real message is in.
+    var canVote: Bool = true
 
     @State private var votes: [String: [Int]] = [:]
     @State private var listener: ListenerRegistration?
@@ -104,6 +108,7 @@ struct PollBubbleContent: View {
     }
 
     private func toggle(_ i: Int) {
+        guard canVote else { return }   // 2026-09-24 decision D-composer-1: not while pending
         var next: [Int]
         if poll.multiple {
             var s = myVotes

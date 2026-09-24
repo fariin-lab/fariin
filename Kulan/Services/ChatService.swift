@@ -124,6 +124,16 @@ enum ChatService {
             seed.removeValue(forKey: "accepted")
             try await ref.setData(seed, merge: true)
         }
+        // 2026-09-24 decision D8: opening a chat with somebody on MY account block list gives the chat
+        // its own copy of the block, so the thread shows them as blocked and every screen that reads
+        // `blockedBy` treats it so. `blockedAt` is the list entry's own time, so anything they sent
+        // silently while blocked stays hidden (their writes land; blocking is silent).
+        let listedAt = await MainActor.run { BlockList.shared.entries[other.id] }
+        let alreadyBlocked = ((snapshot?.data()?["blockedBy"] as? [String: Any])?[uid] as? Bool) == true
+        if let listedAt, !alreadyBlocked {
+            let at = listedAt > 0 ? listedAt : Date().timeIntervalSince1970 * 1000
+            try? await ref.updateData(["blockedBy.\(uid)": true, "blockedAt.\(uid)": at])
+        }
         return cid
     }
 
@@ -880,6 +890,14 @@ enum ChatService {
         if let replyEnc { msg["replyTo"] = replyEnc }
         if !mentions.isEmpty { msg["mentions"] = mentions }
         if forwarded { msg["forwarded"] = true }
+        // 2026-09-24 decision D-composer-3: a poll says in the clear only whether it takes one answer
+        // or several, so the rules can hold a single-answer vote to one option. The question and the
+        // options stay sealed in `text`.
+        if t.hasPrefix(Message.pollMarker),
+           let data = Data(base64Encoded: String(t.dropFirst(Message.pollMarker.count))),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            msg["pollMulti"] = (obj["multi"] as? Bool) ?? false
+        }
         if let preview, let lp = await sealLinkPreview(preview, cid: cid, members: members, msgId: msgRef.documentID) {
             msg["linkPreview"] = lp
         }
@@ -3109,8 +3127,9 @@ enum ChatService {
     /// other person. Where a block should live when no chat exists is a backend decision.
     ///
     /// 2026-09-24 decision D8: THAT DECISION. A block lives on my ACCOUNT, `users/{me}/blocked/{them}`,
-    /// so anyone can be blocked, chat or no chat; the rules read it to refuse their new chat, their
-    /// messages and their calls. When a chat exists its `blockedBy`/`blockedAt` are written too, as
+    /// so anyone can be blocked, chat or no chat; the rules read it to refuse their calls. Their new
+    /// chat and messages still land (silent block): `ConversationsRepository` hides them and
+    /// `onNewMessage` skips the push. When a chat exists its `blockedBy`/`blockedAt` are written too, as
     /// before (the chat list, the thread and the push all read those). `cid` is still the pair id,
     /// `convId(me, them)`, whether or not that chat exists. The conversation write is an UPDATE now,
     /// so a missing chat is "not found" (fine) instead of a create the rules refuse.

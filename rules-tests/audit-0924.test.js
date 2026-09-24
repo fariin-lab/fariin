@@ -74,7 +74,8 @@ const pairMocks = [
   { function: 'exists', args: [{ exactValue: pairPath }], result: { value: true } },
   { function: 'get', args: [{ exactValue: pairPath }],
     result: { value: { data: { users: [ME, THIRD], blockedBy: {}, lastMessage: 'hi', lastSender: ME } } } },
-  // 2026-09-24 decision D8: message create now reads the other person's account block list.
+  // 2026-09-24 decision D8: harmless spare mocks; message create no longer reads the block list
+  // (silent block), only /calls create does.
   { function: 'exists', args: [{ exactValue: `${D}/users/${THIRD}/blocked/${ME}` }], result: { value: false } },
   { function: 'exists', args: [{ exactValue: `${D}/users/${ME}/blocked/${THIRD}` }], result: { value: false } },
 ];
@@ -255,7 +256,69 @@ const cases = [
 
   // ── privacy (2026-09-24 decisions D7, D8, D13): server call privacy, account block list, own unread flag ──
   ...privacyCases(),
+
+  // ── composer (2026-09-24 decision D-composer-3): text ceiling, media address shape, vote shape ──
+  ...composerCases(),
 ];
+
+// 2026-09-24 decision D-composer-3.
+function composerCases() {
+  const newMsg = `${convPath}/messages/mNew`;
+  const gm = [...members, ...convGet(group)];
+  const text = (n) => ({ authorId: ME, text: 'encg1:' + 'A'.repeat(n - 6), createdAt: REQ_TIME });
+  const gif = (url) => ({ type: 'gif', imageUrl: url, width: 200, height: 200, text: '', authorId: ME,
+    createdAt: REQ_TIME });
+  const up = { authorId: ME, type: 'image', text: 'enc1:cap', uploading: true, enc: { k: 'x' } };
+  const attached = (url) => ({ ...up, uploading: false, imageUrl: url });
+  const mine = { authorId: ME, text: 'enc1:old', type: 'text' };
+  const GIFURL = 'https://media.giphy.example/media/abc/giphy.gif';
+  const FILEURL = 'https://firebasestorage.googleapis.com/v0/b/kulan.appspot.com/o/chat%2Fx.enc?alt=media&token=t';
+  const votePath = (who) => `${msgPath}/votes/${who}`;
+  const poll = (flag) => [...gm, { function: 'get', args: [{ exactValue: msgPath }],
+    result: { value: { data: { authorId: ADMIN, text: 'encg1:poll', ...(flag === undefined ? {} : { pollMulti: flag }) } } } }];
+  const vote = (options, extra = {}) => ({ options, at: REQ_TIME, ...extra });
+  return [
+    ['OK      member sends a group text', 'ALLOW', 'ALLOW', ME, newMsg, 'create', text(40), null, gm],
+    ['OK      member sends the longest legitimate sealed text (534k)', 'ALLOW', 'ALLOW',
+      ME, newMsg, 'create', text(534000), null, gm],
+    ['ATTACK  member sends an 800k-character text', 'ALLOW', 'DENY', ME, newMsg, 'create', text(800000), null, gm],
+    ['ATTACK  member sends a text that is not a string', 'ALLOW', 'DENY',
+      ME, newMsg, 'create', { authorId: ME, text: { big: 'map' }, createdAt: REQ_TIME }, null, gm],
+    ['OK      member sends a GIF (https)', 'ALLOW', 'ALLOW', ME, newMsg, 'create', gif(GIFURL), null, gm],
+    ['OK      member sends a built-in sticker (sticker://)', 'ALLOW', 'ALLOW',
+      ME, newMsg, 'create', gif('sticker://fariin.love_burst'), null, gm],
+    ['ATTACK  GIF whose address is a data: URI', 'ALLOW', 'DENY',
+      ME, newMsg, 'create', gif('data:image/gif;base64,R0lGOD'), null, gm],
+    ['ATTACK  GIF whose address is plain http', 'ALLOW', 'DENY',
+      ME, newMsg, 'create', gif('http://tracker.example/p.gif'), null, gm],
+    ['ATTACK  GIF whose address is a number', 'ALLOW', 'DENY', ME, newMsg, 'create', gif(12345), null, gm],
+    ['ATTACK  GIF whose address is 3,000 characters', 'ALLOW', 'DENY',
+      ME, newMsg, 'create', gif('https://x.example/' + 'a'.repeat(2982)), null, gm],
+    ['ATTACK  message carrying a videoUrl with a file: scheme', 'ALLOW', 'DENY',
+      ME, newMsg, 'create', { ...text(40), type: 'video', videoUrl: 'file:///etc/passwd' }, null, gm],
+    ['OK      author attaches the uploaded photo', 'ALLOW', 'ALLOW',
+      ME, msgPath, 'update', attached(FILEURL), up, gm],
+    ['ATTACK  author attaches a javascript: address', 'ALLOW', 'DENY',
+      ME, msgPath, 'update', attached('javascript:alert(1)'), up, gm],
+    ['OK      author edits their text', 'ALLOW', 'ALLOW',
+      ME, msgPath, 'update', { ...mine, text: 'enc1:new', edited: true }, mine, gm],
+    ['ATTACK  author edits their text to 800k characters', 'ALLOW', 'DENY',
+      ME, msgPath, 'update', { ...mine, text: 'enc1:' + 'A'.repeat(800000), edited: true }, mine, gm],
+    // votes
+    ['OK      one option on a single-answer poll', 'ALLOW', 'ALLOW', ME, votePath(ME), 'create', vote([1]), null, poll(false)],
+    ['OK      change a single-answer vote', 'ALLOW', 'ALLOW', ME, votePath(ME), 'update', vote([0]), vote([1]), poll(false)],
+    ['OK      two options on a multiple-answer poll', 'ALLOW', 'ALLOW', ME, votePath(ME), 'create', vote([0, 2]), null, poll(true)],
+    ['OK      two options on a poll from before the flag', 'ALLOW', 'ALLOW', ME, votePath(ME), 'create', vote([0, 2]), null, poll()],
+    ['OK      take my vote back', 'ALLOW', 'ALLOW', ME, votePath(ME), 'delete', null, vote([1]), poll(false)],
+    ['ATTACK  three options on a single-answer poll', 'ALLOW', 'DENY', ME, votePath(ME), 'create', vote([0, 1, 2]), null, poll(false)],
+    ['ATTACK  eleven options on a multiple-answer poll', 'ALLOW', 'DENY',
+      ME, votePath(ME), 'create', vote([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), null, poll(true)],
+    ['ATTACK  vote whose options is not a list', 'ALLOW', 'DENY', ME, votePath(ME), 'create', vote('everything'), null, poll(true)],
+    ['ATTACK  vote with an empty options list', 'ALLOW', 'DENY', ME, votePath(ME), 'create', vote([]), null, poll(true)],
+    ['ATTACK  vote carrying an extra field', 'ALLOW', 'DENY', ME, votePath(ME), 'create', vote([1], { weight: 99 }), null, poll(true)],
+    ['GUARD   vote written in THIRD\'s name', 'DENY', 'DENY', ME, votePath(THIRD), 'create', vote([1]), null, poll(true)],
+  ];
+}
 
 // 2026-09-24 decisions D7 (calls), D8 (account block list) and D13 (markedUnread).
 function privacyCases() {
@@ -308,12 +371,14 @@ function privacyCases() {
     ['GUARD   D8 the blocked person reads the blocker\'s list', 'DENY', 'DENY', THIRD, listPath, 'get', null, { at: REQ_TIME }, base],
     ['GUARD   D8 somebody writes into another person\'s list', 'DENY', 'DENY', THIRD, listPath, 'create', { at: REQ_TIME }, null, base],
     ['GUARD   D8 list entry carrying extra fields', 'DENY', 'DENY', ME, listPath, 'create', { at: REQ_TIME, note: 'x' }, null, base],
-    // D8 new chat and messages
+    // D8 new chat and messages. 2026-09-24 decision D8 correction: blocking is SILENT, so the
+    // blocked person's new chat and message still write (they look sent); the blocker's app hides
+    // them and onNewMessage skips the push. Only /calls refuses (rows below).
     ['OK      D8 start a chat with somebody who has not blocked me', 'ALLOW', 'ALLOW', ...open, openMocks(false)],
-    ['ATTACK  D8 start a chat with somebody who blocked me with no chat', 'ALLOW', 'DENY', ...open, openMocks(true)],
+    ['SILENT  D8 start a chat with somebody who blocked me with no chat (lands, hidden)', 'ALLOW', 'ALLOW', ...open, openMocks(true)],
     ['OK      D8 message to somebody who has not blocked me', 'ALLOW', 'ALLOW', ...newMsg(), msgMocks(pairDoc(), false)],
-    ['ATTACK  D8 message to somebody who blocked me (account list)', 'ALLOW', 'DENY', ...newMsg(), msgMocks(pairDoc(), true)],
-    ['ATTACK  D8 message to somebody who blocked me (old chat block, was silent)', 'ALLOW', 'DENY',
+    ['SILENT  D8 message to somebody who blocked me (account list, lands, hidden)', 'ALLOW', 'ALLOW', ...newMsg(), msgMocks(pairDoc(), true)],
+    ['SILENT  D8 message to somebody who blocked me (old chat block, lands, hidden)', 'ALLOW', 'ALLOW',
       ...newMsg(), msgMocks(pairDoc({ blockedBy: { [THIRD]: true } }), false)],
     ['OK      D8 the blocker can still write to the person they blocked', 'ALLOW', 'ALLOW',
       ...newMsg(THIRD), msgMocks(pairDoc({ blockedBy: { [THIRD]: true } }), false, THIRD)],

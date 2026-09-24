@@ -407,17 +407,25 @@ struct SendContactSheet: View {
         sending = true
         // The first name is captured BEFORE the sending, while the selection is still whole and in
         // the order the grid shows it — afterwards there is nothing left to name.
-        let firstName = selected.compactMap { id in
-            repo.conversations.first { $0.id == id }
-        }.first.map { $0.displayName(me) } ?? "chat"
-        let count = selected.count
+        // 2026-09-24 decision D-composer-5: the toast counts the chats it REALLY reached. It named the
+        // whole selection even when every send had failed. None reached → the existing failure line.
+        let order = selected.compactMap { id in repo.conversations.first { $0.id == id } }
+        var reached: [String] = []
         for cid in selected {
             let conv = repo.conversations.first { $0.id == cid }
-            try? await ChatService.sendText(cid: cid, text: contactText,
-                                            group: conv?.isGroup == true ? conv?.users : nil)
+            do {
+                try await ChatService.sendText(cid: cid, text: contactText,
+                                               group: conv?.isGroup == true ? conv?.users : nil)
+                reached.append(cid)
+            } catch {}
         }
         sending = false
-        onSent(Self.sentMessage(first: firstName, count: count))
+        if reached.isEmpty {
+            onSent("Couldn't send. Check your connection and try again.")
+        } else {
+            let firstName = order.first { reached.contains($0.id) }.map { $0.displayName(me) } ?? "chat"
+            onSent(Self.sentMessage(first: firstName, count: reached.count))
+        }
         dismiss()
     }
 

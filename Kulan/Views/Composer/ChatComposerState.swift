@@ -23,6 +23,9 @@ import SwiftUI
 /// whole; `ChatComposerView` diffs it, so an unchanged state costs one `==`.
 struct ChatComposerState: Equatable {
     var text = ""
+    /// 2026-09-24 decision D-composer-5: where the caret goes when `text` is pushed in (a UTF-16
+    /// offset), for an @mention inserted mid-text. nil keeps UIKit's default, the end.
+    var caret: Int? = nil
     var placeholder = "Message"
     /// The keyboard's owner. In → a CHANGE of this flag makes the field take or give up first
     /// responder; out → the delegate reports what actually happened, a turn later. Between a tap
@@ -109,6 +112,10 @@ struct ChatComposerBanner: Equatable {
 /// installed on the view in `updateUIView`, so they always see the current state.
 struct ChatComposerActions {
     var textChanged: (String) -> Void = { _ in }
+    /// 2026-09-24 decision D-composer-5: the caret moved (UTF-16 offset), so @mentions can follow it.
+    var caretChanged: (Int) -> Void = { _ in }
+    /// 2026-09-24 decision D-composer-5: pictures pasted into the field → the photo approval flow.
+    var pasteImages: ([UIImage]) -> Void = { _ in }
     var focusChanged: (Bool) -> Void = { _ in }
     /// A touch landed anywhere on the bar. The chat's tap-to-dismiss gesture hears taps through
     /// the whole screen — the bar included — and dismisses one runloop turn later so tap-handlers
