@@ -35,6 +35,7 @@ struct VideoPlayerScreen: View {
     @State private var showChrome = true
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
+    @State private var interruptObserver: NSObjectProtocol?
     @State private var hideWork: DispatchWorkItem?
     @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
     @State private var closeToken = 0              // bump → the button close flies home like the drag
@@ -374,6 +375,14 @@ struct VideoPlayerScreen: View {
                                                              object: p.currentItem, queue: .main) { _ in
             isPlaying = false; showChrome = true; cancelAutoHide()
         }
+        // A call or another app's audio pauses AVPlayer by itself, but the screen kept showing it as
+        // playing with the chrome hidden and no play button (2026-09-24 audit). Show it paused.
+        interruptObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification,
+                                                                   object: nil, queue: .main) { note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+            isPlaying = false; showChrome = true; cancelAutoHide()
+        }
         p.play(); isPlaying = true
         scheduleAutoHide()
     }
@@ -382,6 +391,7 @@ struct VideoPlayerScreen: View {
         cancelAutoHide()
         if let o = timeObserver { player?.removeTimeObserver(o) }
         if let e = endObserver { NotificationCenter.default.removeObserver(e) }
+        if let i = interruptObserver { NotificationCenter.default.removeObserver(i) }
         player?.pause()
     }
 }
