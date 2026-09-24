@@ -61,6 +61,12 @@ enum AccountCall {
                details["reauth"] as? Bool == true {
                 throw Failure.needsReauth
             }
+            // No network, or a call that timed out, has no sentence from the server: the screen showed
+            // the SDK's own text ("UNAVAILABLE", or an error-domain line). Same words Chat Key uses.
+            let code = FunctionsErrorCode(rawValue: ns.code)
+            if ns.domain != FunctionsErrorDomain || code == .unavailable || code == .deadlineExceeded {
+                throw Failure.message("Try again in a moment.")
+            }
             throw Failure.message(ns.localizedDescription)
         }
     }

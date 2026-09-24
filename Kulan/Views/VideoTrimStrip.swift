@@ -108,11 +108,15 @@ struct VideoTrimStrip: View {
                 playing = false
                 let dur = max(0.01, duration)
                 let t = Double(min(max(0, g.location.x), W) / W) * dur
+                // A clip SHORTER than the minimum pushed the start below 0 or the end past the video
+                // (trimEnd - 0.5 on a 0.3s clip), and that range went to the export. The gap can never
+                // be wider than the clip, and neither end can leave it.
+                let gap = min(minDuration, dur)
                 if isStart {
-                    trimStart = min(t, trimEnd - minDuration); scrubTime = trimStart
+                    trimStart = max(0, min(t, trimEnd - gap)); scrubTime = trimStart
                     if playhead < trimStart { playhead = trimStart }   // playback position can't precede the start
                 } else {
-                    trimEnd = max(t, trimStart + minDuration); scrubTime = trimEnd
+                    trimEnd = min(dur, max(t, trimStart + gap)); scrubTime = trimEnd
                     if playhead > trimEnd { playhead = trimEnd }       // ...or exceed the end
                 }
             }

@@ -18,7 +18,11 @@ import UIKit
     private static var images: [String: UIImage] = [:]
     /// In flight, so a cell that is configured twice in the same frame — which recycling does —
     /// starts one render rather than two.
-    private static var pending: Set<String> = []
+    ///
+    /// Each in-flight key keeps the callers waiting on it. It was a plain set and the second caller
+    /// was answered nil straight away, so two bubbles of the same place on screen together (the same
+    /// spot shared twice) left the second one blank until it scrolled off and back.
+    private static var pending: [String: [(UIImage?) -> Void]] = [:]
 
     static func key(lat: Double, lon: Double, size: CGSize, dark: Bool) -> String {
         // Five decimals is about a metre, which is finer than any bubble can show, and it keeps two
@@ -31,8 +35,8 @@ import UIKit
     static func render(lat: Double, lon: Double, size: CGSize, dark: Bool,
                        key: String, done: @escaping (UIImage?) -> Void) {
         if let hit = images[key] { done(hit); return }
-        guard !pending.contains(key) else { done(nil); return }
-        pending.insert(key)
+        if pending[key] != nil { pending[key]?.append(done); return }
+        pending[key] = [done]
 
         let options = MKMapSnapshotter.Options()
         // ⚠️ A SPAN, NOT A DISTANCE. `MKCoordinateRegion(center:latitudinalMeters:)` is metres on the
@@ -75,14 +79,14 @@ import UIKit
                 }
             }
             Task { @MainActor in
-                pending.remove(key)
+                let waiters = pending.removeValue(forKey: key) ?? []
                 if let drawn {
                     // A handful is all a chat needs; a long scroll through a location-heavy thread
                     // should not hold every map it passed.
                     if images.count >= 24 { images.removeAll() }
                     images[key] = drawn
                 }
-                done(drawn)
+                for w in waiters { w(drawn) }
             }
         }
     }

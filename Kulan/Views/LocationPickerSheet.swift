@@ -108,6 +108,11 @@ struct LocationPickerSheet: View {
     /// gets the whole app throttled, and the only answer that matters is the one after it settles.
     private func resolveName(for c: CLLocationCoordinate2D) {
         geocodeTask?.cancel()
+        // The old name belongs to the OLD spot. It used to stay up until the new lookup answered, and
+        // with no network the lookup never answers, so Send shipped the new pin under the previous
+        // place's name. Drop it now; the new one appears when (and only if) it resolves.
+        resolvedName = nil
+        resolvedAddress = nil
         geocodeTask = Task {
             try? await Task.sleep(nanoseconds: 450_000_000)
             guard !Task.isCancelled else { return }
@@ -326,6 +331,9 @@ struct LocationPickerSheet: View {
 
     private func pick(_ item: MKMapItem) {
         selectedName = item.name
+        // A drag made BEFORE picking left this true, so the camera settling on the result cleared
+        // the name that was just picked (see `.onEnd`). Picking is a new choice; a later drag sets it again.
+        userMovedMap = false
         results = []
         query = item.name ?? query
         searchFocused = false

@@ -16,14 +16,18 @@ struct PinnedMessagesSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     private var dark: Bool { scheme == .dark }
+    /// A pin whose message was deleted for everyone still arrives here as its tombstone (the chat keeps
+    /// the row), so the list showed a "deleted" bubble with a jump arrow to nothing. Show only live
+    /// messages; Unpin All still clears every pin, dead ones included.
+    private var shown: [Message] { pinned.filter { !$0.deleted } }
 
     var body: some View {
         ZStack {
             Theme.bg(dark).ignoresSafeArea()
             ScrollView {
                 LazyVStack(spacing: 10) {
-                    ForEach(Array(pinned.enumerated()), id: \.element.id) { i, m in
-                        if i == 0 || !Calendar.current.isDate(m.createdAt, inSameDayAs: pinned[i - 1].createdAt) {
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, m in
+                        if i == 0 || !Calendar.current.isDate(m.createdAt, inSameDayAs: shown[i - 1].createdAt) {
                             Text(dayLabel(m.createdAt))
                                 .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity).padding(.vertical, 6)
@@ -50,7 +54,7 @@ struct PinnedMessagesSheet: View {
                 .padding(.bottom, 90)   // clear the floating Unpin All
             }
             .overlay {
-                if pinned.isEmpty {
+                if shown.isEmpty {
                     ContentUnavailableView("No pinned messages", systemImage: "pin",
                                            description: Text("Pin a message from its menu."))
                 }

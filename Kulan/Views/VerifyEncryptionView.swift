@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 import CoreImage.CIFilterBuiltins
 
 // Fariin's own "verify encryption" screen (our look, not a copy of other messengers).
@@ -68,6 +69,12 @@ struct VerifyEncryptionView: View {
         // and the profile page forces its bar dark — see the note in `MediaGalleryView`.
         .toolbarColorScheme(nil, for: .navigationBar)
         .task { await compute() }
+        // Their key can be replaced while this page is open (a refetch after a failed decrypt). The
+        // page kept showing the OLD number, and its Verified seal, until you left and came back.
+        .onReceive(NotificationCenter.default.publisher(for: .peerKeyChanged).receive(on: RunLoop.main)) { note in
+            guard (note.object as? String) == peerUid else { return }
+            Task { await compute() }
+        }
         .sheet(isPresented: $showScanner) {
             VerifyScanSheet { code in handleScanned(code) }
         }
@@ -246,6 +253,7 @@ struct VerifyEncryptionView: View {
         }.value
         await MainActor.run {
             number = n
+            loadError = false
             verified = UserDefaults.standard.bool(forKey: verifyKey(n))
         }
     }

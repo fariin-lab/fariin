@@ -179,6 +179,10 @@ struct ChatCropView: View {
     /// the full frame back would land one photograph and then swap it for a different one — the same
     /// "suddenly replaced" this screen's entry was rebuilt to remove, wearing the other direction.
     @State private var exitProgress: CGFloat = 0
+    /// Done or ✕ has been pressed. The buttons fade but still take touches during the 0.3s flight,
+    /// so a second tap on Done ran `apply` again and handed the editor the crop twice (or ✕ right
+    /// after Done tried to leave both ways). One exit per screen.
+    @State private var leaving = false
 
     /// The scale that carries `crop` onto the card. 1 at rest.
     private var exitScale: CGFloat {
@@ -952,6 +956,8 @@ struct ChatCropView: View {
     /// comes out is what he was looking at, to the pixel, whatever combination of the three he used.
     /// The unturned, unzoomed case lands on the identical rectangle it always did.
     private func apply() {
+        guard !leaving else { return }
+        leaving = true
         // Source pixels per canvas point, so the export keeps the resolution it had rather than the
         // resolution of the screen it was framed on.
         let ppp = (img.size.width * img.scale) / max(1, displayFrame.width)
@@ -1011,6 +1017,8 @@ struct ChatCropView: View {
     /// editor still holds the picture it opened with. That is the entry run backwards, and it is the
     /// one number the entry already animates.
     private func cancelExit() {
+        guard !leaving else { return }
+        leaving = true
         guard initialContentRect != nil, entryFrom.width > 1 else { close(); return }
         withAnimation(.easeInOut(duration: 0.16)) { frameChrome = 0 }
         withAnimation(.easeInOut(duration: Self.entryDuration)) {

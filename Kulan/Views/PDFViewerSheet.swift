@@ -11,12 +11,17 @@ struct PDFViewerSheet: View {
     @State private var page = 1
     @State private var pageCount = 0
     @State private var showShare = false
+    @State private var failed = false
 
     var body: some View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
-            PDFKitView(url: url, currentPage: $page, pageCount: $pageCount)
+            PDFKitView(url: url, currentPage: $page, pageCount: $pageCount, failed: $failed)
                 .ignoresSafeArea()
+            if failed {
+                Text("Couldn't open the file.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
         }
         .safeAreaInset(edge: .top, spacing: 0) { topBar }
         .safeAreaInset(edge: .bottom, spacing: 0) { if pageCount > 1 { pageBar } }
@@ -59,6 +64,7 @@ struct PDFKitView: UIViewRepresentable {
     let url: URL
     @Binding var currentPage: Int
     @Binding var pageCount: Int
+    @Binding var failed: Bool
 
     func makeUIView(context: Context) -> PDFView {
         let v = PDFView()
@@ -67,9 +73,13 @@ struct PDFKitView: UIViewRepresentable {
         v.displayDirection = .vertical
         v.backgroundColor = .clear
         v.pageShadowsEnabled = false
-        if let doc = PDFDocument(url: url) {
+        // A file named .pdf that PDFKit cannot read (damaged, cut short, not really a PDF) used to
+        // leave a blank white reader with nothing to say why. Report it so the sheet can say so.
+        if let doc = PDFDocument(url: url), doc.pageCount > 0 {
             v.document = doc
             DispatchQueue.main.async { pageCount = doc.pageCount }
+        } else {
+            DispatchQueue.main.async { failed = true }
         }
         context.coordinator.view = v
         NotificationCenter.default.addObserver(context.coordinator,

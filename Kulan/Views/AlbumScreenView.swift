@@ -141,6 +141,9 @@ struct AlbumScreenView: View {
             viewerVideo = Message(id: "\(message.id)-\(i)", data: d, cid: cid, crypto: Crypto.shared)
             return
         }
+        // A video whose file is not there yet (still uploading) fell through to the photo lookup,
+        // found no photo with its id, and opened the album's FIRST photo instead. Nothing to play yet.
+        if item.isVideo { return }
         viewerImage = imageGallery.first { $0.id == "\(message.id)-\(i)" } ?? imageGallery.first
     }
 }
