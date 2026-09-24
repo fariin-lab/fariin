@@ -4666,7 +4666,14 @@ struct StoryViewer: View {
         let cid = [me, s.authorUid].sorted().joined(separator: "_")
         // Attach the status reference so the reply shows as a "Status" quote (thumbnail) in chat.
         let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.previewUrl)
-        Task { try? await ChatService.sendText(cid: cid, text: text, replyTo: ref) }
+        // Audit 2026-09-24: this was `try?`, so a reply that failed (no keys reachable offline, a
+        // rule refusal) vanished while the toast below still said "Sent". The optimistic toast stays
+        // (a write queued offline never returns, so waiting for it would show nothing), but a thrown
+        // failure now replaces it with the chat's own "Couldn't send" wording.
+        Task {
+            do { try await ChatService.sendText(cid: cid, text: text, replyTo: ref) }
+            catch { await MainActor.run { flashSentToast("Couldn't send. Check your connection and try again.") } }
+        }
         flashSentToast()   // optimistic "Sent" confirmation
     }
 

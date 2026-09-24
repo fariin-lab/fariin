@@ -65,6 +65,17 @@ enum StoryOutbox {
     /// it, so it is dropped rather than sent late.
     private static let lifetime: TimeInterval = 24 * 3600
 
+    /// ⚠️ A TICKET WHOSE POST IS RUNNING RIGHT NOW IS NOT UNFINISHED. Audit 2026-09-24: `resume`
+    /// read every ticket on disk, including the one a post started THIS session had just written
+    /// (post from the chats camera before the row's first `load`), tore it up and posted the same
+    /// picture again, so the story went up twice. And `load` can pass its "first time for this
+    /// account" test twice when two callers race it at launch, which ran `resume` twice and
+    /// doubled every resumed post. Both sets live under one lock because `remember` runs off the
+    /// main actor.
+    private static let lock = NSLock()
+    private static var liveIds = Set<String>()
+    private static var resumedUids = Set<String>()
+
     /// Write the record. Called before the first byte moves; returns the id to hand back to `forget`.
     ///
     /// Best effort in both halves: a post must never fail because its safety net could not be
@@ -74,6 +85,7 @@ enum StoryOutbox {
                          allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
                          ownerUid: String) -> String {
         let id = UUID().uuidString
+        lock.lock(); liveIds.insert(id); lock.unlock()
         let t = Ticket(id: id, caption: caption, stickers: stickers,
                        excluded: Array(excluded), included: Array(included),
                        everyone: everyone, allowsReplies: allowsReplies,
@@ -89,6 +101,7 @@ enum StoryOutbox {
     /// The post landed, or the person cancelled it. Either way there is nothing left to resume.
     static func forget(_ id: String) {
         guard !id.isEmpty else { return }
+        lock.lock(); liveIds.remove(id); lock.unlock()
         try? FileManager.default.removeItem(at: meta(id))
         try? FileManager.default.removeItem(at: bytes(id))
     }
@@ -137,7 +150,13 @@ enum StoryOutbox {
     /// finish, and a ticket from before this field existed cannot prove whose it is.
     @MainActor static func resume(for uid: String) {
         guard !uid.isEmpty else { return }
-        for (t, img) in pending() {
+        // Once per account per process, and never a ticket a running post owns. See `liveIds`.
+        lock.lock()
+        let first = resumedUids.insert(uid).inserted
+        let running = liveIds
+        lock.unlock()
+        guard first else { return }
+        for (t, img) in pending() where !running.contains(t.id) {
             guard t.ownerUid == uid else {
                 forget(t.id)
                 continue
