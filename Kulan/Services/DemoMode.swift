@@ -103,6 +103,10 @@ enum DemoMode {
     /// them against. Off clears them, so nothing is left holding memory or waiting to reappear.
     @MainActor
     static func setChats(_ on: Bool) {
+        // Belt for the gate (audit 2026-09-24): every caller checks `isAvailable` first, but this
+        // function itself did not, so one careless new caller would have put the six demo chats
+        // into an App Store build. Turning OFF is always allowed, so a stale switch can clear.
+        let on = on && isAvailable
         demoChats = on ? demoConversations() : []
         demoStories = on ? demoStoryPeople() : []
         chatsInjected = on
@@ -125,6 +129,9 @@ enum DemoMode {
 
     @MainActor
     static func activate() {
+        // Same belt as `setChats` (audit 2026-09-24): the takeover replaced the signed-in uid with
+        // "demo-me" for whoever called it, with no gate of its own. Both callers are gated today.
+        guard isAvailable else { return }
         active = true
         // Firebase-free demo: Auth.auth().currentUser is nil in the sim, so we FORCE a fixed uid
         // and set it as the app's current user. Every screen resolves `me` from

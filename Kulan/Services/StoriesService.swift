@@ -1045,7 +1045,9 @@ final class StoriesService {
         let allContacts = await MainActor.run {
             Set(ConversationsRepository.shared.conversations
                 .filter { c in
-                    guard !c.isGroup else { return false }
+                    // Never a demo chat (2026-09-24 audit): with "Demo chats" on, a post pinned
+                    // "demo-hooyo" and the rest into the immutable `recipientUids`.
+                    guard !c.isGroup, !DemoMode.isDemoConversation(c.id) else { return false }
                     let them = c.otherUid(me)
                     return !c.isBlockedByMe(me) && !c.isBlockedByMe(them) && !them.isEmpty
                 }
@@ -1080,7 +1082,9 @@ final class StoriesService {
         let blockedEither = await MainActor.run {
             Set(ConversationsRepository.shared.conversations
                 .filter { c in
-                    guard !c.isGroup else { return false }
+                    // Never a demo chat (2026-09-24 audit): with "Demo chats" on, a post pinned
+                    // "demo-hooyo" and the rest into the immutable `recipientUids`.
+                    guard !c.isGroup, !DemoMode.isDemoConversation(c.id) else { return false }
                     let them = c.otherUid(me)
                     return !them.isEmpty && (c.isBlockedByMe(me) || c.isBlockedByMe(them))
                 }
@@ -2870,9 +2874,10 @@ final class StoriesRepository {
     /// run: the TestFlight lane builds Release, and with no Mac in the picture every build that
     /// reaches his phone is a TestFlight build. `DemoStoryMedia.isAvailable` is debug OR TestFlight,
     /// never the App Store, which is the distinction that was actually wanted.
-    static var injectDemoStories: Bool {
-        DemoStoryMedia.isAvailable && UserDefaults.standard.bool(forKey: "demoStoryUsers")
-    }
+    /// ⛔ ALWAYS OFF — 2026-09-24 audit. The "Demo story people" switch was removed on his
+    /// 2026-09-05 order, but this still read its key, so anyone who had it on in an older TestFlight
+    /// build kept the "(demo)" people with no way left to turn them off.
+    static var injectDemoStories: Bool { false }
 
     /// True for a person who only exists on this device, so nothing tries to write a view receipt,
     /// a watermark or a reply for them.
@@ -2895,8 +2900,11 @@ final class StoriesRepository {
     /// single test cannot cover both, and renaming either cast is a data change on devices that
     /// already have one. `GlowDemo.isDemoPerson` is the Glow half's own copy of this question and
     /// must stay in step with the second clause here.
+    /// ⛔ AND THE THIRD FAMILY, `demo-` WITH A HYPHEN — 2026-09-24 audit. The Settings "Demo chats"
+    /// people ("demo-sagal", "demo-cabdi") matched neither prefix, so viewing their story wrote
+    /// users/{me}/storyContexts/demo-sagal to the real database. No real account uid starts "demo-".
     static func isDemoAuthor(_ uid: String) -> Bool {
-        uid.hasPrefix("demo_") || uid.hasPrefix("glowdemo_")
+        uid.hasPrefix("demo_") || uid.hasPrefix("glowdemo_") || uid.hasPrefix("demo-")
     }
 
     /// Re-publish the row after the demo switch is flipped, so it takes effect without a relaunch.
