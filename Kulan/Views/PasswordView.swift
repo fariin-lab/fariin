@@ -66,7 +66,10 @@ struct PasswordView: View {
     @State private var showCurrent = false
     @State private var showNew = false
     @State private var showConfirm = false
-    @State private var forgotSent = false
+    // 2026-09-24 audit: "Forgot password?" mailed a code the app had nowhere to type. It now pushes
+    // `PasswordResetCodeView`, the same shape as the email-change code page.
+    @State private var resetCodeOpen = false
+    @State private var resetAddress = ""
     @State private var busy = false
     @State private var error: String?
     @State private var done = false
@@ -164,10 +167,11 @@ struct PasswordView: View {
                     .fontWeight(.semibold)
             }
         }
-        .alert("Check your email", isPresented: $forgotSent) {
-            Button("OK") { }
-        } message: {
-            Text("We sent a code to your email address. Enter it there, or use the link in the message to set a new password on the web.")
+        .navigationDestination(isPresented: $resetCodeOpen) {
+            PasswordResetCodeView(address: resetAddress) {
+                // The password is changed; this whole flow is done, so leave together.
+                dismiss()
+            }
         }
     }
 
@@ -222,8 +226,10 @@ struct PasswordView: View {
         error = nil
         defer { busy = false }
         do {
-            try await AccountCall.run("startPasswordReset")
-            forgotSent = true
+            let reply = try await AccountCall.run("startPasswordReset")
+            // The server says where it actually sent it (masked); that is the address to name.
+            resetAddress = (reply["maskedEmail"] as? String) ?? address
+            resetCodeOpen = true
         } catch {
             self.error = error.localizedDescription
         }
@@ -382,6 +388,106 @@ struct PasswordView: View {
                     self.error = AuthService.plainMessage(error) ?? "Could not save that. Try again."
                 }
             }
+        }
+    }
+}
+
+/// 2026-09-24 audit: the in-app half of "Forgot password?". `startPasswordReset` mails six digits and
+/// says "Enter this code in Fariin", but no screen took them, so `confirmPasswordReset` had no caller
+/// and the only way through was the web link. Same shape as `EmailCodeView`: the code, the two new
+/// password rows from the page above, and Save in the bar. Every string is one already used on
+/// those two pages.
+struct PasswordResetCodeView: View {
+    let address: String
+    var onDone: () -> Void
+
+    @State private var code = ""
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var working = false
+    @State private var error: String?
+    @State private var done = false
+
+    private var longEnough: Bool { password.count >= 8 }
+    private var matches: Bool { !confirm.isEmpty && confirm == password }
+    private var canSave: Bool { !working && code.count == 6 && longEnough && matches }
+
+    var body: some View {
+        List {
+            Section {
+                TextField("6-digit code", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .disabled(working)
+                    // A number pad cannot refuse a paste, so the field is filtered, as on the email page.
+                    .onChange(of: code) { _, new in
+                        let digits = String(new.filter(\.isNumber).prefix(6))
+                        if digits != new { code = digits }
+                    }
+            } header: {
+                Text("Verification code").textCase(nil)
+            } footer: {
+                Text("We sent a code to \(address). Enter it below to confirm.")
+            }
+
+            Section {
+                SecureField("New password", text: $password)
+                    .textContentType(.newPassword)
+                    .disabled(working)
+                SecureField("Confirm new password", text: $confirm)
+                    .textContentType(.newPassword)
+                    .disabled(working)
+            } footer: {
+                Text("Use at least 8 characters. After changing, all other devices will need to sign in again.")
+            }
+
+            if !password.isEmpty && !longEnough {
+                Section { Text("At least 8 characters.").font(.footnote).foregroundStyle(.secondary) }
+            } else if !confirm.isEmpty && !matches {
+                Section { Text("Those two do not match.").font(.footnote).foregroundStyle(.secondary) }
+            }
+
+            if let error {
+                Section { Text(error).font(.footnote).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Password")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") { Task { await save() } }
+                    .disabled(!canSave)
+                    .fontWeight(.semibold)
+                    .opacity(working ? 0.4 : 1)
+            }
+        }
+        .alert("Password saved", isPresented: $done) {
+            Button("Done") { onDone() }
+        } message: {
+            Text("Your old password no longer works.")
+        }
+    }
+
+    private func save() async {
+        guard canSave else { return }
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
+        working = true
+        error = nil
+        defer { working = false }
+        do {
+            try await AccountCall.run("confirmPasswordReset", ["code": code, "newPassword": password])
+            // ⚠️ `confirmPasswordReset` revokes EVERY refresh token, this phone's included, so without
+            // a fresh sign-in this device would be thrown out at its next token refresh. Signing
+            // straight back in with the password just set keeps it in. Best effort: if it fails the
+            // password is still changed, and the worst case is the ordinary sign-in screen.
+            try? await AuthService.shared.reauthEmail(password: password)
+            done = true
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 }
