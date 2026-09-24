@@ -398,13 +398,10 @@ struct ChatListTable: UIViewControllerRepresentable {
         // after it, means UIKit animates the indent from a layout that the row change has already
         // invalidated. The editing state settles first, then the diff runs against it.
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
-        // ⛔ THE SEARCH-BAR PIN IS RE-ASSERTED ON EVERY PASS — audit, 2026-09-11. `pinSearchBar()`
-        // is what sets `hidesSearchBarWhenScrolling = false`, and it only ran in `viewWillAppear`
-        // and `viewDidAppear`. Its own note says SwiftUI rebuilds the navigation item freely, and
-        // when `.searchable` re-installs its controller mid-session — cancelling a search is enough
-        // — the flag reverts to `true` with no appearance event left to repair it, and the small
-        // jump on scroll-up comes straight back. Both calls are guarded comparisons, so re-asserting
-        // them on every render costs nothing.
+        // The search bar's cancel button is re-checked on every render as well as every layout
+        // pass: SwiftUI re-installs its search controller freely (cancelling a search is enough),
+        // and a guarded comparison costs nothing. See `reassertNavChrome` for what it no longer
+        // does.
         vc.reassertNavChrome()
         vc.setSelecting(selecting)
         vc.apply(state: .make(pinned: pinned.map(\.id),
@@ -762,7 +759,6 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // for no gain. `didMove(toParent:)` has always done the real registration.
         if tableView.window == nil { registerAsContentScrollView() }
         isInTransition = true
-        pinSearchBar()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -770,31 +766,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         isInTransition = false
     }
 
-    /// ⛔ THE PIN IS RE-ASSERTED IN THE LAYOUT PASS, AND THAT IS THE WHOLE FIX — owner,
-    /// 2026-09-11: "when I open a chat and press Back, the search bar disappears temporarily, the
-    /// list jumps, and the search bar reappears after a second, which looks like the UI is
-    /// rebuilding."
-    ///
-    /// ⚠️ THE PIN WAS BEING LOST AND REPAIRED TOO LATE, and that one fact produces all three
-    /// symptoms in the order he lists them. The pop re-renders the SwiftUI body, so `.searchable`
-    /// re-installs its `UISearchController` — and a freshly installed one has
-    /// `hidesSearchBarWhenScrolling` back at its default `true` with no search row laid out. So:
-    ///
-    ///   1. the bar shrinks by the search row's height → THE FIELD DISAPPEARS;
-    ///   2. the table's top inset shrinks with it while `contentOffset` is deliberately left alone
-    ///      (see the two "DO NOT compensate" notes in this file) → EVERY ROW SHIFTS UP;
-    ///   3. `viewDidAppear`, or whichever render lands next, calls `reassertNavChrome` and sets the
-    ///      flag back → THE FIELD RETURNS and the rows shift back.
-    ///
-    /// His "about a second" is exactly the gap between the render that tore it down and the callback
-    /// that repaired it. Repairing it from `viewWillLayoutSubviews` closes that gap: the flag is
-    /// restored in the SAME layout pass that installed the controller, so there is never a frame
-    /// drawn without it.
-    ///
-    /// ⚠️ AND A NIL LOOKUP IS NO LONGER A DEAD END. `searchHostItem()` returns nil while the
-    /// controller is transiently absent, and the old code simply gave up until some later render
-    /// happened along. This runs on every layout pass, so a nil now is retried a few milliseconds
-    /// later by construction rather than by a scheduled retry.
+    /// The cancel-button invariant (`reassertNavChrome`) is re-checked on every layout pass. A
+    /// layout pass follows every change to the search controller's state, and a nil
+    /// `searchHostItem()` while SwiftUI is mid-reinstall is retried a few milliseconds later by
+    /// construction rather than by a scheduled retry.
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         reassertNavChrome()
@@ -805,10 +780,6 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The arrival has settled: let the footer resize again and replay whatever the transition
         // held back, in one pass rather than one per frame.
         isInTransition = false
-        // SwiftUI installs the search controller around the time the page appears, so the flag is
-        // set once more here — the `viewWillAppear` pass can run before there is an item to set it
-        // on. Guarded, so the second call is a comparison and nothing else.
-        pinSearchBar()
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
@@ -832,37 +803,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// added to it and why.
     static let bottomClearance: CGFloat = 28
 
-    /// ⛔ THE SEARCH FIELD STOPS COLLAPSING, WHICH IS THE JUMP'S CAUSE RATHER THAN ITS SYMPTOM —
-    /// owner, 2026-09-11, his fourth report: "when I scroll up it is doing jumping, it is not
-    /// following my finger, it is doing small jumping, fix, check deep".
-    ///
-    /// ⚠️ THE ARITHMETIC, BECAUSE THE LAST TWO ATTEMPTS BOTH AIMED AT THE WRONG END. `.searchable`
-    /// puts its field in the navigation bar, and by default that field HIDES as you scroll down and
-    /// comes back as you scroll up. Hiding it shrinks the safe area above this table by the field's
-    /// height; showing it grows it again. A scroll view answers an inset change by moving
-    /// `adjustedContentInset` and deliberately leaving `contentOffset` where it was — the offset is
-    /// measured from the content's origin, not from what the eye sees — so every row shifts by that
-    /// height. That shift IS the jump, it happens on the way up because that is when the field comes
-    /// back, and it cannot follow his finger because it is not a scroll at all.
-    ///
-    /// ⛔ DO NOT GO BACK TO COMPENSATING `contentOffset`. That was tried, shipped in build 736 and
-    /// reverted — the note above `ChatListCell` records why: UIKit already compensates part of that
-    /// transition, so subtracting the delta a second time doubles the movement. Both of those were
-    /// attempts to cancel a movement out. This removes the thing that causes it.
-    ///
-    /// With `hidesSearchBarWhenScrolling = false` the field is always there, the safe area above the
-    /// table never changes, and there is no delta for anybody to compensate for. The Calls page
-    /// shows its own field permanently and has never been reported for this.
-    ///
-    /// ⚠️ IT IS A VISIBLE CHANGE AND HE SHOULD BE TOLD: the search field no longer slides away when
-    /// the list is scrolled. One line to undo if he wants the sliding back, and the jump comes with
-    /// it — the two are the same mechanism.
-    ///
-    /// ⚠️ SET ON THE NAVIGATION ITEM SwiftUI OWNS. `.searchable` builds the `UISearchController` and
-    /// installs it; this reaches the item it was installed on and changes one flag. Applied on every
-    /// appearance because SwiftUI rebuilds that item freely, and guarded so it costs nothing once it
-    /// is already false.
-    private func pinSearchBar() { reassertNavChrome() }
+    // ⛔ THE SEARCH-FIELD PIN IS GONE — 2026-09-24, owner's instruction to match the reference app,
+    // whose field hides on scroll (`hidesSearchBarWhenScrolling` at its default). The pin was added
+    // on 2026-09-11 for his fourth "small jumping on scroll-up" report: the field coming back grows
+    // the inset above this table and the rows shift by that height. The reference app runs the
+    // same default without the jump because of its self-sizing footer, which this file has had
+    // since the same day (`ChatListSelfSizingTable`). The two were never run apart here, so if the
+    // scroll-up jump is reported again, that footer is where to look: not at `contentOffset` (see
+    // the note above `ChatListCell`), and not by pinning the field again.
 
     /// The item `.searchable` installed its controller on, wherever SwiftUI put it.
     private func searchHostItem() -> UINavigationItem? {
@@ -874,16 +822,28 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         return item
     }
 
-    /// The last item the bar appearance was written to. Compared by identity rather than kept as a
-    /// `Bool`, because the whole reason this is re-asserted is that SwiftUI can hand us a DIFFERENT
-    /// item mid-session — a flag would say "already done" about an item that no longer exists.
-    private weak var chromedItem: UINavigationItem?
-
-    /// Re-assert both nav-bar settings. Called on every render as well as on appearance: the pin is
-    /// a flag comparison, and the appearance is only rebuilt when the item itself changed.
+    /// ⛔ ONE JOB LEFT: THE SEARCH BAR'S CANCEL BUTTON — 2026-09-24. This method used to write three
+    /// things to the navigation item `.searchable` installed on: `hidesSearchBarWhenScrolling =
+    /// false` (the pin), an empty `backgroundImage` on the search bar, and one
+    /// `UINavigationBarAppearance` on all three slots. All three are gone on the owner's
+    /// 2026-09-24 instruction to match the reference app's header on iOS 26, whose search
+    /// controller and bar are left at their defaults: the field hides on scroll, the bar draws
+    /// its own glass, hairline and scroll-edge change, and no appearance object exists.
+    ///
+    /// ⚠️ THE 09-23 "NOTHING BEHIND THE BAR AT REST" IS THE REFERENCE APP'S OWN AT-REST STATE and
+    /// is accepted: their bar is clear at the top of the list and takes the system blur as rows
+    /// go under it, which this bar can do because `registerAsContentScrollView` hands it the table.
+    ///
+    /// ⚠️ THE FIELD HIDING ON SCROLL BRINGS THE INSET CHANGE BACK, and the answer to it is the
+    /// reference app's, already in this file: `ChatListSelfSizingTable` keeps the content one
+    /// pixel taller than the visible area, recomputed on every layout and inset change, so a short
+    /// list can still scroll far enough to collapse the field. Not an offset correction; the note
+    /// above `ChatListCell` records why that was tried and reverted.
+    ///
+    /// Called on every render and every layout pass; a guarded comparison, so it writes nothing
+    /// on the passes where the button is already right.
     func reassertNavChrome() {
         guard let item = searchHostItem() else { return }
-        if item.hidesSearchBarWhenScrolling { item.hidesSearchBarWhenScrolling = false }
         // ⛔ THE CANCEL BUTTON IS SHOWN EXACTLY WHILE THE CONTROLLER IS ACTIVE — his report,
         // 2026-09-16: tap the search field, tap the ✕, come back, and the ✕ is still sitting beside
         // an idle "Search" placeholder.
@@ -900,113 +860,20 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if let bar = item.searchController?.searchBar {
             let shouldShow = item.searchController?.isActive ?? false
             if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
-            // ⛔ THE LINE HE KEEPS RINGING IS THE SEARCH BAR'S, NOT THE NAVIGATION BAR'S — owner,
-            // 2026-09-23, FOURTH report, and this time he placed it: between the button row and the
-            // Search field, not under the whole header.
-            //
-            // ⚠️ THAT IS WHY THREE FIXES MISSED IT. `ec0c76cd`, `10d68265` and `9876825a` all went
-            // after `UINavigationBarAppearance` — its background, then its `shadowColor`, then
-            // re-asserting both on every pass. All three were right about the navigation bar and all
-            // three left this alone, because a `UISearchBar` installed in the bar's bottom section
-            // draws its OWN background with its OWN hairline along the top edge. The nav bar's
-            // shadow was already cleared; this one never was, so a line survived every attempt.
-            //
-            // ⚠️ `backgroundImage`, NOT `searchBarStyle = .minimal`. Both remove the hairline, but
-            // `.minimal` also restyles the text field itself, and the field's look is his — it is
-            // the rounded grey capsule in every screenshot he has sent. An empty image removes the
-            // bar's background and its hairline and touches nothing else.
-            //
-            // ⚠️ RE-ASSERTED ON EVERY PASS, like everything else in this method, and for the reason
-            // written above `hidesSearchBarWhenScrolling`: SwiftUI rebuilds and re-installs the
-            // search controller freely, and a fresh one arrives with the system's background back.
-            if bar.backgroundImage == nil { bar.backgroundImage = UIImage() }
+            // The search bar's own background and top hairline are the system's now: the 09-23
+            // `backgroundImage = UIImage()` went with the appearance override it was paired with.
+            // The reference app leaves both alone.
         }
-        // ⛔ THE APPEARANCES ARE RE-ASSERTED ON EVERY PASS TOO — his report, 2026-09-16, the header
-        // border again AFTER `10d68265` shipped in build 747.
-        //
-        // ⚠️ THEY USED TO SIT BEHIND `chromedItem !== item`, so `configureNavBar` ran ONCE per
-        // navigation item and never again. This file already knows why that is not enough: SwiftUI
-        // rebuilds the navigation item freely and resets what is on it, which is the whole reason
-        // `hidesSearchBarWhenScrolling` is re-stated above on every render. The appearances have
-        // exactly the same problem and were left behind the guard — so the moment SwiftUI replaced
-        // them, the transparent scroll-edge went with it and nothing ever put it back. What he is
-        // seeing is the SYSTEM default's scroll-edge, restored over ours.
-        //
-        // ⚠️ COMPARED BY IDENTITY, NOT BY VALUE. The two appearance objects are built once and
-        // held, so this is a pointer check on the common path and assigns only when something else
-        // has genuinely swapped them out. `UINavigationBarAppearance` is an NSObject and whether `==`
-        // compares its values or its identity is not something to bet a 40-minute build on — that
-        // caution was already written here, and `===` sidesteps it entirely.
-        if item.standardAppearance !== Self.scrolledAppearance
-            || item.scrollEdgeAppearance !== Self.scrolledAppearance
-            || item.compactAppearance !== Self.scrolledAppearance {
-            configureNavBar(item)
-        }
-        chromedItem = item
     }
 
-    /// The bar under content: the system's own material, with no hairline.
-    ///
-    /// Built once and held so `reassertNavChrome` can compare by identity — see its note.
-    private static let scrolledAppearance: UINavigationBarAppearance = {
-        let a = UINavigationBarAppearance()
-        a.configureWithDefaultBackground()   // Apple's material, not a description of one
-        a.shadowColor = .clear
-        a.shadowImage = UIImage()
-        return a
-    }()
-
-    // ⛔ `atTopAppearance` IS DELETED, NOT COMMENTED OUT — 2026-09-23. It was a transparent
-    // scroll-edge appearance, added on 09-16 to answer the "border" report, and it is what left the
-    // bar with nothing behind it at rest once the search bar's own background was cleared. That is
-    // the "no blur" in his fifth screenshot. `configureNavBar` carries the full history; a dead
-    // appearance sitting here is the kind of thing somebody re-wires in good faith.
-
-    /// ⛔ THE BLUR STAYS, THE LINE UNDER IT GOES — owner, 2026-09-11, after the background was
-    /// hidden outright: "now chat list bottom you removed border correctly. Please fix the header:
-    /// remove border and use Apple blur, make it like the Call page header."
-    ///
-    /// ⚠️ THOSE ARE TWO SETTINGS AND SWIFTUI EXPOSES ONE. `toolbarBackground` turns the material on
-    /// and off; it says nothing about the shadow, and the shadow IS the line he keeps ringing.
-    /// Hiding the background removed the line by removing the blur with it, which is why that build
-    /// answered half the report. `UINavigationBarAppearance.shadowColor` is the only thing that
-    /// separates them.
-    ///
-    /// ⚠️ AN OVERRIDE IS THE RIGHT TOOL ON BOTH SCREENS NOW, and the old warning about build 282 is
-    /// answered rather than avoided: that band was the bar's SHADOW, which the two lines below
-    /// clear. `ChatNavigationItem` used to nil its per-item appearances and inherit the system
-    /// default instead — until 2026-09-16, when that turned out to be the cause of the conversation
-    /// header's late blur (the default's `scrollEdge` is transparent, and neither screen has a
-    /// tracked scroll view to decide by). It now applies this same material, for the same reason
-    /// this method gives below. Nothing else touches this page's item.
-    ///
-    /// ⛔ ALL THREE CARRY THE MATERIAL AGAIN — owner, 2026-09-23, FIFTH report, and this one names
-    /// the symptom my own previous fix created: "now I am not seeing blur, make it like the call
-    /// list page header".
-    ///
-    /// ⚠️ THE HISTORY MATTERS HERE, BECAUSE THIS LINE HAS BEEN BOTH WAYS AND BOTH WERE REPORTED.
-    ///   · `ec0c76cd` → `10d68265` (09-16): identical material on all three. He called the
-    ///     always-drawn background a border, so `scrollEdge` was made transparent.
-    ///   · 09-23, earlier today: the LINE he was ringing turned out to be the search bar's own
-    ///     hairline, cleared with `backgroundImage = UIImage()`. Correct, and it is still in.
-    ///   · But those two together left this page with NOTHING behind the bar at rest: the search
-    ///     bar no longer draws its own surface, and `scrollEdge` was transparent. That is the "no
-    ///     blur" in his screenshot, and it is my regression, not a new fault.
-    ///
-    /// ⚠️ SO THE OLD TRADE IS BACK ON, AND THE REASON IT FAILED IS GONE. The 09-16 note reasoned
-    /// that an always-drawn background creates a tonal step where the bar ends. That step existed
-    /// because TWO surfaces were stacked there — the bar's material AND the search bar's own
-    /// background — and the second one is now cleared. One material, with no hairline under it and
-    /// no second surface inside it, is what the Calls page he keeps naming actually shows.
-    ///
-    /// ⚠️ IF A STEP COMES BACK, IT IS NOT THIS LINE. It would be the bar's SHADOW, which
-    /// `scrolledAppearance` clears on two lines, or the search bar's background returning because
-    /// SwiftUI re-installed the controller — `reassertNavChrome` re-states both on every pass.
-    private func configureNavBar(_ item: UINavigationItem) {
-        item.standardAppearance = Self.scrolledAppearance
-        item.compactAppearance = Self.scrolledAppearance
-        item.scrollEdgeAppearance = Self.scrolledAppearance
-    }
+    // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and
+    // `configureNavBar` (one default-background appearance with the shadow cleared, written to
+    // standard, compact and scrollEdge on every pass) are deleted, not fenced: the deployment
+    // target is iOS 26, and the reference app creates no appearance object for this bar on 26.
+    // `standardAppearance`, `compactAppearance` and `scrollEdgeAppearance` stay nil on the item, so
+    // the system's own glass, hairline and scroll-edge transition draw. If a band or a line is
+    // reported up here again, an override is not the answer; the five-report history of that band
+    // (09-11 to 09-23) is in the memory notes.
 
     private func registerAsContentScrollView() {
         setContentScrollView(tableView, for: .all)

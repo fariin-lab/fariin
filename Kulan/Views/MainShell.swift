@@ -1673,16 +1673,14 @@ struct ChatsView: View {
     private var liveCallCid: String? { call.liveConversationId ?? groupCall.activeCid }
 
 
-    // Native nav bar with a crisp circle avatar — glass stripped via the iOS 26
-    // opt-out, same as the chat header. Keeps the large "Chats" title + smooth
-    // push transitions instead of a hand-rolled bar.
-    // Avatar dropdown menu: Select Chats / Settings / Archive.
-    // Left: Edit (multi-select). Settings moved to its own tab, so no avatar here anymore.
-    private var editButton: some View {
-        Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
-    }
-    // Right: Mark all read + filter (All / Unread / Groups) + Message Requests + Archive.
-    private var filterMenu: some View {
+    // ⛔ THE HEADER IS THE REFERENCE APP'S, ITEM FOR ITEM — owner, 2026-09-24. Left: your own
+    // 40pt avatar, no glass behind it, opening the one menu. Title: plain "Chats". Right: camera
+    // and compose in one capsule. Search: the system's field, hiding on scroll. Nothing else.
+    //
+    // ⚠️ ONE MENU, NOT THREE DOORS. The standalone Edit pill, the standalone filter button and the
+    // title's chevron menu are gone; everything they held is in this menu, in this order: the
+    // filter picker, Select Chats, Message Requests, Chat Key, Archive, Mark All Read.
+    private var avatarMenu: some View {
         Menu {
             // ⛔ THE THREE FILTERS ARE A `Picker` NOW, AND THAT IS WHAT LETS THEM CARRY ICONS —
             // owner, 2026-09-11: "add icons to All, Unread, Groups… use my custom icons only".
@@ -1708,6 +1706,11 @@ struct ChatsView: View {
             }
             .pickerStyle(.inline)
             Divider()
+            // Select Chats: what the Edit pill did. The reference app keeps it in this menu, so the
+            // bar has one control on the left instead of two.
+            Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
+                Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
+            }
             // ⛔ MESSAGE REQUESTS — owner, 2026-09-09: "Message Requests put when users click ...
             // Chats Open comtext menu inside chats". This is that menu, and the entry sits in the
             // last group beside Archive because the two of them are the same kind of thing: the
@@ -1727,12 +1730,9 @@ struct ChatsView: View {
             Button { path.append(RequestsRoute.requests) } label: {
                 Label { Text(requestsMenuTitle) } icon: { MenuIcon("ic_message_request") }
             }
-            Button { path.append(ArchiveRoute.archive) } label: {
-                Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
-            }
-            // ⛔ CHAT PIN HERE TOO — owner, 2026-09-11: "also add in chatlist when i click filter
-            // button". The same page the title menu opens; this menu is where someone already
-            // looking for Archive and Message Requests will look for it.
+            // ⛔ CHAT PIN HERE — owner, 2026-09-11: "also add in chatlist when i click filter
+            // button". It also sat in the title menu; that menu is gone (2026-09-24, the reference
+            // app's title is plain), so this is its one home now, beside Archive.
             //
             // ⛔ HIS OWN GLYPH — owner, 2026-09-11, who sent the vector: a shield with a keyhole.
             // `circle.grid.3x3.fill` was the keypad stand-in this shipped with and it said "number
@@ -1740,6 +1740,9 @@ struct ChatsView: View {
             // picks it up and the tint still reaches it.
             Button { path.append(ChatPinRoute.mine) } label: {
                 Label { Text("Chat Key") } icon: { MenuIcon("ic_chat_key") }
+            }
+            Button { path.append(ArchiveRoute.archive) } label: {
+                Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
             }
             // ⛔ LAST, NOT FIRST — owner, 2026-09-11, who wrote the order out in full. It sat at the
             // top with a divider under it, which put the one ACTION in this menu above the things
@@ -1753,34 +1756,41 @@ struct ChatsView: View {
             // ⛔ NO "ADD STORY" HERE — owner, 2026-09-02, with the entry ringed. Posting a story is
             // the Stories tab's job and that tab now opens with its own add button in the header;
             // this menu belongs to the chat list, and every other thing in it acts on the chat list.
-            // `composeStory` below is left standing, unreferenced, with the day's-limit alerts it
-            // owns — it is the one door with the limit check in it, and the day a second entry point
-            // is wanted it should be this, not a second copy of the check.
+            // The camera bar item (`cameraButton`, 2026-09-24, the reference app's) is that second
+            // entry point, and it goes through `composeStory` because that is the one door with the
+            // day's-limit check in it, not a second copy of the check.
         } label: {
-            // Plain three-lines filter glyph (no inner circle) — Apple moved off the
-            // `.circle` variant; the glass button already supplies the round shape, so
-            // the old symbol drew a circle-inside-a-circle. Active filter = accent tint.
-            Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 18))
-                .foregroundStyle(chatFilter != 0 ? Color.accentColor : .primary)
+            // The signed-in user's own photo, drawn by the same view Settings uses. 40pt is the
+            // reference app's phone size for this item. No accent while a filter is on: the tick
+            // in the picker already says which filter is active.
+            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 40)
         }
-        .tint(.primary)
+    }
+    // The two right items, in the reference app's screen order: camera, then compose at the
+    // trailing edge. Plain bar images: no tint of their own (the tab root's `.tint(.primary)`
+    // already reaches this bar) and no font size forced on them, so the bar draws them at its own
+    // glyph size, the 24pt box the reference's assets are drawn to.
+    //
+    // The camera goes through `composeStory`, the one door with the day's-limit check in it, as
+    // its own note asks. `ic_camera` exists in the catalogue if he wants his own drawing here; the
+    // symbol is used so the pair is one icon family, which compose has no drawing for.
+    private var cameraButton: some View {
+        Button { composeStory() } label: { Image(systemName: "camera") }
     }
     private var composeButton: some View {
-        Button { showNew = true } label: {
-            Image(systemName: "square.and.pencil").font(.system(size: 18))
-        }
-        .tint(.primary)   // glass circle (default), black glyph
+        Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
     }
 
     @ToolbarContentBuilder private var homeToolbar: some ToolbarContent {
         if selecting {
-            // Minimal X close (replaces "Cancel"); no "Select All" — tap rows to select.
+            // Selection mode is the reference app's: a system "Cancel" text item on the left, the
+            // selected count as the title (the page title while nothing is ticked), no right items.
+            // No "Select All" — tap rows to select.
             ToolbarItem(placement: .topBarLeading) {
-                Button { exitSelect() } label: { Image(systemName: "xmark") }.tint(.primary)
+                Button("Cancel") { exitSelect() }
             }
             ToolbarItem(placement: .principal) {
-                Text(selection.isEmpty ? "Select Chats" : "\(selection.count) Selected").font(.headline)
+                Text(selection.isEmpty ? "Chats" : "\(selection.count) Selected").font(.headline)
             }
             // Native bottom toolbar (like Mail/Photos edit mode) — no custom glass bar.
             ToolbarItemGroup(placement: .bottomBar) {
@@ -1795,30 +1805,29 @@ struct ChatsView: View {
                 Button(role: .destructive) { showDeleteSelected = true } label: { Image(systemName: "trash") }
                     .disabled(selection.isEmpty)
             }
-        } else if #available(iOS 26.0, *) {
+        } else {
             // ⛔ THE TITLE BECOMES THE CONNECTION — owner, 2026-09-16, with the reference app's header
             // ringed: a small spinner where the title sits, and the word "Connecting".
             //
             // ⚠️ ADDED ONLY WHEN THERE IS SOMETHING TO SAY, and that is what keeps it safe. A
             // `.principal` item REPLACES `navigationTitle`, so one that is always present but
-            // sometimes empty would take the Chats title and its menu away for the ordinary case.
-            // Present only while `label` is non-nil, the normal header is untouched code.
+            // sometimes empty would take the Chats title away for the ordinary case. Present only
+            // while `label` is non-nil, the normal header is untouched code.
             if let status = connection.state.label {
                 ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
             }
-            // Edit keeps its native Liquid Glass capsule (no sharedBackgroundVisibility opt-out).
-            ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
+            // ⚠️ NO GLASS BEHIND THE AVATAR. `.sharedBackgroundVisibility(.hidden)` is SwiftUI's
+            // name for the reference app's `hidesSharedBackground = true` on this one item: the
+            // photo sits on the bar by itself, with no pill drawn round it. The right items keep
+            // theirs and share one capsule, which is what the group placement draws by default.
+            //
+            // `SwipeFade` stands in for the system's own bar-item pop transition: it drops the
+            // items to opacity 0 the instant a chat is pushed and brings them back on return.
+            // (The deployment target is iOS 26, so there is no pre-26 branch to keep here.)
+            ToolbarItem(placement: .topBarLeading) { avatarMenu.modifier(SwipeFade(on: showHeaderIcons)) }
+                .sharedBackgroundVisibility(.hidden)
             ToolbarItemGroup(placement: .topBarTrailing) {
-                filterMenu.modifier(SwipeFade(on: showHeaderIcons))
-                composeButton.modifier(SwipeFade(on: showHeaderIcons))
-            }
-        } else {
-            if let status = connection.state.label {
-                ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
-            }
-            ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                filterMenu.modifier(SwipeFade(on: showHeaderIcons))
+                cameraButton.modifier(SwipeFade(on: showHeaderIcons))
                 composeButton.modifier(SwipeFade(on: showHeaderIcons))
             }
         }
@@ -2299,9 +2308,10 @@ struct ChatsView: View {
                           // chat list".
                           //
                           // ⚠️ THE DOOR IS THE MENU AND IT ALREADY EXISTS, which is what makes this
-                          // a removal rather than a loss: `filterMenu` has carried an Archive entry
-                          // since it was written, so archived chats stay one tap away from the same
-                          // button that filters them.
+                          // a removal rather than a loss: the header menu (`avatarMenu`, the filter
+                          // button before 2026-09-24) has carried an Archive entry since it was
+                          // written, so archived chats stay one tap away from the same menu that
+                          // filters them.
                           //
                           // The history, because this row has been moved four times and each move
                           // had a reason that is now spent: above the chats, then below them on
@@ -2469,94 +2479,25 @@ struct ChatsView: View {
                 }
             }
             .navigationTitle("Chats")
-            .navigationBarTitleDisplayMode(.inline)   // one row: avatar · Chats · compose
-            // ⛔ THE BAR KEEPS ITS MATERIAL — owner, 2026-09-11, fourth time, and this time with the
-            // comparison that settles it: "use the native Apple blur like the conversation page
-            // header". That is an IN-APP difference, not the system chrome I had twice told him it
-            // was, and it is worth writing down how I got that wrong.
+            .navigationBarTitleDisplayMode(.inline)   // one row: avatar · Chats · camera · compose
+            // ⛔ THE BAR IS STOCK — owner, 2026-09-24: the header is the reference app's on iOS 26,
+            // and theirs sets nothing on the bar. No `toolbarBackground`, no
+            // `UINavigationBarAppearance` on this page's item (see `ChatListTableController
+            // .reassertNavChrome`, which used to write three), no shadow or tint tweaks. The system
+            // draws the glass, the scroll-edge change, the hairline and the title; this page sets
+            // the title text, the items and the search field, and registers the table as the bar's
+            // content scroll view so the bar can see rows go under it.
             //
-            // ⚠️ THE TWO SCREENS CONFIGURE THEIR BARS BY COMPLETELY DIFFERENT ROUTES.
-            // `ChatNavigationItem` — whose `clearBarAppearance` I cited as the reason this could not
-            // be fixed — belongs to `ThreadView` and `OfficialChatView`. It has never touched the
-            // chat list. So the two bars were never the same bar, and the conversation page's blur
-            // was never evidence about this one.
+            // ⚠️ AT REST THERE IS NOTHING BEHIND THE BAR, AND THAT IS ACCEPTED. On 2026-09-23 the
+            // same state was reported as "no blur" and answered with a forced material on all three
+            // appearance slots. It is the reference app's own at-rest state: their bar is clear at
+            // the top of the list and takes the system blur only as rows scroll under it. Kept on
+            // the owner's 2026-09-24 instruction to match them; the 09-11 to 09-23 history of this
+            // band (five reports, four overrides) is in the memory notes, not here.
             //
-            // ⚠️ WHAT HE IS ACTUALLY POINTING AT. This bar sits in its SCROLL-EDGE appearance, which
-            // is transparent — his screenshot shows a row sliding under the header with no band
-            // behind it at all. With nothing behind them, the toolbar buttons' own glass edges are
-            // the only thing drawn up there, and an outlined pill floating on the content is exactly
-            // what reads as "a border". There is no border: there is a missing background.
-            //
-            // A scroll-edge bar is supposed to become opaque as content goes under it, and this one
-            // never did — the list is a `UITableView` inside a representable, so the bar had no
-            // scroll view of its own to watch and stayed at the edge appearance for ever.
-            //
-            // ⛔ THE FORCED MATERIAL IS GONE AGAIN — owner, 2026-09-11 evening, with the Calls page
-            // beside this one: "call page is working correct, top header is blur, no border ...
-            // make the chat list like the call page". `.toolbarBackground(.visible)` painted the
-            // bar opaque at rest too, which is the black band with a row cut off under it that he
-            // photographed. The bar has a scroll view to watch now — `ChatListTableController`
-            // registers its table with `setContentScrollView`, the same thing SwiftUI does for the
-            // `List` on the Calls page — so the automatic appearance does here what it does there:
-            // clear at the top, the system blur as rows go under. Nothing is set on the bar.
-            //
-            // ⛔ THAT REGISTRATION DID NOT WORK, AND THE BAR'S BACKGROUND IS HIDDEN OUTRIGHT NOW —
-            // owner, 2026-09-11, on build 742 (`5e617d40`, which contains it): "the bug still I see
-            // in build 1.0 (742), plz remove border". Third report on one band.
-            //
-            // ⚠️ WHAT IS ACTUALLY DRAWING IT, and why this is the end of the road rather than a
-            // fourth guess. There is no stroke of ours up there — a session verified that on
-            // 2026-09-11 and wrote it down ([[kulan-ios26-chrome-is-apples-not-ours]]): it is iOS
-            // 26's own glass, and its bottom edge is the line he keeps ringing. A `List` makes that
-            // glass go clear at the top because SwiftUI hands its OWN scroll view to the bar; a
-            // `UITableView` in a representable has no such channel, and `setContentScrollView` on
-            // the hosting controller — the documented UIKit equivalent — did not reach SwiftUI's
-            // bar. So the dynamic behaviour the Calls page gets is not available to this screen
-            // without making the list a SwiftUI one again, which is the migration he ordered undone.
-            //
-            // `toolbarBackgroundVisibility(.hidden)` is the SwiftUI API for "this bar has no
-            // background", not a `UINavigationBarAppearance` override — overrides are what drew the
-            // band in build 282 and that note still stands. It removes the border permanently, which
-            // is what he asked for in those words.
-            //
-            // ⚠️ THE TRADE, SO IT IS NOT A SURPRISE: there is now NO blur behind the header at any
-            // scroll position. Rows pass under the Edit/Chats/compose buttons with nothing between
-            // them. Those buttons carry their own glass, which is what keeps them legible.
-            // ⛔ AND HIDING IT WAS NOT WHAT HE WANTED EITHER — owner, 2026-09-11, after that
-            // shipped: "now chat list bottom, you removed border correctly. Please fix the header:
-            // remove border and use Apple blur, make it like the Call page header."
-            //
-            // Hiding the background removed the border by removing everything, and what he is
-            // asking for is the blur WITHOUT the line under it. Those are two different settings on
-            // the bar, and SwiftUI exposes only the first — `toolbarBackground` turns the material
-            // on and off and has nothing to say about the shadow. The shadow IS the border.
-            //
-            // So the bar is configured in `ChatListTableController.configureNavBar`, which already
-            // walks to this page's navigation item for the search field. See that method for why an
-            // appearance override is the right tool HERE and the wrong one on the conversation
-            // screen, which is the case the old warning was written about.
-            // ⛔ THE TITLE OPENS A MENU — owner, 2026-09-09: "Message Requests put when users click
-            // Chats, open context menu inside chats". He photographed the header with a chevron
-            // beside the word, which is what a title menu draws; there was none in the code, so
-            // tapping "Chats" did nothing and the entry had nowhere to live that matched his words.
-            //
-            // ⚠️ IT IS ALSO IN THE FILTER MENU, DELIBERATELY, AND THAT IS NOT A DUPLICATE BY
-            // ACCIDENT. That menu is where every other whole-list destination already is (Archive
-            // sits directly under it), so removing it from there would move Archive's neighbour
-            // somewhere Archive is not. `toolbarTitleMenu` is the affordance he asked for; the
-            // filter menu is where someone already looking for Archive will find it.
-            .toolbarTitleMenu {
-                Button { path.append(RequestsRoute.requests) } label: {
-                    Label { Text(requestsMenuTitle) } icon: { MenuIcon("ic_message_request") }
-                }
-                // ⛔ CHAT PIN, HERE — owner, 2026-09-11, with the reference app's title menu
-                // screenshot and an arrow on its "Number" entry: the private number that opens
-                // your chat lives in the menu under the chat list's own title. The page shows the
-                // pin this phone set, with Copy and Share, and is where it is changed or removed.
-                Button { path.append(ChatPinRoute.mine) } label: {
-                    Label { Text("Chat Key") } icon: { MenuIcon("ic_chat_key") }
-                }
-            }
+            // ⚠️ THE TITLE IS PLAIN. The 2026-09-09 title menu (Message Requests, Chat Key) is gone
+            // with the chevron it drew; both entries live in the avatar menu, `avatarMenu`, which
+            // is the one menu this header has, as the reference app's is.
             // ⛔ SEARCH IS BACK ON THE PAGE — his call, 2026-08-30: "settings does not need search at
             // all, calls has one inside so the chat also will be like the one in the call page".
             // The detached search circle in the tab bar is gone with it. It was one control standing
