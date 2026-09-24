@@ -125,6 +125,21 @@ struct MediaDismissHost: UIViewRepresentable {
         private var clipWrap: UIView?      // landing-only clipping view (the chat viewport), see finish()
         private var fromFrame: CGRect = .zero
         private var active = false
+        /// ⛔ A FLIGHT IS STILL IN THE AIR — the orphan with the viewer's chevron, 4th report,
+        /// 2026-09-24. `active` means "a finger or a close owns the copy" and `finish()` clears it
+        /// BEFORE its 0.25s landing even starts, so for the whole landing this coordinator looked
+        /// idle. A second close in that window (the delayed zoom-out close, a late token) built a
+        /// second copy over the first, swept the first out of the window mid-flight, and ran a second
+        /// `dismiss()` against a cover already being torn down. This holds from the moment a landing,
+        /// drift or cancel spring starts until its completion runs, and every new begin checks it.
+        /// Stamped rather than a Bool so a completion that never arrives cannot lock the viewer open:
+        /// after a second it counts as landed.
+        private var flightStartedAt: CFTimeInterval?
+        private var closeAfterCancel = false
+        private var flying: Bool {
+            guard let t = flightStartedAt else { return false }
+            return CACurrentMediaTime() - t < 1.0
+        }
         /// ⛔ THE SOURCE WE HID, SO EVERY WAY OUT CAN GIVE IT BACK — owner, 2026-09-05: drag a photo
         /// down to close it and the message it came from is left showing an empty grey box where the
         /// picture used to be.
@@ -285,7 +300,16 @@ struct MediaDismissHost: UIViewRepresentable {
         }
 
         private func closeNow() {
-            guard !active, parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else {
+            // A close is already under way (a drag owns the copy, or a landing is in the air). It
+            // will dismiss the viewer itself; a second exit here is what built the orphan.
+            if active || flying {
+                imageCloseLog.info("button close held: active \(self.active), flying \(self.flying)")
+                // Kept, not lost: if what is under way turns out to be a cancel spring, the close
+                // runs when it lands. A finish drops it, because that exit already dismisses.
+                closeAfterCancel = true
+                return
+            }
+            guard parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else {
                 imageCloseLog.error("button close fell back to a plain dismiss: active \(self.active), canBegin \(self.parent.canBegin()), media \(self.parent.media() != nil)")
                 parent.onDismiss()
                 return
@@ -301,7 +325,7 @@ struct MediaDismissHost: UIViewRepresentable {
             guard let root else { return }
             switch g.state {
             case .began:
-                guard !active, parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else { return }
+                guard !active, !flying, parent.canBegin(), let m = parent.media(), buildCopy(m) != nil else { return }
                 active = true
                 // the reference app zeroes the translation on .began (MediaInteractiveDismiss). Without it the
                 // first .changed already carries the recogniser's pre-recognition slop, so the copy
@@ -377,10 +401,38 @@ struct MediaDismissHost: UIViewRepresentable {
             return CGVector(dx: abs(dx) > 1 ? v.x / dx : 0, dy: abs(dy) > 1 ? v.y / dy : 0)
         }
 
+        /// The ONE way a flight asks the viewer to go. Every exit drives the root to alpha 0 first,
+        /// so if the cover is somehow still in a window a second later (SwiftUI dropped the dismiss),
+        /// it would sit there invisible and swallow every touch on the chat. Give it back visible and
+        /// usable instead, and say so in the log.
+        private func dismissViewer() {
+            parent.onDismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self, let root = self.root, root.window != nil,
+                      root.alpha < 1, !self.active, !self.flying else { return }
+                imageCloseLog.error("viewer still on screen 1s after dismiss: restoring its alpha")
+                root.alpha = 1
+                self.parent.onHideContent(false)
+            }
+        }
+
+        /// Remove THIS flight's views and forget them only if the coordinator still points at them.
+        /// A completion used to read `self.container` / `self.clipWrap`, which a later flight may have
+        /// replaced, and so removed the wrong copy while its own stayed in the window.
+        private func endFlight(copy c: UIView, wrap: UIView?) {
+            (wrap ?? c).removeFromSuperview()
+            c.removeFromSuperview()
+            if container === c { container = nil }
+            if let wrap, clipWrap === wrap { clipWrap = nil }
+            flightStartedAt = nil
+        }
+
         // Dismiss (damping 1): the root is already melted past the threshold (the chat shows behind),
         // so the copy fades out from RIGHT WHERE IT WAS RELEASED with a small continued drift + shrink —
         // seeded with the release velocity so it carries the finger's motion. Then dismiss.
         private func finish(offset o: CGPoint, velocity: CGPoint = .zero) {
+            closeAfterCancel = false   // this exit dismisses; a held button close must not run a second
+
             // No copy means there is nothing to animate, but the tile has already stepped aside and
             // the viewer has already been asked to close. Bare `return` left both of those half done:
             // the bubble stayed blank and the cover stayed up.
@@ -389,10 +441,14 @@ struct MediaDismissHost: UIViewRepresentable {
                 active = false
                 restoreSource()
                 parent.onHideContent(false)
-                parent.onDismiss()
+                // The drag may have left the root half faded (chrome and chevron still drawn). Every
+                // other exit drives it to 0 before the dismiss; this one never touched it.
+                root?.alpha = 0
+                dismissViewer()
                 return
             }
             active = false
+            flightStartedAt = CACurrentMediaTime()
 
             // FLY HOME when we know where the media came from: the copy scales and travels into the
             // thumbnail's exact rect and only fades at the very end, so it visibly "lands" on the tile.
@@ -412,6 +468,7 @@ struct MediaDismissHost: UIViewRepresentable {
                 // animate in the same block, which is what makes the child's coordinates interpolate
                 // through the moving clip the way the reference app's do.
                 var clipTarget: CGRect?
+                var flightWrap: UIView?     // THIS flight's wrap, captured for its own completion
                 if let clip = parent.clipRect(), let rootView = c.superview,
                    clip.width > 1, clip.height > 1, clip != rootView.bounds {
                     let wrap = UIView(frame: rootView.bounds)
@@ -420,6 +477,7 @@ struct MediaDismissHost: UIViewRepresentable {
                     rootView.addSubview(wrap)
                     wrap.addSubview(c)         // wrap sits at the root's origin → same on-screen frame
                     clipWrap = wrap
+                    flightWrap = wrap
                     clipTarget = clip
                 }
                 // Destination expressed in the wrap's END-of-animation coordinates when clipped.
@@ -440,7 +498,7 @@ struct MediaDismissHost: UIViewRepresentable {
                     // .identity`). The old version kept a transform SCALE derived from min(w,h) ratios,
                     // which cannot match a tile of a different aspect — the copy arrived the wrong
                     // shape. cornerRadius also did nothing without masksToBounds.
-                    if let wrapTarget { self.clipWrap?.frame = wrapTarget }
+                    if let wrapTarget { flightWrap?.frame = wrapTarget }
                     c.transform = .identity
                     c.frame = CGRect(x: center.x - homeInWrap.width / 2, y: center.y - homeInWrap.height / 2,
                                      width: homeInWrap.width, height: homeInWrap.height)
@@ -460,15 +518,13 @@ struct MediaDismissHost: UIViewRepresentable {
                     // Reveal the tile BEFORE the copy goes, so the two overlap for a frame and the swap
                     // is invisible. Revealing after would flash the empty tile.
                     self.restoreSource()
-                    self.parent.onDismiss()
+                    self.dismissViewer()
                     // The copy lives in the WINDOW now, so the cover's teardown no longer removes it.
                     // Drop it a tick later, once the dismissal has the real content underneath.
+                    // Its OWN copy and wrap, captured above, never whatever `self` points at by now.
                     DispatchQueue.main.async {
-                        let v = self.clipWrap ?? self.container
-                        imageCloseLog.info("fly home copy removed, had superview \(v?.superview != nil)")
-                        v?.removeFromSuperview()
-                        self.clipWrap = nil
-                        self.container = nil
+                        imageCloseLog.info("fly home copy removed, had superview \((flightWrap ?? c).superview != nil)")
+                        self.endFlight(copy: c, wrap: flightWrap)
                     }
                 }
                 animator.startAnimation()
@@ -507,11 +563,10 @@ struct MediaDismissHost: UIViewRepresentable {
                 // tile is what the reveal used to be attached to, and a flight with nowhere to land
                 // still owes the conversation its photograph.
                 self.restoreSource()
-                self.parent.onDismiss()
-                // The copy is in the window, not the cover — remove it ourselves.
+                self.dismissViewer()
+                // The copy is in the window, not the cover — remove it ourselves (this flight's own).
                 DispatchQueue.main.async {
-                    self.container?.removeFromSuperview()
-                    self.container = nil
+                    self.endFlight(copy: c, wrap: nil)
                 }
             }
             animator.startAnimation()
@@ -529,8 +584,12 @@ struct MediaDismissHost: UIViewRepresentable {
                 imageCloseLog.error("cancel with NO copy: restoring")
                 restoreSource()
                 parent.onHideContent(false)
+                root?.alpha = 1   // the drag faded it; nothing else will bring it back
                 return
             }
+            // The spring home is a flight too: a close landing inside it would sweep this copy away
+            // and then have its hide undone by this completion's restoreSource().
+            flightStartedAt = CACurrentMediaTime()
             imageCloseLog.info("cancel: springing copy back")
             let home = CGPoint(x: fromFrame.midX, y: fromFrame.midY)
             let spring = UISpringTimingParameters(dampingRatio: 1,
@@ -550,8 +609,11 @@ struct MediaDismissHost: UIViewRepresentable {
                 // it — a CANCELLED drag left the bubble invisible in the chat, which showed the moment
                 // the viewer was later closed with the X instead of another drag.
                 self.restoreSource()
-                c.removeFromSuperview()
-                self.container = nil
+                self.endFlight(copy: c, wrap: nil)
+                if self.closeAfterCancel {
+                    self.closeAfterCancel = false
+                    self.closeNow()
+                }
             }
             animator.startAnimation()
         }

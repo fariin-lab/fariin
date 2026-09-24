@@ -70,6 +70,11 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     @Published private(set) var cid: String = ""
     @Published private(set) var playing = false
     @Published private(set) var loadingId: String = ""
+    /// The note whose last load failed (no signal, a key or file we could not fetch). The disc
+    /// shows the warning mark for it, the same one a photo that failed to load shows, and a tap
+    /// tries again. It used to spin and then quietly go back to idle, so a failure looked exactly
+    /// like a tap that never registered.
+    @Published private(set) var failedId: String = ""
     @Published private(set) var progress: Double = 0
     /// Whether the note now playing is one of mine, so the bar can say "You".
     @Published private(set) var isMine = false
@@ -293,6 +298,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
 
     func isPlaying(_ id: String) -> Bool { playing && messageId == id }
     func isLoading(_ id: String) -> Bool { loadingId == id }
+    func loadFailed(_ id: String) -> Bool { failedId == id }
     /// The progress THIS note should draw: the live one while it owns playback, otherwise whatever it
     /// was paused at, otherwise zero.
     func progress(for id: String) -> Double {
@@ -302,7 +308,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     func rate(for cid: String) -> Float { rateByCid[cid] ?? 1 }
 
     func cycleRate(cid: String) {
-        let next: Float = rate(for: cid) == 1 ? 1.5 : (rate(for: cid) == 1.5 ? 2 : 1)
+        // 1 → 1.5 → 2 → 0.5 → 1. The slow stop is for a note that is hard to follow (an accent, a
+        // noisy street); the pill already formats any fraction, so "0.5x" needs nothing else.
+        let r = rate(for: cid)
+        let next: Float = r == 1 ? 1.5 : (r == 1.5 ? 2 : (r == 2 ? 0.5 : 1))
         rateByCid[cid] = next
         if playing { player?.rate = next; updateNowPlaying() }   // the lock screen clock runs at 2× too
         objectWillChange.send()
@@ -348,6 +357,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     private func load(message: Message, cid: String, isMe: Bool) async {
         // Taking over from whatever was playing: park its position first so it can be resumed.
         if playing { pause() }
+        if failedId == message.id { failedId = "" }   // trying again: the warning comes off
         // ⚠️ AND THE OLD PLAYER GOES WITH IT. It used to be left alive under the new note's id, so when
         // the new one failed to load — no signal, a key we could not fetch — `toggle` saw
         // `player != nil` for the new id and played the PREVIOUS note's audio under the new bubble.
@@ -397,6 +407,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             defer { if loadingId == message.id { loadingId = "" } }
             guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+                failedId = message.id
                 clearNowPlaying(); return
             }
             let tmp = FileManager.default.temporaryDirectory
@@ -423,6 +434,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         defer { if loadingId == message.id { loadingId = "" } }   // see the note above — mine only
         guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
               let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+            failedId = message.id
             clearNowPlaying(); return
         }
         // Persist the decrypted note so it never downloads twice.

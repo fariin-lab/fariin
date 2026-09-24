@@ -230,4 +230,58 @@ enum DocumentPrefetch {
                                                  withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
     }
+
+    /// The URL to hand QuickLook. A file sent without an extension ("scan", "notes") reached the
+    /// preview as a bare name, and QuickLook decides what it is from the extension alone, so a
+    /// perfectly good document showed as unpreviewable. For such a file this sniffs the first bytes
+    /// and returns a copy beside it that carries the matching extension. Anything unrecognised, or
+    /// a file that already has an extension, comes back unchanged.
+    static func previewURL(for local: URL) -> URL {
+        guard local.pathExtension.isEmpty,
+              let fh = try? FileHandle(forReadingFrom: local) else { return local }
+        let head = (try? fh.read(upToCount: 64 * 1024)) ?? Data()
+        try? fh.close()
+        guard let ext = sniffExtension(head) else { return local }
+        let typed = local.appendingPathExtension(ext)
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: typed.path) {
+            guard (try? fm.copyItem(at: local, to: typed)) != nil else { return local }
+        }
+        return typed
+    }
+
+    /// Common document types by their leading bytes. Office files are zips; the part names inside
+    /// (word/, xl/, ppt/) sit near the start of the archive and tell them apart.
+    static func sniffExtension(_ d: Data) -> String? {
+        func starts(_ bytes: [UInt8], at off: Int = 0) -> Bool {
+            d.count >= off + bytes.count && d.dropFirst(off).prefix(bytes.count).elementsEqual(bytes)
+        }
+        if starts([0x25, 0x50, 0x44, 0x46]) { return "pdf" }
+        if starts([0x89, 0x50, 0x4E, 0x47]) { return "png" }
+        if starts([0xFF, 0xD8, 0xFF]) { return "jpg" }
+        if starts(Array("GIF8".utf8)) { return "gif" }
+        if starts(Array("RIFF".utf8)), starts(Array("WEBP".utf8), at: 8) { return "webp" }
+        if starts(Array("ftyp".utf8), at: 4) {
+            let brand = String(decoding: d.dropFirst(8).prefix(4), as: UTF8.self)
+            if brand.hasPrefix("hei") || brand.hasPrefix("mif1") { return "heic" }
+            if brand.hasPrefix("qt") { return "mov" }
+            if brand.hasPrefix("M4A") { return "m4a" }
+            return "mp4"
+        }
+        if starts(Array("ID3".utf8)) { return "mp3" }
+        if starts(Array("{\\rtf".utf8)) { return "rtf" }
+        if starts([0xD0, 0xCF, 0x11, 0xE0]) { return "doc" }   // legacy Office; QuickLook sorts it out
+        if starts([0x50, 0x4B, 0x03, 0x04]) {
+            let names = String(decoding: d, as: UTF8.self)
+            if names.contains("word/") { return "docx" }
+            if names.contains("xl/") { return "xlsx" }
+            if names.contains("ppt/") { return "pptx" }
+            return "zip"
+        }
+        // Plain text: valid UTF-8 with no NUL bytes in what we read. The read may have cut the last
+        // character in half, so up to three trailing bytes are allowed to be incomplete.
+        if !d.isEmpty, !d.contains(0),
+           (0...3).contains(where: { String(data: d.dropLast($0), encoding: .utf8) != nil }) { return "txt" }
+        return nil
+    }
 }

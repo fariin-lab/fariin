@@ -64,7 +64,9 @@ service firebase.storage {
       // announcement rules below already use. Those two were hardened at some point and this one was
       // never brought along.
       //
-      // ⚠️ MEMBERSHIP IS STILL NOT CHECKED, and I am not guessing at it. The correct rule reads the
+      // (Superseded 2026-09-24: membership IS checked on write now, see `chatMember` below. The
+      // history is kept because the warning about firestore.get() still applies to groups.)
+      // ⚠️ MEMBERSHIP WAS NOT CHECKED, and I was not guessing at it. The correct rule reads the
       // conversation out of Firestore and requires request.auth.uid to be in its `users`. The story
       // rule above carries a warning that firestore.get() "is unreliable in this project's Storage
       // rules and was denying every legitimate upload" — that was a story doc which does not exist
@@ -82,9 +84,51 @@ service firebase.storage {
       // directly above still stands: this path does not check conversation membership, so the only
       // things holding it are `resource == null` and this number. Whoever adds the membership check
       // makes this cheaper; until then, do not raise it again.
+      //
+      // MEMBERSHIP, 2026-09-24. Two halves, because the two kinds of chat differ in the one way that
+      // matters here:
+      //   · A 1:1 chat's id IS its members, "<uidA>_<uidB>". The check reads the path and nothing
+      //     else, so the first photo to a brand-new contact cannot be refused: the client starts
+      //     that upload BEFORE the conversation doc is written (ChatService's `ensureConv` runs
+      //     alongside it), and a Firestore lookup at that moment would find no doc.
+      //   · A group id has no '_' and its doc exists from the moment the group is made, before any
+      //     message can be sent, so the lookup always has something to read.
+      // ⚠️ The group half depends on firestore.get() working from Storage rules in this project (the
+      // warning above). Emulator or one real group photo right after deploying, before trusting it.
       allow write: if request.auth != null
         && request.resource.size < 64 * 1024 * 1024
-        && resource == null;
+        && resource == null
+        && chatMember(cid);
+
+      // ⛔ DELETE FOR EVERYONE NEVER DELETED THE MEDIA (audit, 2026-09-24). There was no delete
+      // clause here at all, so the client's cleanup after "delete for everyone" was refused every
+      // time and swallowed by its `try?`: every deleted photo, video, voice note and file stayed in
+      // the bucket for good. Expiry and one-time voice are cleaned server-side and never needed this.
+      //
+      // Only the AUTHOR, and only once the message is already a tombstone. Every object on this path
+      // is named after its message: `<messageId>.enc`, `.mp4.enc`, `.thumb.enc`, `-<n>.enc`, `-lp.enc`
+      // and so on, and a message id is a Firestore auto-id, which never contains '.' or '-'. So the
+      // part before the first '.' or '-' is the message, and the rule reads it. The client deletes
+      // Storage AFTER writing `deleted: true` (ChatService.deleteMessage), so the doc is there, still
+      // carrying `authorId`, when this runs.
+      //
+      // ⚠️ firestore.get() — see the warning above about it in this project's Storage rules. Here the
+      // doc always exists at call time (the story failure was a doc that did not exist yet), and a
+      // refusal costs only what it costs today: the object stays. Nothing that works now can break.
+      // Not covered: the hard-delete fallback (tombstone refused, doc gone) still cannot delete.
+      allow delete: if request.auth != null
+        && chatMessage(cid, file).data.authorId == request.auth.uid
+        && chatMessage(cid, file).data.get('deleted', false) == true;
+    }
+
+    function chatMember(cid) {
+      return (cid.matches('.*_.*') && request.auth.uid in cid.split('_'))
+        || (!cid.matches('.*_.*')
+            && request.auth.uid in firestore.get(/databases/(default)/documents/conversations/$(cid)).data.users);
+    }
+
+    function chatMessage(cid, file) {
+      return firestore.get(/databases/(default)/documents/conversations/$(cid)/messages/$(file.split('[.-]')[0]));
     }
 
     // Story media at stories/{storyId}/{file} — PLAIN (v1, not E2EE).

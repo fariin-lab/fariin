@@ -86,6 +86,12 @@ final class VoicePlayDiscControl: UIView {
         didSet { if showsPause != oldValue { updateGlyph() } }
     }
 
+    /// The last load of this note failed: a warning mark in place of play, the same mark a photo
+    /// that failed to load shows. The tap is unchanged, so tapping it tries again.
+    var showsFailed: Bool = false {
+        didSet { if showsFailed != oldValue { updateGlyph() } }
+    }
+
     var isBusy: Bool = false {
         didSet {
             guard isBusy != oldValue else { return }
@@ -162,7 +168,8 @@ final class VoicePlayDiscControl: UIView {
         glyph.isHidden = isBusy
         guard !isBusy else { return }
         let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)
-        glyph.image = UIImage(systemName: showsPause ? "pause.fill" : "play.fill",
+        let symbol = showsFailed ? "exclamationmark.triangle" : (showsPause ? "pause.fill" : "play.fill")
+        glyph.image = UIImage(systemName: symbol,
                               withConfiguration: config)?.withRenderingMode(.alwaysTemplate)
         // ⚠️ RESOLVED AGAINST THIS VIEW'S TRAITS BEFORE IT IS WEIGHED. `contrasting` reads the
         // colour's brightness, and a dynamic colour asked for its brightness outside a drawing pass

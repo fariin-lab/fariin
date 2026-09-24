@@ -136,6 +136,7 @@ final class VoiceBubbleView: UIView {
         // The upload's spinner and the player's are the same spinner: there is nothing to play
         // until the bytes land, and the disc is the one place that says so.
         disc.isBusy = b.loading || player.isLoading(b.messageId)
+        disc.showsFailed = !disc.isBusy && player.loadFailed(b.messageId)
         let progress = player.progress(for: b.messageId)
         wave.progress = progress
 
@@ -293,5 +294,6 @@ final class VoiceBubbleView: UIView {
         wave.progress = 0
         disc.showsPause = false
         disc.isBusy = false
+        disc.showsFailed = false
     }
 }

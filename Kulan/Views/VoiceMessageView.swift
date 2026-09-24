@@ -231,7 +231,7 @@ struct VoiceMessageView: View {
         if rate != r { rate = r }
     }
 
-    private var rateLabel: String { rate == 1 ? "1×" : (rate == 1.5 ? "1.5×" : "2×") }
+    private var rateLabel: String { rate == 1 ? "1×" : (rate == 1.5 ? "1.5×" : (rate == 0.5 ? "0.5×" : "2×")) }
 
     /// Has the other side played THIS note of mine? Read live off the conversation the chat list is
     /// already listening to, so it lights up the moment their receipt lands, with no listener of its own.
