@@ -2675,9 +2675,20 @@ enum ChatService {
                               "videoEnc", "thumbEnc", "viewOnce", "mentions",
                               // The Forwarded tag sits ABOVE the bubble, so it survived the content
                               // being stripped and read "Forwarded / This message was deleted".
-                              "forwarded"] {
+                              "forwarded",
+                              // 2026-09-24 feature-audit: `thumb` (the sealed preview every photo,
+                              // video and file send writes) and `edits` (the edit history) were
+                              // missing here while the rule refuses a tombstone that keeps either.
+                              // So every media or edited message had its tombstone REFUSED and fell
+                              // to the hard delete below, losing the placeholder.
+                              "thumb", "edits", "editedAt"] {
                         strip[k] = FieldValue.delete()
                     }
+                    // 2026-09-24 feature-audit: a group admin (the "Delete messages" right) deleting
+                    // someone else's message signs it, so the author's bubble does not claim "You
+                    // deleted this message". Never written on my own message, so an own delete stays
+                    // accepted by rules that predate this field.
+                    if (snap.data()?["authorId"] as? String) != uid { strip["deletedBy"] = uid }
                     try await ref.updateData(strip)
                     markedDeleted = true
                 } catch {
@@ -2688,12 +2699,15 @@ enum ChatService {
             }
             // Nothing marked means either this WAS already a marker, or the server refused the flag.
             // Either way the document goes.
-            if !markedDeleted { try await ref.delete() }
-            // Best-effort, AFTER the doc is gone: a failure here must never turn a successful delete
-            // into a reported failure, and an already-missing object is not an error worth surfacing.
+            // 2026-09-24 feature-audit: THE FILES GO WHILE THE DOC STILL EXISTS. The Storage delete
+            // rule reads this message doc to see who wrote it; after a hard delete there is nothing
+            // to read, so every file of a hard-deleted message was refused and stayed in the bucket.
+            // Tombstone path: the marker is there now. Hard-delete path: sweep first, then delete.
+            // Best-effort either way: a file that will not go never fails the delete.
             for u in blobs {
                 try? await Storage.storage().reference(forURL: u).delete()
             }
+            if !markedDeleted { try await ref.delete() }
             // ⛔ AND THE DECRYPTED COPIES ON THIS PHONE. The comment at the top of this method says
             // the ciphertext must not outlive the message — and until now that promise was kept on
             // the SERVER and broken on the DEVICE.
@@ -2906,6 +2920,25 @@ enum ChatService {
         }
     }
 
+    /// 2026-09-24 feature-audit: an edit refused before it is written (the message was deleted).
+    enum EditRefused: Error { case deleted }
+
+    /// 2026-09-24 feature-audit: a message's earlier versions, oldest first, opened on this phone.
+    /// Each entry is the text that version said and when it was written. A version sealed for a
+    /// group roster this phone cannot open reads as the crypto layer's own "🔒" / "…" sentinels,
+    /// which the sheet shows as unavailable rather than as garbage.
+    static func editHistory(cid: String, messageId: String) async throws -> [(text: String, at: Date)] {
+        let snap = try await db.collection("conversations").document(cid)
+            .collection("messages").document(messageId).getDocument()
+        let data = snap.data() ?? [:]
+        guard data["deleted"] as? Bool != true else { return [] }
+        let author = data["authorId"] as? String ?? ""
+        return ((data["edits"] as? [[String: Any]]) ?? []).map { e in
+            let clear = Crypto.shared.decrypt(e["t"] as? String ?? "", cid: cid, authorId: author)
+            return (clear, (e["at"] as? Timestamp)?.dateValue() ?? Date.distantPast)
+        }
+    }
+
     /// Edit a text message in place: re-encrypt the new text and flag it edited.
     /// Server still never sees plaintext (same E2EE path as sendText).
     static func editMessage(cid: String, messageId: String, newText: String, group: [String]? = nil) async throws {
@@ -2921,8 +2954,25 @@ enum ChatService {
             ? try await Crypto.shared.encryptForGroup(t, members: members!)
             : try await Crypto.shared.encryptForConversation(cid, t)
         let convRef = db.collection("conversations").document(cid)
-        try await convRef.collection("messages").document(messageId)
-            .updateData(["text": cipher, "edited": true])
+        let msgRef = convRef.collection("messages").document(messageId)
+        // 2026-09-24 feature-audit: EDIT HISTORY, like the reference app. The sealed text being
+        // replaced is appended to `edits` (oldest first, at most 10, each {t, at}); the rules accept
+        // only an append of the CURRENT stored text, so it is read from the document itself (the
+        // local cache answers when offline). A tombstone is refused here as well as by the server.
+        let snap = try await msgRef.getDocument()
+        let data = snap.data() ?? [:]
+        if data["deleted"] as? Bool == true { throw EditRefused.deleted }
+        var edits = (data["edits"] as? [[String: Any]]) ?? []
+        if let current = data["text"] as? String {
+            let at = (data["editedAt"] as? Timestamp) ?? (data["createdAt"] as? Timestamp) ?? Timestamp(date: Date())
+            edits.append(["t": current, "at": at])
+        }
+        // Oldest go first: the cap, then the document's 1 MiB ceiling (a long text edited often).
+        func size(_ e: [[String: Any]]) -> Int { e.reduce(cipher.utf8.count) { $0 + (($1["t"] as? String)?.utf8.count ?? 0) } }
+        while edits.count > 10 || (edits.count > 1 && size(edits) > 700_000) { edits.removeFirst() }
+        var update: [String: Any] = ["text": cipher, "edited": true, "editedAt": FieldValue.serverTimestamp()]
+        if size(edits) <= 700_000 { update["edits"] = edits }
+        try await msgRef.updateData(update)
         // If this WAS the newest message, the chat list still shows the pre-edit text on both
         // phones until something else arrives (audit) — re-point the summary at the new wording.
         // 2026-09-24 audit: guarded, so a message that arrives mid-edit keeps its own summary.

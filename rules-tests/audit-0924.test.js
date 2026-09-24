@@ -265,7 +265,52 @@ const cases = [
 
   // ── 2026-09-24 fix-all, group B (#227): decline records may carry `sender`, only the id's own ──
   ...declineSenderCases(),
+
+  // ── 2026-09-24 feature-audit (delete-message): the admin "Delete messages" right, tombstone shape ──
+  ...deleteMessageCases(),
 ];
+
+// 2026-09-24 feature-audit (delete-message). ADMIN owns `team`; LIM holds pinning only; DEL holds
+// deleteMessages; LEG is a legacy full admin (no adminRights entry).
+function deleteMessageCases() {
+  const LIM = 'uidLimited', LEG = 'uidLegacy', DEL = 'uidDeleter';
+  const team = {
+    ...group, users: [ADMIN, LIM, LEG, DEL, ME, THIRD], admins: [ADMIN, LIM, LEG, DEL],
+    adminRights: { [LIM]: ['pinMessages'], [DEL]: ['deleteMessages'] },
+  };
+  const m = [...[ADMIN, LIM, LEG, DEL, ME, THIRD].flatMap(notAdmin), ...convGet(team)];
+  const at = iso(now - 86400000 * 400);   // a year-old message: no time limit on Delete for Everyone
+  const photo = (author) => ({ authorId: author, type: 'image', text: 'enc1:cap', createdAt: at,
+    imageUrl: 'https://firebasestorage.googleapis.com/x', enc: { k: 'x' }, thumb: 'enc1:t', blurhash: 'b' });
+  const tomb = (author) => ({ authorId: author, type: 'text', text: '', deleted: true, createdAt: at });
+  // An admin's tombstone of someone else's message is signed `deletedBy` (ChatService.deleteMessage).
+  const kill = (who, author) => [who, msgPath, 'update',
+    who === author ? tomb(author) : { ...tomb(author), deletedBy: who }, photo(author), m];
+  return [
+    ['OK      author tombstones a year-old photo (thumb stripped)', 'ALLOW', 'ALLOW', ...kill(ME, ME)],
+    ['GUARD   author tombstone that keeps the sealed thumb', 'DENY', 'DENY',
+      ME, msgPath, 'update', { ...tomb(ME), thumb: 'enc1:t' }, photo(ME), m],
+    ['FIX     owner tombstones a member\'s message', 'DENY', 'ALLOW', ...kill(ADMIN, ME)],
+    ['FIX     legacy full admin tombstones a member\'s message', 'DENY', 'ALLOW', ...kill(LEG, ME)],
+    ['FIX     admin holding Delete messages tombstones it', 'DENY', 'ALLOW', ...kill(DEL, ME)],
+    ['GUARD   admin holding only Pin messages tombstones it', 'DENY', 'DENY', ...kill(LIM, ME)],
+    ['GUARD   plain member tombstones someone else\'s message', 'DENY', 'DENY', ...kill(THIRD, ME)],
+    ['GUARD   limited admin tombstones the OWNER\'s message', 'DENY', 'DENY', ...kill(DEL, ADMIN)],
+    ['OK      legacy admin tombstones another admin\'s message', 'DENY', 'ALLOW', ...kill(LEG, DEL)],
+    ['GUARD   admin rewrites a member\'s text (not a tombstone)', 'DENY', 'DENY',
+      LEG, msgPath, 'update', { ...photo(ME), text: 'enc1:forged' }, photo(ME), m],
+    ['GUARD   admin tombstone that keeps the image', 'DENY', 'DENY',
+      LEG, msgPath, 'update', { ...tomb(ME), imageUrl: 'https://firebasestorage.googleapis.com/x' }, photo(ME), m],
+    ['GUARD   admin hard-deletes a member\'s message', 'DENY', 'DENY', LEG, msgPath, 'delete', null, photo(ME), m],
+    ['GUARD   admin tombstone left unsigned', 'DENY', 'DENY', LEG, msgPath, 'update', tomb(ME), photo(ME), m],
+    ['GUARD   admin signs the tombstone as someone else', 'DENY', 'DENY',
+      LEG, msgPath, 'update', { ...tomb(ME), deletedBy: DEL }, photo(ME), m],
+    ['GUARD   author signs their own tombstone as an admin', 'DENY', 'DENY',
+      ME, msgPath, 'update', { ...tomb(ME), deletedBy: LEG }, photo(ME), m],
+    ['GUARD   admin tombstones a member\'s call row', 'DENY', 'DENY', LEG, msgPath, 'update', tomb(ME),
+      { authorId: ME, type: 'call', text: '', callerUid: ME, callOutcome: 'missed', createdAt: at }, m],
+  ];
+}
 
 // 2026-09-24 fix-all #227: the recipient's decline record gains an optional `sender` field so the
 // account purge can find records held against a deleted account. Old shape keeps working.
@@ -440,7 +485,15 @@ function composerCases() {
     createdAt: REQ_TIME });
   const up = { authorId: ME, type: 'image', text: 'enc1:cap', uploading: true, enc: { k: 'x' } };
   const attached = (url) => ({ ...up, uploading: false, imageUrl: url });
-  const mine = { authorId: ME, text: 'enc1:old', type: 'text' };
+  // 2026-09-24 feature-audit: `createdAt` is now read by the edit branch (the window), so the
+  // author's own message carries the server time it was written at, as every real one does.
+  const mine = { authorId: ME, text: 'enc1:old', type: 'text', createdAt: iso(now - 60000) };
+  const oldMine = { ...mine, createdAt: iso(now - 18 * 60000) };        // past 15 min + margin
+  const edge = { ...mine, createdAt: iso(now - 16 * 60000) };           // inside the 2 min margin
+  const hist = (n) => Array.from({ length: n }, (_, i) => ({ t: `enc1:v${i}`, at: iso(now - 120000) }));
+  const prev = { t: 'enc1:old', at: iso(now - 60000) };                 // the text being replaced
+  const muted = [...members, ...convGet({ ...group,
+    restrictedFlags: { [ME]: ['sendText'] }, restrictedUntil: { [ME]: now + 3600000 } })];
   const GIFURL = 'https://media.giphy.example/media/abc/giphy.gif';
   const FILEURL = 'https://firebasestorage.googleapis.com/v0/b/kulan.appspot.com/o/chat%2Fx.enc?alt=media&token=t';
   const votePath = (who) => `${msgPath}/votes/${who}`;
@@ -476,6 +529,43 @@ function composerCases() {
       ME, msgPath, 'update', { ...mine, text: 'enc1:new', edited: true }, mine, gm],
     ['ATTACK  author edits their text to 800k characters', 'ALLOW', 'DENY',
       ME, msgPath, 'update', { ...mine, text: 'enc1:' + 'A'.repeat(800000), edited: true }, mine, gm],
+    // 2026-09-24 feature-audit (edit-message): window, tombstone, restriction, history.
+    ['OK      author edits 16 min in (inside the clock margin)', 'ALLOW', 'ALLOW',
+      ME, msgPath, 'update', { ...edge, text: 'enc1:new', edited: true }, edge, gm],
+    ['ATTACK  author edits an 18-minute-old message', 'ALLOW', 'DENY',
+      ME, msgPath, 'update', { ...oldMine, text: 'enc1:new', edited: true }, oldMine, gm],
+    ['ATTACK  author edits a message with no createdAt', 'ALLOW', 'DENY', ME, msgPath, 'update',
+      { authorId: ME, text: 'enc1:new', type: 'text', edited: true }, { authorId: ME, text: 'enc1:old', type: 'text' }, gm],
+    ['ATTACK  queued edit lands on a Delete-for-Everyone tombstone', 'ALLOW', 'DENY', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', deleted: true, edited: true }, { ...mine, text: '', deleted: true }, gm],
+    ['ATTACK  member muted from text edits an old message', 'ALLOW', 'DENY',
+      ME, msgPath, 'update', { ...mine, text: 'enc1:new', edited: true }, mine, muted],
+    ['OK      edit appends the replaced text to a new history', 'DENY', 'ALLOW', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, edits: [prev], editedAt: REQ_TIME }, mine, gm],
+    ['OK      edit on a full history drops the oldest (10 kept)', 'DENY', 'ALLOW', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, edits: [...hist(10).slice(1), prev], editedAt: REQ_TIME },
+      { ...mine, edited: true, edits: hist(10) }, gm],
+    ['OK      old build edits without touching the history', 'ALLOW', 'ALLOW', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, edits: hist(2) }, { ...mine, edited: true, edits: hist(2) }, gm],
+    ['ATTACK  edit rewrites an earlier version in the history', 'DENY', 'DENY', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, edits: [{ t: 'enc1:fake', at: iso(now - 120000) }, prev] },
+      { ...mine, edited: true, edits: hist(1) }, gm],
+    ['ATTACK  edit records a version that was never the text', 'DENY', 'DENY', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, edits: [{ t: 'enc1:fake', at: iso(now - 60000) }] }, mine, gm],
+    ['ATTACK  edit grows the history past 10', 'DENY', 'DENY', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, edits: [...hist(10), prev] }, { ...mine, edited: true, edits: hist(10) }, gm],
+    ['ATTACK  edit forges editedAt', 'DENY', 'DENY', ME, msgPath, 'update',
+      { ...mine, text: 'enc1:new', edited: true, editedAt: iso(now - 3600000) }, mine, gm],
+    ['ATTACK  message created with a planted edit history', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), edits: [{ t: 'encg1:x', at: REQ_TIME }] }, null, gm],
+    ['ATTACK  message created with a far-future createdAt', 'ALLOW', 'DENY', ME, newMsg, 'create',
+      { ...text(40), createdAt: iso(now + 365 * 86400000) }, null, gm],
+    ['OK      Delete for Everyone scrubs the edit history', 'DENY', 'ALLOW', ME, msgPath, 'update',
+      { authorId: ME, type: 'text', text: '', deleted: true, createdAt: mine.createdAt, edited: true },
+      { ...mine, edited: true, edits: hist(2), editedAt: REQ_TIME }, gm],
+    ['ATTACK  Delete for Everyone that keeps the edit history', 'ALLOW', 'DENY', ME, msgPath, 'update',
+      { authorId: ME, type: 'text', text: '', deleted: true, createdAt: mine.createdAt, edited: true, edits: hist(2) },
+      { ...mine, edited: true, edits: hist(2) }, gm],
     // 2026-09-24 feature-audit: the link card's own fields (ChatService.sealLinkPreview's shape).
     ['OK      group text with a full link card', 'ALLOW', 'ALLOW', ME, newMsg, 'create',
       { ...text(40), linkPreview: card() }, null, gm],

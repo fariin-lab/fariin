@@ -35,6 +35,9 @@ struct MessageRowContext {
     /// Is this story still live? A reply to one that has expired shows "Story unavailable" rather
     /// than an empty frame, and the card stops being a door.
     var storyIsLive: (_ storyId: String, _ author: String) -> Bool = { _, _ in true }
+    /// 2026-09-24 feature-audit: my edits the server has not answered yet. Their footer shows the
+    /// sending clock, as the reference app does for an edit in flight.
+    var editPendingIds: Set<String> = []
 }
 
 /// ⚠️ `@MainActor` because it genuinely is main-actor work, not to silence a warning: it reads
@@ -140,7 +143,8 @@ enum MessageRowModelBuilder {
 
         let body: BubbleBody
         if msg.deleted {
-            body = .tombstone(isMe ? "You deleted this message" : "This message was deleted")
+            // 2026-09-24 feature-audit: an admin's delete of my message is not "You deleted".
+            body = .tombstone(isMe && msg.deletedBy == nil ? "You deleted this message" : "This message was deleted")
         } else if msg.viewOnce {
             body = .pill(viewOncePill(msg, ctx: ctx, isMe: isMe))
         // ⛔ A VOICE NOTE IS NEVER A PLACEHOLDER PILL. `ChatService.sendAudio` writes the duration
@@ -236,6 +240,8 @@ enum MessageRowModelBuilder {
             switch msg.sendState {
             case .sending: tick = .sending
             case .failed: tick = .failed
+            case nil where ctx.editPendingIds.contains(msg.id):
+                tick = .sending   // 2026-09-24 feature-audit: an edit still waiting for the server
             case nil:
                 // A blocked contact's lastRead is ignored, matching what the old path passed in as
                 // `otherLastRead` — or a blocked chat shows ✓✓ on one row class and ✓ on another.

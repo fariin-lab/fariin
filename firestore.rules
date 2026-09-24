@@ -1656,6 +1656,20 @@ service cloud.firestore {
       // hides it and the push function skips their notification. You may delete
       // only your own message.
       match /messages/{mid} {
+        // 2026-09-24 feature-audit: THE GROUP ADMIN'S "Delete messages" RIGHT. The owner could switch
+        // it on for an admin and nothing honoured it. Same test as `adminCan` on the client: the
+        // owner always; an admin with no `adminRights` entry always (legacy full admin); an admin
+        // with an entry only when it lists 'deleteMessages'. Only in a group, and a limited admin
+        // may not remove the OWNER's messages. Grants the tombstone only, never the hard delete.
+        function adminDeletesMessage() {
+          let c = convData();
+          return c.get('type', '') == 'group'
+            && (request.auth.uid == c.get('createdBy', '')
+                || (request.auth.uid in c.get('admins', [])
+                    && resource.data.get('authorId', '') != c.get('createdBy', '')
+                    && (!(request.auth.uid in c.get('adminRights', {}))
+                        || 'deleteMessages' in c.get('adminRights', {})[request.auth.uid])));
+        }
         // 2026-09-24 audit: the CALLEE's fallback call record. `ChatService.recordCall` always
         // writes `authorId` = the caller (one deterministic author for the row both phones merge
         // into), so when the caller's phone never wrote the live row and the callee's phone is the
@@ -1715,6 +1729,44 @@ service cloud.firestore {
                         && lp.imageUrl.matches('https://.+')))
                 && (!('imageEnc' in lp) || lp.imageEnc is map));
         }
+        // 2026-09-24 feature-audit: WHEN AN EDIT MAY LAND. The client's 15-minute window
+        // (`Limits.editWindowSeconds`) was only ever a menu condition, so any authored message could
+        // be rewritten at any age by a client that skipped the menu. Now the server asks the same
+        // three questions: not a tombstone (an edit queued before a Delete for Everyone would put
+        // live text back into the scrubbed document), still inside the window measured from the
+        // message's own server `createdAt` (900s + 120s clock margin; keep in sync with Limits.swift),
+        // and the author not restricted from sending text (a muted member cannot rewrite what they
+        // already said either).
+        function editAllowedNow() {
+          return resource.data.get('deleted', false) == false
+            && resource.data.get('createdAt', null) is timestamp
+            && request.time < resource.data.createdAt + duration.value(1020, 's')
+            && request.resource.data.get('edited', false) == true
+            && !restrictedIn(convData(), 'sendText');
+        }
+        // 2026-09-24 feature-audit: EDIT HISTORY, like the reference app. `edits` holds the previous
+        // sealed texts, oldest first, at most 10, each {t: the sealed text it replaced, at: when that
+        // version was written}. An edit may only APPEND the text being replaced, keeping a tail of
+        // the old list (the client drops the oldest when the cap or the document size needs it);
+        // nothing already in the history can be rewritten. `editedAt` is the server time of the edit.
+        // An edit that leaves `edits` untouched (builds before this one) is still accepted.
+        function editHistoryOk() {
+          let old = resource.data.get('edits', []);
+          let neu = request.resource.data.get('edits', []);
+          let k = neu.size() - 1;
+          return (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['edits'])
+                  || (neu is list && old is list
+                      && neu.size() >= 1 && neu.size() <= 10 && k <= old.size()
+                      && neu[k] is map
+                      && neu[k].keys().hasOnly(['t', 'at'])
+                      && neu[k].get('t', null) == resource.data.get('text', '')
+                      && neu[k].get('at', null) is timestamp
+                      && neu[k].at < request.time + duration.value(5, 'm')   // a phone clock may run ahead
+                      // (an empty slice errors in the rules engine, so k == 0 is its own case)
+                      && (k == 0 || neu[0:k] == old[old.size() - k:old.size()])))
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['editedAt'])
+                || request.resource.data.editedAt == request.time);
+        }
         allow read: if signedIn() && request.auth.uid in convData().users;
         allow create: if signedIn()
           && (request.auth.uid == request.resource.data.authorId || isCallRecordForMember())
@@ -1730,6 +1782,13 @@ service cloud.firestore {
           // there. Every UPDATE branch below is an affectedKeys whitelist and none of them names
           // it, so it cannot be changed afterwards either.
           && !('expiresAt' in request.resource.data)
+          // 2026-09-24 feature-audit: a message is born with no edit history, and with a `createdAt`
+          // that is not in the future. The edit window is measured from `createdAt`, so a forged
+          // far-future time would have been an edit window that never closed.
+          && !request.resource.data.keys().hasAny(['edits', 'editedAt'])
+          && (!('createdAt' in request.resource.data)
+              || !(request.resource.data.createdAt is timestamp)
+              || request.resource.data.createdAt < request.time + duration.value(2, 'm'))
           // ⛔ "Allow replies" OFF NOW STOPS A REPLY, AND IT ONLY EVER HID OUR OWN BUTTON.
           //
           // A story reply is an ordinary 1:1 message carrying `replyTo.isStatus == true` and the
@@ -1845,8 +1904,11 @@ service cloud.firestore {
              && (!(request.auth.uid in request.resource.data.get('reactions', {}))
                  || !restrictedIn(convData(), 'sendReactions')))
             || (request.auth.uid == resource.data.authorId
-                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited'])
-                && textWithinCap())   // 2026-09-24 decision D-composer-3: an edit has the same ceiling
+                && request.resource.data.diff(resource.data).affectedKeys()
+                     .hasOnly(['text', 'edited', 'edits', 'editedAt'])   // 2026-09-24 feature-audit: + history
+                && textWithinCap()   // 2026-09-24 decision D-composer-3: an edit has the same ceiling
+                && editAllowedNow()  // 2026-09-24 feature-audit: tombstone, window, restriction
+                && editHistoryOk())  // 2026-09-24 feature-audit: append-only history
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['album']))
             // FINISHING AN UPLOAD. A photo message is now written the moment Send is tapped,
@@ -1874,7 +1936,14 @@ service cloud.firestore {
             // this branch cannot be used to edit a message into anything except the marker.
             // Without it the app's tombstone write was refused and fell back to a hard delete,
             // so "deleted" messages vanished instead of leaving the placeholder.
-            || (request.auth.uid == resource.data.authorId
+            // 2026-09-24 feature-audit: OR a group admin holding "Delete messages", on the same
+            // pinned end state (see `adminDeletesMessage`). Never a call row. The admin signs it
+            // (`deletedBy` = the caller) so the author is not shown "You deleted this message"; the
+            // author's own tombstone carries no `deletedBy`.
+            || (((request.auth.uid == resource.data.authorId
+                  && !('deletedBy' in request.resource.data))
+                 || (adminDeletesMessage() && resource.data.get('type', '') != 'call'
+                     && request.resource.data.get('deletedBy', '') == request.auth.uid))
                 && request.resource.data.get('deleted', false) == true
                 && request.resource.data.get('text', '-') == ''
                 && request.resource.data.get('type', '-') == 'text'
@@ -1882,13 +1951,15 @@ service cloud.firestore {
                      ['enc', 'imageUrl', 'videoUrl', 'thumbUrl', 'audioUrl', 'fileUrl', 'album',
                       'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'thumb',
                       'linkPreview', 'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
-                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded'])
+                      'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded',
+                      'edits'])   // 2026-09-24 feature-audit: the edit history is content too
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                      ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
                       'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
                       'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
-                      'viewOnce', 'mentions', 'forwarded']))
+                      'viewOnce', 'mentions', 'forwarded', 'edits', 'editedAt',
+                      'deletedBy']))   // 2026-09-24 feature-audit: the admin's signature
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
             // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video
             // upgrade). Either participant may update ONLY these call fields — the callee must be

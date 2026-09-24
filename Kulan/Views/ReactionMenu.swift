@@ -89,6 +89,60 @@ struct EmojiMorePicker: View {
     }
 }
 
+// 2026-09-24 feature-audit: EDIT HISTORY, like the reference app — a message's earlier versions,
+// newest first under the current text, in the Reactions sheet's style. The versions are read from
+// the message document (`ChatService.editHistory`) and opened on this phone; a version this phone
+// cannot open (sealed for an older group roster) says so instead of showing ciphertext.
+struct EditHistorySheet: View {
+    let cid: String
+    let message: Message
+    @Environment(\.dismiss) private var dismiss
+    @State private var versions: [(text: String, at: Date)]? = nil
+    @State private var failed = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                row(message.text, caption: "Current")
+                if let versions {
+                    if versions.isEmpty {
+                        Text("No earlier versions").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(versions.enumerated().reversed()), id: \.offset) { _, v in
+                        let readable = !(v.text.isEmpty || v.text == "…" || v.text == "🔒")
+                        row(readable ? v.text : "Unavailable",
+                            caption: v.at == .distantPast ? "" : v.at.formatted(date: .abbreviated, time: .shortened),
+                            dim: !readable)
+                    }
+                } else if failed {
+                    Text("Couldn't load the edit history").font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Edit History")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+        .task {
+            do { versions = try await ChatService.editHistory(cid: cid, messageId: message.id) }
+            catch { failed = true }
+        }
+    }
+
+    private func row(_ text: String, caption: String, dim: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(text).font(.body).foregroundStyle(dim ? .secondary : .primary)
+            if !caption.isEmpty {
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 // "Who reacted" — reactor name + their emoji. Real data, no fakes.
 struct ReactorsSheet: View {
     let reactions: [String: String]      // uid -> emoji

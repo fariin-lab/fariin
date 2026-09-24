@@ -121,10 +121,33 @@ service firebase.storage {
       // ⚠️ firestore.get() — see the warning above about it in this project's Storage rules. Here the
       // doc always exists at call time (the story failure was a doc that did not exist yet), and a
       // refusal costs only what it costs today: the object stays. Nothing that works now can break.
-      // Not covered: the hard-delete fallback (tombstone refused, doc gone) still cannot delete.
+      //
+      // 2026-09-24 feature-audit: TWO CASES THIS REFUSED, both silent orphans.
+      //   · Removing ONE item from an album edits the message, it does not tombstone it, so
+      //     `deleted` stays false and the removed item's file could never go.
+      //   · The hard-delete fallback left no doc to read. The client now sweeps Storage BEFORE the
+      //     hard delete (ChatService.deleteMessage), while the doc still exists.
+      // So the AUTHOR may delete a file of their own message whatever its state. No wider than
+      // Firestore already is: the author may hard-delete that message outright at any time, and a
+      // file is only ever matched to the message it is named after, in this chat.
+      // A group admin holding "Delete messages" may delete the files of a message that is ALREADY
+      // a tombstone (the Firestore rule lets them make it one), same right test as `adminCan`.
       allow delete: if request.auth != null
-        && chatMessage(cid, file).data.authorId == request.auth.uid
-        && chatMessage(cid, file).data.get('deleted', false) == true;
+        && (chatMessage(cid, file).data.authorId == request.auth.uid
+            || (chatMessage(cid, file).data.get('deleted', false) == true
+                && !cid.matches('.*_.*')
+                && adminDeletes(groupDoc(cid).data, chatMessage(cid, file).data.authorId)));
+    }
+
+    // 2026-09-24 feature-audit: the client's `adminCan(uid, .deleteMessages)`, mirrored in
+    // firestore.rules `adminDeletesMessage`. A limited admin may not touch the owner's messages.
+    function adminDeletes(g, author) {
+      return g.get('type', '') == 'group'
+        && (request.auth.uid == g.get('createdBy', '')
+            || (request.auth.uid in g.get('admins', [])
+                && author != g.get('createdBy', '')
+                && (!(request.auth.uid in g.get('adminRights', {}))
+                    || 'deleteMessages' in g.get('adminRights', {})[request.auth.uid])));
     }
 
     // 2026-09-24 fix-all: the caller may set this group's photo. `file` is `group_<cid>.jpg`, and a

@@ -46,7 +46,43 @@ const cases = [
   ['FIX     retried story photo, same bytes', 'DENY', 'ALLOW', ME, `${O}/stories/s1/photo.jpg`, 'update', jpeg, jpeg, []],
   ['GUARD   story photo overwritten with other bytes', 'DENY', 'DENY',
     ME, `${O}/stories/s1/photo.jpg`, 'update', jpeg, { ...jpeg, md5Hash: 'old' }, []],
+
+  // 2026-09-24 feature-audit (delete-message): who may delete a chat file. `m1-2.enc` is album item 2
+  // of message m1. Before = pre-qa.storage.rules, which had no chat delete clause at all.
+  ...deleteRows(),
 ];
+
+function deleteRows() {
+  const OWNER = 'uidOwner', LIM = 'uidLimited', DEL = 'uidDeleter';
+  const team = group({ users: [OWNER, ADMIN, LIM, DEL, ME], admins: [ADMIN, LIM, DEL], createdBy: OWNER,
+    adminRights: { [LIM]: ['pinMessages'], [DEL]: ['deleteMessages'] } });
+  const msgGet = (cid, data) => ({ function: 'firestore.get',
+    args: [{ exactValue: `${D}/conversations/${cid}/messages/m1` }], result: { value: { data } } });
+  const live = (author) => ({ authorId: author, type: 'album', text: 'enc1:x' });
+  const tomb = (author) => ({ authorId: author, type: 'text', text: '', deleted: true });
+  const g = (msg) => [msgGet(CID, msg), ...groupGet(team)];
+  const file = `${O}/chat/${CID}/m1-2.enc`;
+  const del = (uid, mocks, path = file) => [uid, path, 'delete', null, blob, mocks];
+  const pair = [ME, OUT].sort().join('_');
+  return [
+    ['FIX     author frees one removed album item (message live)', 'DENY', 'ALLOW', ...del(ME, g(live(ME)))],
+    ['FIX     author sweeps before the hard-delete fallback', 'DENY', 'ALLOW',
+      ...del(ME, [msgGet(pair, live(ME))], `${O}/chat/${pair}/m1.enc`)],
+    ['FIX     author deletes a file of their tombstone', 'DENY', 'ALLOW', ...del(ME, g(tomb(ME)))],
+    ['GUARD   the other person in a 1:1 deletes my file', 'DENY', 'DENY',
+      ...del(OUT, [msgGet(pair, tomb(ME))], `${O}/chat/${pair}/m1.enc`)],
+    ['GUARD   member deletes another member\'s live file', 'DENY', 'DENY', ...del(ADMIN, g(live(ME)))],
+    ['FIX     owner deletes a tombstoned member file', 'DENY', 'ALLOW', ...del(OWNER, g(tomb(ME)))],
+    ['FIX     admin holding Delete messages deletes it', 'DENY', 'ALLOW', ...del(DEL, g(tomb(ME)))],
+    ['FIX     legacy full admin deletes it', 'DENY', 'ALLOW', ...del(ADMIN, g(tomb(ME)))],
+    ['GUARD   admin holding only Pin messages deletes it', 'DENY', 'DENY', ...del(LIM, g(tomb(ME)))],
+    ['GUARD   Delete-messages admin deletes a LIVE member file', 'DENY', 'DENY', ...del(DEL, g(live(ME)))],
+    ['GUARD   limited admin deletes the OWNER\'s tombstoned file', 'DENY', 'DENY', ...del(DEL, g(tomb(OWNER)))],
+    ['GUARD   a file whose message doc is gone', 'DENY', 'DENY',
+      ...del(ME, [{ function: 'firestore.get', args: [{ exactValue: `${D}/conversations/${CID}/messages/m1` }],
+        result: { value: null } }, ...groupGet(team)])],
+  ];
+}
 
 async function run(t, source, [, , , uid, path, method, after, before, mocks], expectation) {
   const request = { auth: { uid, token: { firebase: { sign_in_provider: 'password' } } }, path, method, time: REQ_TIME };

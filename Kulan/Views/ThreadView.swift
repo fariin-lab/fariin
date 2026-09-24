@@ -244,6 +244,10 @@ struct ThreadView: View {
     @State private var linkLoadingUrl: URL?
     @State private var bulkForward: [Message]?
     @State private var showBulkDeleteConfirm = false
+    /// 2026-09-24 feature-audit (delete-message): a bulk Delete for Everyone is still talking to the
+    /// server; the selection bar shows a spinner and takes no taps until it ends.
+    @State private var bulkDeleting = false
+    @State private var bulkDeleteRun = 0   // which bulk delete owns the spinner
     /// The header's "Delete All" — the whole conversation, not the selection. See `navigationBar`.
     @State private var showDeleteAllConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
@@ -342,6 +346,10 @@ struct ThreadView: View {
     // 2026-09-24 decision D14: a tapped failed message opens Resend / Delete instead of resending.
     @State private var failedActionTarget: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
+    // 2026-09-24 feature-audit: the message whose earlier versions are on screen, and the edits
+    // still waiting for the server (their footer shows the sending clock until it answers).
+    @State private var editHistoryTarget: Message?
+    @State private var editPendingIds: Set<String> = []
     @State private var forwardTarget: Message?    // forward-to-chat picker
     /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
     /// first responder; out, the field's delegate writes what actually happened (see
@@ -736,7 +744,10 @@ struct ThreadView: View {
             .onChange(of: unreadOnOpen) { _, _ in anchorUnread(proxy) }
             // A reaction changes no message text, so it arrives as a content-only update — this is the
             // one signal that sees it.
-            .onChange(of: repo.itemsVersion) { _, _ in noteReactionChanges() }
+            .onChange(of: repo.itemsVersion) { _, _ in
+                noteReactionChanges()
+                dropDeletedReplyTarget()   // 2026-09-24 feature-audit (delete-message)
+            }
             // Reaching the newest message means you have caught up; the badge has nothing left to say.
             .onChange(of: isAtBottom) { _, atBottom in
                 if atBottom, reactionJumpId != nil {
@@ -1500,6 +1511,10 @@ struct ThreadView: View {
         .sheet(item: $reactorsTarget) { m in
             ReactorsSheet(reactions: m.reactions, nameFor: { personName($0) })
         }
+        // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.
+        .sheet(item: $editHistoryTarget) { m in
+            EditHistorySheet(cid: cid, message: repo.items.first { $0.id == m.id } ?? m)
+        }
         .sheet(item: $forwardTarget) { m in
             ForwardPicker(message: m, sourceCid: cid,
                           onQueued: { showJumpToast($0) },
@@ -1550,6 +1565,14 @@ struct ThreadView: View {
             }
             Button("Delete for Me", role: .destructive) { bulkDelete(everyone: false) }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            // 2026-09-24 feature-audit (delete-message): a MIXED selection says what each button does
+            // to which messages. "Delete for Everyone" only reaches the ones I may delete for
+            // everyone; the rest are removed from my side, and the dialog said nothing about that.
+            let split = selectionDeleteSplit
+            if selectionHasMine && split.onlyMe > 0 {
+                Text("Delete for Everyone removes \(split.everyone) of these for everyone. The other \(split.onlyMe) will only be removed from your side.")
+            }
         }
         // The header's Delete All. Theirs is a separate sheet with its own body text, because it is a
         // separate and much larger action than deleting a selection — and it offers one destructive
@@ -1728,7 +1751,8 @@ struct ThreadView: View {
                                        pendingDelete: $pendingDelete,
                                        onDeleteForMe: { m in deleteForMe(m) },
                                        onMarkDeleted: { m in repo.markDeletedLocally(m.id) },
-                                       onRestoreDeleted: { m in repo.restoreAfterFailedDelete(m.id) }))
+                                       onRestoreDeleted: { m in repo.restoreAfterFailedDelete(m.id) },
+                                       canDeleteForEveryone: { m in canDeleteForEveryone(m) }))
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
@@ -2438,7 +2462,8 @@ struct ThreadView: View {
                 isLastInCluster: isLastInCluster(at: index),
                 otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
                 chatColor: chatColorSpec,
-                isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id)
+                isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id),
+                editPending: editPendingIds.contains(msg.id)   // 2026-09-24 feature-audit
             )
             .equatable()
             .padding(.top, topGap(at: index))
@@ -2652,7 +2677,7 @@ struct ThreadView: View {
         // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
         // signature path. Reading it here also makes the body observe story changes at all.
         let storiesRepo = StoriesRepository.shared
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -2721,7 +2746,7 @@ struct ThreadView: View {
                 // recompute at all; this token is what makes the right row differ.)
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))"   // 2026-09-24 feature-audit
             }
             sigCache.key = key
             sigCache.base = out
@@ -2823,6 +2848,8 @@ struct ThreadView: View {
             // rule — stated four times above — it has to be in the key that decides whether the row
             // is rebuilt. It only moves in a chat that actually has messages on a timer.
             "\(repo.expiryTick)",
+            // 2026-09-24 feature-audit: an edit waiting for the server draws the sending clock.
+            "\(editPendingIds.count):\(editPendingIds.hashValue)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
 
@@ -2841,7 +2868,8 @@ struct ThreadView: View {
                 // Unknown until the stories repo has loaded: assume live, so a reply does not flash
                 // "unavailable" on the way in and then correct itself.
                 !storiesRepo.didLoad || storiesRepo.hasLive(storyId: storyId, author: author)
-            })
+            },
+            editPendingIds: editPendingIds)   // 2026-09-24 feature-audit
 
         var out: [String: MessageRowModel] = [:]
         for (idx, m) in repo.items.enumerated() {
@@ -2872,11 +2900,18 @@ struct ThreadView: View {
         items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
             morePickerTarget = m
         })
-        if m.authorId == me, Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
+        // 2026-09-24 feature-audit: the same `canEdit` as the custom menu (this one skipped every
+        // guard but author + window).
+        if canEdit(m) {
             items.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { _ in
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 input = m.text
                 inputFocused = true
+            })
+        }
+        if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions
+            items.append(UIAction(title: "Edit History", image: UIImage(systemName: "clock.arrow.circlepath")) { _ in
+                editHistoryTarget = m
             })
         }
         let isPinned = repo.pinnedMessageIds.contains(m.id)
@@ -3028,16 +3063,16 @@ struct ThreadView: View {
         // Edit follows the TEXT, not the type: a photo/album/video caption is sealed in the same
         // `text` field editMessage rewrites, so any of my messages WITH a body is editable within
         // the window. Bare media has no text to edit; view-once never re-opens for editing.
-        if mine && !iAmMuted && !m.isAudio && !m.isCall
-            && !m.isFeatureMarker && !m.viewOnce
-            && !m.text.isEmpty
-            && m.sendState == nil
-            && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds {
+        // 2026-09-24 feature-audit: the rule now lives in `canEdit`, shared with the native menu.
+        if canEdit(m) {
             out.append(CMAction(title: "Edit", icon: "pencil") {
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 input = m.text
                 inputFocused = true
             })
+        }
+        if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions, either side
+            out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath") { editHistoryTarget = m })
         }
         if m.isImage && !m.viewOnce {
             out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
@@ -3657,45 +3692,112 @@ struct ThreadView: View {
         inputFocused = true   // replying = you're about to type → open the keyboard
     }
 
-    // Does the current selection include any of MY messages (→ "Delete for Everyone" is offered)?
-    // Tombstones don't count: they are already deleted for everyone (owner order), so a selection
-    // of only placeholders offers Delete for Me alone, same as the single-message dialog.
+    /// 2026-09-24 feature-audit (delete-message): the message being replied to was deleted for
+    /// everyone while the reply bar was up. Sending would have copied its text or thumbnail into the
+    /// new message's quote, keeping readable exactly what the delete removed. Drop the quote and say
+    /// so, with the line the jump-to-message path already uses.
+    private func dropDeletedReplyTarget() {
+        guard let r = replyingTo, repo.items.first(where: { $0.id == r.id })?.deleted == true else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
+        showJumpToast("That message is no longer available")
+    }
+
+    /// 2026-09-24 feature-audit (delete-message): THE one answer to "may I delete this for everyone".
+    /// My own sent message, or, in a group, anyone's when I hold the admin "Delete messages" right
+    /// (the owner always; a limited admin never the owner's). Mirrors `adminDeletesMessage` in
+    /// firestore.rules. Never a pending send, a tombstone, a call record, or a synthetic album child
+    /// ("<parent>-<n>": removing one album item is an author-only edit of the parent).
+    private func canDeleteForEveryone(_ m: Message) -> Bool {
+        guard m.sendState == nil, !m.deleted, !m.isCall else { return false }
+        if m.authorId == me { return true }
+        guard let c = conversation, c.isGroup, c.adminCan(me, .deleteMessages),
+              !m.id.contains("-") else { return false }
+        return c.isOwner(me) || !c.isOwner(m.authorId)
+    }
+
+    // Does the current selection include any message I may delete for everyone (→ the option is
+    // offered)? Tombstones don't count: they are already deleted for everyone (owner order), so a
+    // selection of only placeholders offers Delete for Me alone, same as the single-message dialog.
     private var selectionHasMine: Bool {
-        repo.items.contains { selectedIds.contains($0.id) && $0.authorId == me && !$0.deleted }
+        repo.items.contains { selectedIds.contains($0.id) && canDeleteForEveryone($0) }
+    }
+
+    /// 2026-09-24 feature-audit: how a mixed selection splits, for the confirmation's wording.
+    private var selectionDeleteSplit: (everyone: Int, onlyMe: Int) {
+        let picked = repo.items.filter { selectedIds.contains($0.id) }
+        let n = picked.filter { canDeleteForEveryone($0) }.count
+        return (n, picked.count - n)
     }
 
     // everyone == true: my messages are removed for everyone, others hidden locally (mixed selection).
     // everyone == false: every selected message is hidden locally only (Delete for Me).
     private func bulkDelete(everyone: Bool) {
-        let ids = selectedIds
-        Task {
-            var anyRefused = false
-            for id in ids {
-                guard let m = repo.items.first(where: { $0.id == id }) else { continue }
-                if everyone && m.authorId == me, m.sendState == nil, !m.deleted {
-                    // Tombstone locally FIRST, the same as the single-message path. These run one
-                    // after another, so ten selected photos meant ten round trips with the list
-                    // sitting still; now all ten flip at once and the server catches up behind them.
-                    let undoable = await MainActor.run { repo.markDeletedLocally(id) }
-                    // The single-message path was fixed to SAY when the server refuses; this one
-                    // discarded the result, so a refused bulk delete left the messages in place with
-                    // no alert and the selection already dismissed as if it had worked (audit).
-                    if await !ChatService.deleteMessage(cid: cid, messageId: id) {
-                        anyRefused = true
-                        if undoable { await MainActor.run { repo.restoreAfterFailedDelete(id) } }
-                    }
-                } else {
-                    await MainActor.run { deleteForMe(m) }   // also cancels unsent messages properly
-                }
+        guard !bulkDeleting else { return }
+        // 2026-09-24 feature-audit (delete-message): ALL AT ONCE, THEN THE SERVER IN PARALLEL. The
+        // old loop awaited each message's whole delete (read, tombstone, every file) before marking
+        // the next one, so ten photos flipped one by one. Now every bubble flips in this one pass,
+        // the server calls run four at a time, and the selection bar shows a spinner until they end.
+        var serverIds: [String] = []
+        for id in selectedIds {
+            guard let m = repo.items.first(where: { $0.id == id }) else { continue }
+            if everyone && canDeleteForEveryone(m) {
+                serverIds.append(id)
+            } else {
+                deleteForMe(m)   // also cancels unsent messages properly
             }
+        }
+        // Tombstone locally FIRST, the same as the single-message path.
+        // `let` copies: the Task below must not capture a mutable local.
+        let toServer = serverIds
+        let restorable = Set(toServer.filter { repo.markDeletedLocally($0) })
+        guard !toServer.isEmpty else { exitSelection(); return }
+        bulkDeleting = true
+        bulkDeleteRun += 1
+        let run = bulkDeleteRun
+        let cid = self.cid
+        // OFFLINE: a Firestore write only returns when the server answers, so without a network the
+        // spinner would sit on a locked bar until the connection came back. The tombstones are
+        // already on screen and queued on disk by Firestore (persistence is on, PushManager), so
+        // after 8 seconds the bar lets go; a refusal that arrives later still restores and says so.
+        Task {
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
             await MainActor.run {
+                if bulkDeleting && bulkDeleteRun == run { bulkDeleting = false; exitSelection() }
+            }
+        }
+        Task {
+            // The single-message path was fixed to SAY when the server refuses; this one discarded
+            // the result, so a refused bulk delete left the messages in place with no alert and the
+            // selection already dismissed as if it had worked (audit).
+            let refused = await withTaskGroup(of: (String, Bool).self, returning: [String].self) { group in
+                var queue = toServer[...]
+                var out: [String] = []
+                for _ in 0..<4 {
+                    guard let id = queue.popFirst() else { break }
+                    group.addTask { (id, await ChatService.deleteMessage(cid: cid, messageId: id)) }
+                }
+                while let result = await group.next() {
+                    if !result.1 { out.append(result.0) }
+                    if let id = queue.popFirst() {
+                        group.addTask { (id, await ChatService.deleteMessage(cid: cid, messageId: id)) }
+                    }
+                }
+                return out
+            }
+            let anyRefused = !refused.isEmpty
+            await MainActor.run {
+                for id in refused where restorable.contains(id) { repo.restoreAfterFailedDelete(id) }
+                // Only this run's bar: the 8-second release may already have closed it, and a new
+                // selection made since then is not ours to close.
+                let ownsBar = bulkDeleting && bulkDeleteRun == run
+                if ownsBar { bulkDeleting = false }
                 // ⛔ THE MODE CLOSES AFTER THE WRITE, NOT BEFORE IT. Theirs runs `uiMode = .normal`
                 // inside the completion of the modal that covered the delete, so the selection is
                 // still up if the write fails and the toast lands over the messages it is about.
                 // Ours closed it synchronously while the deletes were still in flight, which is how
                 // "some messages couldn't be deleted" arrived on a screen with nothing selected.
                 if anyRefused { showJumpToast("Some messages couldn't be deleted") }
-                exitSelection()
+                if ownsBar { exitSelection() }
             }
         }
     }
@@ -3724,6 +3826,18 @@ struct ThreadView: View {
     ///   guard Reply, Edit, Pin and Info already share, for the reason written above the menu.
     private func canForward(_ m: Message) -> Bool {
         m.sendState == nil && !m.isCall && !m.isSystem && !m.deleted && !m.viewOnce
+    }
+
+    /// 2026-09-24 feature-audit: THE ONE EDIT RULE, read by both long-press menus and again at Save.
+    /// The native menu used to check only author + window, so it offered Edit on bare media, voice
+    /// notes, view-once, call rows and messages still sending. Edit follows the TEXT, not the type: a
+    /// caption is sealed in the same `text` field, so any of my delivered messages WITH a body is
+    /// editable inside the window; the server holds the same window (firestore.rules
+    /// `editAllowedNow`, plus a small clock margin) and the same mute.
+    private func canEdit(_ m: Message) -> Bool {
+        m.authorId == me && !iAmMuted && !m.deleted && !m.isAudio && !m.isCall && !m.isSystem
+            && !m.isFeatureMarker && !m.viewOnce && !m.text.isEmpty && m.sendState == nil
+            && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds
     }
 
     /// EVERY selected row must be forwardable, not merely one of them.
@@ -5938,6 +6052,10 @@ struct ThreadView: View {
                          onDelete: { showBulkDeleteConfirm = true },
                          onForward: { bulkForwardStart() })
             .frame(height: 44)
+            // 2026-09-24 feature-audit (delete-message): a bulk Delete for Everyone in flight.
+            .disabled(bulkDeleting)
+            .opacity(bulkDeleting ? 0.5 : 1)
+            .overlay { if bulkDeleting { ProgressView() } }
     }
 
     /// ONE SHAPE FOR EVERY BAR THAT STANDS IN FOR THE COMPOSER.
@@ -6373,13 +6491,28 @@ struct ThreadView: View {
         // Empty text = cancel the edit (an edit can't erase a message) — the old silent return
         // left the composer STUCK in edit mode with no way out.
         // Unchanged text = nothing to save; just leave edit mode.
-        if !newText.isEmpty && newText != e.text {
+        // 2026-09-24 feature-audit: eligibility is re-checked at Save against the LIVE copy — the
+        // window can close while typing, and the message can be deleted or the sender muted
+        // meanwhile. Too late reads as the same refusal the server would give.
+        // The typed words are not thrown away: they stay in the composer as an ordinary draft, so
+        // they can still go out as a new message.
+        if !newText.isEmpty && newText != e.text,
+           !canEdit(repo.items.first(where: { $0.id == e.id }) ?? e) {
+            sendError = "Couldn't save your edit. The message still has its original text for both of you."
+            withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
+            Drafts.shared.set(cid, newText)
+            setInputSilently(newText)   // no phantom typing
+            return
+        } else if !newText.isEmpty && newText != e.text {
             // 2026-09-24 audit: a refused edit (message deleted meanwhile, or the server said no) was
             // dropped by `try?` and edit mode closed as if it had saved. Say so, the way Delete for
             // Everyone does. The original text needs no restoring by hand: the edit is only a pending
             // local write until the server answers, and a refused write is rolled back by the store.
             // Offline is not a failure here: the write waits and lands on reconnect.
             let mid = e.id, members = isGroup ? groupMembers : nil
+            // 2026-09-24 feature-audit: pending state. `updateData` returns only when the server
+            // answers (offline, on reconnect), so the footer's sending clock shows for exactly that long.
+            editPendingIds.insert(mid)
             Task {
                 do { try await ChatService.editMessage(cid: cid, messageId: mid, newText: newText, group: members) }
                 catch {
@@ -6387,6 +6520,7 @@ struct ThreadView: View {
                         sendError = "Couldn't save your edit. The message still has its original text for both of you."
                     }
                 }
+                await MainActor.run { _ = editPendingIds.remove(mid) }
             }
         }
         withAnimation(.easeInOut(duration: 0.2)) { editingMessage = nil }
@@ -7449,6 +7583,7 @@ struct MessageBubble: View, Equatable {
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
             && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
             && l.onWallpaper == r.onWallpaper && l.wallpaperBlur == r.wallpaperBlur
+            && l.editPending == r.editPending   // 2026-09-24 feature-audit
     }
 
     let message: Message
@@ -7534,6 +7669,7 @@ struct MessageBubble: View, Equatable {
     var otherLastRead: Double = 0
     var chatColor: ChatColorSpec? = nil   // per-chat custom bubble colour for MY messages (local)
     var isViewedOnce: Bool = false        // view-once photo already consumed on this device
+    var editPending: Bool = false         // 2026-09-24 feature-audit: my edit not yet on the server
 
     // Fill behind MY bubbles: the custom chat colour if set, else the default systemBlue (adaptive
     // light/dark — see Theme.defaultBubble).
@@ -7939,6 +8075,8 @@ struct MessageBubble: View, Equatable {
                     PendingClockGlyph(bornAt: message.createdAt)
                 case .failed:
                     Image(systemName: "exclamationmark.circle.fill").font(.system(size: 10)).foregroundStyle(.red)
+                case nil where editPending:
+                    PendingClockGlyph(bornAt: .distantPast)   // 2026-09-24 feature-audit: edit in flight
                 case nil:
                     // Overlapping pair, same spacing as the chat list's ticks.
                     HStack(spacing: -2.5) {
@@ -8337,7 +8475,8 @@ struct MessageBubble: View, Equatable {
                 Image(systemName: "nosign")
                     .font(.system(size: 12))
                     .foregroundStyle(isMe ? onMyBubble.opacity(0.65) : .secondary.opacity(0.65))
-                Text(isMe ? "You deleted this message" : "This message was deleted")
+                // 2026-09-24 feature-audit: an admin's delete of my message is not "You deleted".
+                Text(isMe && message.deletedBy == nil ? "You deleted this message" : "This message was deleted")
                     .font(.system(size: 15).italic())
                     .foregroundStyle(isMe ? onMyBubble.opacity(0.72) : .secondary.opacity(0.85))
             }
@@ -9685,6 +9824,9 @@ private struct MessageActionDialogs: ViewModifier {
     var onMarkDeleted: (Message) -> Bool = { _ in false }
     /// The server refused: take that back.
     var onRestoreDeleted: (Message) -> Void = { _ in }
+    /// 2026-09-24 feature-audit (delete-message): ThreadView's `canDeleteForEveryone`, so a group
+    /// admin holding "Delete messages" is offered it on other members' messages too.
+    var canDeleteForEveryone: (Message) -> Bool = { _ in false }
     @State private var deleteFailed = false
 
     func body(content: Content) -> some View {
@@ -9711,7 +9853,9 @@ private struct MessageActionDialogs: ViewModifier {
                     // and never looks at `deleted`, so a tombstone there would remove the row for
                     // the other person and leave mine looking untouched. A call goes from my own
                     // side only, which is what the phone's own call log does.
-                    if m.authorId == me, m.sendState == nil, !m.deleted, !m.isCall {
+                    // 2026-09-24 feature-audit: the same four refusals, plus the admin right, now
+                    // live in ThreadView.canDeleteForEveryone (shared with the selection bar).
+                    if canDeleteForEveryone(m) {
                         Button("Delete for Everyone", role: .destructive) {
                             // The bubble becomes a tombstone NOW, and the server work runs behind it.
                             // deleteMessage reads the doc before writing (it needs the Storage urls),

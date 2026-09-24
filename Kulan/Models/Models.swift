@@ -294,6 +294,9 @@ struct Message: Identifiable, Equatable, Codable {
     /// vanishing and leaving the other person wondering what they missed. The content is stripped
     /// server-side and the media is deleted from Storage, so what remains is a few bytes of marker.
     var deleted: Bool = false
+    /// 2026-09-24 feature-audit (delete-message): set only when a group admin deleted someone else's
+    /// message, so its author is not told "You deleted this message". Nil = the author did it.
+    var deletedBy: String? = nil
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
     /// THE MESSAGE EXISTS, THE PICTURE DOES NOT YET.
     ///
@@ -602,7 +605,7 @@ struct Message: Identifiable, Equatable, Codable {
         case clientId, replyTo, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration
-        case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
+        case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         // ⚠️ THE PATH TO A PENDING SEND'S OWN BYTES, and it has to persist or a failed voice note
         // comes back after a restart as a bubble with nothing in it and a retry button that quietly
         // does nothing. The BYTES are not encoded (localAudioData/localImageData stay out on
@@ -665,6 +668,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue
         self.edited = data["edited"] as? Bool ?? false
         self.deleted = data["deleted"] as? Bool ?? false
+        self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
         self.forwarded = data["forwarded"] as? Bool ?? false
         self.uploading = data["uploading"] as? Bool ?? false
         self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []
