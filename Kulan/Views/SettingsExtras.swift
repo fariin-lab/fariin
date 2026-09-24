@@ -376,10 +376,13 @@ struct DevicesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             guard listener == nil else { return }
-            listener = DeviceRegistry.shared.listen { list in
+            listener = DeviceRegistry.shared.listen({ list in
                 sessions = list
                 loaded = true
-            }
+            }, onError: { message in
+                // 2026-09-24 audit: shown in the page's existing red footnote, not as "no devices".
+                error = message
+            })
             if listener == nil { loaded = true }   // signed out; nothing to watch
         }
         .onDisappear { listener?.remove(); listener = nil }
@@ -508,6 +511,7 @@ struct BlockedUsersView: View {
     private var repo = ConversationsRepository.shared
     @Environment(\.colorScheme) private var scheme
     @State private var toUnblock: Conversation?   // row awaiting the "Unblock?" confirm
+    @State private var blockError: String?        // 2026-09-24 audit: a refused block / unblock
     @State private var search = ""
     @State private var showPicker = false
     /// Not SwiftUI's `EditMode`. That one is welded to `.onDelete`, whose button says "Delete" and
@@ -580,6 +584,9 @@ struct BlockedUsersView: View {
 
     var body: some View {
         List {
+            if let blockError {
+                Section { Text(blockError).font(.footnote).foregroundStyle(.red) }
+            }
             Section {
                 Button { showPicker = true } label: {
                     Label { Text("Block User…") } icon: { Image(systemName: "hand.raised.fill") }
@@ -648,7 +655,7 @@ struct BlockedUsersView: View {
         .onChange(of: blocked.isEmpty) { _, empty in
             if empty { withAnimation(.snappy(duration: 0.22)) { editing = false } }
         }
-        .sheet(isPresented: $showPicker) { BlockPickerView() }
+        .sheet(isPresented: $showPicker) { BlockPickerView { blockError = $0 } }
         .task(id: repo.conversations.count) { await loadHandles() }
         .navigationTitle("Blocked Users")
         .navigationBarTitleDisplayMode(.inline)
@@ -657,7 +664,15 @@ struct BlockedUsersView: View {
                isPresented: Binding(get: { toUnblock != nil }, set: { if !$0 { toUnblock = nil } })) {
             Button("Cancel", role: .cancel) {}
             Button("Unblock", role: .destructive) {
-                if let conv = toUnblock { Task { await ChatService.setBlocked(conv.id, false) } }
+                // 2026-09-24 audit: setBlocked already says whether the write landed; it was dropped.
+                if let conv = toUnblock {
+                    let name = conv.name(for: me)
+                    blockError = nil
+                    Task {
+                        let ok = await ChatService.setBlocked(conv.id, false)
+                        if !ok { await MainActor.run { blockError = "\(name) could not be unblocked. Try again." } }
+                    }
+                }
             }
         }
     }
@@ -675,6 +690,10 @@ private struct BlockPickerView: View {
     private var repo = ConversationsRepository.shared
     @State private var query = ""
     private var me: String { AuthService.shared.uid ?? "" }
+    /// 2026-09-24 audit: the sheet closes on tap, so a refused block is reported on the list behind it.
+    private let onFail: (String) -> Void
+
+    init(onFail: @escaping (String) -> Void = { _ in }) { self.onFail = onFail }
 
     private var candidates: [Conversation] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -693,7 +712,12 @@ private struct BlockPickerView: View {
                 } else {
                     ForEach(candidates) { conv in
                         Button {
-                            Task { await ChatService.setBlocked(conv.id, true) }
+                            let name = conv.name(for: me)
+                            let report = onFail
+                            Task {
+                                let ok = await ChatService.setBlocked(conv.id, true)
+                                if !ok { await MainActor.run { report("\(name) could not be blocked. Try again.") } }
+                            }
                             dismiss()
                         } label: {
                             HStack(spacing: 12) {

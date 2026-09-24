@@ -164,10 +164,15 @@ enum MediaAutoDownloader {
                 fetch(id: m.id, url: u, meta: m.enc, cid: cid) { AudioCache.store($0, for: m.id) }
             }
             // Documents: size cap enforced (fileSize travels in the message doc).
-            if m.isFile, AutoDownloadPrefs.allowedNow(.documents), (m.fileSize ?? 0) <= maxAutoBytes {
-                // Files open via QuickLook from tmp today (no persistent cache) — prefetching
-                // without the cache to hold it would be wasted data, so documents currently
-                // honor the policy at OPEN time only.
+            // 2026-09-24 audit: THIS BRANCH WAS EMPTY, so the Documents row in Storage and Data
+            // changed nothing. The file is now fetched, decrypted and written to the exact path
+            // ThreadView.openFile opens it from (`DocumentPrefetch.localURL`), and openFile uses that
+            // copy when it is there instead of downloading again.
+            if m.isFile, AutoDownloadPrefs.allowedNow(.documents), (m.fileSize ?? 0) <= maxAutoBytes,
+               let u = m.fileUrl, !u.isEmpty, m.enc != nil,
+               DocumentPrefetch.cached(id: m.id, fileName: m.fileName) == nil {
+                let dest = DocumentPrefetch.localURL(id: m.id, fileName: m.fileName)
+                fetch(id: m.id, url: u, meta: m.enc, cid: cid) { DocumentPrefetch.write($0, to: dest) }
             }
         }
     }
@@ -190,5 +195,39 @@ enum MediaAutoDownloader {
                 store(data)
             }
         }
+    }
+}
+
+/// 2026-09-24 audit: WHERE A DOCUMENT LIVES ONCE IT IS HERE. One folder per message in the temporary
+/// directory, holding the file under its sanitised name: the same place and the same name
+/// ThreadView.openFile has always written to before opening it, now shared so the auto-download
+/// sweep can put a file there ahead of the tap. The name comes from the sender, so it is reduced to
+/// its last component with separators stripped (the reasoning is in openFile).
+enum DocumentPrefetch {
+    static func safeName(_ fileName: String?) -> String {
+        let raw = (fileName ?? "file") as NSString
+        var safe = raw.lastPathComponent
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        if safe.isEmpty || safe == "." || safe == ".." { safe = "file" }
+        return safe
+    }
+
+    static func localURL(id: String, fileName: String?) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-\(id)", isDirectory: true)
+            .appendingPathComponent(safeName(fileName))
+    }
+
+    /// The local copy, if a complete one is there. Written atomically, so a file that exists is whole.
+    static func cached(id: String, fileName: String?) -> URL? {
+        let u = localURL(id: id, fileName: fileName)
+        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+    }
+
+    static func write(_ data: Data, to url: URL) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 }

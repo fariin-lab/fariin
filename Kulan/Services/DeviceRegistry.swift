@@ -233,10 +233,20 @@ final class DeviceRegistry: ObservableObject {
     // MARK: - The list
 
     /// Live list, most recently active first.
-    func listen(_ onChange: @escaping ([DeviceSession]) -> Void) -> ListenerRegistration? {
+    ///
+    /// 2026-09-24 audit: A FAILED LISTENER IS NOT AN EMPTY LIST. The error was dropped and a nil
+    /// snapshot became `[]`, so a refused read drew "No other devices. Only this device is signed
+    /// in" — a reassurance that could be false. Now the error goes to `onError` and the list is left
+    /// as it was.
+    func listen(_ onChange: @escaping ([DeviceSession]) -> Void,
+                onError: ((String) -> Void)? = nil) -> ListenerRegistration? {
         guard let uid else { return nil }
-        return devices(uid).addSnapshotListener { snap, _ in
-            let all = (snap?.documents ?? []).compactMap(DeviceSession.init)
+        return devices(uid).addSnapshotListener { snap, error in
+            guard let snap else {
+                onError?("Your devices could not be loaded. \(error?.localizedDescription ?? "")")
+                return
+            }
+            let all = snap.documents.compactMap(DeviceSession.init)
             // This device pinned to the top, the rest by when they were last active.
             onChange(all.sorted {
                 if $0.isThisDevice != $1.isThisDevice { return $0.isThisDevice }

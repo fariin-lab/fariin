@@ -242,14 +242,18 @@ struct WallpaperPickerSheet: View {
             guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                   let img = UIImage(data: data) {
+                   // 2026-09-24 audit: decode, downscale, encode and hash OFF the main thread; a
+                   // full-size camera photo froze the picker while this ran on it.
+                   let prepared = await Task.detached(priority: .userInitiated, operation: {
+                       UIImage(data: data).flatMap { WallpaperStore.prepareForLibrary($0) }
+                   }).value {
                     await MainActor.run {
                         // Import into the persistent LIBRARY (dedup by content) and select the tile.
                         // The new id differs from `original`, so hasPendingChange is true and the
                         // Apply button ALWAYS appears — including when replacing an active photo
                         // wallpaper with another photo (the old identity-less .photo compared equal
                         // to itself, which is exactly why Apply used to vanish).
-                        if let id = store.addToLibrary(img) { preview(.photo(id)) }
+                        if let id = store.addPrepared(prepared) { preview(.photo(id)) }
                         photoItem = nil   // reset so re-picking (even the same item) fires again
                     }
                 } else {

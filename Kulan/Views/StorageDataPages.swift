@@ -58,7 +58,8 @@ struct StorageDataView: View {
                 // close — the 200 MB line describes a reference app's limits, not ours,
                 // and told people about a rule that could never fire. The real, useful sentence is
                 // what the setting above actually decides.
-                Text("Chooses when photos, videos and voice messages download by themselves. Anything not downloaded is fetched the moment you open it.")
+                // 2026-09-24 audit: documents now honour their row too (MediaAutoDownloader.sweep).
+                Text("Chooses when photos, videos, voice messages and documents download by themselves. Anything not downloaded is fetched the moment you open it.")
             }
 
             Section {

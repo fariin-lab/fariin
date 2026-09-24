@@ -74,12 +74,31 @@ enum PrivacyPrefs {
         }
     }
 
-    static func setMine(_ key: String, _ a: Audience) {
+    /// 2026-09-24 audit: A REFUSED SAVE IS SAID OUT LOUD. The write was `try?`, so a rejected save
+    /// left the row showing the new choice while everyone else still got the old one — the wrong way
+    /// round for a privacy setting. With `onFail`, a refusal puts this phone's copy back to what it
+    /// was and hands the page a sentence to show. (Offline is NOT a failure: the write waits in the
+    /// local queue and lands when the connection returns, so nothing is reported for it.)
+    static func setMine(_ key: String, _ a: Audience,
+                        onFail: (@MainActor (_ previous: Audience, _ message: String) -> Void)? = nil) {
+        let previous = mine(key)
         UserDefaults.standard.set(a.rawValue, forKey: "priv.\(key)")
         guard let uid = Auth.auth().currentUser?.uid else { return }
         Task {
-            try? await Firestore.firestore().collection("users").document(uid)
-                .setData(["privacy": [key: a.rawValue]], merge: true)
+            do {
+                try await Firestore.firestore().collection("users").document(uid)
+                    .setData(["privacy": [key: a.rawValue]], merge: true)
+            } catch {
+                let m = "This setting could not be saved. \(error.localizedDescription)"
+                await MainActor.run {
+                    guard let onFail, Auth.auth().currentUser?.uid == uid else { return }
+                    // Only if nothing newer was chosen while this write was out.
+                    if UserDefaults.standard.string(forKey: "priv.\(key)") == a.rawValue {
+                        UserDefaults.standard.set(previous.rawValue, forKey: "priv.\(key)")
+                    }
+                    onFail(previous, m)
+                }
+            }
         }
     }
 
@@ -92,12 +111,23 @@ enum PrivacyPrefs {
     /// "true"/"false" strings, so one map carries the whole screen and one import restores it.
     static let flagKeys = ["readReceipts", "typingIndicators", "shareLastSeen"]
 
-    static func setFlag(_ key: String, _ on: Bool) {
+    /// 2026-09-24 audit: `onFail` as for `setMine`, but the switch is NOT flipped back here. These
+    /// are bound to @AppStorage with an onChange that calls this, so flipping it back would fire a
+    /// second save, and a second refusal would flip it again.
+    static func setFlag(_ key: String, _ on: Bool, onFail: (@MainActor (String) -> Void)? = nil) {
         UserDefaults.standard.set(on, forKey: key)
         guard let uid = Auth.auth().currentUser?.uid else { return }
         Task {
-            try? await Firestore.firestore().collection("users").document(uid)
-                .setData(["privacy": [key: on ? "true" : "false"]], merge: true)
+            do {
+                try await Firestore.firestore().collection("users").document(uid)
+                    .setData(["privacy": [key: on ? "true" : "false"]], merge: true)
+            } catch {
+                let m = "This setting could not be saved. \(error.localizedDescription)"
+                await MainActor.run {
+                    guard let onFail, Auth.auth().currentUser?.uid == uid else { return }
+                    onFail(m)
+                }
+            }
         }
     }
 
@@ -134,6 +164,7 @@ struct AudiencePage: View {
     let key: String
     let footer: String
     @State private var selection: Audience
+    @State private var error: String?   // 2026-09-24 audit: a refused save, same red footnote as Devices
 
     init(title: String, key: String, footer: String) {
         self.title = title
@@ -144,11 +175,18 @@ struct AudiencePage: View {
 
     var body: some View {
         List {
+            if let error {
+                Section { Text(error).font(.footnote).foregroundStyle(.red) }
+            }
             Section {
                 ForEach(PrivacyPrefs.options(for: key), id: \.self) { a in
                     Button {
                         selection = a
-                        PrivacyPrefs.setMine(key, a)
+                        error = nil
+                        PrivacyPrefs.setMine(key, a) { previous, message in
+                            if selection == a { selection = previous }
+                            error = message
+                        }
                         if key == "lastSeen" { Task { await PresenceService.set(online: true) } }
                     } label: {
                         HStack {
@@ -271,6 +309,7 @@ struct AppLockPage: View {
 // "My Contacts" = people you already share a chat with. Enforced on the SENDER's client:
 // their composer is disabled if you don't accept messages from them (see ThreadView).
 struct MessagesPrivacyPage: View {
+    @State private var flagError: String?   // 2026-09-24 audit: a refused Read Receipts / Typing save
     @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("readReceipts") private var readReceipts = true
     @AppStorage("typingIndicators") private var typingIndicators = true
@@ -388,9 +427,18 @@ struct MessagesPrivacyPage: View {
 
             Section {
                 Toggle("Read Receipts", isOn: $readReceipts).tint(.green)
-                    .onChange(of: readReceipts) { _, v in PrivacyPrefs.setFlag("readReceipts", v) }
+                    .onChange(of: readReceipts) { _, v in
+                        flagError = nil
+                        PrivacyPrefs.setFlag("readReceipts", v) { flagError = $0 }
+                    }
                 Toggle("Typing Indicators", isOn: $typingIndicators).tint(.green)
-                    .onChange(of: typingIndicators) { _, v in PrivacyPrefs.setFlag("typingIndicators", v) }
+                    .onChange(of: typingIndicators) { _, v in
+                        flagError = nil
+                        PrivacyPrefs.setFlag("typingIndicators", v) { flagError = $0 }
+                    }
+                if let flagError {
+                    Text(flagError).font(.footnote).foregroundStyle(.red)
+                }
             } footer: {
                 // IT PROMISED RECIPROCITY THE APP DOES NOT IMPLEMENT. `ChatService.setTyping`,
                 // `setRecording` and `markRead` each guard on these flags, so turning one off stops

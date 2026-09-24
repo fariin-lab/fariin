@@ -371,9 +371,26 @@ enum ChatWallpapers {
     // makes "same photo re-applied" and "different photo picked" distinguishable.
     @discardableResult
     func addToLibrary(_ image: UIImage) -> String? {
-        let scaled = Self.downscale(image, maxDimension: 1600)
+        guard let p = Self.prepareForLibrary(image) else { return nil }
+        return addPrepared(p)
+    }
+
+    /// 2026-09-24 audit: THE HEAVY HALF OF AN IMPORT, callable off the main thread. Decode,
+    /// downscale, JPEG encode and hash of a full-size camera photo ran inside `MainActor.run` and
+    /// froze the picker on a 48MP image. The pickers now run this in a detached task (as the profile
+    /// photo pipeline does) and hop to the main actor only for `addPrepared`, which touches state.
+    /// Immutable once built, so handing it from the detached task to the main actor is safe.
+    struct LibraryImport: @unchecked Sendable { let scaled: UIImage; let data: Data; let hash: String }
+
+    static func prepareForLibrary(_ image: UIImage) -> LibraryImport? {
+        let scaled = downscale(image, maxDimension: 1600)
         guard let data = scaled.jpegData(compressionQuality: 0.85) else { return nil }
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return LibraryImport(scaled: scaled, data: data, hash: hash)
+    }
+
+    func addPrepared(_ p: LibraryImport) -> String? {
+        let scaled = p.scaled, data = p.data, hash = p.hash
         if let existing = hashes.first(where: { $0.value == hash })?.key,
            libraryIds.contains(existing) {
             return existing                                      // duplicate import → reuse

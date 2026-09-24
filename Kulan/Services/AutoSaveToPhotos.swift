@@ -110,6 +110,11 @@ enum AutoSaveToPhotos {
     private static func image(_ url: String?, enc: EncMeta?, cid: String) async -> UIImage? {
         guard let s = url, !s.isEmpty else { return nil }
         if let cached = await DiskImageCache.shared.image(for: s) { return cached }
+        // 2026-09-24 audit: THE NETWORK HALF OBEYS Storage and Data > Photos, like every other
+        // automatic download. It did not, so Save to Photos pulled every incoming photo over mobile
+        // data with Photos set to Wi-Fi Only or Never. A refusal returns nil, the caller releases the
+        // id, and the next sweep on an allowed network (or after the photo is viewed) saves it.
+        guard AutoDownloadPrefs.allowedNow(.photos) else { return nil }
         guard let u = URL(string: s), let (cipher, _) = try? await MediaSession.shared.data(from: u) else { return nil }
         guard let meta = enc else { return UIImage(data: cipher) }   // legacy plaintext media
         guard let clear = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
@@ -120,6 +125,7 @@ enum AutoSaveToPhotos {
     /// where the player wants them anyway, so the download is not wasted if the save then fails.
     private static func videoFile(_ url: String?, enc: EncMeta?, cid: String, cacheAs id: String) async -> URL? {
         if let have = VideoCache.url(for: id) { return have }
+        guard AutoDownloadPrefs.allowedNow(.videos) else { return nil }   // 2026-09-24 audit, as for photos
         guard let s = url, !s.isEmpty, let u = URL(string: s),
               let (cipher, _) = try? await MediaSession.shared.data(from: u) else { return nil }
         var clear = cipher

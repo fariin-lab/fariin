@@ -174,8 +174,11 @@ struct ChatWallpaperPage: View {
             guard let item else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                   let img = UIImage(data: data),
-                   let id = await MainActor.run(body: { store.addToLibrary(img) }) {
+                   // 2026-09-24 audit: the heavy half off the main thread (see prepareForLibrary).
+                   let prepared = await Task.detached(priority: .userInitiated, operation: {
+                       UIImage(data: data).flatMap { WallpaperStore.prepareForLibrary($0) }
+                   }).value,
+                   let id = await MainActor.run(body: { store.addPrepared(prepared) }) {
                     await MainActor.run { previewing = .photo(id); photoItem = nil }
                 } else {
                     // Audit 2026-09-24: a photo that failed to load left the selection set, so
