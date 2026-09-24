@@ -113,6 +113,12 @@ enum GroupInviteService {
     }
 
     static func fetchInvite(code: String) async -> GroupInvite? {
+        // A code from a link is outside text (audit, 2026-09-24). `document(_:)` does not fail on a
+        // bad id, it raises an ObjC exception `try?` cannot catch: an empty code, or a link like
+        // /g/a%2Fb (decoded to "a/b", a collection path), crashed the app on tap. Such a code can
+        // never be a real invite, so it takes the sheet's own "invalid" answer instead.
+        guard !code.isEmpty, !code.contains("/"), code != ".", code != "..",
+              !(code.hasPrefix("__") && code.hasSuffix("__")) else { return nil }
         guard let snap = try? await db.collection("invites").document(code).getDocument(),
               let data = snap.data() else { return nil }
         return GroupInvite(code: code, data: data)
@@ -262,6 +268,9 @@ struct JoinGroupSheet: View {
     @State private var loading = true
     @State private var joining = false
     @State private var doneMessage: String?
+    /// True only for "Request sent". A refused or failed join used to land on the same page, under
+    /// the same green tick, so a failure read as a success (audit, 2026-09-24).
+    @State private var doneIsSuccess = false
 
     var body: some View {
         NavigationStack {
@@ -270,7 +279,12 @@ struct JoinGroupSheet: View {
                     ProgressView().padding(.top, 60)
                 } else if let msg = doneMessage {
                     Spacer()
-                    Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundStyle(.green)
+                    if doneIsSuccess {
+                        Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundStyle(.green)
+                    } else {
+                        // The same glyph the sheet's own "invalid link" state uses.
+                        Image(systemName: "link.badge.plus").font(.system(size: 48)).foregroundStyle(.secondary)
+                    }
                     Text(msg).multilineTextAlignment(.center).padding(.horizontal)
                     Spacer()
                     Button("Done") { dismiss() }.buttonStyle(.borderedProminent)
@@ -314,11 +328,14 @@ struct JoinGroupSheet: View {
                     AppRouter.shared.pendingChatId = r.cid
                     dismiss()
                 case "requested":
+                    doneIsSuccess = true
                     doneMessage = "Request sent. You'll join once an admin approves."
                 default:
+                    doneIsSuccess = false
                     doneMessage = "Couldn't join. The link may be invalid."
                 }
             } catch {
+                doneIsSuccess = false
                 doneMessage = (error as NSError).localizedDescription
             }
             joining = false

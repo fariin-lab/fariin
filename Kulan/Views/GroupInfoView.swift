@@ -32,7 +32,9 @@ struct GroupInfoView: View {
     @State private var joinReqs: [JoinRequest] = []
     @State private var reqListener: ListenerRegistration?
     @State private var confirmDelete = false
-    @State private var showGroupPhoto = false     // tap the poster → the same morph a person's photo uses
+    /// A refused Leave / Delete Group. Both used to close the page on `try?` whatever happened.
+    @State private var actionError: String?
+    @State private var showGroupPhoto = false    // tap the poster → the same morph a person's photo uses
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     @State private var posterRect: CGRect = .zero // poster photo's global square — the morph's start/end
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
@@ -162,10 +164,24 @@ struct GroupInfoView: View {
         }
         .confirmationDialog("Leave this group?", isPresented: $confirmLeave, titleVisibility: .visible) {
             Button("Leave", role: .destructive) {
-                Task { try? await ChatService.leaveGroup(cid: cid); await MainActor.run { dismiss() } }
+                // Close only on success (audit, 2026-09-24): a refused leave was swallowed by `try?`
+                // and the page closed anyway, so he believed he had left a group he was still in.
+                Task {
+                    do {
+                        try await ChatService.leaveGroup(cid: cid)
+                        await MainActor.run { dismiss() }
+                    } catch {
+                        let msg = error.localizedDescription
+                        await MainActor.run { actionError = msg }
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {}
         }
+        .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                          set: { if !$0 { actionError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
         .sheet(isPresented: $showAdd) {
             AddMembersSheet(cid: cid, existing: Set(conv?.users ?? []))
         }
@@ -476,7 +492,16 @@ struct GroupInfoView: View {
         } message: { Text("The group will be reported to moderators for review.") }
         .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Group", role: .destructive) {
-                Task { try? await GroupInviteService.deleteGroup(cid: cid); await MainActor.run { dismiss() } }
+                // Same as Leave (audit, 2026-09-24): close only once the delete really went through.
+                Task {
+                    do {
+                        try await GroupInviteService.deleteGroup(cid: cid)
+                        await MainActor.run { dismiss() }
+                    } catch {
+                        let msg = error.localizedDescription
+                        await MainActor.run { actionError = msg }
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This permanently deletes the group and all its messages for everyone. This cannot be undone.") }
@@ -548,7 +573,9 @@ struct AddMembersSheet: View {
 
     private var candidates: [(id: String, name: String, photo: String?)] {
         convRepo.conversations
-            .filter { !$0.isGroup && !$0.isCleared(me) }
+            // No demo chats (audit, 2026-09-24): same leak as New Group, a made-up person added
+            // into a real group's `users`.
+            .filter { !$0.isGroup && !$0.isCleared(me) && !DemoMode.isDemoConversation($0.id) }
             .compactMap { c in
                 let u = c.otherUid(me)
                 guard !u.isEmpty, !existing.contains(u) else { return nil }
@@ -660,8 +687,28 @@ struct GroupMemberSheet: View {
     private var iAmOwner: Bool { ownerUid == me }
     private var isMuted: Bool { mutedUntil > Date().timeIntervalSince1970 * 1000 }
 
+    @State private var busy = false
+    @State private var actionError: String?
+
+    /// Every member action goes through here (audit, 2026-09-24). Each one was `try?` then dismiss:
+    /// a refused Make Admin / Remove closed the sheet as if it had worked, and a second tap while the
+    /// first was still waiting on the server wrote the change, and its "is now an admin" line, twice.
+    private func run(_ op: @escaping () async throws -> Void) {
+        guard !busy else { return }
+        busy = true
+        Task {
+            do {
+                try await op()
+                await MainActor.run { busy = false; dismiss() }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run { busy = false; actionError = msg }
+            }
+        }
+    }
+
     private func mute(_ seconds: Double) {
-        Task { try? await ChatService.muteMember(cid: cid, uid: member.id, name: member.name, seconds: seconds); dismiss() }
+        run { try await ChatService.muteMember(cid: cid, uid: member.id, name: member.name, seconds: seconds) }
     }
 
     /// Their audience map, applied the same way ContactInfoView applies it. Sharing a group is not
@@ -725,11 +772,11 @@ struct GroupMemberSheet: View {
                         if canManageAdmins {
                             if member.isAdmin {
                                 Button("Remove as Admin") {
-                                    Task { try? await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                    run { try await ChatService.demoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
                                 }
                             } else {
                                 Button("Make Admin") {
-                                    Task { try? await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                    run { try await ChatService.promoteGroupAdmin(cid: cid, uid: member.id, name: member.name) }
                                 }
                             }
                         }
@@ -757,7 +804,7 @@ struct GroupMemberSheet: View {
                     Section("Restrictions") {
                         if isMuted {
                             Button("Lift restrictions") {
-                                Task { try? await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name); dismiss() }
+                                run { try await ChatService.unmuteMember(cid: cid, uid: member.id, name: member.name) }
                             }
                         } else {
                             Menu {
@@ -781,10 +828,14 @@ struct GroupMemberSheet: View {
             .confirmationDialog("Remove \(member.name) from the group?",
                                 isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) {
-                    Task { try? await ChatService.removeGroupMember(cid: cid, uid: member.id, name: member.name); dismiss() }
+                    run { try await ChatService.removeGroupMember(cid: cid, uid: member.id, name: member.name) }
                 }
                 Button("Cancel", role: .cancel) {}
             }
+            .alert("Could not do that", isPresented: Binding(get: { actionError != nil },
+                                                              set: { if !$0 { actionError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(actionError ?? "") }
         }
     }
 }

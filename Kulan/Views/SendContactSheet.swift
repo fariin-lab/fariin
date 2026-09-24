@@ -54,6 +54,9 @@ struct SendContactSheet: View {
     private var people: [Conversation] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let list = repo.conversations.filter { ((Flags.groupsEnabled && $0.isGroup) || !$0.otherUid(me).isEmpty) && !$0.isCleared(me) && (Flags.groupsEnabled || !$0.isGroup) }
+            // Same two exclusions as the forward picker (audit, 2026-09-24): no blocked person, and
+            // no demo chat, whose id is not a real conversation.
+            .filter { !$0.isBlockedByMe(me) && !DemoMode.isDemoConversation($0.id) }
         return (q.isEmpty ? list : list.filter { $0.displayName(me).lowercased().contains(q) })
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
@@ -395,6 +398,9 @@ struct SendContactSheet: View {
     }
 
     private func sendAll() async {
+        // The button's `.disabled(sending)` only lands on the next frame; two quick taps could both
+        // get here first and send the link twice to everyone picked (audit, 2026-09-24).
+        guard !sending else { return }
         sending = true
         // The first name is captured BEFORE the sending, while the selection is still whole and in
         // the order the grid shows it — afterwards there is nothing left to name.

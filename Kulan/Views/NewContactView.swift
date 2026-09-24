@@ -96,13 +96,18 @@ struct NewContactView: View {
 
     private func add() async {
         let h = ChatService.sanitizeHandle(handle)
-        guard !h.isEmpty else { return }
+        // `!working` (audit, 2026-09-24): the keyboard's Done calls this directly and skips the
+        // disabled check mark, so Done pressed during a lookup opened the chat twice.
+        guard !h.isEmpty, !working else { return }
         working = true
         if let u = await ChatService.findByHandle(h), u.id != me {
             let full = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
             if !full.isEmpty { ContactNames.shared.set(full, for: u.id) }   // save the local display name
             let cid = ChatService.convId(me, u.id)
-            try? await ChatService.openConversation(other: u)
+            // In the background, the way NewChatView's `start` does it (audit, 2026-09-24). Awaited,
+            // this only returned once the server answered, so with no signal the page sat on "..."
+            // until the connection came back. The id is deterministic, so the thread can open now.
+            Task { try? await ChatService.openConversation(other: u) }
             working = false
             let display = full.isEmpty ? (u.name.isEmpty ? u.handle : u.name) : full
             onOpen(ChatTarget(id: cid, name: display, photo: u.photoUrl))

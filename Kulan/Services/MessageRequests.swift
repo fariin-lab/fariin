@@ -87,11 +87,20 @@ enum MessageRequests {
         // before the delete so a delete that lands and a ledger that does not can never leave the
         // door open; the reverse order can. They cannot read it (rules), so being declined looks to
         // them exactly like being ignored, which is what §13 asks for.
+        //
+        // ONE BATCH, NOT TWO AWAITS (audit, 2026-09-24). The ledger write was awaited on its own and
+        // an await only returns once the SERVER answers, so with no signal the delete was never even
+        // queued: the row sat on the page with no reaction, and a kill before reconnecting left the
+        // ledger written and the request still there. A batch lands in the local cache at once and
+        // commits both or neither, which is the ordering promise above made exact.
+        let batch = db.batch()
         if let sender = cid.split(separator: "_").map(String.init).first(where: { $0 != me }) {
-            try await db.collection("requestDeclines").document(me).collection("from").document(sender)
-                .setData(["at": FieldValue.serverTimestamp()])
+            batch.setData(["at": FieldValue.serverTimestamp()],
+                          forDocument: db.collection("requestDeclines").document(me)
+                              .collection("from").document(sender))
         }
-        try await db.collection("conversations").document(cid).delete()
+        batch.deleteDocument(db.collection("conversations").document(cid))
+        try await batch.commit()
     }
 
     /// REMOVE FRIEND — owner's spec, 2026-09-11 §23. Takes back the direct access an accepted chat

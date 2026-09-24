@@ -30,7 +30,9 @@ struct NewGroupView: View {
     // 1:1 contacts (you can't pull members out of another group), de-duped + sorted.
     private var contacts: [Person] {
         convRepo.conversations
-            .filter { !$0.isGroup && !$0.isCleared(me) }
+            // No demo chats (audit, 2026-09-24): their made-up people were offered here and, once
+            // ticked, written into a real group's `users`.
+            .filter { !$0.isGroup && !$0.isCleared(me) && !DemoMode.isDemoConversation($0.id) }
             .compactMap { c in
                 let uid = c.otherUid(me)
                 guard !uid.isEmpty else { return nil }

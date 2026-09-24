@@ -39,6 +39,10 @@ struct ForwardPicker: View {
         // sending from he's chat") — forwarding back into the same chat re-surfaces an old photo,
         // and the references both allow it.
         let list = repo.conversations.filter { ((Flags.groupsEnabled && $0.isGroup) || !$0.otherUid(me).isEmpty) && (Flags.groupsEnabled || !$0.isGroup) }
+            // Not a person I have blocked, and not a demo chat (audit, 2026-09-24). The thread takes
+            // the composer away from a blocked chat, but this list still offered it, so a forward
+            // walked round the block; a demo id is not a real conversation and every send to it fails.
+            .filter { !$0.isBlockedByMe(me) && !DemoMode.isDemoConversation($0.id) }
         return (q.isEmpty ? list : list.filter { $0.displayName(me).lowercased().contains(q) })
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }

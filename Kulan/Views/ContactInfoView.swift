@@ -464,7 +464,10 @@ struct ContactInfoView: View {
                 infoRow("Delete Chat", "trash", tint: .red, chevron: false) { showDeleteChat = true }
                 rowDivider
                 infoRow("Unblock \(shownName)", "checkmark.circle", chevron: false) {
-                    Task { await ChatService.setBlocked(cid, false); blocked = false }
+                    // Flip first (audit, 2026-09-24): the write only returns once the server
+                    // answers, so offline the row sat unchanged and read as a dead button.
+                    blocked = false
+                    Task { await ChatService.setBlocked(cid, false) }
                 }
             } else {
                 // ⛔ HIS OWN GLYPHS — owner, 2026-08-23, who sent both vectors. `nosign` and
@@ -1135,7 +1138,11 @@ struct ContactInfoView: View {
                        actions: [
                         .cancel(),
                         .destructive("Block") {
-                            Task { await ChatService.setBlocked(cid, true); blocked = true }
+                            // Flip first (audit, 2026-09-24): `setBlocked` only returns once the
+                            // server answers, so offline the page kept offering Block after Block
+                            // was pressed. Same for the three Block doors below.
+                            blocked = true
+                            Task { await ChatService.setBlocked(cid, true) }
                         },
                         // The same pair the Report confirm already offers, from the other side. The
                         // two doors were not symmetrical: reporting could also block, but blocking
@@ -1143,8 +1150,9 @@ struct ContactInfoView: View {
                         // through first — you stop somebody reaching you, and only then think about
                         // telling anyone. Without this that thought costs finding a second screen.
                         .destructive("Block and Report") {
+                            blocked = true
                             Task {
-                                await ChatService.setBlocked(cid, true); blocked = true
+                                await ChatService.setBlocked(cid, true)
                                 await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
                             }
                         },
@@ -1161,9 +1169,10 @@ struct ContactInfoView: View {
                             Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
                         },
                         .destructive("Report and Block") {
+                            blocked = true
                             Task {
                                 await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                                await ChatService.setBlocked(cid, true); blocked = true
+                                await ChatService.setBlocked(cid, true)
                             }
                         },
                        ])

@@ -215,6 +215,10 @@ struct ChatSearchView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             if Task.isCancelled { return }
             let u = await ChatService.findByHandle(q)
+            // Checked again AFTER the lookup (audit, 2026-09-24): cancelling does not stop a request
+            // already in flight, so an older, slower answer could land after a newer query (or after
+            // the field was cleared) and put the wrong person back on screen.
+            if Task.isCancelled { return }
             await MainActor.run {
                 if let u, !nameMatches.contains(where: { $0.otherUid(me) == u.id }) { foundByHandle = u }
                 else { foundByHandle = nil }
