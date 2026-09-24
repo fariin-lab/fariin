@@ -131,8 +131,15 @@ struct NewGroupView: View {
         }
     }
 
+    /// The create rule allows at most 30 people in a new group, you included (firestore.rules, the
+    /// group branch of the conversation create). Past that the create was refused and the page only
+    /// said "Could not create group" (2026-09-24 audit). The picker stops at 29 others instead.
+    private static let maxOthersAtCreate = 29
+
     private func toggle(_ p: Person) {
-        if selected[p.id] != nil { selected[p.id] = nil } else { selected[p.id] = p }
+        if selected[p.id] != nil { selected[p.id] = nil; return }
+        guard selected.count < Self.maxOthersAtCreate else { Haptics.notify(.warning); return }
+        selected[p.id] = p
     }
 
     private func search(_ q: String) {
