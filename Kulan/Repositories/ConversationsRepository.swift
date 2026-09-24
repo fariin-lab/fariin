@@ -21,6 +21,12 @@ final class ConversationsRepository {
 
     var conversations: [Conversation] = []
     var hasLoaded = false   // false until the first real snapshot -> drives the skeleton
+    /// 2026-09-24 audit: the listener ended in an error and no snapshot has arrived since. A failed
+    /// listener used to print and nothing else, and the 3s safety net below then flipped `hasLoaded`,
+    /// so a returning account whose chats could not load was shown the first-run welcome. The chat
+    /// list reads this ahead of its empty state and offers a retry instead. Firestore ends a listener
+    /// for good once it errors, so the retry is a fresh `start()`.
+    var loadFailed = false
 
     /// The skeleton is for a genuinely COLD load, not for the ~100ms Firestore's persistent cache
     /// takes to hand back chats it already has on disk. Shown immediately, it flashed shimmer rows
@@ -84,9 +90,16 @@ final class ConversationsRepository {
             .whereField("users", arrayContains: uid)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else {
-                    if let error { print("conversations listen error:", error) }
+                    if let error {
+                        print("conversations listen error:", error)
+                        // 2026-09-24 audit: see `loadFailed`. `hasLoaded` too, because we HAVE heard
+                        // back, and it is what takes the skeleton down so the error can show.
+                        self?.loadFailed = true
+                        self?.hasLoaded = true
+                    }
                     return
                 }
+                if self.loadFailed { self.loadFailed = false }
                 // ⚠️ REPORTED BEFORE THE GUARD BELOW, on purpose. The empty-cached case is exactly
                 // the offline cold start, and it is the one the header most needs to hear about —
                 // returning first would make this listener silent precisely when it has the most to
@@ -285,6 +298,7 @@ final class ConversationsRepository {
         pendingConvs = nil
         conversations = []
         hasLoaded = false
+        loadFailed = false   // 2026-09-24 audit: belongs to the account that just went away
         // The warm-up listeners belong to an account that just went away.
         Task { @MainActor in ChatHistoryPreloader.shared.stopAll() }
 

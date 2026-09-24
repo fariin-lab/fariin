@@ -1794,6 +1794,9 @@ struct ChatsView: View {
             }
             // Native bottom toolbar (like Mail/Photos edit mode) — no custom glass bar.
             ToolbarItemGroup(placement: .bottomBar) {
+                // 2026-09-24 audit: bulk Mute, first, where the reference puts it.
+                bulkMuteMenu
+                Spacer()
                 Button { archiveSelected() } label: {
                     Image("ic_archive").renderingMode(.template).resizable().scaledToFit()
                         .frame(width: 22, height: 22)
@@ -2023,6 +2026,30 @@ struct ChatsView: View {
         Button(role: .destructive) { pendingDelete = conv } label: {
             Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
         }
+    }
+    /// 2026-09-24 audit: Select mode had no way to mute several chats at once. The same durations
+    /// as the single-chat mute sheet, applied to each selected chat through the same `setMute`, with
+    /// Unmute offered when any of them is muted now.
+    private var bulkMuteMenu: some View {
+        let anyMuted = repo.conversations.contains {
+            selection.contains($0.id) && $0.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
+        }
+        return Menu {
+            if anyMuted { Button("Unmute") { muteSelected(until: 0) } }
+            Button("Mute for 1 hour") { muteSelected(until: ChatService.muteUntil(1)) }
+            Button("Mute for 8 hours") { muteSelected(until: ChatService.muteUntil(8)) }
+            Button("Mute for 1 week") { muteSelected(until: ChatService.muteUntil(168)) }
+            Button("Mute Always") { muteSelected(until: ChatService.muteUntil(nil)) }
+        } label: {
+            Image("ic_menu_mute").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 22, height: 22)
+        }
+        .tint(.primary).disabled(selection.isEmpty)
+    }
+    private func muteSelected(until: Double) {
+        let ids = selection
+        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setMute(id, until: until) } } } }
+        exitSelect()
     }
     // Batch ops run the per-chat writes CONCURRENTLY (was sequential = N round-trips in series).
     private func archiveSelected() {
@@ -2398,6 +2425,19 @@ struct ChatsView: View {
                                 if !chatSearch.trimmingCharacters(in: .whitespaces).isEmpty {
                                     ContentUnavailableView.search(text: chatSearch)
                                         .allowsHitTesting(false)
+                                } else if repo.loadFailed {
+                                    // 2026-09-24 audit: the listener failed and nothing was cached.
+                                    // Without this branch someone with chats on the server was shown
+                                    // the first-run welcome below. Wording reused from the app's
+                                    // other load-failure states.
+                                    ContentUnavailableView {
+                                        Label("Couldn't load your chats", systemImage: "wifi.exclamationmark")
+                                    } description: {
+                                        Text("Check your connection and try again.")
+                                    } actions: {
+                                        Button("Try Again") { repo.start() }.buttonStyle(.borderedProminent)
+                                    }
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 } else if chatFilter == 0 {
                                     // First run: an empty list must TEACH the next step, not dead-end
                                     // (big-app pattern) — find people, share your QR, invite friends.

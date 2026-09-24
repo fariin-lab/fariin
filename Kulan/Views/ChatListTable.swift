@@ -141,6 +141,21 @@ struct ChatListRenderState: Equatable {
         return nil
     }
 
+    /// 2026-09-24 audit: every id's index path, built once. `indexPath(of:)` is a linear scan, and
+    /// the diff and the content refresh called it once per id, which is quadratic on the main thread
+    /// on every snapshot for a long chat list. Same answer as `indexPath(of:)`: the first place an
+    /// id appears, searched pinned, unpinned, people.
+    func pathIndex() -> [String: IndexPath] {
+        var out: [String: IndexPath] = [:]
+        out.reserveCapacity(pinned.count + unpinned.count + people.count)
+        for section in ChatListSection.allCases {
+            for (row, id) in ids(in: section).enumerated() where out[id] == nil {
+                out[id] = IndexPath(row: row, section: section.rawValue)
+            }
+        }
+        return out
+    }
+
     /// Which sections currently carry a heading. Used to decide whether the headers have to be
     /// re-synced when the pinned set empties or fills.
     func titledSections() -> Set<Int> {
@@ -181,12 +196,14 @@ struct ChatListRowChanges {
         var out = ChatListRowChanges()
         let oldIds = Set(old.pinned + old.unpinned + old.people)
         let newIds = Set(new.pinned + new.unpinned + new.people)
+        // 2026-09-24 audit: looked up once, not scanned per id. See `pathIndex`.
+        let oldAt = old.pathIndex(), newAt = new.pathIndex()
 
         for id in oldIds.subtracting(newIds) {
-            if let p = old.indexPath(of: id) { out.deletes.append(p); out.removesRows = true }
+            if let p = oldAt[id] { out.deletes.append(p); out.removesRows = true }
         }
         for id in newIds.subtracting(oldIds) {
-            if let p = new.indexPath(of: id) { out.inserts.append(p) }
+            if let p = newAt[id] { out.inserts.append(p) }
         }
         // Survivors: a move is reported only when the row actually lands somewhere else. Reporting
         // a move to the same place is legal and wasteful, and on a list that re-sorts on every
@@ -238,14 +255,14 @@ struct ChatListRowChanges {
         // increasing run of those old positions: everything in that run is already sorted with
         // respect to everything else in it and needs no operation. Every survivor outside it moved.
         for id in oldIds.intersection(newIds) {
-            guard let from = old.indexPath(of: id), let to = new.indexPath(of: id) else { continue }
+            guard let from = oldAt[id], let to = newAt[id] else { continue }
             // A pin or unpin, and nothing else. Always a `moveRow` — see the note above.
             if from.section != to.section { out.moves.append((from: from, to: to)) }
         }
         // Same-section reordering, section by section, over the survivors alone.
         for section in ChatListSection.allCases {
             let survivors = new.ids(in: section).filter {
-                oldIds.contains($0) && old.indexPath(of: $0)?.section == section.rawValue
+                oldIds.contains($0) && oldAt[$0]?.section == section.rawValue
             }
             guard survivors.count > 1 else { continue }
             let oldPos = Dictionary(uniqueKeysWithValues:
@@ -255,7 +272,7 @@ struct ChatListRowChanges {
             let stay = Set(Self.longestIncreasingRun(positions))
             for (i, p) in positions.enumerated() where !stay.contains(p) {
                 let id = survivors[i]
-                guard let from = old.indexPath(of: id), let to = new.indexPath(of: id) else { continue }
+                guard let from = oldAt[id], let to = newAt[id] else { continue }
                 out.deletes.append(from)
                 out.inserts.append(to)
             }
@@ -660,7 +677,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private var isSelectMode = false
 
     func setSelecting(_ on: Bool) {
-        guard isSelectMode != on else { return }
+        guard isSelectMode != on else { selectingWasDeferred = nil; return }
+        // 2026-09-24 audit: not while a row transaction is flying. `setEditing` animates every
+        // row's indent, and starting it over a pin in flight is the same interruption `apply`
+        // already refuses. Owed, and replayed by that transaction's completion block.
+        guard !isAnimatingRows else { selectingWasDeferred = on; return }
         isSelectMode = on
         // An open platter has to go first, for the same reason: it holds the table in editing state,
         // and asking for Select on top of it is asking UIKit for two editing modes at once.
@@ -964,7 +985,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // A stationary finger was never the problem anyway. The jump he reported is content moving
         // under a finger that is SCROLLING, and `isDragging` is exactly that. The reference app gates
         // on neither: it defers only while the view is off screen or the app is not active.
-        if tableView.isDragging || tableView.isDecelerating || isInTransition {
+        //
+        // 2026-09-24 audit: `isAnimatingRows` joins the condition. A second snapshot (unpin right
+        // after pin, or any re-sort) landing inside a transaction's flight opened its own
+        // `beginUpdates` and repainted cells that were still moving. It waits for the landing the
+        // same way it waits for a finger; the transaction's completion block replays it.
+        if tableView.isDragging || tableView.isDecelerating || isInTransition || isAnimatingRows {
             deferredState = (new, animated)
             // `state` has already advanced to `new` above, and the replay needs the diff against
             // what is actually ON SCREEN — so it is rewound here and the replay does the comparing.
@@ -1126,6 +1152,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         CATransaction.setCompletionBlock { [weak self] in
             guard let self else { return }
             self.isAnimatingRows = false
+            // 2026-09-24 audit: Select mode asked for while the rows were flying goes on first, so
+            // the ticks below and any replayed snapshot land on the editing state they expect.
+            if let owed = self.selectingWasDeferred {
+                self.selectingWasDeferred = nil
+                self.setSelecting(owed)
+            }
             // ⛔ ALWAYS, NOT ONLY WHEN A REFRESH WAS TURNED AWAY MID-FLIGHT — audit, 2026-09-11.
             // `contentChangedOldPaths` deliberately skips any survivor whose index moved (`from ==
             // to`), because reloading a travelling row inside its own transaction is the flicker
@@ -1142,6 +1174,12 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             if let owed = self.ticksWereDeferred {
                 self.ticksWereDeferred = nil
                 self.syncTicks(selected: owed)
+            }
+            // 2026-09-24 audit: a snapshot that arrived mid-flight (see the guard in `apply`) is
+            // replayed now the rows have landed. On the next turn of the run loop, not in here, so
+            // it can never meet `isApplying` still set and be dropped.
+            if self.deferredState != nil {
+                DispatchQueue.main.async { [weak self] in self?.flushDeferredState(afterFlight: true) }
             }
         }
         if animated {
@@ -1165,6 +1203,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private var refreshWasDeferred = false
     /// The selection a `syncTicks` wanted to apply mid-flight, owed until the flight ends.
     private var ticksWereDeferred: Set<String>?
+    /// 2026-09-24 audit: the Select-mode switch asked for mid-flight, owed until the flight ends.
+    private var selectingWasDeferred: Bool?
 
     /// The rows whose CONTENT changed while their POSITION did not, addressed in the old model.
     ///
@@ -1176,6 +1216,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                                         new: ChatListRenderState) -> [IndexPath] {
         guard let host else { return [] }
         var out: [IndexPath] = []
+        // 2026-09-24 audit: looked up once, not scanned per id. See `pathIndex`.
+        let oldAt = old.pathIndex(), newAt = new.pathIndex()
         for s in ChatListSection.allCases where s != .people {
             for id in new.ids(in: s) {
                 // ⚠️ `configured[id]` IS NIL FOR EVERY ROW THAT HAS NEVER BEEN DEQUEUED, and
@@ -1185,7 +1227,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                 // database reported changed, which can never include a row it has not seen.
                 // A row with no cell has nothing to repaint; it will be built correctly when it is
                 // first dequeued.
-                guard let from = old.indexPath(of: id), let to = new.indexPath(of: id),
+                guard let from = oldAt[id], let to = newAt[id],
                       from == to,
                       let known = configured[id],
                       let conv = host.conversation(id) else { continue }
@@ -1504,10 +1546,19 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
         // Same reasoning as Delete: Mute opens the duration sheet rather than muting outright, so
         // the row is not finished with when this returns.
-        let mute = UIContextualAction(style: .normal, title: "Mute") { _, _, done in
-            p.onMute(c); done(false)
+        // 2026-09-24 audit: an already-muted chat said "Mute" here while its long-press menu said
+        // "Unmute". It now reads the same state the menu reads, and Unmute acts at once, as the
+        // menu's Unmute does; only Mute needs the duration sheet.
+        let muted = c.isMuted(p.me, now: Date().timeIntervalSince1970 * 1000)
+        let mute = UIContextualAction(style: .normal, title: muted ? "Unmute" : "Mute") { _, _, done in
+            if muted {
+                Task { await ChatService.setMute(c.id, until: 0) }
+                done(true)
+            } else {
+                p.onMute(c); done(false)
+            }
         }
-        mute.image = ChatListIcon.symbol("bell.slash.fill")
+        mute.image = ChatListIcon.symbol(muted ? "bell.fill" : "bell.slash.fill")
         mute.backgroundColor = .systemIndigo
 
         let cfg = UISwipeActionsConfiguration(actions: [archive, del, mute])
@@ -1660,9 +1711,17 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// the list stale until the next unrelated render. A drag released with no throw ends at
     /// `didEndDragging(decelerate: false)`; a flick ends at `didEndDecelerating`; a programmatic
     /// scroll ends at `didEndScrollingAnimation`.
-    private func flushDeferredState() {
-        guard let (pending, _) = deferredState else { return }
+    /// `afterFlight` (2026-09-24 audit): the replay of a snapshot that waited for a row transaction
+    /// to land, not for a scroll to stop. That change happened in front of him, so it keeps the
+    /// animation it arrived with; the "never animate" rule below is for the scroll catch-up only.
+    private func flushDeferredState(afterFlight: Bool = false) {
+        guard let (pending, wantsAnimation) = deferredState else { return }
         deferredState = nil
+        if afterFlight {
+            apply(state: pending, animated: wantsAnimation)
+            if let selected = host?.parent.selection { syncTicks(selected: selected) }
+            return
+        }
         // Never animate the catch-up. The rows moved while he was scrolling and the reason for the
         // move is already off screen; a spring here would draw attention to a rearrangement he did
         // not ask to watch.
@@ -1673,6 +1732,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // delegates where `isDecelerating` is false by definition. So the comment said "never" and
         // the code said "always", and he watched the list reshuffle after every flick.
         apply(state: pending, animated: false)
+        // 2026-09-24 audit: `updateUIViewController` put the ticks back after the diff it ran, but
+        // that diff was the deferred one, so a re-sort replayed here left a ticked chat unticked
+        // while the toolbar still counted it. `syncTicks` defers itself if rows are moving.
+        if let selected = host?.parent.selection { syncTicks(selected: selected) }
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
