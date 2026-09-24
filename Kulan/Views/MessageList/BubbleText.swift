@@ -49,14 +49,11 @@ enum BubbleText {
 
         // In-chat search: highlight the matched TERM, never the whole bubble. Case, diacritic and
         // width insensitive so the highlight finds exactly what the search matched.
+        // 2026-09-24 decision D2: each query term, not the whole query as one string (see ChatSearch).
         if t.searchTerm.count >= 2 {
-            var searchFrom = 0
-            while searchFrom < ns.length {
-                let r = ns.range(of: t.searchTerm, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                                 range: NSRange(location: searchFrom, length: ns.length - searchFrom))
-                guard r.location != NSNotFound, r.length > 0 else { break }
-                out.addAttributes([.backgroundColor: UIColor.systemYellow, .foregroundColor: UIColor.black], range: r)
-                searchFrom = r.location + r.length
+            for sr in ChatSearch.highlightRanges(in: full, query: t.searchTerm) {
+                out.addAttributes([.backgroundColor: UIColor.systemYellow, .foregroundColor: UIColor.black],
+                                  range: NSRange(sr, in: full))
             }
         }
 

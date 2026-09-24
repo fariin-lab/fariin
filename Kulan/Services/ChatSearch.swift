@@ -53,4 +53,23 @@ enum ChatSearch {
         guard !terms.isEmpty else { return false }
         return terms.allSatisfy { term in tokens.contains { $0.hasPrefix(term) } }
     }
+
+    /// 2026-09-24 decision D2: where to highlight a query inside `text`, from the SAME terms `matches`
+    /// uses. The bubbles used to look for the whole query as one literal string, so "hel wor" found
+    /// "Hello World" and highlighted nothing. Each term is found case/diacritic/width-insensitively
+    /// at the start of a word, which is exactly where the prefix matcher counts it.
+    static func highlightRanges(in text: String, query: String) -> [Range<String.Index>] {
+        var out: [Range<String.Index>] = []
+        for term in queryTerms(query) {
+            var from = text.startIndex
+            while from < text.endIndex,
+                  let r = text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                                     range: from..<text.endIndex), !r.isEmpty {
+                let before = r.lowerBound == text.startIndex ? nil : text[text.index(before: r.lowerBound)]
+                if before.map({ !($0.isLetter || $0.isNumber) }) ?? true { out.append(r) }
+                from = r.upperBound
+            }
+        }
+        return out
+    }
 }

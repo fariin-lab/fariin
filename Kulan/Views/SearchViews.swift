@@ -74,6 +74,14 @@ struct ChatSearchView: View {
     @State private var corpus: [SearchableMessage] = []   // loaded once; filtered in memory
     @State private var loadingCorpus = false
     @State private var loadTask: Task<Void, Never>?
+    // 2026-09-24 decision D1: the corpus follows the chats while this screen is open, the way
+    // ThreadView's in-chat search re-runs on itemsVersion. `corpusStamps` is what each chat looked
+    // like when its messages were indexed; a chat whose stamp moves (new message, edit or delete of
+    // the latest, clear, block, rename) is re-indexed on its own, never the whole account.
+    @State private var corpusStamps: [String: String] = [:]
+    @State private var cappedChats: Set<String> = []       // decision D6: chats searched only back to the cap
+    @State private var refreshTask: Task<Void, Never>?
+    @State private var openedCid: String?                  // the chat pushed from here, re-indexed on return
     @State private var foundByHandle: UserProfile?         // exact @username match (global — start a new chat)
     @State private var handleTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
@@ -93,11 +101,13 @@ struct ChatSearchView: View {
     }
 
     // Instant in-memory filter over the cached corpus — no network/decrypt per keystroke.
+    // 2026-09-24 decision D2: the same ChatSearch engine as in-chat search (case/diacritic folding,
+    // every word prefix-matched), so a message found inside a chat is also found from here.
     private var hits: [MessageHit] {
-        let q = trimmed.lowercased()
-        guard !q.isEmpty else { return [] }
+        let terms = ChatSearch.queryTerms(trimmed)
+        guard !terms.isEmpty else { return [] }
         return corpus
-            .filter { $0.text.lowercased().contains(q) }
+            .filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
             .sorted { $0.date > $1.date }
             .prefix(60)
             .map { MessageHit(messageId: $0.id, cid: $0.cid, chatName: $0.chatName,
@@ -156,6 +166,11 @@ struct ChatSearchView: View {
                         }
                     }
                 }
+                // 2026-09-24 decision D6: say when older history was not searched, as partial local
+                // indexes do in mature apps, so a missing old message is not read as proof.
+                if showCapNote && !nothingFound {
+                    capNote.listRowSeparator(.hidden)
+                }
             }
             .listStyle(.plain)
             .overlay {
@@ -165,7 +180,10 @@ struct ChatSearchView: View {
                 } else if loadingCorpus && nothingFound {
                     ChatListSkeleton()   // skeleton rows instead of a spinner while indexing
                 } else if !loadingCorpus && nothingFound {
-                    ContentUnavailableView.search(text: trimmed)
+                    VStack(spacing: 0) {
+                        ContentUnavailableView.search(text: trimmed)
+                        if showCapNote { capNote.padding(.bottom, 24) }   // decision D6
+                    }
                 }
             }
             .navigationTitle("Search")
@@ -188,21 +206,88 @@ struct ChatSearchView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { searchFocused = true }
             loadTask?.cancel()
             loadingCorpus = corpus.isEmpty
+            let stamps = liveStamps   // decision D1: what the chats looked like when this load began
             loadTask = Task {
                 let loaded = await MessageSearch.loadCorpus(me: me)
                 if Task.isCancelled { return }
-                await MainActor.run { corpus = loaded; loadingCorpus = false }
+                await MainActor.run {
+                    corpus = loaded.messages; cappedChats = loaded.capped; loadingCorpus = false
+                    var s = stamps
+                    for cid in loaded.failed { s[cid] = nil }   // failed chats count as changed: retried below
+                    corpusStamps = s
+                    refreshCorpus()   // anything that changed while this was loading
+                }
             }
+        }
+        // 2026-09-24 decision D1: re-index the chats that changed while the screen is open.
+        .onChange(of: liveStamps) { _, _ in refreshCorpus() }
+        // Back from a chat opened here: whatever was edited or deleted inside it is re-indexed.
+        .onChange(of: path.isEmpty) { _, empty in
+            guard empty, let cid = openedCid else { return }
+            openedCid = nil
+            corpusStamps[cid] = nil
+            refreshCorpus()
         }
         .onDisappear {
             // Cancel background work so it doesn't linger after navigating away.
             loadTask?.cancel();   loadTask   = nil
             handleTask?.cancel(); handleTask = nil
+            refreshTask?.cancel(); refreshTask = nil
         }
     }
 
     private func open(_ cid: String, _ name: String, _ photo: String?) {
+        openedCid = cid
         path.append(ChatTarget(id: cid, name: name, photo: photo))
+    }
+
+    // MARK: 2026-09-24 decision D1 / D6: keeping the corpus current, and saying where it stops
+
+    /// One comparable value per searchable chat. It moves when the chat's newest message arrives,
+    /// is edited or deleted (updatedAt / last cipher), when I clear or block it, and when its name
+    /// or photo (shown on every hit) changes. Typing and unread counts do not move it.
+    private var liveStamps: [String: String] {
+        var out: [String: String] = [:]
+        for c in MessageSearch.searchableConversations(me: me) {
+            out[c.id] = "\(c.updatedAtMillis)|\(c.lastMessageCipher.hashValue)|\(c.clearedAt[me] ?? 0)|"
+                + "\(c.blockedBy[me] ?? false)|\(c.name(for: me))|\(c.photoUrl(for: me) ?? "")"
+        }
+        return out
+    }
+
+    /// Re-index only the chats whose stamp moved, drop chats that left scope. Debounced so a burst
+    /// of messages in a busy group costs one fetch, not one per message.
+    private func refreshCorpus() {
+        guard !loadingCorpus else { return }   // the first load calls this again when it lands
+        refreshTask?.cancel()
+        refreshTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if Task.isCancelled { return }
+            let live = await MainActor.run { liveStamps }
+            let known = await MainActor.run { corpusStamps }
+            let changed = Set(live.filter { known[$0.key] != $0.value }.keys)
+            let gone = Set(known.keys).subtracting(live.keys)
+            guard !changed.isEmpty || !gone.isEmpty else { return }
+            var loaded = SearchCorpus()
+            if !changed.isEmpty { loaded = await MessageSearch.loadCorpus(me: me, only: changed) }
+            if Task.isCancelled { return }
+            await MainActor.run {
+                let reloaded = changed.subtracting(loaded.failed)
+                let drop = reloaded.union(gone)
+                corpus = corpus.filter { !drop.contains($0.cid) } + loaded.messages
+                cappedChats = cappedChats.subtracting(drop).union(loaded.capped)
+                for cid in gone { corpusStamps[cid] = nil }
+                for cid in reloaded { corpusStamps[cid] = live[cid] }
+            }
+        }
+    }
+
+    private var showCapNote: Bool { !trimmed.isEmpty && !loadingCorpus && !cappedChats.isEmpty }
+
+    private var capNote: some View {
+        Text("Only recent messages are searched.")
+            .font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     // Debounced exact @username lookup across ALL users (not just existing chats), so
@@ -263,6 +348,18 @@ struct SearchableMessage {
     let photoUrl: String?
     let text: String
     let date: Date
+    /// 2026-09-24 decision D2: normalized tokens, built once, so this search matches exactly like
+    /// the in-chat one (ChatSearch: case/diacritic folding, every word prefix-matched).
+    var tokens: [String] = []
+}
+
+/// 2026-09-24 decision D6: what one load produced, plus which chats hit `perChatLimit` and so were
+/// only searched back that far.
+struct SearchCorpus {
+    var messages: [SearchableMessage] = []
+    var capped: Set<String> = []
+    /// Chats whose fetch failed: a refresh keeps what it already had for them.
+    var failed: Set<String> = []
 }
 
 // Loads the recent messages across all chats ONCE (decrypting ONLY the text field, not
@@ -271,25 +368,33 @@ struct SearchableMessage {
 enum MessageSearch {
     private static let perChatLimit = 250
 
-    static func loadCorpus(me: String) async -> [SearchableMessage] {
+    /// The chats the global search covers. One definition, shared with ChatSearchView's change
+    /// detection (2026-09-24 decision D1), so both agree on what is in scope.
+    static func searchableConversations(me: String) -> [Conversation] {
+        ConversationsRepository.shared.conversations
+            .filter { !$0.isCleared(me) }
+            .filter { Flags.groupsEnabled || !$0.isGroup }
+    }
+
+    /// `only`: reload just these chats (2026-09-24 decision D1); nil loads every chat.
+    static func loadCorpus(me: String, only: Set<String>? = nil) async -> SearchCorpus {
         let convs = await MainActor.run {
-            ConversationsRepository.shared.conversations
-                .filter { !$0.isCleared(me) }
-                .filter { Flags.groupsEnabled || !$0.isGroup }
+            searchableConversations(me: me).filter { only?.contains($0.id) ?? true }
         }
         let db = Firestore.firestore()
-        var out: [SearchableMessage] = []
+        var out = SearchCorpus()
         // Fetch all chats CONCURRENTLY instead of sequentially — N serial round-trips
         // become a parallel fan-out, so the search index loads much faster on big accounts.
-        await withTaskGroup(of: [SearchableMessage].self) { group in
+        await withTaskGroup(of: (String, Bool, [SearchableMessage]?).self) { group in
             for c in convs {
                 group.addTask {
-                    if Task.isCancelled { return [] }
+                    if Task.isCancelled { return (c.id, false, nil) }
                     guard let snap = try? await db.collection("conversations").document(c.id)
                         .collection("messages")
                         .order(by: "createdAt", descending: true)
                         .limit(to: perChatLimit)
-                        .getDocuments() else { return [] }
+                        .getDocuments() else { return (c.id, false, nil) }
+                    let capped = snap.documents.count >= perChatLimit
                     // Warm the keys needed to decrypt: the 1:1 peer, or EVERY author in a group
                     // (group messages are sealed per-sender). Without this, group search indexed
                     // raw ciphertext and could never match plaintext.
@@ -306,12 +411,16 @@ enum MessageSearch {
                     // regardless, so a blocked person's new messages were fully readable here and
                     // tapping one opened a thread that doesn't contain it (audit).
                     let blockCutoff = c.isBlockedByMe(me) ? c.blockedAtMillis(me) : 0
-                    return snap.documents.compactMap { doc -> SearchableMessage? in
+                    let found = snap.documents.compactMap { doc -> SearchableMessage? in
                         let data = doc.data()
                         // View-once is NEVER searchable — the in-chat corpus in this same file
                         // enforces that rule; the global one didn't, so view-once captions leaked
                         // (and stayed searchable after the single view was spent).
                         guard (data["viewOnce"] as? Bool) != true else { return nil }
+                        // 2026-09-24 decision D2: the in-chat corpus's other two exclusions, so both
+                        // searches agree: a message deleted for me, and a tombstone, are not findable.
+                        if HiddenMessages.isHidden(doc.documentID) { return nil }
+                        if data["deleted"] as? Bool == true { return nil }
                         let author = data["authorId"] as? String ?? ""
                         let text = isGroup
                             ? Crypto.shared.decrypt(data["text"] as? String ?? "", cid: c.id, authorId: author)
@@ -322,12 +431,19 @@ enum MessageSearch {
                            date.timeIntervalSince1970 * 1000 > blockCutoff { return nil }
                         // Index the SAFE label, not the raw "fariin-…:" payload — contact/location
                         // cards then match and display as "Contact"/"Location", never the marker.
+                        let safe = quoteSafeLabel(text)
                         return SearchableMessage(id: doc.documentID, cid: c.id, chatName: name,
-                                                 photoUrl: photo, text: quoteSafeLabel(text), date: date)
+                                                 photoUrl: photo, text: safe, date: date,
+                                                 tokens: ChatSearch.tokens(safe))
                     }
+                    return (c.id, capped, found)
                 }
             }
-            for await chunk in group { out.append(contentsOf: chunk) }
+            for await (cid, capped, chunk) in group {
+                guard let chunk else { out.failed.insert(cid); continue }
+                out.messages.append(contentsOf: chunk)
+                if capped { out.capped.insert(cid) }
+            }
         }
         return out
     }
@@ -414,91 +530,8 @@ extension MessageSearch {
     }
 }
 
-// Search inside a single conversation. Loads the chat's text history once, filters in memory as you
-// type, and hands the picked message id back so ThreadView can scroll to + flash it.
-struct InChatSearchView: View {
-    let cid: String
-    let isGroup: Bool
-    let me: String
-    var nameFor: (String) -> String = { _ in "" }
-    var onPick: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @State private var corpus: [InChatMessage] = []
-    @State private var loading = false
-    @FocusState private var focused: Bool
-
-    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
-
-    private var results: [InChatMessage] {
-        guard trimmed.count >= 2 else { return [] }   // same 2-char floor as the in-conversation search
-        let terms = ChatSearch.queryTerms(trimmed)
-        guard !terms.isEmpty else { return [] }
-        return Array(corpus.filter { ChatSearch.matches(tokens: $0.tokens, terms: terms) }
-            .sorted { $0.date > $1.date }.prefix(100))
-    }
-
-    var body: some View {
-        NavigationStack {
-            List(results) { m in
-                Button { onPick(m.id); dismiss() } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            if isGroup {
-                                Text(nameFor(m.authorId)).font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.tint).lineLimit(1)
-                                VerifiedMark(uid: m.authorId, size: 11)
-                            }
-                            Spacer(minLength: 8)
-                            Text(m.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption).foregroundStyle(.secondary).fixedSize()
-                        }
-                        Text(highlighted(m.text)).font(.system(size: 15)).lineLimit(2)
-                    }
-                }
-                .buttonStyle(.plain)
-                .listRowSeparator(.hidden)
-            }
-            .listStyle(.plain)
-            .overlay {
-                if trimmed.isEmpty {
-                    EmptyStateView(title: "Search this chat", icon: "magnifyingglass",
-                                   text: "Find any message in this conversation.")
-                } else if loading && results.isEmpty {
-                    ProgressView()
-                } else if !loading && results.isEmpty {
-                    ContentUnavailableView.search(text: trimmed)
-                }
-            }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
-            }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Search this chat")
-            .autoFocusSearch($focused)
-        }
-        .task {
-            focused = true
-            loading = true
-            corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
-            loading = false
-        }
-    }
-
-    // Bold the matched span inside the snippet so the hit is obvious.
-    private func highlighted(_ text: String) -> AttributedString {
-        var str = AttributedString(text)
-        let q = trimmed
-        guard !q.isEmpty, let r = text.range(of: q, options: .caseInsensitive),
-              let lo = AttributedString.Index(r.lowerBound, within: str),
-              let hi = AttributedString.Index(r.upperBound, within: str) else { return str }
-        str[lo..<hi].font = .system(size: 15, weight: .bold)
-        return str
-    }
-}
+// 2026-09-24 decision D7: `InChatSearchView`, a second in-chat search nothing presented, was removed.
+// The live one is ThreadView's search bar (activateSearch / updateSearchMatches).
 
 // MARK: - Calls: search anyone you've chatted with, tap to call
 

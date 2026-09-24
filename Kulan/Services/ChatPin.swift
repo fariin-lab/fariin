@@ -53,6 +53,8 @@ enum ChatPin {
     /// pin, and signing back in finds it again.
     private static var keychainKey: String { "chatPin.\(uid)" }
     private static var statusKey: String { "chatPin.set.\(uid)" }
+    /// 2026-09-24 decision D4: the server's `updatedAt` (ms) for the key this phone last knew about.
+    private static var stampKey: String { "chatPin.stamp.\(uid)" }
 
     static func isValid(_ pin: String) -> Bool {
         pin.count >= minDigits && pin.count <= maxDigits
@@ -109,6 +111,9 @@ enum ChatPin {
         _ = try await call("setChatPin", ["pin": pin], onFailure: "Couldn’t save your Chat Key. Try again.")
         Keychain.set(keychainKey, pin)
         UserDefaults.standard.set(true, forKey: statusKey)
+        // 2026-09-24 decision D4: the old stamp belongs to the key just replaced; the next status
+        // answer carries this one's and is adopted.
+        UserDefaults.standard.removeObject(forKey: stampKey)
         await MainActor.run { ChatPinState.shared.changed() }
     }
 
@@ -116,6 +121,7 @@ enum ChatPin {
         _ = try await call("setChatPin", ["pin": ""], onFailure: "Couldn’t remove your Chat Key. Try again.")
         Keychain.delete(keychainKey)
         UserDefaults.standard.set(false, forKey: statusKey)
+        UserDefaults.standard.removeObject(forKey: stampKey)   // 2026-09-24 decision D4
         await MainActor.run { ChatPinState.shared.changed() }
     }
 
@@ -126,6 +132,7 @@ enum ChatPin {
         guard !uid.isEmpty else { return }
         Keychain.delete("chatPin.\(uid)")
         UserDefaults.standard.removeObject(forKey: "chatPin.set.\(uid)")
+        UserDefaults.standard.removeObject(forKey: "chatPin.stamp.\(uid)")   // 2026-09-24 decision D4
     }
 
     /// Ask the server whether I have one. Returns nil when it could not be asked, and in that case
@@ -165,10 +172,25 @@ enum ChatPin {
         let was = UserDefaults.standard.bool(forKey: statusKey)
         UserDefaults.standard.set(set, forKey: statusKey)
         // Removed from another device: the copy here would be a pin that opens nothing.
-        if !set { Keychain.delete(keychainKey) }
+        if !set { Keychain.delete(keychainKey); UserDefaults.standard.removeObject(forKey: stampKey) }
+        // 2026-09-24 decision D4: CHANGED on another device. `set` stays true, so the check above
+        // never fired and this phone kept showing (and sharing) digits the server no longer takes.
+        // The server's `updatedAt` identifies which key it holds: remember the one this phone's copy
+        // belongs to, and when the server names a different one, drop the copy and fall back to
+        // "set on another device". No stamp yet (just set here, or a key from before this build):
+        // adopt the server's, since the only key this phone could have is that one.
+        var copyDropped = false
+        if set, let ms = r["updatedAt"] as? Double {
+            let known = UserDefaults.standard.object(forKey: stampKey) as? Double
+            if let known, known != ms, Keychain.get(keychainKey) != nil {
+                Keychain.delete(keychainKey)
+                copyDropped = true
+            }
+            UserDefaults.standard.set(ms, forKey: stampKey)
+        }
         // When the server's answer changed what this phone believed, the rows showing it have to
         // hear about it too — the same reason `set` and `remove` post.
-        if was != set { await MainActor.run { ChatPinState.shared.changed() } }
+        if was != set || copyDropped { await MainActor.run { ChatPinState.shared.changed() } }
         // ⛔ WHEN IT WAS SET, for the "set on another device" line — audit L8. The server has always
         // returned this and nothing read it, so a phone that could not show the key could not say
         // anything about it either.
