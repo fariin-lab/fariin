@@ -834,7 +834,11 @@ final class AuthService: NSObject {
 
     private func reauthenticate(with credential: AuthCredential) async throws {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+        // 2026-09-24 decision D1: the token from BEFORE, so a two-step session stays through the door
+        // after its auth_time changes (TwoStepGate.renewAfterReauth).
+        let before = try? await user.getIDTokenResult(forcingRefresh: false)
         _ = try await user.reauthenticate(with: credential)
+        await TwoStepGate.renewAfterReauth(previous: before)
         // Record it ourselves — see lastReauthAt. Only reached when reauthenticate did NOT throw, so a
         // cancelled or mismatched sign-in never marks the session as verified.
         lastReauthAt = Date()

@@ -80,7 +80,8 @@ struct PasswordView: View {
     /// own floor and is no longer the one that decides.
     private var longEnough: Bool { password.count >= 8 }
     private var matches: Bool { !confirm.isEmpty && confirm == password }
-    private var canSave: Bool { longEnough && matches && !busy }
+    // 2026-09-24 decision D2: changing needs the current password every time, however fresh the session.
+    private var canSave: Bool { longEnough && matches && !busy && (isFirstPassword || !currentPassword.isEmpty) }
 
     var body: some View {
         Group {
@@ -368,12 +369,22 @@ struct PasswordView: View {
                 // that does nothing and Firebase decides on its own whether to demand a fresh login,
                 // which is the `.needsReauth` detour below.
                 //
-                // ⚠️ BEST EFFORT, AND DELIBERATELY SO. A wrong current password is NOT reported here:
-                // `setPassword` is still the authority, and it refuses with `requiresRecentLogin` if
-                // this did not satisfy Firebase. Failing loudly at this step would give two different
-                // errors for one wrong entry.
-                if !isFirstPassword, !currentPassword.isEmpty {
-                    try? await AuthService.shared.reauthEmail(password: currentPassword)
+                // 2026-09-24 decision D2: NO LONGER BEST EFFORT. It was `try?`, so a wrong current
+                // password went unnoticed whenever the session was fresh enough for Firebase, and the
+                // password moved anyway. Now a change always re-authenticates with the current
+                // password first, and a wrong one stops here with its own message.
+                if !isFirstPassword {
+                    do {
+                        try await AuthService.shared.reauthEmail(password: currentPassword)
+                    } catch {
+                        await MainActor.run {
+                            busy = false
+                            // Same wording DeleteAccountView uses for a wrong password on its page.
+                            self.error = AuthService.plainMessage(error, credentialHint: "That password is not right.")
+                                ?? "Could not verify that. Try again."
+                        }
+                        return
+                    }
                 }
                 try await AuthService.shared.setPassword(password, isFirst: isFirstPassword)
                 await MainActor.run { busy = false; done = true }

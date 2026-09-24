@@ -221,6 +221,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     var pendingChatName: String?  // fallback header name when the conv isn't in the cache yet
     var pendingChatPhoto: String? // fallback header photo
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
+    /// 2026-09-24 decision D4: a kulan://u/<handle> link, kept like the invite code above until the
+    /// app is signed in and on its main screen (RootView opens it then). A link tapped while signed
+    /// out used to be dropped, because the lookup needs a session.
+    var pendingUserHandle: String?
     var activeChatId: String?     // the chat currently on screen (suppresses its own banners)
     /// A specific message to land on once that chat is open, rather than opening wherever the chat
     /// normally opens. Set beside `pendingChatId`, consumed once by ThreadView.

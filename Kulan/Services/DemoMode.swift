@@ -64,7 +64,23 @@ enum DemoMode {
     /// already had to solve exactly this and solved it correctly: the receipt name is the honest
     /// test for "this build came from TestFlight", and it needs nobody to remember to flip a switch
     /// before submitting. Do not replace this with a hand-set Bool.
-    static var isAvailable: Bool { DemoStoryMedia.isAvailable }
+    ///
+    /// 2026-09-24 decision D5: BOTH the sandbox receipt AND the owner's own handle. App Review
+    /// installs carry a sandbox receipt too, and so does every other TestFlight tester, so the receipt
+    /// alone put the Demo chats switch and the "apple" demo login in front of them. Same two gates
+    /// GlowDemo.isOn already uses (handle `realwarya`). Debug builds keep the receipt rule alone:
+    /// they never reach App Review or TestFlight, and the browser preview needs the demo login
+    /// before any handle exists.
+    static var isAvailable: Bool {
+        #if DEBUG
+        return DemoStoryMedia.isAvailable
+        #else
+        guard DemoStoryMedia.isAvailable else { return false }
+        return (ProfileStore.shared.me?.handle ?? "").lowercased() == ownerHandle
+        #endif
+    }
+    /// The owner's handle, lowercased; the same one GlowDemo checks.
+    private static let ownerHandle = "realwarya"
 
     /// THE ONE HE ACTUALLY USES. A switch in Settings turns this on and six demo chats appear in
     /// his own chat list, next to his real ones. He stays signed in, nothing is written anywhere,

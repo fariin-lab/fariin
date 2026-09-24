@@ -319,3 +319,167 @@ struct DisableAdditionalPasswordView: View {
         } catch { self.error = error.localizedDescription }
     }
 }
+
+// MARK: - The door after sign-in
+
+/// 2026-09-24 decision D1: two-step gates EVERY new sign-in. The claim lists the `auth_time` of each
+/// sign-in that entered the additional password; `firestore.rules` (`twoStepSatisfied`) and
+/// `twoStepSessionPassed` in functions-account make the same test. This is the app's copy of it, so
+/// RootView can show the password page instead of an app the database refuses to fill.
+enum TwoStepGate {
+    /// The same three-way test as the rules. No claim, or not required: through.
+    static func sessionPassed(_ r: AuthTokenResult) -> Bool {
+        guard let c = r.claims["twoStep"] as? [String: Any],
+              (c["required"] as? Bool) == true else { return true }
+        guard (c["ok"] as? Bool) == true else { return false }
+        let t = Int64(r.authDate.timeIntervalSince1970.rounded())
+        let tMs = Double(t) * 1000
+        let legacyAt = (c["legacyAt"] as? NSNumber)?.doubleValue ?? 0
+        if let list = c["authTimes"] as? [NSNumber] {
+            return list.contains { $0.int64Value == t } || (legacyAt > 0 && tMs <= legacyAt)
+        }
+        let at = (c["at"] as? NSNumber)?.doubleValue ?? 0
+        return at > 0 && tMs <= at
+    }
+
+    /// true: this sign-in must enter the password. false: through. nil: the token did not arrive in
+    /// time (offline launch with an expired token), so the caller routes as usual and asks again later.
+    /// ⚠️ A TIMEOUT, BECAUSE THIS IS ON THE BOOT PATH. An expired token means a network refresh, and
+    /// launch must never wait on the network (see RootView.route).
+    static func needsPassword(timeout: Double = 2) async -> Bool? {
+        guard let user = Auth.auth().currentUser else { return false }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool?, Never>) in
+            let once = Once()
+            user.getIDTokenResult(forcingRefresh: false) { result, _ in
+                if once.take() { cont.resume(returning: result.map { !sessionPassed($0) }) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                if once.take() { cont.resume(returning: nil) }
+            }
+        }
+    }
+
+    /// Called by AuthService right after a successful re-authentication, with the token held just
+    /// before it. Re-authenticating gives the session a new `auth_time`, which is not on the list, so
+    /// without this the phone would lock itself out the moment it proved who it is.
+    /// `renewTwoStepSession` adds the new sign-in only if that earlier token was through the door.
+    static func renewAfterReauth(previous: AuthTokenResult?) async {
+        guard let previous,
+              let c = previous.claims["twoStep"] as? [String: Any],
+              (c["required"] as? Bool) == true,
+              sessionPassed(previous) else { return }
+        do {
+            try await AccountCall.run("renewTwoStepSession", ["idToken": previous.token])
+            _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
+        } catch {
+            print("[twoStep] renew after reauth failed: \(error.localizedDescription)")
+        }
+    }
+
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func take() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+    }
+}
+
+/// The page RootView shows right after a sign-in on an account with two-step on. Same fields and
+/// the same way back (recovery code) as `DisableAdditionalPasswordView`; the password here lets this
+/// sign-in in instead of turning anything off.
+struct TwoStepSignInView: View {
+    let onPassed: () -> Void
+
+    @State private var password = ""
+    @State private var hint = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var recoveryCode = ""
+    @State private var recoverySent = false
+
+    var body: some View {
+        Form {
+            Section {
+                SecureField("Additional password", text: $password)
+                    .submitLabel(.continue)
+                    .onSubmit { Task { await verify() } }
+            } footer: {
+                // Existing line from the settings page, true here word for word.
+                Text("An additional password is required when you sign in on a new device.")
+            }
+            if !hint.isEmpty {
+                Section {
+                    HStack { Text("Hint"); Spacer(); Text(hint).foregroundStyle(.secondary) }
+                }
+            }
+            Section {
+                Button("I forgot this password") { Task { await startRecovery() } }
+                    .disabled(busy)
+            }
+            if recoverySent {
+                Section {
+                    TextField("6-digit code", text: $recoveryCode)
+                        .keyboardType(.numberPad)
+                        .onChange(of: recoveryCode) { _, new in
+                            let digits = String(new.filter(\.isNumber).prefix(6))
+                            if digits != new { recoveryCode = digits }
+                        }
+                    Button("Turn Off With Code") { Task { await finishRecovery() } }
+                        .disabled(recoveryCode.count != 6 || busy)
+                } footer: {
+                    Text("We sent a code to your recovery email.")
+                }
+            }
+            if let error {
+                Section { Text(error).foregroundStyle(.red).font(.footnote) }
+            }
+        }
+        .navigationTitle("Two-step verification")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Continue") { Task { await verify() } }
+                    .disabled(password.isEmpty || busy)
+                    .fontWeight(.semibold)
+            }
+        }
+        .task {
+            // The hint is the one thing readable before the password; a failure just leaves it off.
+            if let d = try? await AccountCall.run("twoStepStatus") {
+                hint = d["hint"] as? String ?? ""
+                // Turned off from another device meanwhile: nothing to ask.
+                if (d["enabled"] as? Bool) == false || (d["passed"] as? Bool) == true { onPassed() }
+            }
+        }
+    }
+
+    private func verify() async {
+        guard !password.isEmpty, !busy else { return }
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            try await AccountCall.run("verifyAdditionalPassword", ["password": password])
+            // The claim lands on the next refresh; the rules read the token, so fetch it first.
+            _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
+            onPassed()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func startRecovery() async {
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            try await AccountCall.run("startTwoStepRecovery")
+            recoverySent = true
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func finishRecovery() async {
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            try await AccountCall.run("confirmTwoStepRecovery", ["code": recoveryCode])
+            _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
+            onPassed()
+        } catch { self.error = error.localizedDescription }
+    }
+}

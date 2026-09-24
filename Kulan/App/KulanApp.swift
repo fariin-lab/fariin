@@ -98,11 +98,10 @@ struct KulanApp: App {
             guard Flags.groupsEnabled else { return }
             AppRouter.shared.pendingInviteCode = code
         case .user(let handle):
-            Task {
-                guard let user = await ChatService.findByHandle(handle),
-                      let cid = try? await ChatService.openConversation(other: user) else { return }
-                await MainActor.run { AppRouter.shared.pendingChatId = cid }
-            }
+            // 2026-09-24 decision D4: kept, not resolved here. Signed out (or still on the front
+            // door, onboarding or the two-step page) the lookup has no session and the link was lost;
+            // RootView opens it once the app reaches its main screen, the invite code's pattern.
+            AppRouter.shared.pendingUserHandle = handle
         case .story:
             // Deliberately nothing yet, and the shape is still parsed on purpose — see `DeepLink`.
             // Doing nothing is the right behaviour until the site serves these: a half-built handler

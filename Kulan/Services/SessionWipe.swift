@@ -57,6 +57,8 @@ enum SessionWipe {
         GlowStoriesCache.clear()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         ProfileStore.shared.me = nil
+        ProfileStore.shared.stopPrivacySync()   // 2026-09-24 decision D11: stop mirroring this account's privacy
+        BlockList.shared.stop()                 // 2026-09-24 decision D8: the account's block list goes with it
         // The name Apple handed over at the last sign-up (audit 2026-09-24). Nothing cleared it, so
         // an account that signed up with Apple and left before onboarding had its real name prefilled
         // into the NEXT account's onboarding on this phone.
@@ -102,6 +104,7 @@ enum SessionWipe {
         AppRouter.shared.pendingChatName = nil
         AppRouter.shared.pendingChatPhoto = nil
         AppRouter.shared.pendingInviteCode = nil
+        AppRouter.shared.pendingUserHandle = nil   // 2026-09-24 decision D4: same as the invite code
         // 2026-09-24 audit: the signed-out account's notifications and badge. Left behind, the icon
         // kept showing its unread count on the Welcome screen, and a banner still in Notification
         // Center could be tapped under the NEXT account and open a chat that account is not in.

@@ -9,7 +9,9 @@ struct RootView: View {
     /// immediately, so somebody who force-quits on the code screen is left holding a real session
     /// for an address nobody has proved. Without this case the next launch would walk them straight
     /// into the app and the proof would be skipped for good.
-    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date) }
+    /// 2026-09-24 decision D1: `twoStep` is the additional-password page every new sign-in on a
+    /// two-step account meets before the app (see TwoStepGate).
+    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date), twoStep }
     @State private var phase: Phase = .loading
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
@@ -135,6 +137,24 @@ struct RootView: View {
                             }
                         }
                 }
+            case .twoStep:
+                // 2026-09-24 decision D1. Same shape and the same light Sign Out as `.proveEmail`:
+                // nothing past this door was ever opened, so there is nothing to tear down.
+                NavigationStack {
+                    TwoStepSignInView(onPassed: { Task { await route() } })
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Sign Out") {
+                                    Task {
+                                        await AuthService.shared.abandonSession()
+                                        await route()
+                                    }
+                                }
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                }
             case .main:
                 // Root-level call container so an active call (full screen or top mini
                 // bar) lives above every screen and survives all navigation.
@@ -173,6 +193,12 @@ struct RootView: View {
             #if DEBUG
             if new == .main && !DemoMode.active { Task { await seedPreviewStoryIfNeeded() } }
             #endif
+            // 2026-09-24 decision D4: a profile link opened before sign-in finished.
+            if new == .main { openPendingUserLink() }
+        }
+        // …and one opened while already inside the app.
+        .onChange(of: AppRouter.shared.pendingUserHandle) { _, handle in
+            if handle != nil, phase == .main { openPendingUserLink() }
         }
         .onAppear { if lockEnabled { locked = true; authenticate() } }
         // Remote sign-out: our own device record was deleted from another phone. Same teardown
@@ -273,6 +299,14 @@ struct RootView: View {
             phase = .proveEmail(unproven)
             return
         }
+        // 2026-09-24 decision D1: a sign-in on a two-step account that has not entered the additional
+        // password stops here. Local token read with a short timeout (boot path); `nil` means the
+        // token did not arrive in time, and the cached path below asks again in the background.
+        let twoStepAnswer = await TwoStepGate.needsPassword()
+        if twoStepAnswer == true {
+            phase = .twoStep
+            return
+        }
         // Returning user: boot INSTANTLY from the on-disk cache (the the reference app model).
         // Launch must never wait on the network — offline, each awaited server call
         // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
@@ -310,6 +344,12 @@ struct RootView: View {
             startOfficialChannel()
             phase = .main
             Task {   // background refresh + key self-heal, off the boot path
+                // 2026-09-24 decision D1: the two-step answer the boot path timed out on. Before the
+                // deletion check, because a locked token cannot read the profile that check reads.
+                if twoStepAnswer == nil, await TwoStepGate.needsPassword(timeout: 20) == true {
+                    phase = .twoStep
+                    return
+                }
                 // The server's word on a deletion scheduled from another device (see above). First,
                 // because it is the one answer that changes which screen you should be looking at.
                 if let due = await ProfileStore.shared.scheduledDeletionDate() {
@@ -381,6 +421,19 @@ struct RootView: View {
     /// one piece of config the "Update Now" button needs, and the limits the server sets. All four
     /// are cheap listeners on small documents, and all four must be running before the chat list
     /// draws its first frame — the channel is a row in that list.
+    /// 2026-09-24 decision D4: opens a kept profile link (AppRouter.pendingUserHandle) once, now that
+    /// there is a session. The same lookup KulanApp.handleDeepLink used to run straight away.
+    private func openPendingUserLink() {
+        guard let handle = AppRouter.shared.pendingUserHandle else { return }
+        AppRouter.shared.pendingUserHandle = nil
+        guard !DemoMode.active else { return }
+        Task {
+            guard let user = await ChatService.findByHandle(handle),
+                  let cid = try? await ChatService.openConversation(other: user) else { return }
+            await MainActor.run { AppRouter.shared.pendingChatId = cid }
+        }
+    }
+
     private func startOfficialChannel() {
         OfficialChannelStore.shared.start()
         AdminStore.shared.start()

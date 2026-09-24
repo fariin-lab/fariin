@@ -245,11 +245,21 @@ struct EmailCodeView: View {
         error = nil
         defer { working = false }
         do {
-            try await AccountCall.run("confirmEmailChange", ["code": code])
+            // 2026-09-24 decision D3: the token from before, for the two-step renew below.
+            let before = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: false)
+            let reply = try await AccountCall.run("confirmEmailChange", ["code": code])
             // ⛔ THE TOKEN IS REFRESHED BEFORE ANYTHING READS THE NEW STATE. `confirmEmailChange`
             // revokes every refresh token — the address is an account's recovery route, so the other
             // devices come back through the front door — and this one has to pick up its new token
             // before the app asks Firebase who it is, or it reads the old address back.
+            // 2026-09-24 decision D3: that revoke includes THIS phone's refresh token, so a refresh
+            // alone failed and the phone was signed out later without a word. The server now hands
+            // back a session minted after the revoke; signing in with it re-authenticates in place.
+            if let token = reply["customToken"] as? String {
+                _ = try await Auth.auth().signIn(withCustomToken: token)
+                // A new sign-in has a new auth_time; keep a two-step session through the door (D1).
+                await TwoStepGate.renewAfterReauth(previous: before)
+            }
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
             await ProfileStore.shared.refreshMe()
             onDone()
