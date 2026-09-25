@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
+import LocalAuthentication
 
 // The privacy audience system (user's reference, 2026-07-24). Each privacy item opens a
 // page with Everyone / My Chats / No One.
@@ -304,10 +305,22 @@ struct AppLockPage: View {
     @AppStorage("appLockDelay") private var lockDelay = 0
     @AppStorage("screenSecurity") private var screenSecurity = false
 
+    private var requireLabel: String {
+        let ctx = LAContext()
+        _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)   // fills biometryType
+        switch ctx.biometryType {
+        case .faceID: return "Require Face ID"
+        case .touchID: return "Require Touch ID"
+        default: return "Require Passcode"
+        }
+    }
+
     var body: some View {
         List {
             Section {
-                Toggle("App Lock", isOn: $appLock).tint(.green)
+                // Owner 2026-09-25: the page is already titled App Lock, so the switch names what
+                // it asks for instead, the way the system's own lock settings do.
+                Toggle(requireLabel, isOn: $appLock).tint(.green)
                 if appLock {
                     Picker("Auto-Lock", selection: $lockDelay) {
                         Text("Immediately").tag(0)
