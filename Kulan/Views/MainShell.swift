@@ -1771,11 +1771,7 @@ struct ChatsView: View {
             }
             .pickerStyle(.inline)
             Divider()
-            // Select Chats: what the Edit pill did. The reference app keeps it in this menu, so the
-            // bar has one control on the left instead of two.
-            Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
-                Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
-            }
+            // Select Chats left this menu on 2026-09-25: the Edit button on the left does it now.
             // ⛔ MESSAGE REQUESTS — owner, 2026-09-09: "Message Requests put when users click ...
             // Chats Open comtext menu inside chats". This is that menu, and the entry sits in the
             // last group beside Archive because the two of them are the same kind of thing: the
@@ -1825,24 +1821,22 @@ struct ChatsView: View {
             // entry point, and it goes through `composeStory` because that is the one door with the
             // day's-limit check in it, not a second copy of the check.
         } label: {
-            // ⛔ NOT THE USER'S PHOTO — owner, 2026-09-24: "the is no bussnes to aviator here". His
-            // photo already sits on the Settings tab; a second copy on the Chats header was a
-            // shortcut to nowhere. A plain "…" in the system glass circle, the same as the Stories
-            // tab's menu button, opens the same menu.
-            Image(systemName: "ellipsis")
+            // ⛔ A FILTER ICON ON THE RIGHT, BESIDE COMPOSE — owner, 2026-09-25, with the header he
+            // wants: "Edit" on the left, filter and compose in one capsule on the right. It was a
+            // "…" on the left (and his photo before that, 2026-09-24: "the is no bussnes to
+            // aviator here"). Same menu, new door.
+            Image(systemName: "line.3.horizontal.decrease")
         }
     }
-    // The two right items, in the reference app's screen order: camera, then compose at the
-    // trailing edge. Plain bar images: no tint of their own (the tab root's `.tint(.primary)`
-    // already reaches this bar) and no font size forced on them, so the bar draws them at its own
-    // glyph size, the 24pt box the reference's assets are drawn to.
-    //
-    // The camera goes through `composeStory`, the one door with the day's-limit check in it, as
-    // its own note asks. `ic_camera` exists in the catalogue if he wants his own drawing here; the
-    // symbol is used so the pair is one icon family, which compose has no drawing for.
-    private var cameraButton: some View {
-        Button { composeStory() } label: { Image(systemName: "camera") }
+    // ⛔ "EDIT" ON THE LEFT — owner, 2026-09-25. It goes straight into selecting chats, which is
+    // what Edit means on every iOS list.
+    private var editButton: some View {
+        Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }
     }
+    // The two right items: the filter menu, then compose at the trailing edge (owner, 2026-09-25;
+    // the camera that stood here left the header, stories are posted from the Stories tab). Plain
+    // bar images: no tint of their own (the tab root's `.tint(.primary)` already reaches this bar)
+    // and no font size forced on them, so the bar draws them at its own glyph size.
     private var composeButton: some View {
         Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
     }
@@ -1889,9 +1883,9 @@ struct ChatsView: View {
             // `SwipeFade` stands in for the system's own bar-item pop transition: it drops the
             // items to opacity 0 the instant a chat is pushed and brings them back on return.
             // (The deployment target is iOS 26, so there is no pre-26 branch to keep here.)
-            ToolbarItem(placement: .topBarLeading) { avatarMenu.modifier(SwipeFade(on: showHeaderIcons)) }
+            ToolbarItem(placement: .topBarLeading) { editButton.modifier(SwipeFade(on: showHeaderIcons)) }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                cameraButton.modifier(SwipeFade(on: showHeaderIcons))
+                avatarMenu.modifier(SwipeFade(on: showHeaderIcons))
                 composeButton.modifier(SwipeFade(on: showHeaderIcons))
             }
         }
