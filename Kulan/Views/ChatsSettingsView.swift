@@ -80,7 +80,7 @@ struct ChatsSettingsView: View {
                 // are no channels at all, and there is no contact list to be in or out of — the
                 // sweep's actual test is whether YOU have ever replied (see UnknownChatArchiver).
                 // Copy carried over from a reference app describes that app, not this one.
-                Text("When someone you have never replied to starts a chat, it goes straight to Archived and stays muted. You still get the message.")
+                Text("New chats from people you've never replied to go to Archived, muted.")
             }
 
             Section {

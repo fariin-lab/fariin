@@ -75,7 +75,7 @@ struct StorageDataView: View {
                 // and told people about a rule that could never fire. The real, useful sentence is
                 // what the setting above actually decides.
                 // 2026-09-24 audit: documents now honour their row too (MediaAutoDownloader.sweep).
-                Text("Chooses when photos, videos, voice messages and documents download by themselves. Anything not downloaded is fetched the moment you open it.")
+                Text("When media downloads by itself. Anything else downloads when you open it.")
             }
 
             Section {
@@ -106,7 +106,7 @@ struct StorageDataView: View {
             } header: {
                 Text("Uploads (testing)")
             } footer: {
-                Text("Hands photos and videos to iOS instead of sending them inside the app, so leaving Fariin mid-send no longer cancels them and a dropped connection continues where it stopped. Turn it off if anything stops sending.")
+                Text("Photos and videos keep sending after you leave Fariin. Turn off if sending stops.")
             }
 
             Section {
@@ -294,7 +294,7 @@ struct ManageStoragePage: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { refresh() }
                 }
             } footer: {
-                Text("Cached photos older than your selection are removed from this device (they re-download when needed). Videos and voice notes are never auto-removed — this phone holds their only copy.")
+                Text("Older photos are removed and download again when needed. Videos and voice notes are kept.")
             }
 
             Section {
@@ -321,7 +321,7 @@ struct ManageStoragePage: View {
                 }
             }
         } message: {
-            Text("This permanently deletes the videos and voice notes stored on this phone. They exist nowhere else and cannot be downloaded again.")
+            Text("Deletes the videos and voice notes on this phone. They can't be downloaded again.")
         }
         .alert("Clear cache?", isPresented: $confirmCache) {
             Button("Cancel", role: .cancel) {}

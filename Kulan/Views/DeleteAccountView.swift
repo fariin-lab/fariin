@@ -113,7 +113,7 @@ struct DeleteAccountView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Permanently Delete Account")
                     .font(.title2.weight(.bold))
-                Text("Your account is hidden straight away and deleted for good after \(ProfileStore.gracePeriodDays) days. Sign in before then to bring it back exactly as it was.")
+                Text("Your account is hidden now and deleted after \(ProfileStore.gracePeriodDays) days. Sign in before then to restore it.")
                     .font(.subheadline).foregroundStyle(.secondary)
                 // Honest about what deleting your account does NOT reach: messages already
                 // delivered live on other people's phones, and we can't reach into those.

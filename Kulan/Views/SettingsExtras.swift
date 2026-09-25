@@ -124,7 +124,7 @@ struct NotificationsSettingsView: View {
                 // The section had no footer at all, and "In-App Preview" says nothing on its own —
                 // it is the only one of the three whose name does not describe what it does. All
                 // three are real: `InAppNotify` and `PushManager` both read them.
-                Text("How a message announces itself while you already have Fariin open. Preview shows the sender and the message in the banner; with it off the banner says only that something arrived.")
+                Text("Alerts while Fariin is open. Preview shows the sender and message in the banner.")
             }
             // Dead without push, for the reason in the footer under Show Notifications: the banner
             // IS a push, arriving while the app is open.
@@ -726,7 +726,7 @@ struct BlockedUsersView: View {
                 // that lands after it stays hidden even once you unblock. Stories: the same
                 // function calls `revokeAudience`, which reaches back and pulls your live ones. Not
                 // told: nothing is written to their side at all.
-                Text("Blocked people cannot call you, and nothing they send will reach you. They lose your stories straight away. They are never told they were blocked.")
+                Text("Blocked people can't call or message you or see your stories. They aren't told.")
             }
         }
         .listStyle(.insetGrouped)

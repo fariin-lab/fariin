@@ -32,7 +32,7 @@ struct SecurityNotificationsView: View {
                                                        set: { on in alerts = on; Task { await save(on) } }))
                     .disabled(loading)
             } footer: {
-                Text("Email me when my account is signed in to on a device it has not been used on before. These emails are how you would find out about a sign-in that was not you.")
+                Text("Email me when my account signs in on a new device.")
             }
 
             if let error {

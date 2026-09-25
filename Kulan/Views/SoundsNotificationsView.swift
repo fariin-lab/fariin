@@ -153,7 +153,7 @@ struct SoundPickerView: View {
                     // Says it on the screen rather than leaving somebody to wonder why their
                     // ringtone is not in the list.
                     if kind == .call {
-                        Text("iPhone Ringtone plays whatever you have chosen in Settings > Sounds & Haptics. Apple's ringtones can only be used that way, so they cannot be listed here one by one.")
+                        Text("iPhone Ringtone uses the ringtone set in iPhone Settings > Sounds & Haptics.")
                     }
                 }
             }

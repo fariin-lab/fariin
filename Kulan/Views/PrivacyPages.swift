@@ -359,7 +359,7 @@ struct AppLockPage: View {
                     .disabled(appLock)
             } footer: {
                 Text(appLock
-                     ? "Hides the app preview in the multitasking switcher. App Lock always does this, otherwise your last chat would still be visible there without Face ID."
+                     ? "Hides the app preview in the app switcher. Always on while App Lock is on."
                      : "Hides the app preview in the multitasking switcher.")
             }
         }
@@ -462,7 +462,7 @@ struct MessagesPrivacyPage: View {
                 // The two modes in the owner's own words, 2026-09-11 ("Messages — Who Can Send Me
                 // Messages"): Everyone can knock once with a short text and the key lets them
                 // straight in; the second closes even that first knock to anyone without it.
-                Text("Everyone: anyone new can send you one short message request, and your Chat Key lets them straight into a chat. People Who Know My Chat Key: nobody new can reach you without it. People already in your chats keep messaging you either way.")
+                Text("Who new people can message. Your chats are never affected.")
             }
 
             // CHAT PIN — owner's spec, 2026-09-11. The private invitation that goes past both modes,
@@ -482,7 +482,7 @@ struct MessagesPrivacyPage: View {
                 // ⚠️ THE ONE STATE THAT LOCKS EVERYBODY NEW OUT, said out loud: the second mode with
                 // no key set. A legitimate choice, but not one a person should arrive at by accident.
                 if privMessages == Audience.contacts.rawValue && !ChatPin.isSet {
-                    Text("You haven’t set a Chat Key yet, so nobody new can message you until you do. People already in your chats are not affected.")
+                    Text("You haven't set a Chat Key, so nobody new can message you yet.")
                 } else {
                     Text("Anyone who knows your Chat Key can message and call you directly, whatever you choose above.")
                 }

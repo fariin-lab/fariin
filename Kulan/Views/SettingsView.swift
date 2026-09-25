@@ -743,8 +743,8 @@ struct AccountSettingsView: View {
             Text("Sign-in Methods")
         } footer: {
             Text(AuthService.shared.isAnonymousSession
-                 ? "You're signed in as a guest. Connect a login so you can get back into this account on another phone, and your chats stay exactly as they are."
-                 : "Connect more than one so you can always get back in. They all open this same account. You can remove one as long as another is left, and we'll ask you to prove it's you first.")
+                 ? "You're signed in as a guest. Connect a login to keep this account on a new phone."
+                 : "Add more than one so you can always get back in. Each opens this same account.")
         }
     }
 
@@ -1229,7 +1229,7 @@ struct PrivacySettingsView: View {
                             // ⛔ TWO CHOICES — owner, 2026-09-11: "Everyone should mean everyone,
                             // including people who send message requests"; Nobody is nobody NEW.
                             // People in your chats can always call; a block always wins.
-                            footerText: "Who can call you. Everyone: anyone you haven’t blocked, including people who sent you a message request. Only My Chats: only people you already have a chat with. Anyone who used your Chat Key is in your chats.")
+                            footerText: "Who can call you. Only My Chats: people you already chat with, including anyone who used your Chat Key.")
                 // ⛔ STORIES, AND IT IS A DOOR RATHER THAN A PICKER — owner, 2026-09-16: "add Stories
                 // like next call, when user click is going stories page".
                 //
@@ -1312,7 +1312,7 @@ struct PrivacySettingsView: View {
     /// 2026-09-24 fix-all #145: the three choices `Audience` offers on every key but Calls and
     /// Messages, named with their on-screen labels ("My Chats", "No One").
     private static let threeChoiceFooter =
-        "Everyone: anyone on Fariin. My Chats: only people you have a one-to-one chat with; sharing a group is not enough. No One: nobody."
+        "My Chats means people you have a one-to-one chat with. A shared group doesn't count."
 
     private func audienceRow(_ title: String, key: String, value: String, footerText: String) -> some View {
         NavigationLink { AudiencePage(title: title, key: key, footer: footerText) } label: {
@@ -1480,7 +1480,7 @@ struct StorySettingsView: View {
                     }
                     .textCase(nil)
                 } footer: {
-                    Text("Story updates automatically disappear after 24 hours. Choose who can view your story, or make a new one with specific viewers.")
+                    Text("Stories disappear after 24 hours. Choose who can see them.")
                 }
             }
             if !optedOut {

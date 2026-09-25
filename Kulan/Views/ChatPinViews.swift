@@ -479,7 +479,7 @@ struct ChatPinPage: View {
             } footer: {
                 // "make it can call and message who know the pin" — owner, 2026-09-11. A pin makes
                 // the chat accepted, and an accepted chat is what "friend" means for calls too.
-                Text("Anyone who knows your Chat Key can message and call you directly, whatever your Messages and Calls settings say. Share it only with people you want to hear from.")
+                Text("Anyone with your Chat Key can message and call you. Share it only with people you trust.")
             }
 
             if isSet {
@@ -491,7 +491,7 @@ struct ChatPinPage: View {
                     .disabled(removing)
                 } footer: {
                     // Spec §22: rotating controls NEW access only.
-                    Text("Changing or removing your Chat Key doesn’t remove anyone who already used it. Remove a friend from their profile instead.")
+                    Text("Changing your Chat Key doesn't remove people who already used it.")
                 }
             }
 
