@@ -74,7 +74,9 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            USERNAME PAGE, GREEN SWITCHES, SMALL FIXES.
+            USERNAME PAGE, SETTINGS SIZES, GREEN SWITCHES.
+
+            SETTINGS: rows at the reference app's size (24pt icons, tighter lines). Appearance is now the same native cards as the rest of Settings.
 
             ACCOUNT: new Username row opening Contact me by username: your @username, who can contact you by it, and your Chat Key.
 
