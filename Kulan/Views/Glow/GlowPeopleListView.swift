@@ -407,6 +407,11 @@ private struct NativeSegments: UIViewRepresentable {
         c.selectedSegmentIndex = selected
         c.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         c.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        // ⛔ AND VERTICALLY — owner, 2026-09-25 night, screenshot: the bar was still ~30pt under a
+        // 52pt frame. A segmented control hugs its own height, so SwiftUI kept that and centred it
+        // in the frame. Low hugging plus `sizeThatFits` below make it take the frame's height.
+        c.setContentHuggingPriority(.defaultLow, for: .vertical)
+        c.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         // Text grown with the 52pt bar, so the halves do not read as a small label in a tall track.
         c.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 16, weight: .medium)], for: .normal)
         c.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 16, weight: .semibold)], for: .selected)
@@ -416,6 +421,12 @@ private struct NativeSegments: UIViewRepresentable {
     func updateUIView(_ c: UISegmentedControl, context: Context) {
         context.coordinator.parent = self
         if c.selectedSegmentIndex != selected { c.selectedSegmentIndex = selected }
+    }
+
+    /// Whatever the page offers, taken whole: the width of the row and the height of `tabs`' frame.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width,
+               height: proposal.height ?? 52)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
