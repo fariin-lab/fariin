@@ -2121,6 +2121,11 @@ struct UsernameEditView: View {
         .navigationTitle("Username")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Owner, 2026-09-25: an ✕ to leave without saving. Always opened as a sheet (both
+            // callers wrap it in their own NavigationStack), so there is no Back button to clash with.
+            ToolbarItem(placement: .cancellationAction) {
+                CloseXButton { dismiss() }
+            }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { Task { await done() } }
                     .fontWeight(.semibold)
