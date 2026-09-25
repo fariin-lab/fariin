@@ -115,6 +115,7 @@ struct SettingsView: View {
                         GlowProfileView(uid: AuthService.shared.uid ?? "",
                                         initialName: profile.me?.name ?? "",
                                         initialPhoto: profile.me?.photoUrl)
+                            .toolbar(.hidden, for: .tabBar)
                     } label: {
                         SettingsRowLabel("My Profile", "ic_account")
                     }
@@ -123,25 +124,25 @@ struct SettingsView: View {
                 Section {
                     // Account is data + session actions only — no profile fields here, they all
                     // live above now (see AccountSettingsView's own note, user direction 2026-07-22).
-                    NavigationLink { AccountSettingsView(onSignOut: onSignOut) } label: {
+                    NavigationLink { AccountSettingsView(onSignOut: onSignOut).toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Account", "ic_account")
                     }
-                    NavigationLink { DevicesView() } label: {
+                    NavigationLink { DevicesView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Devices", "ic_linked_devices")
                     }
                 }
 
                 Section {
-                    NavigationLink { NotificationsSettingsView() } label: {
+                    NavigationLink { NotificationsSettingsView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Notifications", "ic_notifications")
                     }
-                    NavigationLink { AppearanceSettingsView() } label: {
+                    NavigationLink { AppearanceSettingsView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Appearance", system: "paintbrush")
                     }
                     // NO App Icon row here: it lives inside Appearance, and one door is enough (user
                     // 2026-07-29, after seeing both). Two rows leading to the same page reads as a
                     // duplicate, which is what it was.
-                    NavigationLink { ChatsSettingsView() } label: {
+                    NavigationLink { ChatsSettingsView().toolbar(.hidden, for: .tabBar) } label: {
                         // ITS OWN OUTLINED DRAWING, not the tab bar's. `ic_chat` is a SOLID bubble
                         // because a tab bar icon has to read at 24pt against a selected pill; dropped
                         // into this list it was a black blob beside Account, Devices, Notifications
@@ -149,17 +150,17 @@ struct SettingsView: View {
                         // settings row wants the outline.
                         SettingsRowLabel("Chats", "ic_settings_chats")
                     }
-                    NavigationLink { StorySettingsView() } label: {
+                    NavigationLink { StorySettingsView().toolbar(.hidden, for: .tabBar) } label: {
                         // ⛔ HIS NEW MARK, OUTLINE WEIGHT — owner, 2026-09-11, with the SVG. It is
                         // the same drawing the tab bar now fills, and the pair is the app's usual
                         // rule: a settings row is a place you go, so it takes the outline; the tab
                         // you are standing on takes the fill.
                         SettingsRowLabel("Stories", "ic_stories_stack")
                     }
-                    NavigationLink { PrivacySettingsView() } label: {
+                    NavigationLink { PrivacySettingsView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Privacy & Security", "ic_privacy")
                     }
-                    NavigationLink { StorageDataView() } label: {
+                    NavigationLink { StorageDataView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Storage and Data", system: "externaldrive")
                     }
                 }
@@ -174,7 +175,7 @@ struct SettingsView: View {
                     // 2026-09-25). See `Flags.inAppAnnouncementAdmin`.
                     if Flags.inAppAnnouncementAdmin {
                         Section {
-                            NavigationLink { AnnouncementAdminView() } label: {
+                            NavigationLink { AnnouncementAdminView().toolbar(.hidden, for: .tabBar) } label: {
                                 SettingsRowLabel("Official Announcements", system: "megaphone")
                             }
                         } footer: {
@@ -189,7 +190,7 @@ struct SettingsView: View {
                     // again before any write lands.
                     if Flags.verificationConsole, admin.can(.verify) {
                         Section {
-                            NavigationLink { VerificationAdminView() } label: {
+                            NavigationLink { VerificationAdminView().toolbar(.hidden, for: .tabBar) } label: {
                                 SettingsRowLabel("Verification", system: "checkmark.seal")
                             }
                         } footer: {
@@ -201,7 +202,7 @@ struct SettingsView: View {
                 Section {
                     // My QR Code lives in the top-left toolbar button — no duplicate row here.
                     ShareLink(item: inviteText, preview: InviteShare.preview) { SettingsRowLabel("Invite Friends", "ic_invite_friends") }
-                    NavigationLink { AboutView() } label: {
+                    NavigationLink { AboutView().toolbar(.hidden, for: .tabBar) } label: {
                         SettingsRowLabel("Help & About", system: "questionmark.circle")
                     }
                 }
@@ -1427,11 +1428,6 @@ struct StorySettingsView: View {
     @State private var audiences = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
     @State private var creating = false
-    /// The Glowers picker — see the row that raises it.
-    @State private var editingGlowers = false
-    /// The Everyone picker. A sheet since 2026-09-11 for the same reason Glowers is one — it is now
-    /// the same screen, and that screen carries a ✕ and a Save.
-    @State private var editingEveryone = false
 
     var body: some View {
         List {
@@ -1447,32 +1443,25 @@ struct StorySettingsView: View {
                                 // edited" was his own rule and stands — but the page behind it edits
                                 // the SEPARATE hidden list, which is not a property of any audience
                                 // and applies to all of them. See `EveryonePrivacyView`.
-                                //
-                                // ⛔ A SHEET, NOT A PUSH, since 2026-09-11: it is the same screen as
-                                // Glowers now, and that screen carries its own ✕ and Save. Pushing
-                                // it would put a back button beside a close button.
-                                Button { editingEveryone = true } label: {
+                                // 2026-09-25: a push again. The page is a list with a back chevron
+                                // now (his custom-story screenshot), not a ✕/Save sheet.
+                                NavigationLink { EveryonePrivacyView() } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
-                                .buttonStyle(.plain)
                             } else if a.kind == .myFriends {
                                 NavigationLink { MyFriendsPrivacyView() } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
                             } else if a.kind == .glowers {
-                                // ⛔ A SHEET, AND IT IS THE PICKER ITSELF — owner, 2026-09-02: "only
+                                // ⛔ THE PICKER FIRST — owner, 2026-09-02: "only
                                 // show, when the user clicks Glowers, the glowers list and select to
                                 // hide", with the members editor as his reference. It was a pushed
                                 // page of radio rows with the picker one tap behind them; Glowers
                                 // has one question and that wrapped it in a screen.
-                                //
-                                // A sheet rather than a push because his reference is one: the
-                                // editor carries its own ✕ and Done, which is a sheet's chrome, and
-                                // pushing it would put a back button beside a Cancel.
-                                Button { editingGlowers = true } label: {
+                                // 2026-09-25: a push again, same as Everyone above.
+                                NavigationLink { GlowersPrivacyView() } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
-                                .buttonStyle(.plain)
                             } else {
                                 NavigationLink { CustomStoryDetailView(audienceId: a.id) } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
@@ -1508,14 +1497,6 @@ struct StorySettingsView: View {
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(onCreated: { _ in creating = false },
                                   onCancel: { creating = false })
-        }
-        // The two hide pickers — each in its own stack, because `StoryPeoplePicker` carries a title
-        // and a ✕/Save pair and is no longer inside this screen's navigation.
-        .sheet(isPresented: $editingGlowers) {
-            NavigationStack { GlowersPrivacyView() }
-        }
-        .sheet(isPresented: $editingEveryone) {
-            NavigationStack { EveryonePrivacyView() }
         }
     }
 }

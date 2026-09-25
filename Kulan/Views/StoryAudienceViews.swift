@@ -234,8 +234,11 @@ struct StoryPeoplePicker: View {
     /// Save is dead until somebody is picked. True only where an empty list would mean the mode does
     /// nothing at all — see `MyFriendsPrivacyView`.
     var requireAtLeastOne: Bool = false
+    /// "Add" where the page only ever adds people (the two hide lists' first step, 2026-09-25).
+    var saveTitle: String = "Save"
     let onSave: () -> Void
-    let onClose: () -> Void
+    /// nil on a PUSHED page, which has the system back chevron and must not grow a ✕ beside it.
+    var onClose: (() -> Void)? = nil
 
     @State private var search = ""
 
@@ -276,14 +279,16 @@ struct StoryPeoplePicker: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                // ✕ rather than the word Cancel, his point 1. The label is still there for
-                // VoiceOver, which cannot read a glyph.
-                Button { onClose() } label: { Image(systemName: "xmark") }
-                    .accessibilityLabel("Close")
+            if let onClose {
+                ToolbarItem(placement: .topBarLeading) {
+                    // ✕ rather than the word Cancel, his point 1. The label is still there for
+                    // VoiceOver, which cannot read a glyph.
+                    Button { onClose() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") { onSave() }
+                Button(saveTitle) { onSave() }
                     .fontWeight(.semibold)
                     .disabled(requireAtLeastOne && selected.isEmpty)
             }
@@ -587,6 +592,116 @@ fileprivate func setHiddenFromGlow(_ hidden: Set<String>, _ store: StoryAudience
     store.update(n)
 }
 
+// MARK: - The hide-list page (Everyone and Glowers)
+
+/// ⛔ PICK FIRST, THEN A LIST — owner, 2026-09-25, with the custom story page as his picture: "when
+/// the user first clicks Everyone show people and select, then top right Save changes to Add; when
+/// they add, show a page like this image. Glowers the same."
+///
+/// So there are two faces and the live hidden list chooses between them. Nobody hidden: the people
+/// ARE the page and the button says Add. Somebody hidden: a "Hidden Users" card with Add People on
+/// top, swipe or Edit to take a person off. Emptying the list lands back on the picker.
+///
+/// It only ever reports a DIFFERENCE (who was added, who was removed), never the whole set, because
+/// the Everyone writer revokes live stories and must not be called for somebody already hidden.
+struct StoryHiddenListPage: View {
+    let title: String
+    /// The heading over the people who are not hidden, "Everyone" or "Glowers".
+    let candidateHeader: String
+    /// Everybody who could be on the list, hidden or not.
+    let people: [StoryContact]
+    let hidden: Set<String>
+    var isLoading: Bool = false
+    let onAdd: (Set<String>) -> Void
+    let onRemove: (Set<String>) -> Void
+
+    @State private var draft: Set<String> = []
+    @State private var adding = false
+    @State private var editMode: EditMode = .inactive
+
+    /// Every hidden uid gets a row, named or not yet, so nobody on the list is out of reach.
+    private var hiddenPeople: [StoryContact] {
+        let byId = Dictionary(people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return hidden.map { byId[$0] ?? StoryContact(id: $0, name: "", photo: nil) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    private var notHidden: [StoryContact] { people.filter { !hidden.contains($0.id) } }
+
+    var body: some View {
+        Group {
+            if hidden.isEmpty {
+                StoryPeoplePicker(
+                    title: title,
+                    selectedHeader: "Hidden Users",
+                    unselectedHeader: candidateHeader,
+                    people: people,
+                    selected: $draft,
+                    isLoading: isLoading,
+                    requireAtLeastOne: true,
+                    saveTitle: "Add",
+                    onSave: { let d = draft; draft = []; onAdd(d) })
+            } else {
+                list
+            }
+        }
+        .onChange(of: hidden.isEmpty) { _, empty in if empty { editMode = .inactive } }
+    }
+
+    private var list: some View {
+        List {
+            Section {
+                // Hidden while editing: a delete control beside Add People would offer to delete
+                // the button itself (same rule as the Links page).
+                if editMode == .inactive {
+                    Button { draft = []; adding = true } label: {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle().fill(Color.secondary.opacity(0.18))
+                                Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                            }
+                            .frame(width: 36, height: 36)
+                            Text("Add People").foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
+                ForEach(hiddenPeople) { c in
+                    HStack(spacing: 12) {
+                        AvatarView(name: c.name, photoUrl: c.photo, size: 36)
+                        Text(c.name.isEmpty ? (isLoading ? " " : "Fariin user") : c.name).lineLimit(1)
+                    }
+                }
+                .onDelete { idx in
+                    let list = hiddenPeople
+                    onRemove(Set(idx.map { list[$0].id }))
+                }
+            } header: {
+                Text("Hidden Users")
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
+        .environment(\.editMode, $editMode)
+        .sheet(isPresented: $adding) {
+            NavigationStack {
+                StoryPeoplePicker(
+                    title: "Add People",
+                    selectedHeader: "Selected",
+                    unselectedHeader: candidateHeader,
+                    people: notHidden,
+                    selected: $draft,
+                    requireAtLeastOne: true,
+                    saveTitle: "Add",
+                    onSave: { let d = draft; draft = []; adding = false; onAdd(d) },
+                    onClose: { adding = false })
+            }
+        }
+    }
+}
+
 // MARK: - Everyone
 
 /// ⛔ EVERYONE IS THE PAGE THAT LISTS PEOPLE FROM BOTH SOURCES — owner, 2026-09-05, his words:
@@ -626,11 +741,6 @@ struct EveryonePrivacyView: View {
     @State private var store = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
     @State private var glowPeople = GlowPeopleLoader()
-    /// Who is ticked right now, and not yet who is hidden. Seeded from the stored list the first
-    /// time the page appears and written back only on Save — see `StoryPeoplePicker`.
-    @State private var draft: Set<String> = []
-    @State private var seeded = false
-    @Environment(\.dismiss) private var dismiss
     /// ⚠️ `glowRelationship`, THE SCREEN-FACING ONE, so demo people are listed and can be hidden
     /// while he is testing — the same choice `GlowersPrivacyView` makes and for the same reason.
     /// Nothing on this page can put a uid into a recipient list; the tick only ever subtracts.
@@ -668,41 +778,24 @@ struct EveryonePrivacyView: View {
     }
 
     var body: some View {
-        StoryPeoplePicker(
+        // 2026-09-25: pick first, then the Hidden Users list — see `StoryHiddenListPage`.
+        StoryHiddenListPage(
             title: "Everyone",
-            selectedHeader: "Hidden Users",
-            unselectedHeader: "Everyone",
+            candidateHeader: "Everyone",
             people: everybody,
-            selected: $draft,
+            hidden: store.hiddenFrom,
             isLoading: glowPeople.state.isLoading,
-            onSave: { save() },
-            onClose: { dismiss() })
+            onAdd: { added in
+                // ⛔ Only people not already hidden: `setHidden` revokes live stories.
+                for uid in added where !store.hiddenFrom.contains(uid) { store.setHidden(uid, true) }
+            },
+            onRemove: { gone in
+                for uid in gone where store.hiddenFrom.contains(uid) { store.setHidden(uid, false) }
+            })
         // `.onAppear` rather than `.task`: coming back to this page after blocking somebody has to
         // recount the chats, and a task keyed to the view's identity would not run again.
-        .onAppear {
-            contacts = StoryContact.all()
-            // ONCE. `onAppear` fires again when the sheet comes back to the front, and re-seeding
-            // there would throw away a selection he had already made.
-            if !seeded { draft = store.hiddenFrom; seeded = true }
-        }
+        .onAppear { contacts = StoryContact.all() }
         .task(id: lookupKey) { await glowPeople.load(lookupUids, key: lookupKey) }
-    }
-
-    /// ⛔ ONLY THE PEOPLE WHOSE SIDE ACTUALLY CHANGED. `setHidden` is the door that also revokes the
-    /// stories already up (see its own note), so calling it for somebody who was already hidden
-    /// would take a live story down and put it straight back. The two-way difference is the whole
-    /// of the work, and it is why this page keeps a draft instead of writing on the tap.
-    ///
-    /// ⚠️ A DEMO UID CAN REACH THIS LIST, because the rows include glowers and the glow relationship
-    /// carries demo people while he is testing. It is safe in the way the Glowers except-list is
-    /// safe and NOT in the way `recipientUids` is dangerous: this list only ever subtracts, a fake
-    /// id in it removes nobody, and the same tick takes it back out again. See the note on
-    /// `realGlowRelationship`.
-    private func save() {
-        let was = store.hiddenFrom
-        for uid in draft.subtracting(was) { store.setHidden(uid, true) }
-        for uid in was.subtracting(draft) { store.setHidden(uid, false) }
-        dismiss()
     }
 }
 
@@ -867,10 +960,6 @@ struct GlowersPrivacyView: View {
 
     @State private var store = StoryAudienceStore.shared
     @State private var people = GlowPeopleLoader()
-    /// Who is ticked right now, and not yet who is hidden — see `StoryPeoplePicker`.
-    @State private var draft: Set<String> = []
-    @State private var seeded = false
-    @Environment(\.dismiss) private var dismiss
     private var glow = GlowService.shared
 
     private var a: StoryAudience { store.glowers }
@@ -894,20 +983,15 @@ struct GlowersPrivacyView: View {
     }
 
     var body: some View {
-        StoryPeoplePicker(
+        // 2026-09-25: pick first, then the Hidden Users list — see `StoryHiddenListPage`.
+        StoryHiddenListPage(
             title: "Glowers",
-            selectedHeader: "Hidden Users",
-            unselectedHeader: "Glowers",
+            candidateHeader: "Glowers",
             people: contacts,
-            selected: $draft,
+            hidden: Set(a.members),
             isLoading: people.state.isLoading,
-            onSave: {
-                setHiddenFromGlow(draft, store)
-                dismiss()
-            },
-            onClose: { dismiss() })
-        // ONCE. The sheet coming back to the front must not throw away a selection he has made.
-        .onAppear { if !seeded { draft = Set(a.members); seeded = true } }
+            onAdd: { added in setHiddenFromGlow(Set(a.members).union(added), store) },
+            onRemove: { gone in setHiddenFromGlow(Set(a.members).subtracting(gone), store) })
         .task(id: key) { await people.load(uids, key: key) }
     }
 }
