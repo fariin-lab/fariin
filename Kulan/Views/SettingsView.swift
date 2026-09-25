@@ -170,13 +170,17 @@ struct SettingsView: View {
                 // be unable to send anything. Hidden here so a normal user never sees a door they
                 // cannot open.
                 if admin.isAdmin {
-                    Section {
-                        NavigationLink { AnnouncementAdminView() } label: {
-                            SettingsRowLabel("Official Announcements", system: "megaphone")
+                    // Off for now: the admin panel moves to a fariin.com subdomain (owner,
+                    // 2026-09-25). See `Flags.inAppAnnouncementAdmin`.
+                    if Flags.inAppAnnouncementAdmin {
+                        Section {
+                            NavigationLink { AnnouncementAdminView() } label: {
+                                SettingsRowLabel("Official Announcements", system: "megaphone")
+                            }
+                        } footer: {
+                            Text(admin.isOwner ? "You are the owner of the Fariin channel."
+                                               : "You can send announcements from the Fariin channel.")
                         }
-                    } footer: {
-                        Text(admin.isOwner ? "You are the owner of the Fariin channel."
-                                           : "You can send announcements from the Fariin channel.")
                     }
 
                     // VERIFICATION, on its own capability. An admin who can send announcements is not

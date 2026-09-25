@@ -18,6 +18,11 @@ enum Flags {
     /// because the database rules keep enforcing the claim for that account; hiding the prompt
     /// would lock it out of its own data.
     static let twoStepEnabled = false
+    /// The Official Announcements admin screen in Settings. OFF (owner, 2026-09-25): the admin panel
+    /// will live on a fariin.com subdomain instead of inside the app. Only the door closes; the
+    /// channel everyone reads, the admin rules and the sending functions are untouched, so the web
+    /// panel can use the same backend.
+    static let inAppAnnouncementAdmin = false
     /// Puts the Verification console in Settings. OFF (owner, 2026-08-05): the whole system is built,
     /// wired and enforced — this only decides whether the door to it is on the wall. Turning it on is
     /// this one word; nothing else has to change, and badges granted while it was off keep showing.
