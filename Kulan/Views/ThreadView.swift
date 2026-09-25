@@ -1777,6 +1777,10 @@ struct ThreadView: View {
         // but who has one is private by his own earlier spec (§34), and the app cannot know without
         // publishing that fact on every profile. One question with a Not Now costs less than that.
         .onChange(of: requestStance) { old, new in
+            // ⛔ THE KEYBOARD GOES WITH THE COMPOSER — owner, 2026-09-25: after the first message the
+            // box became the "Message request sent" card, but the hidden field kept the keyboard,
+            // which then sat over the card. A notice has nothing to type into.
+            if new == .awaitingReply || new == .incoming { Self.dismissKeyboard() }
             guard old == .firstMessage, new == .awaitingReply else { return }
             let asked = "chatKeyAsked.\(cid)"
             guard !UserDefaults.standard.bool(forKey: asked) else { return }
@@ -1788,6 +1792,7 @@ struct ThreadView: View {
         // recording controls, so the mic kept running with nothing on screen to stop it. The note
         // could not be sent here anyway, so it is cancelled and the partial discarded.
         .onChange(of: sendingClosed) { _, closed in
+            if closed { Self.dismissKeyboard() }   // the notice replacing the box has no field
             guard closed, recordLocked || holdStarted || reviewingNote || recorder.isRecording else { return }
             cancelRecording()
         }
@@ -6349,6 +6354,10 @@ struct ThreadView: View {
                     .multilineTextAlignment(.center)
             }
         }
+    }
+
+    static func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private var awaitingReplyBar: some View {
