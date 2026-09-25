@@ -753,7 +753,10 @@ struct EmailAuthView: View {
                             Image(systemName: "envelope").foregroundStyle(.secondary).frame(width: 22)
                             TextField("Email", text: $email)
                                 .keyboardType(.emailAddress)
-                                .textContentType(.emailAddress)
+                                // `.username`, not `.emailAddress` (bug hunt 2026-09-25): it is the
+                                // login name of the password beside it, which is what Password
+                                // AutoFill pairs for "Save Password?" and for filling it back in.
+                                .textContentType(.username)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                                 .focused($emailFocused)
