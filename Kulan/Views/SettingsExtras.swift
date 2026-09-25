@@ -746,43 +746,106 @@ private struct BlockPickerView: View {
 
     init(onFail: @escaping (String) -> Void = { _ in }) { self.onFail = onFail }
 
+    /// Every 1:1 chat, the ones already blocked included: they stay listed, greyed and marked, so
+    /// the list reads as your people rather than a list that silently lost some of them.
     private var candidates: [Conversation] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         return repo.conversations
-            .filter { !$0.isGroup && $0.blockedBy[me] != true && !$0.otherUid(me).isEmpty }
-            // 2026-09-24 decision D8: nor somebody already on my account block list.
-            .filter { !BlockList.shared.contains($0.otherUid(me)) }
+            .filter { !$0.isGroup && !$0.otherUid(me).isEmpty }
             .filter { q.isEmpty || $0.name(for: me).lowercased().contains(q) }
-            .sorted { $0.updatedAtMillis > $1.updatedAtMillis }
+    }
+
+    private func isBlocked(_ c: Conversation) -> Bool {
+        c.blockedBy[me] == true || BlockList.shared.contains(c.otherUid(me))
+    }
+
+    /// ⛔ A–Z CARDS WITH AN INDEX — owner, 2026-09-25, with the reference app's Block contact sheet:
+    /// ✕ on the right, the search under the title, people in lettered cards, a letter index down
+    /// the side. Anything not starting with a letter goes under "#", last.
+    private var sections: [(letter: String, people: [Conversation])] {
+        let groups = Dictionary(grouping: candidates) { c -> String in
+            let f = c.name(for: me).trimmingCharacters(in: .whitespaces).first.map(String.init)?.uppercased() ?? "#"
+            return f.rangeOfCharacter(from: .letters) == nil ? "#" : f
+        }
+        return groups.map { (letter: $0.key,
+                             people: $0.value.sorted { $0.name(for: me).localizedCaseInsensitiveCompare($1.name(for: me)) == .orderedAscending }) }
+            .sorted { a, b in
+                if a.letter == "#" { return false }
+                if b.letter == "#" { return true }
+                return a.letter < b.letter
+            }
+    }
+
+    private func row(_ conv: Conversation) -> some View {
+        let blocked = isBlocked(conv)
+        // ⛔ ASK FIRST — owner, 2026-09-25: a tap here blocked straight away, with no question.
+        // Unblocking already asks; blocking is the bigger step, so it asks too.
+        return Button { toBlock = conv } label: {
+            HStack(spacing: 12) {
+                AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 40)
+                    .opacity(blocked ? 0.5 : 1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(conv.name(for: me))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(blocked ? .secondary : .primary)
+                        .lineLimit(1)
+                    if blocked {
+                        Text("Already blocked").font(.subheadline).italic().foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(blocked)
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                if candidates.isEmpty {
-                    Text(query.isEmpty ? "You have no chats to block." : "No match.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                } else {
-                    ForEach(candidates) { conv in
-                        // ⛔ ASK FIRST — owner, 2026-09-25: a tap here blocked straight away, with no
-                        // question. Unblocking already asks; blocking is the bigger step, so it asks too.
-                        Button { toBlock = conv } label: {
-                            HStack(spacing: 12) {
-                                AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 40)
-                                Text(conv.name(for: me)).foregroundStyle(.primary)
-                                Spacer()
+            ScrollViewReader { proxy in
+                List {
+                    if sections.isEmpty {
+                        Text(query.isEmpty ? "You have no chats to block." : "No match.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(sections, id: \.letter) { section in
+                            Section(section.letter) {
+                                ForEach(section.people) { row($0) }
+                            }
+                            .id(section.letter)
+                        }
+                    }
+                }
+                .listStyle(.insetGrouped)
+                // Same air as New Message: a third of inset-grouped's default between cards.
+                .listSectionSpacing(14)
+                .contentMargins(.top, 6, for: .scrollContent)
+                .overlay(alignment: .trailing) {
+                    if query.isEmpty && sections.count > 1 {
+                        VStack(spacing: 1) {
+                            ForEach(sections.map(\.letter), id: \.self) { l in
+                                Text(l)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.tint)
+                                    .frame(width: 16)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { withAnimation { proxy.scrollTo(l, anchor: .top) } }
                             }
                         }
-                        .buttonStyle(.plain)
+                        .padding(.trailing, 1)
                     }
                 }
             }
-            .listStyle(.plain)
-            .searchable(text: $query, prompt: "Search")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
             .navigationTitle("Block User")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() }.tint(.primary) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .tint(.primary)
+                        .accessibilityLabel("Close")
+                }
             }
             .alert("Block \(toBlock.map { $0.name(for: me) } ?? "")?",
                    isPresented: Binding(get: { toBlock != nil }, set: { if !$0 { toBlock = nil } })) {
