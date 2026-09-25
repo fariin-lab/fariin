@@ -14,7 +14,7 @@ struct RootView: View {
     /// two-step account meets before the app (see TwoStepGate).
     /// `notifications` (first-run rebuild, 2026-09-24) is the explainer between the profile step and
     /// the Chats screen, shown only while iOS has never asked this phone (see Push.needsExplainer).
-    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date), twoStep, notifications }
+    enum Phase: Equatable { case loading, welcome, onboarding, tour, main, proveEmail(String), restore(handle: String, due: Date), twoStep, notifications }
     @State private var phase: Phase = .loading
     /// When "Agree and continue" was tapped on this install (seconds since 1970), 0 = not yet.
     @AppStorage(FirstRun.termsAgreedAtKey) private var termsAgreedAt: Double = 0
@@ -86,6 +86,11 @@ struct RootView: View {
                         DeviceRegistry.shared.start()
                         startOfficialChannel()
                     }
+                    // 2026-09-25: the feature tour first (owner's reference), then the rest as before.
+                    phase = .tour
+                }
+            case .tour:
+                FeatureTourView {
                     Task {
                         if await Push.needsExplainer() {
                             askAgeAfterNotifications = true
@@ -899,8 +904,19 @@ struct OnboardingView: View {
             // 2026-09-24 fix-all (onboarding photo): the Settings path's own optimistic upload, now
             // that the profile it attaches to exists. It shows at once and reports its own failure.
             if let pickedAvatar {
-                await MainActor.run {
-                    ProfileStore.shared.setPhotoLocallyThenUpload(circle: pickedAvatar, poster: pickedPoster)
+                // ⛔ THE PHOTO MUST NOT BE DROPPED — owner, 2026-09-25: "I can't add an image when I
+                // create my account". `setPhotoLocallyThenUpload` returns without a word when
+                // `me` is nil, and `updateProfile` only refreshes `me` if its read comes back; a
+                // brand-new account whose first read missed lost the picture silently. Load the
+                // profile once more, and if it is still not there, upload directly (that path does
+                // not need `me`).
+                if ProfileStore.shared.me == nil { await ProfileStore.shared.loadMine() }
+                if ProfileStore.shared.me != nil {
+                    await MainActor.run {
+                        ProfileStore.shared.setPhotoLocallyThenUpload(circle: pickedAvatar, poster: pickedPoster)
+                    }
+                } else {
+                    try? await ProfileStore.shared.uploadProfileImages(circle: pickedAvatar, poster: pickedPoster)
                 }
             }
             onDone()
