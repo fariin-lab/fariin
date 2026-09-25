@@ -184,8 +184,14 @@ enum SoundStore {
     static func defaultSound(_ kind: Kind) -> NotificationSound {
         kind == .call ? .defaultRingtone : .defaultMessageTone
     }
+    /// ⛔ A CHAT WITH NO TONE OF ITS OWN FOLLOWS SETTINGS › NOTIFICATIONS › SOUND — owner,
+    /// 2026-09-25: "I chose a different sound and a message still plays Note". The foreground push
+    /// path reads this, and it fell straight to Note, skipping the Settings pick. Same order as the
+    /// server's `apsSoundFor`: the chat's own tone, then the Settings pick, then Note.
     static func soundId(_ cid: String, _ kind: Kind) -> String {
-        UserDefaults.standard.string(forKey: key(cid, kind)) ?? defaultSound(kind).id
+        if let own = UserDefaults.standard.string(forKey: key(cid, kind)) { return own }
+        if kind == .message, let pick = UserDefaults.standard.string(forKey: "notif.sound") { return pick }
+        return defaultSound(kind).id
     }
     static func sound(_ cid: String, _ kind: Kind) -> NotificationSound {
         let id = soundId(cid, kind)
