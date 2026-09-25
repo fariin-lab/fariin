@@ -338,10 +338,18 @@ struct AuthMethodView: View {
     @Environment(\.colorScheme) private var scheme
     @State private var busy = false
     @State private var error: String?
-    /// The saved account (see `LastAccount`), Log In only.
-    @State private var saved: LastAccount.Info? = LastAccount.load()
-    @State private var savedPhoto: UIImage? = LastAccount.photo()
+    /// The accounts this phone has used (see `LastAccount`), Log In only, newest first.
+    @State private var saved: [LastAccount.Info] = LastAccount.all()
+    @State private var photos: [String: UIImage] = Dictionary(
+        uniqueKeysWithValues: LastAccount.all().compactMap { a in LastAccount.photo(for: a.uid).map { (a.uid, $0) } })
     @State private var emailPrefill: String?
+    /// "Add another account" was tapped: show the sign-in doors instead of the saved accounts.
+    @State private var showDoors = false
+
+    /// ⛔ THE SAVED-ACCOUNTS FACE — owner, 2026-09-25, with the design: every account this phone has
+    /// used as its own card, "Add another account" under them, then "or" and Sign up. Only on Log In,
+    /// only when there is an account to show, and until "Add another account" asks for the doors.
+    private var accountsFace: Bool { mode == .login && !saved.isEmpty && !showDoors }
 
     /// Which door to mark "Last used" — ON THE LOG IN SCREEN ONLY.
     ///
@@ -361,7 +369,13 @@ struct AuthMethodView: View {
             AuthPalette.page.ignoresSafeArea()
             VStack(spacing: 0) {
                 Spacer()
-                if mode == .login, let saved { savedAccountRow(saved).padding(.bottom, 28) }
+                if accountsFace {
+                    VStack(spacing: 16) {
+                        ForEach(saved) { savedAccountRow($0) }
+                        addAnotherAccountRow
+                    }
+                    orDivider.padding(.top, 36)
+                } else {
                 Text("Fariin")
                     .font(.system(size: 22, weight: .semibold)).foregroundStyle(.primary)
                     .padding(.bottom, 28)
@@ -389,6 +403,7 @@ struct AuthMethodView: View {
                     .buttonStyle(.plain)
                     .disabled(busy)
                 }
+                }
 
                 if busy { ProgressView().padding(.top, 16) }
                 if let error {
@@ -409,7 +424,7 @@ struct AuthMethodView: View {
                     .font(.subheadline)
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 36)
+                .padding(.top, accountsFace ? 24 : 36)
 
                 Spacer()
                 Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
@@ -465,8 +480,8 @@ struct AuthMethodView: View {
         Button { continueAs(info) } label: {
             HStack(spacing: 12) {
                 Group {
-                    if let savedPhoto {
-                        Image(uiImage: savedPhoto).resizable().scaledToFill()
+                    if let photo = photos[info.uid] {
+                        Image(uiImage: photo).resizable().scaledToFill()
                     } else {
                         AvatarView(name: info.name, size: 48)
                     }
@@ -488,10 +503,50 @@ struct AuthMethodView: View {
         .disabled(busy)
         .contextMenu {
             Button(role: .destructive) {
-                LastAccount.forget()
-                withAnimation { saved = nil; savedPhoto = nil }
+                LastAccount.forget(info.uid)
+                withAnimation {
+                    saved.removeAll { $0.uid == info.uid }
+                    photos[info.uid] = nil
+                }
             } label: { Label("Remove from This Phone", systemImage: "xmark.circle") }
         }
+    }
+
+    /// "Add another account", with the ways in drawn small on the right (Google, Apple, email), as in
+    /// his design. Opens the usual doors on this same page.
+    private var addAnotherAccountRow: some View {
+        Button {
+            error = nil
+            withAnimation(.easeInOut(duration: 0.2)) { showDoors = true }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .medium))
+                    .frame(width: 48)
+                Text("Add another account")
+                    .font(.body.weight(.medium))
+                Spacer(minLength: 8)
+                HStack(spacing: -6) {
+                    doorBadge { GoogleGIcon(size: 15) }
+                    doorBadge { Image(systemName: "apple.logo").font(.system(size: 14)) }
+                    doorBadge { Image(systemName: "envelope").font(.system(size: 13)) }
+                }
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16).frame(height: 72)
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+    }
+
+    private func doorBadge<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        content()
+            .frame(width: 30, height: 30)
+            .background(AuthPalette.raised, in: Circle())
+            .overlay(Circle().strokeBorder(AuthPalette.page, lineWidth: 2))
     }
 
     private func continueAs(_ info: LastAccount.Info) {
