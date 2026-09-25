@@ -4639,11 +4639,23 @@ struct ThreadView: View {
         return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? title
     }
 
+    /// ⛔ THE PHOTO IS LIVE TOO — owner, 2026-09-25: "the profile picture sometimes shows, sometimes
+    /// comes late". `photoUrl` is the value captured at the tap. If the conversation's `photos` map
+    /// had no entry yet at that moment (a new chat, a fan-out still landing), the header kept the
+    /// placeholder for the life of the screen while the live conversation already had the URL. Same
+    /// fix `liveTitle` got: read the live record, fall back to the snapshot only when it has nothing.
+    private var livePhotoUrl: String? {
+        let me = AuthService.shared.uid ?? ""
+        if let live = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.displayPhoto(me),
+           !live.isEmpty { return live }
+        return photoUrl
+    }
+
     /// What the UIKit header shows. The reference app's `configure(threadViewModel:)` reads a thread
     /// record; ours reads the same live sources the old SwiftUI header read, so nothing about WHEN the
     /// header updates changed — only what draws it.
     private var headerModel: ChatHeaderModel {
-        var m = ChatHeaderModel(name: liveTitle, photoUrl: photoUrl)
+        var m = ChatHeaderModel(name: liveTitle, photoUrl: livePhotoUrl)
         m.subtitle = presenceSubtitle
         // ⛔ THE COLOUR IS AS MUCH A DISCLOSURE AS THE WORDS ARE.
         //

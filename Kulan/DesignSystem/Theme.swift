@@ -544,12 +544,27 @@ struct AvatarView: View {
             ProfilePhotoIndex.noteLoad(s, ok: true)
             return
         }
-        if let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
-            DiskImageCache.shared.store(ui, data: data, for: s)
-            image = ui
-            ProfilePhotoIndex.noteLoad(s, ok: true)
-            return
+        // ⛔ A NETWORK FAILURE IS RETRIED, AN ANSWER IS NOT — 2026-09-25 photo audit. This view loads
+        // from `.task(id: photoUrl)`, so one dropped request (a blip, the first seconds after launch)
+        // left the placeholder until the url itself changed. Two retries, 2s then 6s, inside the same
+        // task, so leaving the screen or a new url cancels them. A response that is not an image
+        // (a refused or missing photo, see ProfilePhotoURLProtocol) is a real answer and falls
+        // through to the index below exactly as before.
+        for delay in [0.0, 2.0, 6.0] {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                if Task.isCancelled { return }
+            }
+            guard let (data, _) = try? await MediaSession.shared.data(from: url) else { continue }
+            if let ui = UIImage(data: data) {
+                DiskImageCache.shared.store(ui, data: data, for: s)
+                image = ui
+                ProfilePhotoIndex.noteLoad(s, ok: true)
+                return
+            }
+            break
         }
+        if Task.isCancelled { return }
         // NOTHING BEHIND THE URL. Told to the index, because the profile header has to answer
         // "circle or big photo" before it draws and cannot wait for a download of its own. Avatars
         // are everywhere — the chat list, the calls list, the story row — so by the time a profile

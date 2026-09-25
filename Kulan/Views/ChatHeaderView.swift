@@ -311,6 +311,9 @@ final class HeaderAvatarView: UIView {
     private let glyph = UIImageView()
     private var loadedFor: String?
     private var loadTask: Task<Void, Never>?
+    /// The last URL that failed and when, so a retry waits a few seconds instead of firing on
+    /// every header update while offline.
+    private var failed: (url: String, at: Date)?
 
     init(size: CGFloat) {
         self.size = size
@@ -359,6 +362,7 @@ final class HeaderAvatarView: UIView {
             return
         }
         guard url != loadedFor else { return }
+        if let f = failed, f.url == url, Date().timeIntervalSince(f.at) < 5 { return }
         loadedFor = url
         // First frame: memory, then disk, synchronously — the same seed AvatarView.init takes.
         if let warm = DiskImageCache.shared.smallImageSync(url) {
@@ -379,7 +383,14 @@ final class HeaderAvatarView: UIView {
                 DiskImageCache.shared.store(ui, data: data, for: url)
                 found = ui
             }
-            guard !Task.isCancelled, let self, self.loadedFor == url, let found else { return }
+            guard !Task.isCancelled, let self, self.loadedFor == url else { return }
+            // ⛔ A FAILED LOAD FORGETS ITS URL — 2026-09-25. `loadedFor` was set before the download
+            // and kept after a failure, so `guard url != loadedFor` turned every later configure into
+            // a no-op: one dropped request (offline, a slow Storage rule check) meant the placeholder
+            // for the life of the screen. Cleared, the next header update (they are frequent:
+            // presence, typing) simply asks again.
+            guard let found else { self.loadedFor = nil; self.failed = (url, Date()); return }
+            self.failed = nil
             self.imageView.image = found
             self.imageView.alpha = 0
             self.imageView.isHidden = false
