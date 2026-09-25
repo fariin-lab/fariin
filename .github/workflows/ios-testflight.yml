@@ -74,18 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            TICKS, PHOTO PRIVACY, AND A SAFER DELETE.
+            PROFILE PHOTOS REBUILT, AND A LOT OF SETTINGS FIXES.
 
-            TICKS: one tick = sent, two faded = reached their phone, two solid (blue in the chat list) = read. Works even when their app is closed.
+            PROFILE PHOTOS: one loader for every avatar. The chat header photo no longer sticks on grey, failed downloads retry, the same photo downloads once, and a new photo shows everywhere. Story headers load photos again.
 
-            PROFILE PHOTO: "My Chats" and "No One" are now enforced by the server. New: Privacy > Profile Photo > Hide From, to hide it from chosen people. Open the app once so your photo moves to the private system.
+            CHAT LIST: search stays after Back, no jump on search X, Unread pull removed, select mode has an X, first chat open is faster.
 
-            SECURITY: picking a different Google or Apple account on a confirm step (like Delete Account) is now refused.
+            SETTINGS: Everyone/Glowers pick-first then Hidden Users page, bottom bar hidden on Settings pages, Blocked Users and Block User redesigned, Hide From shows people first, Require Face ID, passkeys open instantly, new Delete Account look.
 
-            SETTINGS: Devices shows real model names and a page per device. Passkeys has a new look with a visible Delete. Password pages show a live checklist. Blocking asks first. Two-step and the in-app announcements admin are hidden for now.
+            ALSO: chosen message sound plays in the app, QR logo block, Links row size, Glowers/Glowing bar, link pill grey without a photo.
 
-            ALSO: Chats header is Edit / filter / compose. My QR Code has Download. Edit Photo "Recents" shows your past profile photos. The lock-screen sound follows your Settings pick. Invites show the Fariin logo.
-
-            PLEASE TEST: send a message to a phone with the app closed and watch for two ticks. Set your photo to No One and check the other phone.
+            PLEASE TEST: open 5 chats right after launch; change your photo and check another phone; airplane mode then back on and the photo should appear within about 6 seconds.
 
         run: fastlane beta
