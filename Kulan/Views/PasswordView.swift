@@ -2,6 +2,7 @@ import SwiftUI
 import LocalAuthentication
 import FirebaseAuth
 import AuthenticationServices   // 2026-09-24 fix-all #204: Apple's re-auth button
+import Security                 // SecAddSharedWebCredential (SavePasswordOffer)
 
 // Settings › Password. Set one if you have none, change the one you have.
 //
@@ -404,6 +405,7 @@ struct PasswordView: View {
                 }
                 try await AuthService.shared.setPassword(password, isFirst: isFirstPassword)
                 await MainActor.run { busy = false; done = true }
+                SavePasswordOffer.offer(password: password)
             } catch let e as NSError where e.code == AuthErrorCode.requiresRecentLogin.rawValue {
                 // Not an error to show, a step to offer. Firebase's own wording here is "This
                 // operation is sensitive and requires recent authentication", which reads as a
@@ -512,8 +514,24 @@ struct PasswordResetCodeView: View {
             // password is still changed, and the worst case is the ordinary sign-in screen.
             try? await AuthService.shared.reauthEmail(password: password)
             done = true
+            SavePasswordOffer.offer(password: password)
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+}
+
+/// ⛔ "SAVE PASSWORD?" AFTER A PASSWORD IS SET — owner, 2026-09-25, with the reference app's
+/// screenshot: Apple's own card (Passwords icon, Not Now / Save) right after creating or changing the
+/// password. These pages have no username field, so iOS's automatic offer never fires; this asks for
+/// it outright. `SecAddSharedWebCredential` is Apple's call for exactly that: the system shows the
+/// card, the user decides, and the app never sees the Passwords app's contents. It works because
+/// fariin.com is in the app's `webcredentials` entitlement (the same link passkeys use).
+enum SavePasswordOffer {
+    static func offer(password: String) {
+        guard let email = Auth.auth().currentUser?.email, !email.isEmpty, !password.isEmpty else { return }
+        SecAddSharedWebCredential("fariin.com" as CFString, email as CFString, password as CFString) { _ in
+            // Saved, declined or unavailable: nothing to do either way.
         }
     }
 }
