@@ -40,6 +40,12 @@ final class ProfileStore {
                 self.setPhotoLocallyThenUpload(circle: pending.circle, poster: pending.poster)
             }
         }
+        // 2026-09-25 photo privacy: a photo still published as a public download link moves to a
+        // private name once, on this account's first launch of this build. The server then retires
+        // the old link's token (see `onProfilePhotoChanged`), so the link stops working everywhere.
+        if let url = me?.photoUrl, url.hasPrefix("https://"), url.contains("profiles%2F") {
+            Task { await self.republishPhoto() }
+        }
     }
 
     /// BRING MY OWN PRIVACY SETTINGS BACK WITH ME (owner 2026-08-04: "after I close the app and sign
@@ -526,12 +532,18 @@ final class ProfileStore {
     /// the page is on screen, which is the flicker that was already fixed once.
     // One blob → its download URL. The two profile crops ride this concurrently from
     // uploadProfileImages, which is most of why Save stopped taking so long.
+    // ⛔ NO DOWNLOAD URL — 2026-09-25, photo privacy. A download URL's token skips the storage rules,
+    // so publishing one made "No One" a screen-level hide. The name returned is a private reference
+    // that only `ProfilePhotoURLProtocol` can fetch, through the rules. `v` is the upload time, so a
+    // new photo is a new name and misses every cache.
     private func putJPEG(_ data: Data, path: String) async throws -> String {
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = "image/jpeg"
         _ = try await ref.putDataAsync(data, metadata: meta)
-        return try await ref.downloadURL().absoluteString
+        return ProfilePhotoURLProtocol.reference(path: path, version: Self.nowMs())
     }
+
+    static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     /// The photo half of Edit Profile's Save, as ONE pass. This replaced uploadPhoto +
     /// uploadPoster called in sequence, which was the owner's "save takes too long": two storage
@@ -606,8 +618,10 @@ final class ProfileStore {
         // photograph and has nothing of it to draw — which is the whole bug: opening somebody's
         // profile straight after they changed their picture showed the big letter on flat colour
         // until the download finished. About 400-700 bytes.
-        var userFields: [String: Any] = ["photoUrl": circleURL,
-                                         "photoThumb": StoriesService.blurThumbBase64(circleData)]
+        // The blurry cover is readable by anyone who can read the user record, so it is only
+        // published when the photo is public to everyone (see `PhotoPrivacy.publishesCover`).
+        let cover = await PhotoPrivacy.shared.publishesCover() ? StoriesService.blurThumbBase64(circleData) : ""
+        var userFields: [String: Any] = ["photoUrl": circleURL, "photoThumb": cover]
         if let posterURL { userFields["posterUrl"] = posterURL }
         try await db.collection("users").document(uid).setData(userFields, merge: true)
         // Saved, so it joins the Edit Photo page's Recents (owner, 2026-09-25). The full crop, not
@@ -714,6 +728,64 @@ final class ProfileStore {
         // 2026-09-24 audit: same-account guard as loadMine; a sign-out during the sweep wiped `me`.
         guard Auth.auth().currentUser?.uid == uid else { return }
         me = fresh ?? me   // nil on a failed read must not blank `me` — see refreshMe
+    }
+
+    /// ⛔ RUN AFTER ANY CHANGE TO WHO MAY SEE MY PHOTO — 2026-09-25, photo privacy. The audience or
+    /// the Hide From list changed, so:
+    ///  1. the photo gets a NEW private name (same files, new `v`). Every viewer's cached copy is
+    ///     keyed by the old name, so the next draw misses the cache and `storage.rules` is asked
+    ///     again; someone who may no longer see it gets the initial instead;
+    ///  2. the blurry cover is published or withdrawn to match (`PhotoPrivacy.publishesCover`);
+    ///  3. the copies in every conversation are updated, as a photo change does.
+    /// An account still on an old public download link is moved to a private name by this too.
+    func republishPhoto() async {
+        guard let uid = Auth.auth().currentUser?.uid,
+              let current = await fetch(uid),
+              let oldCircle = current.photoUrl, !oldCircle.isEmpty else { return }
+        let v = Self.nowMs()
+        let circle = ProfilePhotoURLProtocol.reference(path: "profiles/\(uid).jpg", version: v)
+        let poster = (current.posterUrl ?? "").isEmpty
+            ? nil : ProfilePhotoURLProtocol.reference(path: "profiles/\(uid)-poster.jpg", version: v)
+
+        // My own screens keep drawing without a blink: the bytes I already hold move to the new name.
+        var circleData = await DiskImageCache.shared.rawData(for: oldCircle)
+        if circleData == nil, let u = URL(string: circle) {
+            circleData = try? await MediaSession.shared.data(from: u).0
+        }
+        if let d = circleData, let ui = UIImage(data: d) { DiskImageCache.shared.store(ui, data: d, for: circle) }
+        if let oldPoster = current.posterUrl, let poster,
+           let d = await DiskImageCache.shared.rawData(for: oldPoster), let ui = UIImage(data: d) {
+            DiskImageCache.shared.store(ui, data: d, for: poster)
+        }
+
+        let cover = await PhotoPrivacy.shared.publishesCover()
+            ? (circleData.map { StoriesService.blurThumbBase64($0) } ?? "") : ""
+        var userFields: [String: Any] = ["photoUrl": circle, "photoThumb": cover]
+        if let poster { userFields["posterUrl"] = poster }
+        do {
+            try await db.collection("users").document(uid).setData(userFields, merge: true)
+        } catch {
+            print("[photoPrivacy] republish failed: \(error.localizedDescription)")
+            return
+        }
+
+        var fields: [String: Any] = ["photos.\(uid)": circle]
+        if let poster { fields["posters.\(uid)"] = poster }
+        if let snap = try? await db.collection("conversations")
+            .whereField("users", arrayContains: uid).getDocuments() {
+            // Same split as a photo change: one refused group write must not sink a whole batch.
+            let groups = snap.documents.filter { ($0.data()["type"] as? String) == "group" }
+            let oneToOnes = snap.documents.filter { ($0.data()["type"] as? String) != "group" }
+            for start in stride(from: 0, to: oneToOnes.count, by: 450) {
+                let batch = db.batch()
+                for d in oneToOnes[start..<min(start + 450, oneToOnes.count)] {
+                    batch.updateData(fields, forDocument: d.reference)
+                }
+                try? await batch.commit()
+            }
+            for d in groups { try? await d.reference.updateData(fields) }
+        }
+        if let refreshed = await fetch(uid), Auth.auth().currentUser?.uid == uid { me = refreshed }
     }
 }
 

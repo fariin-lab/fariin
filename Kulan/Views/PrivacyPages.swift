@@ -88,6 +88,9 @@ enum PrivacyPrefs {
             do {
                 try await Firestore.firestore().collection("users").document(uid)
                     .setData(["privacy": [key: a.rawValue]], merge: true)
+                // Photo privacy is enforced by storage.rules; a new name makes every viewer ask
+                // again instead of drawing their cached copy (2026-09-25).
+                if key == "photo" { await ProfileStore.shared.republishPhoto() }
             } catch {
                 let m = "This setting could not be saved. \(error.localizedDescription)"
                 await MainActor.run {
@@ -165,6 +168,10 @@ struct AudiencePage: View {
     let footer: String
     @State private var selection: Audience
     @State private var error: String?   // 2026-09-24 audit: a refused save, same red footnote as Devices
+    private var hideFromSummary: String {
+        let n = PhotoPrivacy.shared.hidden.count
+        return n == 0 ? "Add People" : (n == 1 ? "1 person" : "\(n) people")
+    }
 
     init(title: String, key: String, footer: String) {
         self.title = title
@@ -204,9 +211,27 @@ struct AudiencePage: View {
             } footer: {
                 Text(footer)
             }
+            // ⛔ HIDE FROM — owner, 2026-09-25: pick people who never see the photo, whatever is
+            // chosen above. Our own name for it. Enforced by storage.rules, see `PhotoPrivacy`.
+            if key == "photo" {
+                Section {
+                    NavigationLink { HideFromPage() } label: {
+                        HStack {
+                            Text("Hide From")
+                            Spacer()
+                            Text(hideFromSummary).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Exceptions")
+                } footer: {
+                    Text("These people will not see your profile photo, whatever you choose above.")
+                }
+            }
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .task { if key == "photo" { await PhotoPrivacy.shared.load() } }
         // 2026-09-24 decision D11: a change made on another device lands here while the page is open.
         .onReceive(NotificationCenter.default.publisher(for: ProfileStore.privacySynced)) { _ in
             selection = PrivacyPrefs.mine(key)

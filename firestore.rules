@@ -615,6 +615,20 @@ service cloud.firestore {
       // ringing, no error. The order has to be: server reads here and FALLS BACK to the profile;
       // app writes here; that build reaches people; only then migrate the existing tokens and drop
       // the old fields. The hole is open until that third step.
+      // ⛔ HIDE FROM — owner, 2026-09-25: people who never see my profile photo, whatever the
+      // audience says. One empty document per hidden account, so storage.rules can answer with a
+      // single `exists`. OWNER ONLY: who you hid is nobody else's business, and a hidden person must
+      // not be able to find out (or take themselves off the list). Capped at an ID shape so it cannot
+      // be used to store anything but a uid.
+      match /photoHiddenFrom/{viewer} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && viewer != uid
+          && viewer.matches('^[A-Za-z0-9]{10,64}$')
+          && request.resource.data.keys().hasOnly(['at'])
+          && request.resource.data.at is timestamp;
+      }
+
       match /push/{docId} {
         // 2026-09-24 audit: each token list is capped at 50. Uncapped, a modified client could grow
         // one past the 500 tokens a single multicast send accepts, and every push to the account

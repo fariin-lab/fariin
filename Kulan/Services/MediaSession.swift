@@ -27,6 +27,9 @@ enum MediaSession {
         // useless without the key.
         c.urlCache = nil
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // Private profile photos (`fariin-photo://`) are fetched with the signed-in Storage SDK so the
+        // storage rules decide who sees them. See `ProfilePhotoURLProtocol`.
+        c.protocolClasses = [ProfilePhotoURLProtocol.self] + (c.protocolClasses ?? [])
         return URLSession(configuration: c)
     }()
 }

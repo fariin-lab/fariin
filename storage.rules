@@ -12,7 +12,26 @@ service firebase.storage {
 
     // Profile photos: profiles/{uid}.jpg
     match /profiles/{file} {
-      allow read: if request.auth != null;
+      // ⛔ WHO CAN SEE MY PROFILE PHOTO IS DECIDED HERE — owner, 2026-09-25: "when I set my profile
+      // photo as No One, it still shows in the chat list … make the proper way". Until today every
+      // signed-in account could read every photo, and the setting was honoured by one screen only.
+      //
+      // Now the owner's own setting decides, read from their user record on every fetch:
+      //   · the owner always;
+      //   · nobody on the owner's Hide From list (`users/{owner}/photoHiddenFrom/{viewer}`), whatever
+      //     the setting says;
+      //   · "everyone" → any signed-in account;
+      //   · "contacts" ("My Chats") → someone with a 1:1 chat with the owner that is accepted, or that
+      //     the owner started. A stranger's unanswered request does not count;
+      //   · "nobody" → nobody else.
+      // Group photos (`group_<cid>.jpg`) are not a person's photo and keep the plain signed-in rule.
+      //
+      // ⚠️ THIS ONLY MEANS SOMETHING BECAUSE THE APP NO LONGER PUBLISHES DOWNLOAD LINKS. A Firebase
+      // download URL carries a token that skips these rules entirely. Profile photos are now named
+      // `fariin-photo://profiles/<file>?v=…` and fetched with the signed-in Storage SDK (see
+      // `ProfilePhotoURLProtocol`), and the old tokens were revoked by the one-time migration.
+      allow read: if request.auth != null
+        && (file.matches('group_.*') || canSeePhoto(file.split('[-.]')[0]));
       // ⚠️ `file == uid + '.jpg'` ON THE WRITE, and it was missing. The DELETE rule below has always
       // had it; the write rule checked only that you were signed in, the file was under 8 MB, and it
       // was an image. Nothing tied the file to the person uploading it.
@@ -161,6 +180,28 @@ service firebase.storage {
 
     function groupDoc(cid) {
       return firestore.get(/databases/(default)/documents/conversations/$(cid));
+    }
+
+    // Profile photo privacy — see the note on `match /profiles`. `owner` is the uid the file is
+    // named after. A 1:1 chat's id is the two uids sorted and joined with "_", as the app builds it.
+    function canSeePhoto(owner) {
+      return request.auth.uid == owner
+        || (!firestore.exists(/databases/(default)/documents/users/$(owner)/photoHiddenFrom/$(request.auth.uid))
+            && photoAudienceAllows(owner,
+                 firestore.get(/databases/(default)/documents/users/$(owner)).data.get('privacy', {}).get('photo', 'everyone')));
+    }
+
+    function photoAudienceAllows(owner, audience) {
+      return audience == 'everyone'
+        || (audience == 'contacts' && sharesAcceptedChat(owner));
+    }
+
+    function sharesAcceptedChat(owner) {
+      let cid = owner < request.auth.uid ? owner + '_' + request.auth.uid : request.auth.uid + '_' + owner;
+      let path = /databases/(default)/documents/conversations/$(cid);
+      return firestore.exists(path)
+        && (firestore.get(path).data.get('accepted', true) == true
+            || firestore.get(path).data.get('startedBy', owner) == owner);
     }
 
     // 2026-09-24 fix-all: A RETRIED UPLOAD OF THE SAME BYTES. The media paths are create-only
