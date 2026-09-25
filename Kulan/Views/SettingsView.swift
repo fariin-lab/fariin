@@ -1312,7 +1312,7 @@ struct PrivacySettingsView: View {
     /// 2026-09-24 fix-all #145: the three choices `Audience` offers on every key but Calls and
     /// Messages, named with their on-screen labels ("My Chats", "No One").
     private static let threeChoiceFooter =
-        "Everyone: anyone on Fariin. My Chats: only people already in your chats. No One: nobody."
+        "Everyone: anyone on Fariin. My Chats: only people you have a one-to-one chat with; sharing a group is not enough. No One: nobody."
 
     private func audienceRow(_ title: String, key: String, value: String, footerText: String) -> some View {
         NavigationLink { AudiencePage(title: title, key: key, footer: footerText) } label: {

@@ -497,7 +497,7 @@ private struct RecentPersonRow: View {
 
     private var photo: String? {
         ProfilePhotoIndex.header(uid: uid, fallbackPhoto: nil, fallbackPoster: nil,
-                                 iAmContact: PrivacyPrefs.isContact(uid)).photoUrl
+                                 iAmContact: PrivacyPrefs.mayViewPhotoOf(uid)).photoUrl
     }
 }
 

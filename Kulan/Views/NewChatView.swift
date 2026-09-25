@@ -119,7 +119,7 @@ struct NewChatView: View {
                                     personRow(name: user.name.isEmpty ? user.handle : user.name,
                                               handle: user.handle,
                                               photo: PrivacyPrefs.allows(user.privacy, "photo",
-                                                                          contactOfMine: PrivacyPrefs.isContact(user.id))
+                                                                          contactOfMine: PrivacyPrefs.mayViewPhotoOf(user.id))
                                                      ? user.photoUrl : nil,
                                               uid: user.id)
                                 }

@@ -53,6 +53,17 @@ const cases = [
     { function: 'firestore.get', args: [{ exactValue: `${D}/users/${OWNER}` }], result: { value: { data: {} } } },
     ...world(STRANGER).slice(1)])],
   ['OK      a group photo stays readable to members', 'ALLOW', 'ALLOW', ...read(STRANGER, 'group_grp1.jpg', [])],
+  // 2026-09-25 photo audit: the cases the app's `PrivacyPrefs.mayViewPhotoOf` mirrors. Before and
+  // after are the pre-privacy rules and the current ones, as for every case above.
+  ['AUDIT   a legacy 1:1 chat with no accepted/startedBy, My Chats', 'ALLOW', 'ALLOW',
+    ...read(FRIEND, photo, world(FRIEND, { audience: 'contacts', chat: { users: [OWNER, FRIEND] } }))],
+  ['AUDIT   only a GROUP shared, no 1:1 chat, My Chats (by design)', 'ALLOW', 'DENY',
+    ...read(FRIEND, photo, world(FRIEND, { audience: 'contacts' }))],
+  ['AUDIT   the owner asked ME (their request, unanswered), My Chats', 'ALLOW', 'ALLOW',
+    ...read(STRANGER, photo, world(STRANGER, { audience: 'contacts',
+      chat: { users: [OWNER, STRANGER], accepted: false, startedBy: OWNER } }))],
+  ['AUDIT   I asked the owner (my request, unanswered), My Chats', 'ALLOW', 'DENY',
+    ...read(STRANGER, photo, world(STRANGER, { audience: 'contacts', chat: pending }))],
 ];
 
 async function run(t, source, [, , , uid, path, method, after, before, mocks], expectation) {

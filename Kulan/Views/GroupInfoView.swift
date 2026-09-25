@@ -736,7 +736,7 @@ struct GroupMemberSheet: View {
     private var gatedMemberPhoto: String? {
         guard let p = profile else { return nil }
         return PrivacyPrefs.allows(p.privacy, "photo",
-                                   contactOfMine: PrivacyPrefs.isContact(member.id)) ? p.photoUrl : nil
+                                   contactOfMine: PrivacyPrefs.mayViewPhotoOf(member.id)) ? p.photoUrl : nil
     }
     private var gatedMemberAbout: String? {
         guard let p = profile else { return nil }

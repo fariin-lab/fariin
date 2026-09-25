@@ -82,7 +82,7 @@ struct ContactInfoView: View {
             uid: other,
             fallbackPhoto: conv.map { $0.photoUrl(for: me) } ?? photoUrl,
             fallbackPoster: conv.map { $0.posterUrl(for: me) } ?? posterUrl,
-            iAmContact: PrivacyPrefs.isContact(other)))
+            iAmContact: PrivacyPrefs.mayViewPhotoOf(other)))
 
         // THE STORY IS KNOWN ON FRAME ONE TOO, for exactly the reason the photo is.
         //
@@ -1522,11 +1522,13 @@ struct ContactInfoView: View {
     // live call tiles (audit). The callee-side call gate already used the message-history rule, so
     // the two disagreed.
     private var iAmContact: Bool { PrivacyPrefs.isContact(otherUid) }
+    /// The photo's own "My Chats" test, the one `storage.rules` makes — see `mayViewPhotoOf`.
+    private var mayViewPhoto: Bool { PrivacyPrefs.mayViewPhotoOf(otherUid) }
     /// The circle's picture. `headerFacts` already applied the audience it knew about at open time;
     /// the live check stays as well, so a privacy map that lands DURING the visit still hides the
     /// picture. It can no longer move the layout — the image goes, the shape of the page does not.
     private var gatedPhotoUrl: String? {
-        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? headerFacts.photoUrl : nil
+        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) ? headerFacts.photoUrl : nil
     }
     /// What the HEADER draws: their tall crop when there is one, otherwise the avatar. Behind the
     /// same privacy gate as the avatar — a poster is the same photograph, so hiding one and showing
@@ -1536,7 +1538,7 @@ struct ContactInfoView: View {
     /// of JPEG, behind the same privacy gate as the picture it stands in for, because a cover of a
     /// photo I may not see is still that photo.
     private var headerThumb: UIImage? {
-        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) else { return nil }
+        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) else { return nil }
         if let b64 = headerFacts.thumb, !b64.isEmpty,
            let data = Data(base64Encoded: b64), let ui = UIImage(data: data) { return ui }
         // ⚠️ AND THE ROUND AVATAR WHEN THE RECORD HAS NO THUMB — same photograph, already decoded.
@@ -1551,7 +1553,7 @@ struct ContactInfoView: View {
     }
 
     private var gatedPosterUrl: String? {
-        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? headerFacts.posterUrl : nil
+        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) ? headerFacts.posterUrl : nil
     }
     /// ⛔ TIDIED ON THE WAY OUT, BECAUSE THE STORED STRING CANNOT BE REACHED (owner 2026-08-22: "old
     /// users still using bio spaces, can you clear that bio").
@@ -2487,8 +2489,8 @@ struct ProfilePhotoViewer: View {
         .task {
             if image != nil { return }   // already seeded from memory — don't re-fetch or flash
             if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
-            guard let url = URL(string: photoUrl),
-                  let (data, _) = try? await MediaSession.shared.data(from: url),
+            // The shared download (2026-09-25): one request with every avatar of the same person.
+            guard case .image(let data) = await ProfilePhotoLoader.shared.fetch(photoUrl),
                   let ui = UIImage(data: data) else { return }
             DiskImageCache.shared.store(ui, data: data, for: photoUrl)
             image = ui

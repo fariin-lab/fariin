@@ -163,6 +163,24 @@ enum PrivacyPrefs {
             return !$0.lastMessageCipher.isEmpty
         }
     }
+
+    /// ⛔ "MY CHATS" FOR THE PROFILE PHOTO, SAID EXACTLY AS `storage.rules` SAYS IT — 2026-09-25 photo
+    /// audit. The server (`sharesAcceptedChat`) lets you see `uid`'s photo when your 1:1 chat with
+    /// them exists AND is either accepted, or was started by THEM: somebody who sent you a request
+    /// shows you their face, which is how you decide whether to accept. `isContact` above answers a
+    /// different question (am I their friend, for last seen, bio and calls) and said no to that
+    /// requester, so their profile hid a photo the chat list was drawing. `accepted` decodes true for
+    /// a chat with no `startedBy`, the same default the rule uses.
+    ///
+    /// A group shared with them does NOT count, on purpose: one meaning of "My Chats" everywhere
+    /// (the owner's 2026-09-11 spec), and it is what the rule enforces.
+    static func mayViewPhotoOf(_ uid: String) -> Bool {
+        let me = Auth.auth().currentUser?.uid ?? ""
+        guard !me.isEmpty, !uid.isEmpty else { return false }
+        return ConversationsRepository.shared.conversations.contains {
+            !$0.isGroup && $0.users.contains(uid) && ($0.accepted || $0.startedBy == uid)
+        }
+    }
 }
 
 // One audience page: Everyone / My Contacts / No One with a checkmark (reference layout).
