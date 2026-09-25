@@ -513,6 +513,14 @@ struct PasswordResetCodeView: View {
             // straight back in with the password just set keeps it in. Best effort: if it fails the
             // password is still changed, and the worst case is the ordinary sign-in screen.
             try? await AuthService.shared.reauthEmail(password: password)
+            // Bug hunt 2026-09-25: `confirmPasswordReset` also deletes EVERY one-tap device key, this
+            // phone's included, but the Keychain still held the dead one, so `ensureIssued` (which
+            // only issues when there is no key) never replaced it and this phone's saved-account
+            // card quietly lost one-tap. Drop it and ask for a fresh one now.
+            if let uid = Auth.auth().currentUser?.uid {
+                DeviceSessionKeys.forget(uid)
+                await DeviceSessionKeys.ensureIssued()
+            }
             done = true
             SavePasswordOffer.offer(password: password)
         } catch {
