@@ -2123,9 +2123,12 @@ struct UsernameEditView: View {
         .toolbar {
             // Owner, 2026-09-25: an ✕ to leave without saving. Always opened as a sheet (both
             // callers wrap it in their own NavigationStack), so there is no Back button to clash with.
+            // `sharedBackgroundVisibility(.hidden)`: `CloseXButton` is its own glass circle, and the
+            // toolbar item's glass behind it drew a circle in a circle (owner: "duplicate X").
             ToolbarItem(placement: .cancellationAction) {
                 CloseXButton { dismiss() }
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { Task { await done() } }
                     .fontWeight(.semibold)
