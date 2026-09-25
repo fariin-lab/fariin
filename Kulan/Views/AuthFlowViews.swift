@@ -34,7 +34,10 @@ struct WelcomeView: View {
                     ShiningLogo()
                         .frame(width: 108, height: 108)
                         .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                    Text("Welcome to Fariin")
+                    // "Sign in", not "Welcome": the first-run agreement screen right before this one
+                    // already says "Welcome to Fariin", and the same title twice in a row read as a
+                    // loop (2026-09-24).
+                    Text("Sign in to Fariin")
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.primary)
                         .padding(.top, 22)
