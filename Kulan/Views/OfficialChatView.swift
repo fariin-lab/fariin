@@ -616,7 +616,8 @@ private struct InviteShareSheet: View {
     }
 
     var body: some View {
-        ShareSheet(items: [inviteText])
+        // The header shows the Fariin mark, not the system's text icon (2026-09-25).
+        ShareSheet(items: [InviteActivityItem(text: inviteText)])
     }
 }
 

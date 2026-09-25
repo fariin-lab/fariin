@@ -93,7 +93,7 @@ struct NewChatView: View {
                                 .tint(.primary)
                             Button { showScan = true } label: { actionRow("qrcode.viewfinder", "Scan QR code") }
                                 .tint(.primary)
-                            ShareLink(item: inviteText) {
+                            ShareLink(item: inviteText, preview: InviteShare.preview) {
                                 actionRow("square.and.arrow.up", "Invite friends")
                             }
                             .tint(.primary)
