@@ -994,42 +994,36 @@ struct AppearanceSettingsView: View {
     var body: some View {
         let _ = wallStore.version
         let _ = colorStore.version
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Chat Theme").font(.footnote).foregroundStyle(.secondary)
-                    .textCase(.uppercase).padding(.horizontal, 6)
-
+        // ⛔ A REAL INSET-GROUPED LIST, LIKE EVERY OTHER SETTINGS PAGE — owner, 2026-09-25: "the
+        // appearance cards look a different size from my other cards; use Apple's size, spacing and
+        // padding". It was a hand-built ScrollView of rounded stacks (16pt margins, 24pt corners,
+        // 14pt gaps, 14pt row padding), so it could never match the system list the rest of
+        // Settings uses. The preview and the theme strip stay as they were, inside the first card.
+        List {
+            Section {
                 VStack(spacing: 0) {
                     preview
                     themeCards
                 }
-                .background(Color(.secondarySystemGroupedBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-
-                VStack(spacing: 0) {
-                    doorRow("Chat Wallpaper") { ChatWallpaperPage() }
-                    Divider().padding(.leading, 16)
-                    doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
-                    Divider().padding(.leading, 16)
-                    doorRow("App Icon") { AppIconPage() }
-                    Divider().padding(.leading, 16)
-                    doorRow("Quick Reaction",
-                            accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
-                }
-                .background(Color(.secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-
-                VStack(spacing: 0) {
-                    doorRow("Night Mode",
-                            accessory: AnyView(Text(AppAppearance(rawValue: appearanceRaw)?.label ?? "System")
-                                .foregroundStyle(.secondary))) { NightModePage() }
-                }
-                .background(Color(.secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .listRowInsets(EdgeInsets())
+            } header: {
+                Text("Chat Theme")
             }
-            .padding(16)
+
+            Section {
+                doorRow("Chat Wallpaper") { ChatWallpaperPage() }
+                doorRow("Chat Color", accessory: AnyView(colorDot)) { ChatColorPage() }
+                doorRow("App Icon") { AppIconPage() }
+                doorRow("Quick Reaction", accessory: AnyView(Text(QuickReaction.current))) { QuickReactionPage() }
+            }
+
+            Section {
+                doorRow("Night Mode",
+                        accessory: AnyView(Text(AppAppearance(rawValue: appearanceRaw)?.label ?? "System")
+                            .foregroundStyle(.secondary))) { NightModePage() }
+            }
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .listStyle(.insetGrouped)
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
@@ -1149,17 +1143,14 @@ struct AppearanceSettingsView: View {
     private func doorRow<D: View>(_ title: String,
                                   accessory: AnyView? = nil,
                                   @ViewBuilder destination: @escaping () -> D) -> some View {
+        // A system row: its own height, insets and chevron, like every other Settings page.
         NavigationLink { destination() } label: {
             HStack(spacing: 12) {
                 Text(title).foregroundStyle(.primary)
                 Spacer()
                 if let accessory { accessory }
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 16).padding(.vertical, 14)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 }
 
