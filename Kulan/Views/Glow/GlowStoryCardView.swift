@@ -641,6 +641,8 @@ private struct AddStoryFace: View {
     /// sharper than this card needs at 3x.
     private func load() async {
         guard let s = photoUrl, !s.isEmpty else { image = nil; return }
-        if let img = await ProfilePhotoLoader.shared.avatar(s), !Task.isCancelled { image = img }
+        let img = await ProfilePhotoLoader.shared.avatar(s)
+        guard !Task.isCancelled else { return }
+        if let img { image = img } else if ProfilePhotoIndex.knownMissing(s) { image = nil }   // as AvatarView
     }
 }

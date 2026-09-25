@@ -50,8 +50,12 @@ struct KulanApp: App {
                     // and it adds a gated disk read to the memory lookup. That is what removes the
                     // grey frame outright rather than shortening it — a photo cached in an earlier
                     // session is on disk with memory cold, which is every cold launch.
-                    StoryUIImages.cachedNow = { DiskImageCache.shared.smallImageSync($0) }
-                    StoryUIImages.cached = { await DiskImageCache.shared.image(for: $0) }
+                    // 2026-09-25 photo audit: all three go through `ProfilePhotoLoader`, the one
+                    // profile-photo pipeline. `load` is the one that matters most: the package's
+                    // own URLSession cannot open a `fariin-photo://` name at all.
+                    StoryUIImages.cachedNow = { ProfilePhotoLoader.shared.cachedAvatar($0) }
+                    StoryUIImages.cached = { await ProfilePhotoLoader.shared.avatar($0) }
+                    StoryUIImages.load = { await ProfilePhotoLoader.shared.avatar($0) }
                     StoryUIImages.store = { image, data, url in
                         DiskImageCache.shared.store(image, data: data, for: url)
                     }

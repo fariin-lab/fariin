@@ -53,6 +53,12 @@ final class ProfilePhotoLoader {
     func cachedAvatar(_ url: String?) -> UIImage? {
         guard let url, !url.isEmpty else { return nil }
         if let m = memory.object(forKey: url as NSString) { return m }
+        // My own new photo in the moment after Save: `ProfileStore` seeds the shared cache's memory
+        // and the disk write is still queued. That decoded image is used as it is, no re-encode.
+        if let seeded = DiskImageCache.shared.memoryImage(for: url) {
+            remember(seeded, url)
+            return seeded
+        }
         guard let data = DiskImageCache.shared.bytesSync(url), let img = Self.thumbnail(data) else { return nil }
         remember(img, url)
         return img
@@ -69,10 +75,9 @@ final class ProfilePhotoLoader {
         }
         // My own new photo in the moment after Save: `ProfileStore` seeds the shared cache in memory
         // and the disk write is still queued. Draw that rather than download what I just uploaded.
-        if let seeded = DiskImageCache.shared.memoryImage(for: url),
-           let data = seeded.jpegData(compressionQuality: 0.9), let img = Self.thumbnail(data) {
-            remember(img, url)
-            return img
+        if let seeded = DiskImageCache.shared.memoryImage(for: url) {
+            remember(seeded, url)
+            return seeded
         }
         switch await fetch(url) {
         case .image(let data):
@@ -122,7 +127,9 @@ final class ProfilePhotoLoader {
             if status == 403 || status == 404 { return .noPhoto }
             // Any other non-success (a 5xx, a throttled request) is the server, not an answer.
             guard (200..<300).contains(status) else { continue }
-            guard UIImage(data: data) != nil else { return .noPhoto }
+            // A 200 whose body is not an image is a broken response, not an answer: try again, and
+            // never file it as "no photo" (that would blank a real picture elsewhere).
+            guard UIImage(data: data) != nil else { continue }
             DiskImageCache.shared.storeBytes(data, for: s)
             return .image(data)
         }

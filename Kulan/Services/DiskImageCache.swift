@@ -210,11 +210,7 @@ final class DiskImageCache {
     /// cannot evict them. Gated on the index like `smallImageSync`, so a miss does no file IO.
     func bytesSync(_ url: String) -> Data? {
         guard isCached(url) || mem.object(forKey: url as NSString) != nil else { return nil }
-        let f = existingFileURL(url)
-        guard let data = try? Data(contentsOf: f) else {
-            // Not on disk after all (the uploader's memory-only copy): hand back an encoded copy.
-            return mem.object(forKey: url as NSString)?.jpegData(compressionQuality: 0.9)
-        }
+        guard let data = try? Data(contentsOf: existingFileURL(url)) else { return nil }
         touchOnHit(url)
         return data
     }

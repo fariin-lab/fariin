@@ -563,11 +563,17 @@ final class ProfileStore {
     func healMyMirrors() async {
         guard let uid = Auth.auth().currentUser?.uid, let me, me.id == uid else { return }
         let photo = me.photoUrl ?? "", poster = me.posterUrl ?? ""
-        guard !photo.isEmpty else { return }
+        // ⚠️ PUBLISHED NAMES ONLY. While a new photo uploads, `me` holds the optimistic
+        // `https://fariin.local/…` placeholder (see `setPhotoLocallyThenUpload`), which only this
+        // phone can draw; written into a mirror it would be a broken photo for everyone else.
+        // Only a `fariin-photo://` reference, the one the upload publishes, is ever copied out.
+        guard !photo.isEmpty, Self.isPublished(photo) else { return }
         for c in ConversationsRepository.shared.conversations where c.users.contains(uid) {
             var fields: [String: Any] = [:]
             if Self.isNewer(photo, than: c.photos[uid]) { fields["photos.\(uid)"] = photo }
-            if !poster.isEmpty, Self.isNewer(poster, than: c.posters[uid]) { fields["posters.\(uid)"] = poster }
+            if !poster.isEmpty, Self.isPublished(poster), Self.isNewer(poster, than: c.posters[uid]) {
+                fields["posters.\(uid)"] = poster
+            }
             guard !fields.isEmpty else { continue }
             let attempt = "\(photo)|\(poster)"
             guard healWritten[c.id] != attempt else { continue }
@@ -582,6 +588,10 @@ final class ProfileStore {
         guard mine != theirs else { return false }
         guard let theirs, !theirs.isEmpty else { return true }
         return version(mine) > version(theirs)
+    }
+
+    static func isPublished(_ url: String) -> Bool {
+        URL(string: url).flatMap { ProfilePhotoURLProtocol.storagePath($0) } != nil
     }
 
     static func version(_ url: String) -> Int64 {

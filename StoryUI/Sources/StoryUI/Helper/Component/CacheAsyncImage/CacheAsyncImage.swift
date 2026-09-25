@@ -36,6 +36,12 @@ public enum StoryUIImages {
     /// component at the size asked for rather than a copy of it that can drift. Nil is still a
     /// working configuration — it means grey, the way it always was.
     public static var avatarFallback: ((String, CGFloat) -> AnyView)?
+    /// ⛔ THE APP'S WHOLE PROFILE-PHOTO LOAD, when set — 2026-09-25 photo audit. Profile photos are
+    /// `fariin-photo://` names since the photo-privacy change, which only the app's own session can
+    /// fetch; `URLSession.shared` below cannot, so a story header whose photo was not cached yet
+    /// drew the letter for good. The app hands in its one loader (shared download, retry rule).
+    /// Nil keeps the package's own download for anything else.
+    public static var load: ((String) async -> UIImage?)?
 }
 
 struct CacheAsyncImage: View {
@@ -48,12 +54,16 @@ struct CacheAsyncImage: View {
     private let size: CGFloat
     /// Seeded synchronously so a cached photo is on screen in the FIRST frame, with no grey at all.
     @State private var image: UIImage?
+    /// Which url `image` belongs to, so a changed url never keeps the previous person's picture.
+    @State private var shownFor: String?
 
     init(urlString: String?, name: String = "", size: CGFloat = 38) {
         self.urlString = urlString
         self.name = name
         self.size = size
-        _image = State(initialValue: urlString.flatMap { StoryUIImages.cachedNow?($0) })
+        let seed = urlString.flatMap { StoryUIImages.cachedNow?($0) }
+        _image = State(initialValue: seed)
+        _shownFor = State(initialValue: seed == nil ? nil : urlString)
     }
 
     var body: some View {
@@ -83,10 +93,21 @@ struct CacheAsyncImage: View {
     }
 
     private func load() async {
-        guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
-        if image != nil { return }                                   // the sync seed already won
+        guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else {
+            image = nil; shownFor = nil; return
+        }
+        if image != nil, shownFor == urlString { return }           // the sync seed already won
+        if let appLoad = StoryUIImages.load {
+            let img = await appLoad(urlString)
+            guard !Task.isCancelled else { return }
+            // Nil here is the letter: a refused, missing or unreachable photo. Never the old url's.
+            image = img
+            shownFor = img == nil ? nil : urlString
+            return
+        }
         if let shared = await StoryUIImages.cached?(urlString) {      // the app's cache, memory+disk
             image = shared
+            shownFor = urlString
             return
         }
         if let hit = URLCache.shared.cachedResponse(for: .init(url: url)),
@@ -105,6 +126,7 @@ struct CacheAsyncImage: View {
                                                 for: .init(url: url))
             StoryUIImages.store?(ui, data, urlString)
             image = ui
+            shownFor = urlString
         } catch {
             // Cancelled or offline. Nothing to draw and nothing to remember: the next appearance
             // asks again, which is the behaviour a failed avatar should have.
