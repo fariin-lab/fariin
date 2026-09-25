@@ -78,12 +78,16 @@ struct ChatSearchOverlay: View {
         self.onOpenPerson = onOpenPerson
     }
 
+    /// The reference app's own curve for opening and closing search: 0.5s on a fixed bezier
+    /// (0.38, 0.70, 0.125, 1.0), which it calls "spring". Read from source 2026-09-25.
+    static let motion = Animation.timingCurve(0.38, 0.70, 0.125, 1.0, duration: 0.5)
+
     var body: some View {
         if isSearching {
             // ⛔ THE REAL FIELD LIVES ON THIS PAGE — 2026-09-25, the reference app's design: the list
-            // shows a placeholder (`ChatListSearchHeader`), tapping it puts this page over the list
-            // with the field in the same place and the keyboard up, and ✕ takes it away. The list
-            // under it is never moved or re-inset, so closing search cannot make it jump.
+            // shows a placeholder (`ChatListSearchHeader`); tapping it hides the top bar, and this
+            // page rises from the placeholder's place into the bar's row with the keyboard up. ✕
+            // runs it backwards. The list under it is never moved (`ChatListTable.searchActive`).
             VStack(spacing: 0) {
                 searchBar
                 ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
@@ -92,14 +96,16 @@ struct ChatSearchOverlay: View {
                                onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
             }
             .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            // Rises from where the list's field sits (about one bar-height lower) while fading in.
+            .transition(.offset(y: 56).combined(with: .opacity))
             .onAppear { fieldFocused = true }
         }
     }
 
-    /// Same capsule and position as the list's placeholder, so the field appears to stay put while
-    /// it becomes editable. The ✕ beside it closes search (owner, 2026-09-25: an icon, not "Cancel").
+    /// The reference app's active field: a 44pt liquid glass pill, 16pt from the edges, and a round
+    /// 44pt glass ✕ beside it (owner, 2026-09-25: an icon, not "Cancel").
     private var searchBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search", text: $text)
@@ -117,23 +123,25 @@ struct ChatSearchOverlay: View {
             }
             .font(.system(size: 17))
             .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+            .frame(height: 44)
+            .glassEffect(.regular, in: Capsule())
             Button {
+                // The keyboard goes first, then the page (the reference app's order).
                 fieldFocused = false
                 dismissSearch()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Circle())
             .accessibilityLabel("Cancel")
         }
-        .padding(.leading, 16).padding(.trailing, 8)
-        .padding(.top, 6).padding(.bottom, 6)
+        .padding(.horizontal, 16)
+        .padding(.top, 4).padding(.bottom, 8)
     }
 }
 

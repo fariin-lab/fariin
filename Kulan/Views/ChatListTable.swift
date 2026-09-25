@@ -410,6 +410,8 @@ struct ChatListTable: UIViewControllerRepresentable {
     /// ⛔ THE SEARCH FIELD IS PART OF THE LIST — 2026-09-25, owner: make it work like the reference
     /// app, "100%". Tapping the field at the top of the list opens the search page over it.
     var onSearchTap: () -> Void = {}
+    /// The search page is open over the list (see `ChatListTableController.setSearchActive`).
+    var searchActive: Bool = false
 
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
@@ -426,6 +428,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
         vc.setLoadingMore(loadingMore)   // 2026-09-24 feature-audit
         vc.setSelecting(selecting)
+        vc.setSearchActive(searchActive)
         vc.apply(state: .make(pinned: pinned.map(\.id),
                               unpinned: unpinned.map(\.id),
                               people: people.map(\.id)),
@@ -704,6 +707,48 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         (tableView as? ChatListSelfSizingTable)?.showsLoadingRow = on
     }
 
+    /// ⛔ THE LIST DOES NOT MOVE WHILE SEARCH IS OPEN — owner, 2026-09-25, "exactly like the
+    /// reference app". Theirs puts the search page over the list and never touches the list's
+    /// offset or inset. Ours hides the top bar while searching (the field takes the bar's row), and
+    /// a hidden bar shrinks the table's automatic top inset, which would shift every row under the
+    /// page and back again on ✕. So the inset is frozen at its current value for the whole search
+    /// and handed back to UIKit only once the bar is back and the numbers match again.
+    private var insetsFrozen = false
+    private var unfreezeWork: DispatchWorkItem?
+    private var savedInsets: (content: UIEdgeInsets, indicator: UIEdgeInsets)?
+
+    func setSearchActive(_ on: Bool) {
+        guard on != insetsFrozen else { return }
+        insetsFrozen = on
+        unfreezeWork?.cancel()
+        let t = tableView
+        if on {
+            // A second open before the first close finished keeps the ORIGINAL numbers.
+            if savedInsets == nil { savedInsets = (t.contentInset, t.verticalScrollIndicatorInsets) }
+            guard t.contentInsetAdjustmentBehavior != .never else { return }
+            let adj = t.adjustedContentInset
+            let off = t.contentOffset
+            t.contentInsetAdjustmentBehavior = .never
+            t.contentInset = adj
+            t.verticalScrollIndicatorInsets = adj
+            t.contentOffset = off
+        } else {
+            // After the bar's return animation, so the automatic inset it gives back is the same
+            // one frozen here. The offset is put back by hand in case UIKit nudged it.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.insetsFrozen, let saved = self.savedInsets else { return }
+                let off = t.contentOffset
+                t.contentInsetAdjustmentBehavior = .automatic
+                t.contentInset = saved.content
+                t.verticalScrollIndicatorInsets = saved.indicator
+                t.contentOffset = off
+                self.savedInsets = nil
+            }
+            unfreezeWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        }
+    }
+
     /// ⛔ THE MODE IS TRACKED HERE, NOT READ BACK OFF THE TABLE — audit, 2026-09-11. `isEditing` is
     /// true for a revealed SWIPE PLATTER as well as for Select mode (this file says so itself, where
     /// `apply` closes a stranded platter), so `guard tableView.isEditing != on` read a platter as
@@ -844,6 +889,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// on one with a tall one, and it re-reads whenever that changes.
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
+        // While search holds the insets still (`setSearchActive`), this waits; the saved ones come back.
+        guard !insetsFrozen else { return }
         let clearance = Self.bottomClearance + view.safeAreaInsets.bottom
         guard abs(tableView.contentInset.bottom - clearance) > 0.5 else { return }
         tableView.contentInset.bottom = clearance
@@ -861,7 +908,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     // field is plain content, so it is where it was when you come back. `ChatListSearchHeader` below
     // is that field; the search page opens over the list. `searchHostItem`, `reassertNavChrome`
     // (the cancel-button invariant and its ✕ glyph) and the hide-on-scroll re-expansion all lived to
-    // manage SwiftUI's `.searchable` controller and went with it.
+    // manage SwiftUI's `.searchable` controller and went with it. Later the same day the bar was made
+    // to slide away while searching (the reference app does that too); `setSearchActive` holds the
+    // list's insets still across it, so the "list never moves" rule above still holds.
 
     // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and
     // `configureNavBar` (one default-background appearance with the shadow cleared, written to
@@ -2150,41 +2199,51 @@ final class ChatListSectionHeader: UIView {
 /// It is the table's `tableHeaderView`, so it scrolls away with the rows and is exactly where it
 /// was when you come back from a chat; no inset changes, so no jump.
 final class ChatListSearchHeader: UIView {
-    static let height: CGFloat = 52
+    /// The reference app's numbers (read from source 2026-09-25): a 44pt pill, 16pt from each
+    /// edge, 8pt above and below. The owner rejected the flat grey 40pt capsule as "flat"; the pill
+    /// is the system liquid glass, as the navigation-bar field he preferred was.
+    static let height: CGFloat = 60
     var onTap: () -> Void = {}
 
-    private let capsule = UIControl()
+    private let pill: UIVisualEffectView = {
+        let v = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        v.cornerConfiguration = .capsule()
+        v.isUserInteractionEnabled = false
+        return v
+    }()
     private let glass = UIImageView(image: UIImage(systemName: "magnifyingglass"))
     private let label = UILabel()
+    /// ⚠️ THE TAP TARGET SITS ON TOP OF THE GLASS, not inside it: an effect view with interactive
+    /// glass eats touches meant for a control beneath (see the composer's pill notes).
+    private let hit = UIControl()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        capsule.backgroundColor = .tertiarySystemFill
-        capsule.layer.cornerCurve = .continuous
-        capsule.addTarget(self, action: #selector(tapped), for: .touchUpInside)
-        capsule.accessibilityLabel = "Search"
-        capsule.accessibilityTraits = [.button, .searchField]
-        capsule.isAccessibilityElement = true
+        hit.addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        hit.accessibilityLabel = "Search"
+        hit.accessibilityTraits = [.button, .searchField]
+        hit.isAccessibilityElement = true
         glass.tintColor = .secondaryLabel
-        glass.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)
+        glass.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
         label.text = "Search"
         label.textColor = .secondaryLabel
         label.font = .systemFont(ofSize: 17)
-        capsule.addSubview(glass)
-        capsule.addSubview(label)
-        addSubview(capsule)
+        pill.contentView.addSubview(glass)
+        pill.contentView.addSubview(label)
+        addSubview(pill)
+        addSubview(hit)
     }
     required init?(coder: NSCoder) { fatalError("ChatListSearchHeader is never built from a nib") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        capsule.frame = CGRect(x: 16, y: 6, width: bounds.width - 32, height: 40)
-        capsule.layer.cornerRadius = capsule.bounds.height / 2
+        pill.frame = CGRect(x: 16, y: 8, width: bounds.width - 32, height: 44)
+        hit.frame = pill.frame
         glass.sizeToFit()
-        glass.frame.origin = CGPoint(x: 14, y: (capsule.bounds.height - glass.bounds.height) / 2)
+        glass.frame.origin = CGPoint(x: 14, y: (pill.bounds.height - glass.bounds.height) / 2)
         label.sizeToFit()
-        label.frame.origin = CGPoint(x: glass.frame.maxX + 8, y: (capsule.bounds.height - label.bounds.height) / 2)
+        label.frame.origin = CGPoint(x: glass.frame.maxX + 8, y: (pill.bounds.height - label.bounds.height) / 2)
     }
 
     @objc private func tapped() { onTap() }

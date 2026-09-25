@@ -1547,7 +1547,8 @@ struct ChatsView: View {
     /// unchanged when the row stopped being a Button.
     private func openPerson(_ u: UserProfile) {
         let cid = ChatService.convId(me, u.id)
-        chatSearch = ""
+        // Kept while the search page is open, so Back returns to the same results (see `onOpenChat`).
+        if !chatSearchActive { chatSearch = "" }
         path.append(ChatTarget(id: cid, name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl))
         Task { try? await ChatService.openConversation(other: u) }
     }
@@ -1572,7 +1573,7 @@ struct ChatsView: View {
                 searching: searchingUsers || repo.loadingWholeList,
                 isSearching: chatSearchActive,
                 dismissSearch: {
-                    chatSearchActive = false
+                    withAnimation(ChatSearchOverlay.motion) { chatSearchActive = false }
                     chatSearch = ""
                 },
                 text: $chatSearch,
@@ -1582,11 +1583,10 @@ struct ChatsView: View {
                 onOpenChat: { conv in
                     path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                            photo: conv.displayPhoto(me)))
-                    // ⚠️ THE QUERY IS CLEARED HERE AND NOT ONLY BY `dismissSearch`. The list
-                    // underneath is still filtered by `chatSearch`, so leaving the text behind means
-                    // coming back from that chat to an inbox showing one row. `openPerson` has
-                    // cleared it for the same reason since the search box was added.
-                    chatSearch = ""
+                    // ⛔ THE QUERY IS KEPT — 2026-09-25, the reference app: open a chat from search,
+                    // tap Back, and the search page is still there with the same text and results.
+                    // The page stays open over the list until ✕, so the filtered list under it is
+                    // never seen; ✕ clears the text (`dismissSearch`).
                 },
                 onOpenPerson: { openPerson($0) })
         )
@@ -2330,8 +2330,13 @@ struct ChatsView: View {
             // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
             // asked for by scrolling and for a search or filter fetching the whole list.
             loadingMore: repo.loadingOlder || repo.loadingWholeList,
-            // 2026-09-25: the in-list search field opens the search page.
-            onSearchTap: { if !selecting { chatSearchActive = true } }
+            // 2026-09-25: the in-list search field opens the search page, on the reference app's
+            // curve: the bar slides away and the field rises into its row (`ChatSearchOverlay.motion`).
+            onSearchTap: {
+                guard !selecting else { return }
+                withAnimation(ChatSearchOverlay.motion) { chatSearchActive = true }
+            },
+            searchActive: chatSearchActive
         )
     }
 
@@ -2671,6 +2676,12 @@ struct ChatsView: View {
             // is now the list's own first thing (`ChatListSearchHeader`, tap = `chatSearchActive`),
             // and the page above carries the real field and the ✕. The bar never changes.
             .overlay { chatSearchOverlay }
+            // ⛔ THE BAR GOES AWAY WHILE SEARCHING — 2026-09-25, the reference app, read from source:
+            // tapping the field slides the whole header (title, Edit, menu, compose) up and out,
+            // and the field rises into the row the bar had. ✕ brings it back. The list under the
+            // page is held still by `ChatListTable.searchActive`, so the bar's height change never
+            // moves a row. A chat opened from search shows its own bar as usual.
+            .toolbar(chatSearchActive ? .hidden : .automatic, for: .navigationBar)
             // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.
