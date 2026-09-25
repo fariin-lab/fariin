@@ -533,6 +533,7 @@ struct BlockedUsersView: View {
     @State private var profiles: [String: UserProfile] = [:]
     @State private var blockError: String?        // 2026-09-24 audit: a refused block / unblock
     @State private var search = ""
+    @FocusState private var searchFocused: Bool
     @State private var showPicker = false
     /// Not SwiftUI's `EditMode`. That one is welded to `.onDelete`, whose button says "Delete" and
     /// cannot be renamed — the wrong word entirely for taking a block off somebody, and on this
@@ -570,6 +571,48 @@ struct BlockedUsersView: View {
             $0.name.lowercased().contains(q)
                 || (handles[$0.id] ?? "").lowercased().contains(q)
         }
+    }
+
+    /// The system search field's look (magnifier, grey capsule, clear button), plus an ✕ beside it
+    /// while it is in use that clears the text and puts the keyboard away.
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $search)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !search.isEmpty {
+                    Button { search = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Clear")
+                }
+            }
+            .font(.system(size: 17))
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+            if searchFocused || !search.isEmpty {
+                Button {
+                    search = ""
+                    searchFocused = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Cancel")
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: searchFocused)
     }
 
     private func blockedRow(_ conv: BlockedPerson) -> some View {
@@ -623,6 +666,14 @@ struct BlockedUsersView: View {
 
     var body: some View {
         List {
+            // ⛔ THE SEARCH FIELD IS A ROW OF THIS PAGE, NOT `.searchable` — owner, 2026-09-25, twice:
+            // tap the field, tap ✕, and the Block User card and every row dropped down. `.searchable`
+            // puts the field in the NAVIGATION BAR, which changes height as search opens and closes,
+            // and this List did not move back. A field inside the list changes nothing above it, so
+            // there is nothing to jump. Same approach as the archive's own search bar.
+            Section { searchField }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             if let blockError {
                 Section { Text(blockError).font(.footnote).foregroundStyle(.red) }
             }
@@ -684,11 +735,6 @@ struct BlockedUsersView: View {
         .listSectionSpacing(14)
         .contentMargins(.top, 6, for: .scrollContent)
         .environment(\.defaultMinListRowHeight, 44)
-        // ⛔ PINNED, NOT FOLDING — owner, 2026-09-25: tap the field, tap ✕, and the Block User card
-        // and every blocked row jumped down. The default placement (copied from Calls that morning)
-        // folds the field away and brings it back, and ✕ is the moment it comes back and pushes the
-        // list. `.always` keeps the same field in the same place, so nothing under it moves.
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if !blocked.isEmpty || editing {
