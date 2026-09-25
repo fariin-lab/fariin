@@ -741,6 +741,7 @@ private struct BlockPickerView: View {
     @Environment(\.dismiss) private var dismiss
     private var repo = ConversationsRepository.shared
     @State private var query = ""
+    @State private var toBlock: Conversation?
     private var me: String { AuthService.shared.uid ?? "" }
     /// 2026-09-24 audit: the sheet closes on tap, so a refused block is reported on the list behind it.
     private let onFail: (String) -> Void
@@ -765,15 +766,9 @@ private struct BlockPickerView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 } else {
                     ForEach(candidates) { conv in
-                        Button {
-                            let name = conv.name(for: me)
-                            let report = onFail
-                            Task {
-                                let ok = await ChatService.setBlocked(conv.id, true)
-                                if !ok { await MainActor.run { report("\(name) could not be blocked. Try again.") } }
-                            }
-                            dismiss()
-                        } label: {
+                        // ⛔ ASK FIRST — owner, 2026-09-25: a tap here blocked straight away, with no
+                        // question. Unblocking already asks; blocking is the bigger step, so it asks too.
+                        Button { toBlock = conv } label: {
                             HStack(spacing: 12) {
                                 AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 40)
                                 Text(conv.name(for: me)).foregroundStyle(.primary)
@@ -790,6 +785,22 @@ private struct BlockPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() }.tint(.primary) }
+            }
+            .alert("Block \(toBlock.map { $0.name(for: me) } ?? "")?",
+                   isPresented: Binding(get: { toBlock != nil }, set: { if !$0 { toBlock = nil } })) {
+                Button("Cancel", role: .cancel) {}
+                Button("Block", role: .destructive) {
+                    guard let conv = toBlock else { return }
+                    let name = conv.name(for: me)
+                    let report = onFail
+                    Task {
+                        let ok = await ChatService.setBlocked(conv.id, true)
+                        if !ok { await MainActor.run { report("\(name) could not be blocked. Try again.") } }
+                    }
+                    dismiss()
+                }
+            } message: {
+                Text("They will not be able to call you, and nothing they send will reach you. They are not told.")
             }
         }
     }
