@@ -80,10 +80,10 @@ struct PasswordView: View {
     /// ⛔ EIGHT, HIS NUMBER — 2026-09-16: "Use at least 8 characters" is the footnote he drew on the
     /// page, and `functions-account` refuses anything shorter on the reset path. Six was Firebase's
     /// own floor and is no longer the one that decides.
-    private var longEnough: Bool { password.count >= 8 }
-    private var matches: Bool { !confirm.isEmpty && confirm == password }
+    // 2026-09-25: the four rules live in `PasswordRules`, shown as the checklist under the fields.
+    private var rules: PasswordRules { PasswordRules(password: password, confirm: confirm) }
     // 2026-09-24 decision D2: changing needs the current password every time, however fresh the session.
-    private var canSave: Bool { longEnough && matches && !busy && (isFirstPassword || !currentPassword.isEmpty) }
+    private var canSave: Bool { rules.allMet && !busy && (isFirstPassword || !currentPassword.isEmpty) }
 
     var body: some View {
         Group {
@@ -138,9 +138,14 @@ struct PasswordView: View {
                 revealRow("Confirm new password", text: $confirm,
                           reveal: $showConfirm, content: .newPassword)
             } footer: {
-                // His sentence. The second half is a promise the server actually keeps:
-                // `confirmPasswordReset` and Firebase's own update both revoke every refresh token.
-                Text("Use at least 8 characters. After changing, all other devices will need to sign in again.")
+                // The checklist replaces "Use at least 8 characters" (owner, 2026-09-25). The second
+                // sentence is a promise the server keeps: `confirmPasswordReset` and Firebase's own
+                // update both revoke every refresh token.
+                VStack(alignment: .leading, spacing: 10) {
+                    PasswordChecklist(rules: rules)
+                    Text("After changing, all other devices will need to sign in again.")
+                }
+                .padding(.top, 4)
             }
 
             // Only where there is a password to have forgotten — his rule.
@@ -150,12 +155,6 @@ struct PasswordView: View {
                         .disabled(busy)
                         .foregroundStyle(Color.accentColor)
                 }
-            }
-
-            if !password.isEmpty && !longEnough {
-                Section { Text("At least 8 characters.").font(.footnote).foregroundStyle(.secondary) }
-            } else if !confirm.isEmpty && !matches {
-                Section { Text("Those two do not match.").font(.footnote).foregroundStyle(.secondary) }
             }
 
             if let error {
@@ -436,9 +435,8 @@ struct PasswordResetCodeView: View {
     @State private var error: String?
     @State private var done = false
 
-    private var longEnough: Bool { password.count >= 8 }
-    private var matches: Bool { !confirm.isEmpty && confirm == password }
-    private var canSave: Bool { !working && code.count == 6 && longEnough && matches }
+    private var rules: PasswordRules { PasswordRules(password: password, confirm: confirm) }
+    private var canSave: Bool { !working && code.count == 6 && rules.allMet }
 
     var body: some View {
         List {
@@ -466,13 +464,11 @@ struct PasswordResetCodeView: View {
                     .textContentType(.newPassword)
                     .disabled(working)
             } footer: {
-                Text("Use at least 8 characters. After changing, all other devices will need to sign in again.")
-            }
-
-            if !password.isEmpty && !longEnough {
-                Section { Text("At least 8 characters.").font(.footnote).foregroundStyle(.secondary) }
-            } else if !confirm.isEmpty && !matches {
-                Section { Text("Those two do not match.").font(.footnote).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 10) {
+                    PasswordChecklist(rules: rules)
+                    Text("After changing, all other devices will need to sign in again.")
+                }
+                .padding(.top, 4)
             }
 
             if let error {
@@ -528,5 +524,50 @@ private struct FocusIf: ViewModifier {
 
     func body(content: Content) -> some View {
         if active { content.focused($flag) } else { content }
+    }
+}
+
+/// The four rules a new password must meet — owner, 2026-09-25, with the reference page's checklist.
+/// ⛔ A CHECKLIST, NOT A RED/YELLOW/GREEN STRENGTH METER. His question, my call: a meter guesses at
+/// strength and people argue with it ("why is mine only yellow?"); a checklist says exactly what is
+/// needed and ticks each part off as it happens, which is what the large apps do on this screen.
+struct PasswordRules {
+    let password: String
+    let confirm: String
+
+    var longEnough: Bool { password.count >= 8 }
+    var hasLetter: Bool { password.contains { $0.isLetter } }
+    var hasNumber: Bool { password.contains { $0.isNumber } }
+    var matches: Bool { !confirm.isEmpty && confirm == password }
+    var allMet: Bool { longEnough && hasLetter && hasNumber && matches }
+}
+
+/// Grey until a rule is met, then a green tick and full-strength text. Nothing is ever red: an
+/// unfinished password is not an error, it is a password still being typed.
+struct PasswordChecklist: View {
+    let rules: PasswordRules
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            row("At least 8 characters", rules.longEnough)
+            row("At least 1 letter", rules.hasLetter)
+            row("At least 1 number", rules.hasNumber)
+            row("Passwords match", rules.matches)
+        }
+        .font(.subheadline)
+        .animation(.easeOut(duration: 0.15), value: rules.allMet)
+    }
+
+    private func row(_ text: String, _ met: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(met ? Color.green : Color.secondary)
+                .frame(width: 16)
+            Text(text)
+                .foregroundStyle(met ? Color.primary : Color.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(met ? "Done" : "Not yet")
     }
 }
