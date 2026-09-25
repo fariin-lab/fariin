@@ -338,7 +338,17 @@ struct ProfileLinkChips: View {
                         // 09-16 complaints stay answered: the glass keeps an edge of its own (no grey
                         // smear that reads as a shadow), and with no photo it is plain glass, as the
                         // circles are, never a blue capsule.
-                        .liquidGlass(Capsule(), interactive: true, tint: tint)
+                        //
+                        // ⛔ SOLID PROFILE COLOUR, NO SHADOW — owner, 2026-09-25 (later): on his
+                        // snow photo the glass pills came out pale grey with a drop shadow, not the
+                        // profile's colour. Glass refracts what is behind it and carries its own
+                        // shadow, so it can never be exactly the colour. Now a flat fill of the SAME
+                        // `card` colour the cards below are painted with, a hairline edge so it holds
+                        // its shape on any photo, and no shadow. No photo: a plain quiet fill.
+                        .foregroundStyle(tint == nil ? Color.primary : Color.white)
+                        .background(tint ?? Color.primary.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(tint == nil ? 0.08 : 0.22), lineWidth: 0.75))
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                 }
