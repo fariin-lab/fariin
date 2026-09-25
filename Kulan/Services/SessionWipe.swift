@@ -115,6 +115,7 @@ enum SessionWipe {
         CallPrivacyIndex.clear()                // who-refuses-calls is per-account too
         VerificationIndex.clear()               // and who is verified — the next account starts blank
         SafetyKeyLog.wipe()                     // whose key we have seen: per account, never inherited
+        ProfilePhotoHistory.wipe()              // past profile photos: never shown to the next account
         // The launch cache. `wipeAll`, not the per-uid door: by the time a sign-out reaches here the
         // uid may already be gone, and a chat list left behind would be handed to whoever signs in
         // next — on their FIRST FRAME, before any listener could correct it.

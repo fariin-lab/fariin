@@ -610,6 +610,10 @@ final class ProfileStore {
                                          "photoThumb": StoriesService.blurThumbBase64(circleData)]
         if let posterURL { userFields["posterUrl"] = posterURL }
         try await db.collection("users").document(uid).setData(userFields, merge: true)
+        // Saved, so it joins the Edit Photo page's Recents (owner, 2026-09-25). The full crop, not
+        // the 640 upload, so picking it again later still gives the poster a sharp picture.
+        let saved = poster ?? circle
+        Task.detached(priority: .utility) { ProfilePhotoHistory.record(saved, uid: uid) }
 
         // EVERYTHING BELOW HAPPENS BEHIND THE DISMISS. See the note on this function for why it is
         // safe: the user document above is the source of truth and it has already landed.

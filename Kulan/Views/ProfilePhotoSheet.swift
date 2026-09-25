@@ -1,5 +1,5 @@
 import SwiftUI
-import Photos
+import FirebaseAuth
 import UIKit
 
 // THE EDIT PHOTO PAGE — his redesign, 2026-09-02: "when I click edit photo I see a small sheet;
@@ -52,7 +52,7 @@ struct ProfilePhotoSheet: View {
     @Environment(\.colorScheme) private var scheme
 
     @State private var palette: ProfilePalette?
-    @State private var recents: [UIImage] = []
+    @State private var recents: [ProfilePhotoHistory.Entry] = []
 
     private let circle: CGFloat = 190
 
@@ -183,7 +183,7 @@ struct ProfilePhotoSheet: View {
 
     // MARK: - Recents
 
-    /// ⚠️ SILENT WHEN THERE IS NOTHING TO SHOW. No photo access, or an empty library, draws no
+    /// ⚠️ SILENT WHEN THERE IS NOTHING TO SHOW. No past profile photos on this phone draws no
     /// heading at all — a "Recents" label over a blank strip is a section that looks broken rather
     /// than one that is empty.
     @ViewBuilder private var recentsSection: some View {
@@ -205,8 +205,9 @@ struct ProfilePhotoSheet: View {
             // same centred circle; that half is unchanged and its reasoning is below.
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 4),
                       spacing: 14) {
-                ForEach(Array(recents.enumerated()), id: \.offset) { _, img in
-                    Button { choose(.image(img)) } label: {
+                ForEach(recents) { entry in
+                    let img = entry.thumb
+                    Button { if let full = entry.fullImage { choose(.image(full)) } } label: {
                         // ⛔ THE SQUARE IS THE BOX AND THE PICTURE POURS INTO IT — owner,
                         // 2026-09-11, off a screenshot of this strip beside his reference: ours
                         // were squashed, with white showing inside the circles, while every
@@ -275,67 +276,17 @@ struct ProfilePhotoSheet: View {
                 palette = await ProfilePalette.resolve(url: url)
             }
         }
-        recents = await Self.recentImages()
+        // ⛔ YOUR PAST PROFILE PHOTOS, NOT THE CAMERA ROLL — owner, 2026-09-25 (see
+        // `ProfilePhotoHistory`). The newest entry is the photo on show right now, so it is left out
+        // while there is one; after a removal there is none, and every past photo is offered.
+        guard let uid = Auth.auth().currentUser?.uid else { recents = []; return }
+        let hasCurrent = !(photoUrl ?? "").isEmpty
+        recents = await Task.detached(priority: .userInitiated) {
+            let all = ProfilePhotoHistory.entries(uid: uid)
+            return hasCurrent ? Array(all.dropFirst()) : all
+        }.value
     }
 
-    /// The newest few pictures, as decoded thumbnails.
-    ///
-    /// ⚠️ READ-ONLY AND SILENT. It never ASKS for photo access — the picker does that, at the moment
-    /// somebody actually reaches for the library. Prompting on the way into this page would put a
-    /// system alert in front of a screen somebody may well have opened only to look at their picture.
-    /// (This line used to say "to press one emoji"; the emoji section went on 2026-09-11, the reason
-    /// for not prompting did not.)
-    /// ⛔ TEN, NOT TWELVE — owner, 2026-09-11, with the last two circled: "recent images make it
-    /// only 10, remove 2". Four to a row, so ten is two full rows and a short one; twelve filled a
-    /// third row exactly and pushed the sheet longer than the picture it is about.
-    private static func recentImages(_ count: Int = 10) async -> [UIImage] {
-        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        guard status == .authorized || status == .limited else { return [] }
-        let f = PHFetchOptions()
-        f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        f.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
-        f.fetchLimit = count
-        let result = PHAsset.fetchAssets(with: f)
-        guard result.count > 0 else { return [] }
-
-        let manager = PHImageManager.default()
-        let opts = PHImageRequestOptions()
-        opts.deliveryMode = .highQualityFormat
-        opts.isNetworkAccessAllowed = true
-        opts.isSynchronous = false
-        // ⛔ THE SQUARE IS CUT HERE, NOT LEFT TO THE VIEW — owner, 2026-09-11, the second half of the
-        // same report the strip above carries. The resize mode was never set, so it was `.none`, and
-        // with `.none` Photos is free to ignore both the 300×300 asked for below and the `.aspectFill`
-        // beside it and hand back the frame it already had: a 9:19.5 screenshot arrived a 9:19.5
-        // screenshot, and every bit of the squaring was left to SwiftUI. `.exact` makes Photos do the
-        // centre crop itself, at the size actually requested. The view still pours and clips — that
-        // is the belt — but a thumbnail that is square on arrival cannot be letterboxed on the way in,
-        // and cropping 300×300 out of a full frame is cheaper than carrying the full frame around.
-        opts.resizeMode = .exact
-
-        var out: [UIImage] = []
-        for i in 0..<result.count {
-            let asset = result.object(at: i)
-            let img: UIImage? = await withCheckedContinuation { cont in
-                var resumed = false
-                manager.requestImage(for: asset,
-                                     targetSize: CGSize(width: 300, height: 300),
-                                     contentMode: .aspectFill,
-                                     options: opts) { image, info in
-                    // ⚠️ `.opportunistic` CALLS BACK TWICE and a continuation may only resume once.
-                    // `.highQualityFormat` above is one callback, and this guard is the belt for the
-                    // day somebody changes that line without reading this one.
-                    guard !resumed else { return }
-                    let degraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                    guard !degraded || image == nil else { return }
-                    resumed = true
-                    cont.resume(returning: image)
-                }
-            }
-            if let img { out.append(img) }
-        }
-        return out
-    }
 
     private func choose(_ a: ProfilePhotoAction) {
         action = a
