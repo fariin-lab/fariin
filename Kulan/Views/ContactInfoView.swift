@@ -253,6 +253,15 @@ struct ContactInfoView: View {
         return hasPhotograph ? nil : ProfilePalette.forName(shownName)
     }
 
+    /// ⛔ THE LINK PILL TAKES THE PHOTO'S COLOUR ONLY — owner, 2026-09-25: with no profile picture the
+    /// pill came out red. `palette` falls back to a colour picked from the NAME when there is no
+    /// photograph, which is right for the page wash and wrong for a pill: it reads as an alert. No
+    /// photo is plain glass, which is what the pill's own note always said it should be.
+    private var linkTint: Color? {
+        let hasPhotograph = gatedPosterUrl?.isEmpty == false || gatedPhotoUrl?.isEmpty == false
+        return hasPhotograph ? palette.map { Color(uiColor: $0.card) } : nil
+    }
+
     /// The adaptive page is a POSTER idea: the photograph runs off the top of the screen and the
     /// colour it dissolves into is the page. Somebody on the classic circle header has no such
     /// photograph, so they keep the ordinary background.
@@ -1737,7 +1746,7 @@ struct ContactInfoView: View {
             // ⛔ THEIR LINKS, DIRECTLY UNDER THE BIO — owner, 2026-09-11, his third screenshot: two
             // small capsules between the bio and the row of action circles. Drawn by one shared
             // view so this header and the poster one below cannot drift apart.
-            ProfileLinkChips(links: links, tint: palette.map { Color(uiColor: $0.card) })
+            ProfileLinkChips(links: links, tint: linkTint)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 20)
@@ -1828,7 +1837,7 @@ struct ContactInfoView: View {
                     .padding(.top, 2)
                     .transition(.opacity)
             }
-            ProfileLinkChips(links: links, tint: palette.map { Color(uiColor: $0.card) })
+            ProfileLinkChips(links: links, tint: linkTint)
         }
         .frame(maxWidth: .infinity)
         .animation(.easeOut(duration: 0.22), value: gatedAbout)
