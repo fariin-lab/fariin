@@ -80,6 +80,9 @@ enum Passkeys {
             .replacingOccurrences(of: "=", with: "")
     }
 
+    /// A passkey's id as the server stores it (base64url) back to the raw credential id.
+    static func credentialData(_ id: String) -> Data? { data(fromB64url: id) }
+
     private static func data(fromB64url s: String) -> Data? {
         var t = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while t.count % 4 != 0 { t += "=" }
@@ -506,6 +509,14 @@ struct PasskeysView: View {
         defer { working = false }
         do {
             try await AccountCall.run("deletePasskey", ["id": row.id])
+            // Bug hunt 2026-09-25: the server forgot it, but the Passwords app kept offering it at
+            // sign-in, where it could only fail. iOS 26's credential updater tells the password
+            // manager this credential is gone so it can remove it. The row id IS the credential id
+            // (base64url), which is how the server keys it. Best effort.
+            if let credentialID = Passkeys.credentialData(row.id) {
+                try? await ASCredentialUpdater().reportUnknownPublicKeyCredential(
+                    relyingPartyIdentifier: passkeyRelyingParty, credentialID: credentialID)
+            }
             await load()
         } catch {
             self.error = error.localizedDescription
