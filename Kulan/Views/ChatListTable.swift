@@ -407,9 +407,6 @@ struct ChatListTable: UIViewControllerRepresentable {
     var onReachEnd: () -> Void = {}
     /// 2026-09-24 feature-audit: older chats are on their way; the end of the list shows a spinner.
     var loadingMore: Bool = false
-    /// 2026-09-24 fix-all (pull-down Unread filter): released after pulling well past the top, the
-    /// reference app's gesture for flipping the list to Unread and back.
-    var onPullFilter: () -> Void = {}
 
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
@@ -1840,19 +1837,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         clearStuckHighlights(in: table)
     }
 
-    /// 2026-09-24 fix-all (pull-down Unread filter): let go after pulling the list well past its
-    /// top, search bar included, and the list flips between All and Unread, the reference app's
-    /// gesture. Measured against `adjustedContentInset.top`, which already counts a revealed search
-    /// bar, so revealing the bar alone never fires it. Not in Select mode, not while searching.
-    static let pullFilterDistance: CGFloat = 90
-    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
-                                   targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-        guard let parent = host?.parent, !parent.selecting, parent.people.isEmpty else { return }
-        let pulled = -(scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
-        guard pulled > Self.pullFilterDistance else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        parent.onPullFilter()
-    }
+    // ⛔ NO PULL-DOWN UNREAD FILTER — owner, 2026-09-25: "when I scroll, the chat list goes to
+    // Unread chats, remove that feature". Added 2026-09-24 (a pull past the search bar flipped
+    // All <-> Unread); removed whole. Unread stays in the filter menu. Do not bring it back.
 
     /// 2026-09-24 fix-all #6: the last row of the chats section is about to show, so ask for the
     /// next page of older chats. The repository drops the call when there is none or one is coming.

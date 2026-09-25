@@ -2317,12 +2317,7 @@ struct ChatsView: View {
             },
             // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
             // asked for by scrolling and for a search or filter fetching the whole list.
-            loadingMore: repo.loadingOlder || repo.loadingWholeList,
-            // 2026-09-24 fix-all: pull past the search bar and let go flips All <-> Unread, the
-            // reference app's gesture. The same `chatFilter` the title menu sets.
-            // No `withAnimation`: an animation around a representable's update is a second clock
-            // over the table's own row transaction (see the chat list's UIKit migration notes).
-            onPullFilter: { chatFilter = chatFilter == 1 ? 0 : 1 }
+            loadingMore: repo.loadingOlder || repo.loadingWholeList
         )
     }
 
