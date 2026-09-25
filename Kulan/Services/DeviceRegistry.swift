@@ -255,6 +255,16 @@ final class DeviceRegistry: ObservableObject {
         }
     }
 
+    /// One read from the server, for when the live listener has not answered (see DevicesView).
+    func fetchOnce() async throws -> [DeviceSession] {
+        guard let uid else { return [] }
+        let snap = try await devices(uid).getDocuments(source: .server)
+        return snap.documents.compactMap(DeviceSession.init).sorted {
+            if $0.isThisDevice != $1.isThisDevice { return $0.isThisDevice }
+            return $0.lastSeenAt > $1.lastSeenAt
+        }
+    }
+
     /// Sign another device out: its record goes, and its push tokens come off the account in
     /// the same batch, so it stops ringing and receiving even before it notices.
     func signOut(deviceId: String) async throws {

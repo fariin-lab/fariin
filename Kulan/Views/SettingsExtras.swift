@@ -278,6 +278,43 @@ struct DevicesView: View {
 
     private var others: [DeviceSession] { sessions.filter { !$0.isThisDevice } }
 
+    /// ⛔ THE PAGE NEVER WAITS FOR EVER — owner, 2026-09-25: "Devices is loading, never ends". The
+    /// live listener can stay silent (no cached copy and a server answer that does not come), and a
+    /// failure only set the red line while "Loading..." stayed up. Now a failure ends loading, and a
+    /// listener still silent after 4s is backed by one direct server read; if that fails too, the page
+    /// says so with Try Again.
+    private func startListening() {
+        guard listener == nil else { return }
+        error = nil
+        listener = DeviceRegistry.shared.listen({ list in
+            sessions = list
+            loaded = true
+        }, onError: { message in
+            error = message
+            loaded = true
+        })
+        if listener == nil { loaded = true; return }   // signed out; nothing to watch
+        Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !loaded else { return }
+            do {
+                let list = try await DeviceRegistry.shared.fetchOnce()
+                if !loaded { sessions = list; loaded = true }
+            } catch {
+                if !loaded {
+                    self.error = "Your devices could not be loaded. Check your connection and try again."
+                    loaded = true
+                }
+            }
+        }
+    }
+
+    private func retry() {
+        listener?.remove(); listener = nil
+        loaded = false
+        startListening()
+    }
+
     var body: some View {
         List {
             Section {
@@ -349,7 +386,10 @@ struct DevicesView: View {
             }
 
             if let error {
-                Section { Text(error).font(.footnote).foregroundStyle(.red) }
+                Section {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                    Button("Try Again") { retry() }
+                }
             }
 
             Section {
@@ -373,17 +413,7 @@ struct DevicesView: View {
         }
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            guard listener == nil else { return }
-            listener = DeviceRegistry.shared.listen({ list in
-                sessions = list
-                loaded = true
-            }, onError: { message in
-                // 2026-09-24 audit: shown in the page's existing red footnote, not as "no devices".
-                error = message
-            })
-            if listener == nil { loaded = true }   // signed out; nothing to watch
-        }
+        .onAppear { startListening() }
         .onDisappear { listener?.remove(); listener = nil }
         .task {
             autoDays = await DeviceRegistry.shared.autoSignOutDays()
