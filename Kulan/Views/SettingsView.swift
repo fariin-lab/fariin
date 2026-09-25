@@ -19,21 +19,24 @@ struct SettingsRowLabel: View {
     var system = false
     init(_ title: String, _ image: String) { self.title = title; self.image = image }
     init(_ title: String, system: String) { self.title = title; self.image = system; self.system = true }
+    /// ⛔ THE REFERENCE APP'S NUMBERS, READ FROM ITS SOURCE — owner, 2026-09-25, "cards, line spacing and
+    /// icon sizes 100% like the reference". `OWSTableItem`: icon 24pt, 16pt from icon to text, body font;
+    /// `OWSTableViewController2`: 13pt above and below the content (`cellVInnerMargin`), system
+    /// inset-grouped cards, 20pt between sections. The separator starts under the text, as theirs.
     var body: some View {
-        Label {
-            // No extra padding — owner, 2026-09-25, beside iOS Settings and another messenger: the rows
-            // were ~62pt against their ~52. The system row height is the right one.
-            Text(title).font(.system(size: 17))
-        } icon: {
+        HStack(spacing: 16) {
             Group {
                 if system {
-                    Image(systemName: image).font(.system(size: 19))
+                    Image(systemName: image).font(.system(size: 20))
                 } else {
                     Image(image).renderingMode(.template).resizable().scaledToFit()
                 }
             }
-            .frame(width: 26, height: 26)
+            .frame(width: 24, height: 24)
+            Text(title).font(.body)
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
         }
+        .padding(.vertical, 2)   // system row inset 11 + 2 = their 13
     }
 }
 
