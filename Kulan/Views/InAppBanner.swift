@@ -147,7 +147,9 @@ struct InAppBannerCard: View {
     /// more, notch phones 44 to 50, so the island test is `>= 51` and the notch branch is live.
     private func topInset(safeTop: CGFloat) -> CGFloat {
         if safeTop >= 51 { return safeTop + 6 }     // Dynamic Island
-        if safeTop >= 44 { return 42 }              // notch
+        // Notch: just under the status bar, on the back-button row (owner, 2026-09-25). A flat 42
+        // sat above a 47 status bar and clipped the clock.
+        if safeTop >= 44 { return safeTop + 2 }      // notch
         return 37                                    // everything older
     }
 
@@ -158,6 +160,12 @@ struct InAppBannerCard: View {
         }
         // The reader would otherwise take the whole screen and push the card's own frame with it.
         .frame(height: Self.cardHeight + 80)
+        // ⛔ MEASURED FROM THE SCREEN'S TOP — owner, 2026-09-25 night, screenshot: the card sat a
+        // whole bar too low, under the back button instead of over it. The overlay that mounts
+        // this starts BELOW the safe area, so `geo.safeAreaInsets.top` read 0, `topInset` took its
+        // "older phone" 37, and that 37 was added under the status bar. Ignoring the top edge puts
+        // the reader at the screen's top and gives it the real safe area to measure.
+        .ignoresSafeArea(.container, edges: .top)
         .allowsHitTesting(true)
     }
 
