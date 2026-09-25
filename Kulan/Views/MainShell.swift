@@ -1846,8 +1846,12 @@ struct ChatsView: View {
             // Selection mode is the reference app's: a system "Cancel" text item on the left, the
             // selected count as the title (the page title while nothing is ticked), no right items.
             // No "Select All" — tap rows to select.
+            // ✕ rather than the word — owner, 2026-09-25, the same glyph Calls' select mode uses.
+            // The label stays for VoiceOver, which cannot read a glyph.
             ToolbarItem(placement: .topBarLeading) {
-                Button("Cancel") { exitSelect() }
+                Button { exitSelect() } label: { Image(systemName: "xmark") }
+                    .tint(.primary)
+                    .accessibilityLabel("Cancel")
             }
             ToolbarItem(placement: .principal) {
                 Text(selection.isEmpty ? "Chats" : "\(selection.count) Selected").font(.headline)
