@@ -852,8 +852,13 @@ final class ChatComposerView: UIView {
         // The two exceptions are the ones with nothing in that slot: a text-only request has no mic
         // at all, and a hold in flight gives the whole pill to the "slide to cancel" row with the
         // mic invisible over its end.
+        //
+        // ⚠️ A TEXT-ONLY REQUEST STILL HAS A SEND BUTTON. It took the whole width, and the moment
+        // there was text the send arrow appeared in the trailing slot ON TOP of the pill's end (owner
+        // screenshot, 2026-09-25, first message to somebody). The slot is kept free whenever send
+        // can show; with nothing typed there is nothing in it, so the pill may use it.
         let right: CGFloat
-        if s.textOnly { right = width }
+        if s.textOnly { right = s.hasText ? width - slot : width }   // exactly `targetAlpha`'s send rule
         else if s.recordingActive && !s.recordLocked { right = width }
         else { right = width - slot }
         return (left, max(left, right))
