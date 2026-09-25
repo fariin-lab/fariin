@@ -144,7 +144,14 @@ struct GlowProfileView: View {
     /// plain system background so it answers to light and dark the way he asked, and a letter sized
     /// to this slot rather than to the screen. `photoHeight` is untouched and still the number the
     /// photograph uses.
-    private static var letterHeroHeight: CGFloat { 132 }
+    ///
+    /// ⛔ 2026-09-25, his screenshot of a new account: the 132pt slot started at the TOP OF THE SCREEN,
+    /// behind the bar, so the letter sat inside the navigation bar on a black band that was not the
+    /// page colour, and the name ran into it. The slot now starts below the bar and holds the same
+    /// silhouette every other avatar in the app falls back to (the letter was retired app-wide on
+    /// 2026-09-16), on the page's own background.
+    private static var letterHeroHeight: CGFloat { barBottom + noPhotoDiameter + 16 }
+    private static let noPhotoDiameter: CGFloat = 110
 
     /// Is there a picture to draw at all? Read by everything that measures the header, so the three
     /// call sites cannot disagree about which hero is on screen — the same reason `photoHeight`
@@ -342,11 +349,10 @@ struct GlowProfileView: View {
                         // card colour is deliberately NOT used: a palette with no photograph to
                         // read has nothing to be derived from, so it was painting a screen-wide
                         // slab of a colour that means nothing.
-                        Color(.systemBackground).overlay {
-                            Text(String((profile?.name ?? initialName).prefix(1)).uppercased())
-                                // Sized to THIS slot, not to the screen. `w * 0.34` was about 130pt.
-                                .font(.system(size: Self.letterHeroHeight * 0.46, weight: .semibold))
-                                .foregroundStyle(.secondary)
+                        Color.clear.overlay(alignment: .top) {
+                            AvatarView(name: profile?.name ?? initialName, photoUrl: nil,
+                                       size: Self.noPhotoDiameter)
+                                .padding(.top, Self.barBottom)
                         }
                     }
                 }
