@@ -430,6 +430,10 @@ final class AudioRecorder {
     /// standing idle recorder IS the next stretch, pre-warmed; only actual recording refuses.
     func resume() {
         guard !isRecording, !segments.isEmpty else { return }
+        // 2026-09-24 feature-audit: re-arm the 30-minute cap. It latched once and a resume skipped
+        // the reset (only a cold start cleared it), so "keep recording" after the cap ran unbounded.
+        // A resume at or past the cap now lands straight back on the review bar at the next tick.
+        limitFired = false
         // The preview no longer covers the note. A multi-stretch preview is its own stitched file
         // and would leak here; a single-stretch preview IS the stretch, so it must survive.
         if let r = reviewURL, !segments.contains(where: { $0.url == r }) {

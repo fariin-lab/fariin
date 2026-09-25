@@ -182,6 +182,7 @@ struct ThreadView: View {
     @State private var holdBeganAt: Date = .distantPast   // touch-down time: a sub-0.3s release is a TAP, not a hold
     @State private var micDenied = false            // mic permission denied → "open Settings" alert
     @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
+    @State private var voiceRestricted = false          // 2026-09-24 feature-audit: tried to record while restricted from voice
     @State private var recorder = AudioRecorder()
     @State private var highlightId: String?
     // NEW-REACTION BADGE (user request): someone reacts to one of my older messages while I am reading
@@ -855,7 +856,10 @@ struct ThreadView: View {
     private func noteReactionChanges() {
         var sigs: [String: String] = [:]
         var arrived: (id: String, emoji: String)?
-        for m in repo.items where m.authorId == me && !m.reactions.isEmpty {
+        // 2026-09-24 feature-audit: a message whose reactions went to zero keeps an empty baseline
+        // (""), so a reaction added back later is seen as new. Dropping it made that re-add look like
+        // a never-seen message and the badge stayed quiet.
+        for m in repo.items where m.authorId == me {
             let sig = m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
             sigs[m.id] = sig
             // Changed since we last looked, and the change is someone ELSE's reaction. Diff against
@@ -1160,6 +1164,10 @@ struct ThreadView: View {
         .alert("You're on a call", isPresented: $recordingBlockedByCall) {
             Button("OK", role: .cancel) {}
         } message: { Text("Can't record voice messages during a call.") }
+        // 2026-09-24 feature-audit: the sendVoice restriction, said before a note is recorded.
+        .alert("You're restricted in this group", isPresented: $voiceRestricted) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("An admin has turned off voice messages for you.") }
     }
 
     // Split into two halves at an erased boundary: this modifier chain (~28 covers/sheets/alerts on one
@@ -1509,7 +1517,10 @@ struct ThreadView: View {
             EmojiMorePicker { emoji in react(m, emoji) }
         }
         .sheet(item: $reactorsTarget) { m in
-            ReactorsSheet(reactions: m.reactions, nameFor: { personName($0) })
+            // 2026-09-24 feature-audit: the live row, so a reaction added or taken back while the
+            // sheet is open shows (the Edit History sheet below reads it the same way).
+            ReactorsSheet(reactions: (repo.items.first(where: { $0.id == m.id }) ?? m).reactions,
+                          nameFor: { personName($0) })
         }
         // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.
         .sheet(item: $editHistoryTarget) { m in
@@ -2410,7 +2421,11 @@ struct ThreadView: View {
                         imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
                         present: { MediaPresentGate.present { viewerVideo = m } })
                 },
-                onReact: { emoji in sendReaction(messageId: msg.id, emoji: emoji, toAuthor: msg.authorId) },
+                // 2026-09-24 feature-audit: the bubble's double-tap asks the same `canReact` as the bar.
+                onReact: { emoji in
+                    guard canReact(repo.items.first(where: { $0.id == msg.id }) ?? msg) else { return }
+                    sendReaction(messageId: msg.id, emoji: emoji, toAuthor: msg.authorId)
+                },
                 onPin: { m in togglePin(m) },
                 onForward: { forwardTarget = $0 },
                 // THE SELECTION BLUR, THIRD PASS — the first two were real but incomplete. Entering
@@ -2897,9 +2912,13 @@ struct ThreadView: View {
         items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
             beginReply(to: m)
         })
-        items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
-            morePickerTarget = m
-        })
+        // 2026-09-24 feature-audit: offered only where the quick bar is (`canReact`); it had no guard,
+        // so a call/system/pin/tombstone row took a reaction nobody could see.
+        if canReact(m) {
+            items.append(UIAction(title: "React…", image: UIImage(systemName: "face.smiling")) { _ in
+                morePickerTarget = m
+            })
+        }
         // 2026-09-24 feature-audit: the same `canEdit` as the custom menu (this one skipped every
         // guard but author + window).
         if canEdit(m) {
@@ -3116,7 +3135,8 @@ struct ThreadView: View {
         // The list above is `canReact` — one predicate, asked here before the bar is offered and
         // again in `handleCustomReact` before anything is written. Two copies is how they drifted.
         guard canReact(m) else { return nil }
-        return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
+        // 2026-09-24 feature-audit: recent reactions first, topped up with the defaults.
+        return (ReactionRecents.quickBar(count: 6), m.reactions[me])
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
@@ -3152,7 +3172,8 @@ struct ThreadView: View {
     private func uikitQuickReact(_ rowId: String) {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
         let m = repo.items[idx]
-        guard m.sendState == nil else { return }
+        // 2026-09-24 feature-audit: the same `canReact` as the quick bar (was "not sending" only).
+        guard canReact(m) else { return }
         // The user's chosen quick reaction, not a hard-coded heart (Settings > Appearance).
         let quick = QuickReaction.current
         let emoji: String? = m.reactions[me] == quick ? nil : quick
@@ -4944,8 +4965,12 @@ struct ThreadView: View {
             // ⚠️ THE FALLBACK IS THE WHOLE POINT. After a relaunch `localAudioData` is nil — the bytes
             // are never written into the message cache — so this branch used to fail its pattern
             // match, fall past every other branch, and do nothing at all.
-            var again = Message(localAudioData: data, duration: m.duration ?? 0, waveform: m.waveform,
+            // 2026-09-24 feature-audit: a one-time note stays one-time on Resend and on the automatic
+            // retry (both land here). It went out as an ordinary, replayable note with a waveform.
+            let once = m.viewOnce
+            var again = Message(localAudioData: data, duration: m.duration ?? 0, waveform: once ? [] : m.waveform,
                                 authorId: me, clientId: clientId, sendState: .sending)
+            again.viewOnce = once
             // Carry the parked file forward, or a retry that fails AGAIN comes back after the next
             // restart with nothing to try — the bug this branch exists to fix.
             again.localMediaURL = m.localMediaURL ?? AudioRecorder.parkInFlight(data, clientId: clientId)
@@ -4955,8 +4980,9 @@ struct ThreadView: View {
                 defer { if mediaRetry { SendQueue.endSending(clientId) } }
                 do {
                     try await ChatService.sendAudio(cid: cid, data: data, duration: m.duration ?? 0,
-                                                    waveform: m.waveform, replyTo: m.replyTo,
-                                                    clientId: clientId, group: isGroup ? groupMembers : nil)
+                                                    waveform: once ? [] : m.waveform, replyTo: m.replyTo,
+                                                    clientId: clientId, group: isGroup ? groupMembers : nil,
+                                                    viewOnce: once)
                     AudioRecorder.dropInFlight(clientId: clientId)
                 }
                 catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
@@ -5674,16 +5700,22 @@ struct ThreadView: View {
     }
 
     private func react(_ m: Message, _ emoji: String) {
-        guard m.sendState == nil else { return }   // can't react to a message that isn't on the server yet
-        let new = m.reactions[me] == emoji ? nil : emoji
-        if let e = new { ReactionRecents.add(e) }
-        sendReaction(messageId: m.id, emoji: new, toAuthor: m.authorId)
+        // 2026-09-24 feature-audit: the live row and the same `canReact` as the quick bar. The picker
+        // held the snapshot from when it opened and checked only "still sending", so a delete that
+        // landed while it was up wrote onto the tombstone.
+        let live = repo.items.first(where: { $0.id == m.id }) ?? m
+        guard canReact(live) else { return }
+        let new = live.reactions[me] == emoji ? nil : emoji
+        sendReaction(messageId: live.id, emoji: new, toAuthor: live.authorId)
     }
 
     /// Every reaction write in this screen goes through here (2026-09-24 audit): a refused one
     /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
     /// the forward and jump paths use.
     private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        // 2026-09-24 feature-audit: every pick feeds the quick bar's recents (bar, picker and
+        // double-tap alike); only the full picker used to record one.
+        if let e = emoji { ReactionRecents.add(e) }
         let members = isGroup ? groupMembers : nil
         Task {
             let ok = await ChatService.setReaction(cid: cid, messageId: messageId, emoji: emoji,
@@ -6893,8 +6925,18 @@ struct ThreadView: View {
         // A live call OWNS the microphone. CallKit holds the audio session in manual mode and WebRTC has
         // the mic hot, so starting a recording here would either capture nothing or fight the call for the
         // session - and the user would only find out afterwards, from a silent voice note. Say so instead.
-        if CallService.shared.state != .idle && CallService.shared.state != .ended {
+        // 2026-09-24 feature-audit: a live GROUP call too (`VoiceAudio.callActive`'s other half); only
+        // the 1:1 call was checked, so a hold during a group call fought it for the microphone.
+        if (CallService.shared.state != .idle && CallService.shared.state != .ended)
+            || GroupCallService.shared.isActive {
             recordingBlockedByCall = true
+            return
+        }
+        // 2026-09-24 feature-audit: a member an admin restricted from voice messages cannot start one.
+        // The server refuses the send (`sendVoice`), so the whole recording was futile, then a red mark.
+        if isGroup, let conv = conversation,
+           conv.isRestricted(me, .sendVoice, now: Date().timeIntervalSince1970 * 1000) {
+            voiceRestricted = true
             return
         }
         // Permission already DENIED: don't flip into the recording UI (nothing would be captured —
@@ -7050,6 +7092,13 @@ struct ThreadView: View {
 
     /// The review bar's red mic: carry on recording where the pause left off (a new stretch).
     private func resumeRecording() {
+        // 2026-09-24 feature-audit: "keep recording" from the review bar asks the same call question as
+        // the hold (a call may have started while the note sat on the review bar).
+        if (CallService.shared.state != .idle && CallService.shared.state != .ended)
+            || GroupCallService.shared.isActive {
+            recordingBlockedByCall = true
+            return
+        }
         stopPreviewPlayback()   // clears reviewingNote + the preview player; segment files stay with the recorder
         recorder.resume()
     }
@@ -7188,11 +7237,14 @@ struct ThreadView: View {
         }
         // Sending from the review bar must not leave the note playing over the send. The bytes are
         // read by `finish()` inside stopAndSendAudio, which knows to use the finalized file.
+        // 2026-09-24 feature-audit: the waveform the person REVIEWED (sampled from that same file),
+        // captured before stopPreviewPlayback clears it; empty when the note was never reviewed.
+        let reviewedBars = reviewingNote ? SampledWaveform.storedBars(for: previewDecibels, count: 40) : []
         stopPreviewPlayback()
         // ⚠️ CAPTURED BEFORE resetRecordingState, which clears the flag — the Task below races the
         // reset, and reading the @State inside it sent every one-time note as ordinary.
         let once = voiceViewOnce
-        Task { await stopAndSendAudio(viewOnce: once) }
+        Task { await stopAndSendAudio(viewOnce: once, reviewedBars: reviewedBars) }
         impact(.light)
         resetRecordingState()
     }
@@ -7217,14 +7269,17 @@ struct ThreadView: View {
         let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private func stopAndSendAudio(viewOnce: Bool = false) async {
+    /// 2026-09-24 feature-audit: `reviewedBars` is the file-sampled waveform the review strip drew;
+    /// when present it is what ships, so the reviewed shape and the sent shape are the same.
+    private func stopAndSendAudio(viewOnce: Bool = false, reviewedBars: [Int] = []) async {
         // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
         // still tear down cleanly so the recording UI never gets stuck. Keep replyingTo though:
         // a dropped too-short note must not destroy the reply target — the user just retries.
         // The draft folder goes either way: on success the note leaves as a message; on a nil
         // finish the segment files are already cleaned and stale meta must not resurrect them.
         defer { AudioRecorder.discardDraft(cid) }
-        guard let (data, dur, wf) = await recorder.finish() else { return }
+        guard let (data, dur, meteredWf) = await recorder.finish() else { return }
+        let wf = reviewedBars.isEmpty ? meteredWf : reviewedBars
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
         // recording), then reconcile when the upload echoes back — no dead lag on release.
         let clientId = UUID().uuidString
@@ -7264,11 +7319,17 @@ struct ThreadView: View {
             // The bytes are already parked on disk under this clientId, so the queue only records
             // that they are owed a send. The red bubble stays either way — retrying by hand still
             // works, this just means nobody HAS to.
+            // 2026-09-24 feature-audit: `viewOnce` rides the queue entry, so a re-drive stays one-time.
             SendQueue.addAudio(clientId: clientId, cid: cid, duration: dur, waveform: viewOnce ? [] : wf,
-                               reply: reply, ts: Date().timeIntervalSince1970)
+                               reply: reply, ts: Date().timeIntervalSince1970, viewOnce: viewOnce)
             // 2026-09-24 decision D-composer-2: a rule refusal is not re-driven at every launch.
             if SendQueue.isPermanentRefusal(error) { SendQueue.markRefused(clientId: clientId) }
-            await MainActor.run { repo.markFailed(clientId: clientId) }
+            // 2026-09-24 feature-audit: the same alert the other attachments show (the album's
+            // wording); a voice note used to fail with only the red mark.
+            await MainActor.run {
+                repo.markFailed(clientId: clientId)
+                sendError = "Couldn't send. \(error.localizedDescription)"
+            }
         }
     }
 

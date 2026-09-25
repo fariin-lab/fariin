@@ -1729,6 +1729,20 @@ service cloud.firestore {
                         && lp.imageUrl.matches('https://.+')))
                 && (!('imageEnc' in lp) || lp.imageEnc is map));
         }
+        // 2026-09-24 feature-audit: A VOICE NOTE'S SHAPE. `duration` and `waveform` were the two
+        // attachment fields with no check at all. The recorder stops at 30 minutes (1,800s), so a
+        // voice note's duration is a number from 0 to 1,900 (margin); other kinds (video) keep
+        // theirs unchecked here. The waveform is a list of at most 256 bars (the app sends 64 at
+        // most); the rules language cannot loop, so each bar's type is not checked. A one-time voice
+        // note carries NO waveform (absent or empty), the invariant `sendAudio` states and keeps.
+        function voiceShapeOk() {
+          let d = request.resource.data;
+          return (!('waveform' in d) || (d.waveform is list && d.waveform.size() <= 256))
+            && (d.get('type', '') != 'audio'
+                || ((!('duration' in d)
+                     || (d.duration is number && d.duration >= 0 && d.duration <= 1900))
+                    && (d.get('viewOnce', false) != true || d.get('waveform', []).size() == 0)));
+        }
         // 2026-09-24 feature-audit: WHEN AN EDIT MAY LAND. The client's 15-minute window
         // (`Limits.editWindowSeconds`) was only ever a menu condition, so any authored message could
         // be rewritten at any age by a client that skipped the menu. Now the server asks the same
@@ -1811,6 +1825,7 @@ service cloud.firestore {
           && textWithinCap()
           && mediaUrlsOk()
           && linkPreviewOk()   // 2026-09-24 feature-audit: the card's own fields
+          && voiceShapeOk()    // 2026-09-24 feature-audit: duration, waveform, one-time = no waveform
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           && (convData().get('onlyAdminsSend', false) == false
               || request.auth.uid in convData().get('admins', []))
@@ -1902,7 +1917,16 @@ service cloud.firestore {
              // 2026-09-24 fix-all: `sendReactions` restricts ADDING or changing a reaction; taking my
              // own back stays allowed.
              && (!(request.auth.uid in request.resource.data.get('reactions', {}))
-                 || !restrictedIn(convData(), 'sendReactions')))
+                 || !restrictedIn(convData(), 'sendReactions'))
+             // 2026-09-24 feature-audit: my key is absent or a STRING of bounded size. Not "16
+             // characters": the value is the SEALED emoji (`setReaction` writes enc1:/encg1:), and a
+             // group seal carries one key wrap per member (Crypto.encryptForGroup, about 175
+             // characters each, 303 at the worst base64 escaping), so the cap scales with the
+             // member count: 600 + 320 per member. A 1:1 seal is about 110.
+             && (!(request.auth.uid in request.resource.data.get('reactions', {}))
+                 || (request.resource.data.reactions[request.auth.uid] is string
+                     && request.resource.data.reactions[request.auth.uid].size()
+                          <= 600 + 320 * convData().users.size())))
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys()
                      .hasOnly(['text', 'edited', 'edits', 'editedAt'])   // 2026-09-24 feature-audit: + history

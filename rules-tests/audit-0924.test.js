@@ -268,7 +268,37 @@ const cases = [
 
   // ── 2026-09-24 feature-audit (delete-message): the admin "Delete messages" right, tombstone shape ──
   ...deleteMessageCases(),
+  // ── 2026-09-24 feature-audit (reactions, voice notes): value and shape caps ──
+  ...reactionVoiceCases(),
 ];
+
+// 2026-09-24 feature-audit (reactions, voice notes). A reaction is a sealed string capped by member
+// count; a voice note's duration and waveform have a shape; a one-time note carries no waveform.
+function reactionVoiceCases() {
+  const m = [ME, ADMIN, THIRD].flatMap(notAdmin);
+  const mocks = [...m, ...convGet(group)];
+  const react = (v) => [ME, msgPath, 'update', { ...msg, reactions: { [THIRD]: 'r3', [ME]: v } }, msg, mocks];
+  const send = (data) => [ME, `${convPath}/messages/m9`, 'create',
+    { authorId: ME, createdAt: REQ_TIME, type: 'audio', text: '', audioUrl: 'https://x/y', ...data }, null, mocks];
+  const sealed = 'encg1:' + 'A'.repeat(1400);   // a 3-member group seal is about 700
+  const bars = (n) => Array.from({ length: n }, (_, i) => i % 100);
+  return [
+    ['OK      member adds a group-sealed reaction', 'ALLOW', 'ALLOW', ...react(sealed)],
+    ['ATTACK  reaction value is a map', 'ALLOW', 'DENY', ...react({ junk: 'x' })],
+    ['ATTACK  reaction value is a 100 KB blob', 'ALLOW', 'DENY', ...react('x'.repeat(100000))],
+    ['OK      voice note with duration and 64 bars', 'ALLOW', 'ALLOW', ...send({ duration: 12.5, waveform: bars(64) })],
+    ['OK      one-time voice note with an empty waveform', 'ALLOW', 'ALLOW',
+      ...send({ duration: 12.5, waveform: [], viewOnce: true })],
+    ['OK      video keeps a long duration', 'ALLOW', 'ALLOW',
+      ME, `${convPath}/messages/m9`, 'create',
+      { authorId: ME, createdAt: REQ_TIME, type: 'video', text: '', videoUrl: 'https://x/v', duration: 7200 }, null, mocks],
+    ['ATTACK  voice note duration is a string', 'ALLOW', 'DENY', ...send({ duration: 'long', waveform: [] })],
+    ['ATTACK  voice note lasts ten hours', 'ALLOW', 'DENY', ...send({ duration: 36000, waveform: [] })],
+    ['ATTACK  voice note waveform of 5,000 bars', 'ALLOW', 'DENY', ...send({ duration: 5, waveform: bars(5000) })],
+    ['ATTACK  one-time voice note carries a waveform', 'ALLOW', 'DENY',
+      ...send({ duration: 5, waveform: bars(40), viewOnce: true })],
+  ];
+}
 
 // 2026-09-24 feature-audit (delete-message). ADMIN owns `team`; LIM holds pinning only; DEL holds
 // deleteMessages; LEG is a legacy full admin (no adminRights entry).

@@ -30,6 +30,9 @@ enum SendQueue {
         /// so this only has to remember that the file is waiting and what to send it as.
         var audioDuration: Double? = nil
         var audioWaveform: [Int]? = nil
+        /// 2026-09-24 feature-audit: a one-time voice note stays one-time when it is re-driven.
+        /// Optional so entries saved by an older build still decode (absent = an ordinary note).
+        var audioViewOnce: Bool? = nil
         /// 2026-09-24 decision D-composer-2: the server refused this send (a rule said no), so no
         /// automatic path sends it again. The entry is kept only so the chat can still draw it as a
         /// failed bubble with Resend / Delete; a Resend re-adds it without this flag.
@@ -129,12 +132,15 @@ enum SendQueue {
     /// Queues a voice note whose send failed. The bytes are already parked on disk by the recorder;
     /// this is the note that they are owed a retry.
     static func addAudio(clientId: String, cid: String, duration: Double, waveform: [Int],
-                         reply: ReplyRef?, ts: Double) {
+                         reply: ReplyRef?, ts: Double, viewOnce: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         var map = load()
-        map[clientId] = Entry(clientId: clientId, cid: cid, text: "", mentions: [],
-                              replyId: reply?.id, replyAuthor: reply?.authorId, replyText: reply?.text,
-                              createdAt: ts, audioDuration: duration, audioWaveform: waveform)
+        var e = Entry(clientId: clientId, cid: cid, text: "", mentions: [],
+                      replyId: reply?.id, replyAuthor: reply?.authorId, replyText: reply?.text,
+                      createdAt: ts, audioDuration: duration, audioWaveform: viewOnce ? [] : waveform)
+        // 2026-09-24 feature-audit: remembered, so the re-drive below sends it one-time again.
+        if viewOnce { e.audioViewOnce = true }
+        map[clientId] = e
         save(map)
     }
 
@@ -187,9 +193,12 @@ enum SendQueue {
                     guard let data = AudioRecorder.inFlightData(clientId: e.clientId) else {
                         remove(clientId: e.clientId); continue
                     }
+                    // 2026-09-24 feature-audit: a one-time note is re-driven one-time (it went out
+                    // as an ordinary, replayable note with a waveform).
+                    let once = e.audioViewOnce == true
                     try await ChatService.sendAudio(cid: e.cid, data: data, duration: dur,
-                                                    waveform: e.audioWaveform ?? [], replyTo: reply,
-                                                    clientId: e.clientId, group: nil)
+                                                    waveform: once ? [] : (e.audioWaveform ?? []), replyTo: reply,
+                                                    clientId: e.clientId, group: nil, viewOnce: once)
                     AudioRecorder.dropInFlight(clientId: e.clientId)
                 } else {
                     // group: nil → sendText resolves members from the conversation doc itself.

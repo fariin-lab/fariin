@@ -2641,6 +2641,8 @@ enum ChatService {
                 return true
             }
             let blobs = mediaStorageURLs(in: snap.data())
+            // 2026-09-24 feature-audit: read before the strip below removes them.
+            let reactionsBefore = snap.data()?["reactions"] as? [String: Any]
 
             // TOMBSTONE, not a hole. The document survives carrying `deleted`, with every content
             // field stripped, so both sides see that something was here and was removed instead of a
@@ -2730,6 +2732,7 @@ enum ChatService {
             //   what "delete for everyone" promises it won't.
             await removePinnedMessage(cid, messageId)
             await clearSummaryIfNewest(cid: cid, deletedId: messageId)
+            await clearReactionPreviewIfFrom(cid: cid, reactions: reactionsBefore)
             return true
         } catch {
             #if DEBUG
@@ -2790,6 +2793,23 @@ enum ChatService {
         // A GIF is a public Giphy url we never uploaded — deleting it is not ours to do.
         if (d["type"] as? String) == "gif" { return [] }
         return out
+    }
+
+    /// 2026-09-24 feature-audit: the chat list's "Reacted …" preview came from a message that has
+    /// just been deleted for everyone, so clear it; it outlived the message indefinitely. The
+    /// conversation doc does not name the message, but `setReaction` writes the SAME ciphertext
+    /// to the message's `reactions[uid]` and to `lastReactionEnc`, and each seal is unique, so an
+    /// equal pair identifies the message. The server's expiry sweep does the same check.
+    private static func clearReactionPreviewIfFrom(cid: String, reactions: [String: Any]?) async {
+        guard let reactions, !reactions.isEmpty else { return }
+        let convRef = db.collection("conversations").document(cid)
+        guard let d = try? await convRef.getDocument().data(),
+              let by = d["lastReactionBy"] as? String, let enc = d["lastReactionEnc"] as? String,
+              (reactions[by] as? String) == enc else { return }
+        try? await convRef.updateData([
+            "lastReactionEnc": FieldValue.delete(), "lastReactionBy": FieldValue.delete(),
+            "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
+        ])
     }
 
     /// After the newest message is deleted, re-point the conversation summary at whatever is now

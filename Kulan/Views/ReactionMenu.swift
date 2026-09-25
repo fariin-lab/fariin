@@ -16,6 +16,16 @@ enum ReactionRecents {
         r.insert(emoji, at: 0)
         UserDefaults.standard.set(r.prefix(10).joined(separator: " "), forKey: key)
     }
+    /// 2026-09-24 feature-audit: the quick bar's emoji. The user's recent reactions first, topped
+    /// up with the default set, no repeats — `add` was written on every pick and read by nothing.
+    static func quickBar(count: Int = 6) -> [String] {
+        var out: [String] = []
+        for e in get() + QuickReaction.choices where !e.isEmpty && !out.contains(e) {
+            out.append(e)
+            if out.count == count { break }
+        }
+        return out
+    }
 }
 
 // The full native Apple emoji set, enumerated from Unicode (so we render the same
@@ -144,20 +154,70 @@ struct EditHistorySheet: View {
 }
 
 // "Who reacted" — reactor name + their emoji. Real data, no fakes.
+// 2026-09-24 feature-audit: per-emoji tabs ("All" first, then each emoji most-popular first, the
+// bubble pill's own order), and reactors sorted by display name. It was sorted by raw uid, which
+// reads as shuffled. The data carries no reaction time, so recency is not available to sort by.
 struct ReactorsSheet: View {
     let reactions: [String: String]      // uid -> emoji
     let nameFor: (String) -> String
     @Environment(\.dismiss) private var dismiss
+    @State private var selected: String?  // nil = All
+
+    /// (emoji, count), most-popular first, ties by emoji: the same order as the bubble's pills.
+    private var tabs: [(emoji: String, count: Int)] {
+        Dictionary(grouping: reactions.values, by: { $0 })
+            .map { (emoji: $0.key, count: $0.value.count) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
+    }
+
+    /// A tab whose last reactor took their reaction back falls back to All.
+    private var activeEmoji: String? {
+        guard let s = selected, reactions.values.contains(s) else { return nil }
+        return s
+    }
+
+    private var rows: [(uid: String, emoji: String, name: String)] {
+        reactions
+            .filter { activeEmoji == nil || $0.value == activeEmoji }
+            .map { (uid: $0.key, emoji: $0.value, name: nameFor($0.key)) }
+            .sorted {
+                let c = $0.name.localizedCaseInsensitiveCompare($1.name)
+                return c != .orderedSame ? c == .orderedAscending : $0.uid < $1.uid
+            }
+    }
+
+    private func tab(_ label: String, emoji: String?) -> some View {
+        let on = activeEmoji == emoji
+        return Button { selected = emoji } label: {
+            Text(label)
+                .font(.subheadline.weight(on ? .semibold : .regular))
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Capsule().fill(on ? Color.secondary.opacity(0.22) : Color.clear))
+                .foregroundStyle(.primary)
+        }
+        .buttonStyle(.plain)
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(reactions.sorted { $0.key < $1.key }, id: \.key) { uid, emoji in
+                if !tabs.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            tab("All \(reactions.count)", emoji: nil)
+                            ForEach(tabs, id: \.emoji) { t in tab("\(t.emoji) \(t.count)", emoji: t.emoji) }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowSeparator(.hidden)
+                }
+                ForEach(rows, id: \.uid) { r in
                     HStack {
-                        Text(nameFor(uid)).font(.body)
-                        VerifiedMark(uid: uid, size: 13)
+                        Text(r.name).font(.body)
+                        VerifiedMark(uid: r.uid, size: 13)
                         Spacer()
-                        Text(emoji).font(.title3)
+                        Text(r.emoji).font(.title3)
                     }
                 }
             }

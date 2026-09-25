@@ -91,6 +91,20 @@ enum SampledWaveform {
         return downsample(decibels, to: count).map(normalize)
     }
 
+    /// 2026-09-24 feature-audit: the reviewed decibels in the bubble's STORED form, so the reviewed
+    /// shape is the one that ships. A message's `waveform` is 0…100 on the recorder's scale,
+    /// `100 * ((dB + 50) / 50)^0.85` (AudioRecorder.perceptualLevel), which `WaveformBars.display`
+    /// undoes onto the −50…−20 window at draw time; stored the same way, a sampled note draws on the
+    /// same curve as every note already sent. Empty in, empty out.
+    static func storedBars(for decibels: [Float], count: Int) -> [Int] {
+        guard count > 0, !decibels.isEmpty else { return [] }
+        let dbs = decibels.count > count ? downsample(decibels, to: count) : decibels
+        return dbs.map { db in
+            let norm = max(0, min(1, (db - silenceThreshold) / 50))
+            return Int((pow(norm, 0.85) * 100).rounded())
+        }
+    }
+
     /// Their `downsample(samples:toSampleCount:)`: a plain mean over `stride` samples per bar. The
     /// leftover `count % stride` samples at the tail are dropped, as theirs drops them.
     private static func downsample(_ samples: [Float], to count: Int) -> [Float] {

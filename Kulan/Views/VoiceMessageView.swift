@@ -456,22 +456,10 @@ struct VoiceMessageView: View {
                 Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
                     .transition(.opacity)
             }
-            // THEY HEARD IT. On my own notes only, and only in a chat — this is the thing the reference app says
-            // with a blue microphone, and the one voice signal we sent nothing for at all.
-            //
-            // ⚠️ IT DIMS, IT DOES NOT TURN BLUE, and that is forced rather than chosen. The reference app can use
-            // a colour because their bubble is a pale green; ours is whatever chat colour the person
-            // picked, and the only ink guaranteed to read on it is `tint`. A blue would vanish on a blue
-            // bubble. Faint-to-solid is the one contrast that survives every colour and both appearances.
-            //
-            // Drawn at BOTH states rather than appearing when they listen, for the reason the speed pill
-            // carries above: the row is pre-measured before any of this arrives, and something that
-            // shows up later changes the height that was already measured.
-            if isMe && !plainBackground {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(tint.opacity(heardByOther ? 1 : 0.35))
-            }
+            // ⛔ NO "HEARD" MIC GLYPH. Owner, 2026-09-02: "remove the small icon next of duration". It
+            // was taken out of the chat's UIKit bubble (MessageRowLayout's VoicePlan) and survived here,
+            // so Pinned Messages and the preview platter still drew it. 2026-09-24 feature-audit: removed
+            // here too, so every surface agrees.
         }
         // The COLUMN's width, not the bubble's: this row now lives beside the disc rather than
         // under it, so the clock's trailing edge is the column's — which is still the bubble's right
