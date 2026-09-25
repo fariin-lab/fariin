@@ -372,6 +372,14 @@ struct AppLockPage: View {
 // "My Contacts" = people you already share a chat with. Enforced on the SENDER's client:
 // their composer is disabled if you don't accept messages from them (see ThreadView).
 struct MessagesPrivacyPage: View {
+    /// ⛔ THE SAME PAGE, OPENED FROM ACCOUNT > USERNAME — owner, 2026-09-25, with the reference: a
+    /// "Contact me by username" page carrying the username itself, who can reach you by it, and the
+    /// key. It edits the SAME setting and the SAME Chat Key as Privacy > Messages (one setting, two
+    /// doors), adds the username row on top, and leaves the read-receipt switches to the Messages door.
+    var usernameMode: Bool = false
+    init(usernameMode: Bool = false) { self.usernameMode = usernameMode }
+    @State private var editingHandle = false
+    @State private var handle = ProfileStore.shared.me?.handle ?? ""
     @State private var flagError: String?   // 2026-09-24 audit: a refused Read Receipts / Typing save
     @AppStorage("priv.messages") private var privMessages = "everyone"
     @AppStorage("readReceipts") private var readReceipts = true
@@ -434,6 +442,20 @@ struct MessagesPrivacyPage: View {
 
     var body: some View {
         List {
+            if usernameMode {
+                Section {
+                    Button { editingHandle = true } label: {
+                        HStack {
+                            Text("Username").foregroundStyle(.primary)
+                            Spacer()
+                            Text(handle.isEmpty ? "Not set" : "@\(handle)").foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
+            }
             Section {
                 // NO "No One" HERE (owner 2026-08-04). Messaging is the app; a switch that turns it
                 // off entirely is being held back as a paid option rather than shipped as a way to
@@ -488,6 +510,7 @@ struct MessagesPrivacyPage: View {
                 }
             }
 
+            if !usernameMode {
             Section {
                 Toggle("Read Receipts", isOn: $readReceipts).tint(.green)
                     .onChange(of: readReceipts) { _, v in
@@ -511,8 +534,15 @@ struct MessagesPrivacyPage: View {
                 // was true. Making it reciprocal is a behaviour change and his call, not a rewrite.
                 Text("Turning one off stops you sending it. You will still see read receipts and typing from other people.")
             }
+            }
         }
-        .navigationTitle("Messages")
+        .navigationTitle(usernameMode ? "Contact me by username" : "Messages")
+        .toolbar(.hidden, for: .tabBar)
+        .sheet(isPresented: $editingHandle, onDismiss: {
+            handle = ProfileStore.shared.me?.handle ?? handle
+        }) {
+            NavigationStack { UsernameEditView(handle: $handle) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         // The mode is written by the sheet's SUCCESS and by nothing else — see `choose`. Dismissing
         // it without saving leaves the selection where it was.

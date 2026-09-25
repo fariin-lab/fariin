@@ -545,6 +545,15 @@ struct AccountSettingsView: View {
                     NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
                 }
                 NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications") }
+                // ⛔ USERNAME, BESIDE PASSKEYS AND SECURITY NOTIFICATIONS — owner, 2026-09-25: the
+                // username, who can reach you by it, and the Chat Key on one page.
+                NavigationLink { MessagesPrivacyPage(usernameMode: true) } label: {
+                    HStack {
+                        Text("Username")
+                        Spacer()
+                        Text(profile.me.map { "@\($0.handle)" } ?? "").foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Security").textCase(nil)
             } footer: {
@@ -554,7 +563,8 @@ struct AccountSettingsView: View {
                 // create or offer a passkey at all. A row that opened a page saying so would be a
                 // dead end in his settings, so the row arrives with the capability. Told to him
                 // plainly rather than quietly dropped.
-                Text("An additional password when you sign in on a new device.")
+                // It described two-step verification, which is hidden (Flags.twoStepEnabled).
+                Text("Passkeys sign you in with Face ID. Security notifications email you about new sign-ins.")
             }
 
             // ⛔ SIGN-IN METHODS IS OFF THIS PAGE — owner, 2026-09-16: "make it like that", with his
