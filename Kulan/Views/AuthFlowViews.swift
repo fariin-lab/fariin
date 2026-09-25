@@ -551,7 +551,28 @@ struct AuthMethodView: View {
             .overlay(Circle().strokeBorder(AuthPalette.page, lineWidth: 2))
     }
 
+    /// ⛔ ONE TAP, NO QUESTIONS — owner, 2026-09-25. The account's device key first
+    /// (`DeviceSessionKeys`); only if there is none, or the server refused it (30 days unused, the
+    /// password changed, this phone signed out elsewhere), the account's own door as before.
     private func continueAs(_ info: LastAccount.Info) {
+        guard !busy else { return }
+        guard NetworkState.shared.isOnline else {
+            error = "No internet connection. Check your connection and try again."
+            return
+        }
+        busy = true; error = nil
+        Task {
+            let resumed = await DeviceSessionKeys.resume(uid: info.uid)
+            if resumed {
+                await AuthService.shared.bootstrap()
+                await MainActor.run { busy = false; onAuthed() }
+            } else {
+                await MainActor.run { busy = false; continueWithDoor(info) }
+            }
+        }
+    }
+
+    private func continueWithDoor(_ info: LastAccount.Info) {
         switch AuthService.SignInMethod(rawValue: info.method) {
         case .apple:
             run {

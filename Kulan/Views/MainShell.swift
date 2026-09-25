@@ -2687,6 +2687,7 @@ struct ChatsView: View {
             .task(id: "\(repo.conversations.count)|\(ProfileStore.shared.me?.photoUrl ?? "")|\(ProfileStore.shared.me?.posterUrl ?? "")") {
                 await ProfileStore.shared.healMyMirrors()
                 LastAccount.remember()   // 2026-09-25: the saved-account row on Log In
+                await DeviceSessionKeys.ensureIssued()   // and its one-tap sign-in key
             }
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back

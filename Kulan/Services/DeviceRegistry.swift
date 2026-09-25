@@ -283,12 +283,17 @@ final class DeviceRegistry: ObservableObject {
         }
         batch.deleteDocument(ref)
         try await batch.commit()
+        // 2026-09-25: and its saved-account one-tap key (DeviceSessionKeys), so that phone asks for
+        // the password next time instead of signing straight back in.
+        await DeviceSessionKeys.revoke(deviceIds: [deviceId])
     }
 
     func signOutAllOthers(_ sessions: [DeviceSession]) async throws {
         for s in sessions where !s.isThisDevice {
             try await signOut(deviceId: s.id)
         }
+        // Keys for phones no longer listed here too.
+        await DeviceSessionKeys.revokeAllOthers()
     }
 
     // MARK: - Bits about this hardware

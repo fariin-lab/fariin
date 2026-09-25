@@ -319,7 +319,8 @@ final class AuthService: NSObject {
     /// Pro Max", "iOS 27.0": the Device line in the Fariin chat's New login / New passkey / Password
     /// changed messages. The model name Settings › Devices shows, not the bare "iPhone".
     static var deviceFields: [String: Any] {
-        ["app": "Fariin \(DeviceRegistry.appVersion)",
+        ["deviceId": DeviceSessionKeys.deviceId,
+         "app": "Fariin \(DeviceRegistry.appVersion)",
          "device": DeviceNames.name(for: DeviceRegistry.hardwareIdentifier) ?? UIDevice.current.model,
          "os": "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"]
     }

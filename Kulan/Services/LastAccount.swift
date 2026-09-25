@@ -78,7 +78,7 @@ enum LastAccount {
     /// moves the signed-in account to the front and refreshes its card.
     static func remember() {
         guard let user = Auth.auth().currentUser, let me = ProfileStore.shared.me, me.id == user.uid,
-              !me.handle.isEmpty, let method = AuthService.lastSignInMethod else { return }
+              !me.handle.isEmpty, let method = doorOf(user) else { return }
         let info = Info(uid: user.uid, name: me.name, handle: me.handle, method: method.rawValue,
                         email: method == .email ? user.email : nil)
         var list = all()
@@ -98,8 +98,22 @@ enum LastAccount {
         }
     }
 
+    /// ⛔ THIS ACCOUNT'S DOOR, NOT THE PHONE'S — owner, 2026-09-25: his email account's card asked for
+    /// Apple. `AuthService.lastSignInMethod` is the last door used ON THIS PHONE, by any account. The
+    /// account's own sign-in methods are on its Firebase record; the phone's last door is used only
+    /// when it is one of them, otherwise the first the account has (email, Google, Apple).
+    private static func doorOf(_ user: User) -> AuthService.SignInMethod? {
+        let providers = Set(user.providerData.map(\.providerID))
+        if let last = AuthService.lastSignInMethod, providers.contains(last.providerId) { return last }
+        for m in [AuthService.SignInMethod.email, .google, .apple] where providers.contains(m.providerId) {
+            return m
+        }
+        return nil
+    }
+
     /// One account off this phone (its card's menu, or the account was deleted).
     static func forget(_ uid: String) {
+        DeviceSessionKeys.forget(uid)   // its one-tap key goes with the card
         save(all().filter { $0.uid != uid })
         try? FileManager.default.removeItem(at: photoURL(uid))
     }
