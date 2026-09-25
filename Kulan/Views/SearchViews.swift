@@ -124,7 +124,13 @@ struct ChatSearchView: View {
                     Section("People") {
                         Button { openUser(u) } label: {
                             HStack(spacing: 12) {
-                                AvatarView(name: u.name.isEmpty ? u.handle : u.name, photoUrl: u.photoUrl, size: 44)
+                                // Gated like every other stranger row (2026-09-25 photo audit). This
+                                // screen has no caller today; the gate keeps it safe if one returns.
+                                AvatarView(name: u.name.isEmpty ? u.handle : u.name,
+                                           photoUrl: PrivacyPrefs.allows(u.privacy, "photo",
+                                                                         contactOfMine: PrivacyPrefs.mayViewPhotoOf(u.id))
+                                               ? u.photoUrl : nil,
+                                           size: 44)
                                 VStack(alignment: .leading, spacing: 2) {
                                     // Search is where impersonation is actually attempted: somebody
                                     // typing a company's name gets a list, and the mark is what
