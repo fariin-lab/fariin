@@ -269,8 +269,22 @@ struct StoryPeoplePicker: View {
             if !rest.isEmpty {
                 Section { ForEach(rest) { row($0) } } header: { header(unselectedHeader) }
             }
+            // ⛔ SKELETON ROWS, NOT A SPINNER — owner, 2026-09-25. The same size as the real rows
+            // (40pt circle, a name), built from the app's own skeleton parts, so the list appears to
+            // fill in rather than a wheel turning in an empty card.
             if visible.isEmpty && isLoading {
-                Section { ProgressView() }
+                Section {
+                    ForEach(0..<6, id: \.self) { i in
+                        HStack(spacing: 12) {
+                            SkeletonCircle(size: 40)
+                            SkeletonBlock(width: [150, 110, 170, 95, 140, 120][i], height: 13)
+                            Spacer()
+                        }
+                        .listRowInsets(Self.rowInsets)
+                        .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] + Self.separatorInset }
+                    }
+                }
+                .accessibilityLabel("Loading")
             }
         }
         .listStyle(.insetGrouped)
