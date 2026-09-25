@@ -74,23 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE FULL AUDIT BUILD. About 200 fixes across the whole app. Check these first:
+            NEW FIRST RUN, CLEANER HEADER, AND THE LAST AUDIT FIXES.
 
-            HEADERS: the Chats list and the chat screen use the plain iOS 26 glass bar, like the reference app. Chats has your photo menu on the left and camera plus compose on the right. The search bar folds away as you scroll. Pull down past it to switch to Unread.
+            CHATS HEADER: your photo is gone from the top left. A "..." button opens the same menu.
 
-            CLOSED PHOTO: swiping a photo closed should now put it back in its bubble every time. Two real causes were found and fixed.
+            NEW USERS now see: Welcome and Agree, Sign in (Face ID offered if a passkey exists), profile, then a friendly notifications screen before Apple's popup.
 
-            STORIES: swiping past the last person closes the viewer. Repost no longer freezes, shows who you reposted with their photo (tap it to open their story), is gone from the top menu, and the icon gap is smaller.
+            MESSAGES: edits keep a history (long-press, Edit History). Delete for Everyone on photos and videos now really deletes the file. Group admins with the right can delete others' messages.
 
-            MESSAGES: offline messages no longer send twice. Polls and locations work offline. A failed message offers Resend or Delete. Pasting a picture opens the photo editor.
+            REACTIONS: your recent emoji come first. You get a notification when someone reacts to your message.
 
-            CALLS: mute tapped while it rings now really mutes. Group calls show errors and reconnecting.
+            VOICE NOTES: a failed one-time voice note stays one-time when resent. The waveform matches what you reviewed.
 
-            BLOCKING works on anyone, even with no chat, and stays silent.
+            PLEASE TEST: set a group photo, and delete a photo for everyone. Tell me if either fails.
 
-            ACCOUNT: two-step now asks for the extra password on every new sign-in. Forgot password has a page to type the code. Passkey sign-in works.
-
-            ⚠️ NOT LIVE YET: the new server rules. Until they are, some protections are app-side only.
-
-            ⚠️ If the chat list shows Try Again right after installing, wait a few minutes: a new server index is still building.
         run: fastlane beta
