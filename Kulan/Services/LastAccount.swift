@@ -86,7 +86,12 @@ enum LastAccount {
             list.removeAll { $0.uid == info.uid }
             list.insert(info, at: 0)
             // An account pushed off the end takes its photo with it.
-            for dropped in list.dropFirst(limit) { try? FileManager.default.removeItem(at: photoURL(dropped.uid)) }
+            // And its one-tap key (bug hunt 2026-09-25): with no card left, nothing could use or
+            // remove it, and it stayed valid on the server for 30 days.
+            for dropped in list.dropFirst(limit) {
+                try? FileManager.default.removeItem(at: photoURL(dropped.uid))
+                DeviceSessionKeys.forget(dropped.uid)
+            }
             save(list)
         }
         // The photo as it is drawn right now; a removed photo removes the copy.

@@ -82,7 +82,16 @@ struct ChatSearchOverlay: View {
     /// (0.38, 0.70, 0.125, 1.0), which it calls "spring". Read from source 2026-09-25.
     static let motion = Animation.timingCurve(0.38, 0.70, 0.125, 1.0, duration: 0.5)
 
+    /// Reset when search closes, so the next open raises the keyboard again.
+    @State private var focusedThisSearch = false
+
     var body: some View {
+        // A ZStack that is always there, so the close can be watched even while the page is gone.
+        ZStack { page }
+            .onChange(of: isSearching) { _, open in if !open { focusedThisSearch = false } }
+    }
+
+    @ViewBuilder private var page: some View {
         if isSearching {
             // ⛔ THE REAL FIELD LIVES ON THIS PAGE — 2026-09-25, the reference app's design: the list
             // shows a placeholder (`ChatListSearchHeader`); tapping it hides the top bar, and this
@@ -93,12 +102,19 @@ struct ChatSearchOverlay: View {
                 ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
                                dismissSearch: dismissSearch,
                                chats: chats, people: people, personRow: personRow,
-                               onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
+                               // The field lets go of the keyboard before the chat opens.
+                               onOpenChat: { fieldFocused = false; onOpenChat($0) },
+                               onOpenPerson: { fieldFocused = false; onOpenPerson($0) })
             }
             .background(Color(uiColor: .systemBackground).ignoresSafeArea())
             // Rises from where the list's field sits (about one bar-height lower) while fading in.
             .transition(.offset(y: 56).combined(with: .opacity))
-            .onAppear { fieldFocused = true }
+            // Keyboard up on the TAP only. Bug hunt 2026-09-25: `onAppear` fires again when you come
+            // Back from a chat opened from search, and the keyboard jumped up over the results. The
+            // reference app returns to the results with the keyboard down.
+            .onAppear {
+                if !focusedThisSearch { fieldFocused = true; focusedThisSearch = true }
+            }
         }
     }
 
