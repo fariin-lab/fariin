@@ -538,6 +538,9 @@ struct MessagesPrivacyPage: View {
         }
         .navigationTitle(usernameMode ? "Contact me by username" : "Messages")
         .toolbar(.hidden, for: .tabBar)
+        // Read again on every visit (bug hunt 2026-09-25): the initial value is taken once, and a
+        // profile that had not loaded yet left the row on "Not set".
+        .onAppear { if let h = ProfileStore.shared.me?.handle, !h.isEmpty { handle = h } }
         .sheet(isPresented: $editingHandle, onDismiss: {
             handle = ProfileStore.shared.me?.handle ?? handle
         }) {

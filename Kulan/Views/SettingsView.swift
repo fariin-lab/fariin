@@ -548,7 +548,9 @@ struct AccountSettingsView: View {
                     HStack {
                         Text("Username")
                         Spacer()
-                        Text(profile.me.map { "@\($0.handle)" } ?? "").foregroundStyle(.secondary)
+                        // A bare "@" for an account with no username yet (bug hunt 2026-09-25).
+                        Text(profile.me.map { $0.handle.isEmpty ? "Not set" : "@\($0.handle)" } ?? "")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 NavigationLink { PasskeysView() } label: { Text("Passkeys") }
