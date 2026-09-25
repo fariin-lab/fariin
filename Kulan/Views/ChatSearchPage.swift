@@ -52,7 +52,7 @@ struct ChatSearchOverlay: View {
     var dismissSearch: () -> Void
     /// The text itself, typed into this page's own field (see `searchBar`).
     @Binding var text: String
-    @FocusState private var fieldFocused: Bool
+    @State private var fieldFocused = false
 
     /// ⚠️ SPELLED OUT, NOT SYNTHESISED. A single PRIVATE stored property — the environment read
     /// above — makes Swift's memberwise initialiser private too, and the call site in another file
@@ -102,29 +102,13 @@ struct ChatSearchOverlay: View {
         }
     }
 
-    /// The reference app's active field: a 44pt liquid glass pill, 16pt from the edges, and a round
-    /// 44pt glass ✕ beside it (owner, 2026-09-25: an icon, not "Cancel").
+    /// The field is Apple's `UISearchBar`, the same control as the list's resting field and the Calls
+    /// page's (owner, 2026-09-25 night: "make it look like the search bar in the call list"), with a
+    /// round 44pt glass ✕ beside it (owner, 2026-09-25: an icon, not "Cancel").
     private var searchBar: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search", text: $text)
-                    .focused($fieldFocused)
-                    .submitLabel(.search)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                if !text.isEmpty {
-                    Button { text = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear")
-                }
-            }
-            .font(.system(size: 17))
-            .padding(.horizontal, 14)
-            .frame(height: 44)
-            .glassEffect(.regular, in: Capsule())
+        HStack(spacing: 0) {
+            SystemSearchBar(text: $text, focused: $fieldFocused)
+                .fixedSize(horizontal: false, vertical: true)
             Button {
                 // The keyboard goes first, then the page (the reference app's order).
                 fieldFocused = false
@@ -140,8 +124,52 @@ struct ChatSearchOverlay: View {
             .glassEffect(.regular.interactive(), in: Circle())
             .accessibilityLabel("Cancel")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4).padding(.bottom, 8)
+        // The bar insets its own field by 8pt, so 8 here lands the field 16pt from the edge.
+        .padding(.leading, 8).padding(.trailing, 16)
+        .padding(.top, 2).padding(.bottom, 4)
+    }
+}
+
+/// Apple's search bar, typed into, for SwiftUI. Minimal style: just the system field, no bar
+/// background. Focus is a plain Bool so the page can raise and drop the keyboard.
+struct SystemSearchBar: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+
+    func makeUIView(context: Context) -> UISearchBar {
+        let b = UISearchBar()
+        b.searchBarStyle = .minimal
+        b.placeholder = "Search"
+        b.autocapitalizationType = .none
+        b.autocorrectionType = .no
+        b.returnKeyType = .search
+        b.delegate = context.coordinator
+        b.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        b.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return b
+    }
+
+    func updateUIView(_ b: UISearchBar, context: Context) {
+        context.coordinator.parent = self
+        if b.text != text { b.text = text }
+        // Deferred a turn: first-responder changes inside an update pass are ignored while the
+        // view is still being inserted.
+        if focused, !b.isFirstResponder {
+            DispatchQueue.main.async { b.becomeFirstResponder() }
+        } else if !focused, b.isFirstResponder {
+            DispatchQueue.main.async { b.resignFirstResponder() }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UISearchBarDelegate {
+        var parent: SystemSearchBar
+        init(_ p: SystemSearchBar) { parent = p }
+        func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) { parent.text = searchText }
+        func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) { if !parent.focused { parent.focused = true } }
+        func searchBarTextDidEndEditing(_ searchBar: UISearchBar) { if parent.focused { parent.focused = false } }
+        func searchBarSearchButtonClicked(_ searchBar: UISearchBar) { searchBar.resignFirstResponder() }
     }
 }
 

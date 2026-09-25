@@ -2199,22 +2199,20 @@ final class ChatListSectionHeader: UIView {
 /// It is the table's `tableHeaderView`, so it scrolls away with the rows and is exactly where it
 /// was when you come back from a chat; no inset changes, so no jump.
 final class ChatListSearchHeader: UIView {
-    /// The reference app's numbers (read from source 2026-09-25): a 44pt pill, 16pt from each
-    /// edge, 8pt above and below. The owner rejected the flat grey 40pt capsule as "flat"; the pill
-    /// is the system liquid glass, as the navigation-bar field he preferred was.
+    /// ⛔ APPLE'S OWN SEARCH BAR, THE ONE THE CALLS PAGE HAS — owner, 2026-09-25 night, with a
+    /// screenshot of the glass pill: "make it look like the search bar in the call list". Calls uses
+    /// `.searchable`, i.e. a real `UISearchBar`; this is the same control, so the two cannot differ.
+    /// It is only a picture here (touches off); the tap target on top opens the search page.
     static let height: CGFloat = 60
     var onTap: () -> Void = {}
 
-    private let pill: UIVisualEffectView = {
-        let v = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-        v.cornerConfiguration = .capsule()
-        v.isUserInteractionEnabled = false
-        return v
+    private let bar: UISearchBar = {
+        let b = UISearchBar()
+        b.searchBarStyle = .minimal
+        b.placeholder = "Search"
+        b.isUserInteractionEnabled = false
+        return b
     }()
-    private let glass = UIImageView(image: UIImage(systemName: "magnifyingglass"))
-    private let label = UILabel()
-    /// ⚠️ THE TAP TARGET SITS ON TOP OF THE GLASS, not inside it: an effect view with interactive
-    /// glass eats touches meant for a control beneath (see the composer's pill notes).
     private let hit = UIControl()
 
     override init(frame: CGRect) {
@@ -2224,26 +2222,19 @@ final class ChatListSearchHeader: UIView {
         hit.accessibilityLabel = "Search"
         hit.accessibilityTraits = [.button, .searchField]
         hit.isAccessibilityElement = true
-        glass.tintColor = .secondaryLabel
-        glass.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
-        label.text = "Search"
-        label.textColor = .secondaryLabel
-        label.font = .systemFont(ofSize: 17)
-        pill.contentView.addSubview(glass)
-        pill.contentView.addSubview(label)
-        addSubview(pill)
+        bar.isAccessibilityElement = false
+        addSubview(bar)
         addSubview(hit)
     }
     required init?(coder: NSCoder) { fatalError("ChatListSearchHeader is never built from a nib") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        pill.frame = CGRect(x: 16, y: 8, width: bounds.width - 32, height: 44)
-        hit.frame = pill.frame
-        glass.sizeToFit()
-        glass.frame.origin = CGPoint(x: 14, y: (pill.bounds.height - glass.bounds.height) / 2)
-        label.sizeToFit()
-        label.frame.origin = CGPoint(x: glass.frame.maxX + 8, y: (pill.bounds.height - label.bounds.height) / 2)
+        // The bar insets its own field by 8pt; 8 more puts the field 16pt from each edge, where
+        // the navigation-bar field on Calls sits.
+        let h = bar.sizeThatFits(CGSize(width: bounds.width - 16, height: .greatestFiniteMagnitude)).height
+        bar.frame = CGRect(x: 8, y: (bounds.height - h) / 2, width: bounds.width - 16, height: h)
+        hit.frame = bar.frame
     }
 
     @objc private func tapped() { onTap() }
