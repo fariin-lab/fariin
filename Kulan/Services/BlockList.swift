@@ -24,11 +24,25 @@ final class BlockList {
 
     func contains(_ uid: String) -> Bool { entries[uid] != nil }
 
+    /// Whose list `entries` is: set when a snapshot for that account lands, nil otherwise.
+    @ObservationIgnored private(set) var loadedFor: String?
+
+    /// ⛔ MY entry for `other`, only when the list in memory is the SIGNED-IN account's own, loaded
+    /// from the server. `ChatService.openConversation` turns an entry into a real block on the chat,
+    /// so an entry from the previous account on this phone (or none loaded yet) must answer nil.
+    /// Owner, 2026-09-25: "sometimes my chat blocks itself" (he switches accounts on one phone).
+    func confirmedEntry(for other: String) -> Double? {
+        guard let me = Auth.auth().currentUser?.uid, loadedFor == me else { return nil }
+        return entries[other]
+    }
+
     /// Idempotent: a second call for the same account keeps the running listener.
     func start() {
         guard let uid = Auth.auth().currentUser?.uid, !uid.isEmpty else { return }
         if listener != nil, listenerUid == uid { return }
         listener?.remove()
+        // A different account: the previous one's list goes NOW, not when the new snapshot lands.
+        if listenerUid != uid { entries = [:]; loadedFor = nil }
         listenerUid = uid
         listener = Firestore.firestore().collection("users").document(uid).collection("blocked")
             .addSnapshotListener { [weak self] snap, _ in
@@ -40,7 +54,9 @@ final class BlockList {
                     m[d.documentID] = at * 1000
                 }
                 DispatchQueue.main.async {
+                    guard Auth.auth().currentUser?.uid == uid else { return }
                     self?.entries = m
+                    self?.loadedFor = uid
                     // 2026-09-24 decision D8: re-filter the chat list (silent block, see there).
                     ConversationsRepository.shared.blockListChanged()
                 }
@@ -53,5 +69,6 @@ final class BlockList {
         listener = nil
         listenerUid = nil
         entries = [:]
+        loadedFor = nil
     }
 }

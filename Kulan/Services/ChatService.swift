@@ -133,7 +133,8 @@ enum ChatService {
         // its own copy of the block, so the thread shows them as blocked and every screen that reads
         // `blockedBy` treats it so. `blockedAt` is the list entry's own time, so anything they sent
         // silently while blocked stays hidden (their writes land; blocking is silent).
-        let listedAt = await MainActor.run { BlockList.shared.entries[other.id] }
+        // `confirmedEntry`, not `entries`: only MY list, loaded for this account, may block a chat.
+        let listedAt = await MainActor.run { BlockList.shared.confirmedEntry(for: other.id) }
         let alreadyBlocked = ((snapshot?.data()?["blockedBy"] as? [String: Any])?[uid] as? Bool) == true
         if let listedAt, !alreadyBlocked {
             let at = listedAt > 0 ? listedAt : Date().timeIntervalSince1970 * 1000
