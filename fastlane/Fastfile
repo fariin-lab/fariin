@@ -2,6 +2,9 @@ default_platform(:ios)
 
 PROFILE_NAME = "Kulan Native AppStore"
 BUNDLE_ID = "com.kulan.messenger.native"
+# 2026-09-25 delivered ticks: the embedded notification extension (project.yml `NotificationService`).
+NSE_ID = "com.kulan.messenger.native.NotificationService"
+NSE_PROFILE_NAME = "Kulan Notification Service AppStore"
 
 platform :ios do
   desc "Build a signed Release and upload to TestFlight"
@@ -31,6 +34,34 @@ platform :ios do
       profile_name: PROFILE_NAME
     )
 
+    # The extension needs its own App ID and App Store profile. The App ID is created once, through
+    # the same App Store Connect API key (no Apple ID login on CI); after that this is a lookup.
+    unless Spaceship::ConnectAPI::BundleId.find(NSE_ID)
+      UI.message("Creating App ID #{NSE_ID}")
+      Spaceship::ConnectAPI::BundleId.create(
+        name: "Fariin Notification Service",
+        platform: Spaceship::ConnectAPI::BundleIdPlatform::IOS,
+        identifier: NSE_ID
+      )
+    end
+
+    get_provisioning_profile(
+      api_key: api_key,
+      app_identifier: NSE_ID,
+      provisioning_name: NSE_PROFILE_NAME,
+      force: true
+    )
+
+    update_code_signing_settings(
+      path: "Kulan.xcodeproj",
+      use_automatic_signing: false,
+      team_id: ENV["ASC_TEAM_ID"],
+      targets: ["NotificationService"],
+      code_sign_identity: "Apple Distribution",
+      bundle_identifier: NSE_ID,
+      profile_name: NSE_PROFILE_NAME
+    )
+
     build_app(
       project: "Kulan.xcodeproj",
       scheme: "Kulan",
@@ -55,7 +86,7 @@ platform :ios do
       #     still send export down a slower path.
       export_options: {
         signingStyle: "manual",
-        provisioningProfiles: { BUNDLE_ID => PROFILE_NAME },
+        provisioningProfiles: { BUNDLE_ID => PROFILE_NAME, NSE_ID => NSE_PROFILE_NAME },
         uploadSymbols: false,
         compileBitcode: false
       }

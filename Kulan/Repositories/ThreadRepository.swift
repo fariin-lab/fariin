@@ -166,6 +166,10 @@ final class ThreadRepository {
     /// Only set from a snapshot that actually arrived; a failed read leaves it false.
     var otherAccountDeleted = false
     var otherLastReadMillis: Double = 0
+    /// 1:1 only: the newest time the other person's phone confirmed it had my messages. Written by
+    /// their app (`ConversationsRepository.markDelivered`) or, while it is closed, by the server when
+    /// the notification lands (`ackDelivered`). Drives the two grey ticks.
+    var otherDeliveredMillis: Double = 0
     var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
     var disappearSeconds = 0
@@ -506,6 +510,11 @@ final class ThreadRepository {
                     self.armTypingExpiry()
                     if let ts = (d?["lastRead"] as? [String: Any])?[other] as? Timestamp {
                         self.otherLastReadMillis = ts.dateValue().timeIntervalSince1970 * 1000
+                    }
+                    // 2026-09-25: when my messages reached their phone (two grey ticks).
+                    // Milliseconds: the conversation's `updatedAt` their phone confirmed it had.
+                    if let n = (d?["delivered"] as? [String: Any])?[other] as? NSNumber {
+                        self.otherDeliveredMillis = n.doubleValue
                     }
                 } else {
                     // Group: typing = ANY other member typing; "read" = the SLOWEST other reader

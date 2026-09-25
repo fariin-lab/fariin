@@ -27,6 +27,8 @@ struct MessageRowContext {
     var onWallpaper: Bool
     var wallpaperBlur: WallpaperBlurState?
     var otherLastReadMillis: Double
+    /// 2026-09-25: when my messages reached the other phone (1:1). 0 = not known / group.
+    var otherDeliveredMillis: Double = 0
     var iBlocked: Bool
     var searchTerm: String
     var nameFor: (String) -> String
@@ -245,9 +247,11 @@ enum MessageRowModelBuilder {
             case nil:
                 // A blocked contact's lastRead is ignored, matching what the old path passed in as
                 // `otherLastRead` — or a blocked chat shows ✓✓ on one row class and ✓ on another.
-                let read = !ctx.iBlocked
-                    && ctx.otherLastReadMillis >= msg.createdAt.timeIntervalSince1970 * 1000
-                tick = read ? .read : .sent
+                let sentMs = msg.createdAt.timeIntervalSince1970 * 1000
+                let read = !ctx.iBlocked && ctx.otherLastReadMillis >= sentMs
+                // 2026-09-25: one tick = on the server, two faded = on their phone, two solid = read.
+                let delivered = !ctx.iBlocked && ctx.otherDeliveredMillis >= sentMs
+                tick = read ? .read : (delivered ? .delivered : .sent)
             }
         }
 

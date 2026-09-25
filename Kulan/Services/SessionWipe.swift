@@ -70,6 +70,7 @@ enum SessionWipe {
         // through the last account's contact relationships. The next account must ask again.
         ProfilePhotoIndex.reset()
         Task { @MainActor in PhotoPrivacy.shared.reset() }   // my Hide From list: never the next account's
+        Task { @MainActor in DeliveryReceipts.reset() }      // which chats this account confirmed
         SendQueue.removeAll()                   // queued unsent plaintext
         PendingOutbox.removeAll()               // forwarded bubbles waiting for a chat to be opened
         StoryOutbox.removeAll()                 // unfinished story posts — never inherited

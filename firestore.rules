@@ -1166,7 +1166,10 @@ service cloud.firestore {
             // would have leaked one anyway.
             && ownKeyOnly('lastPlayedVoice')
             // 2026-09-24 decision D13: Mark as Unread is its own per-user flag; only my own key.
-            && ownKeyOnly('markedUnread');
+            && ownKeyOnly('markedUnread')
+            // 2026-09-25 delivered ticks: "it reached my phone" is MY statement, like `lastRead`.
+            // Written by my app while it runs; the server writes it for a closed app (ackDelivered).
+            && ownKeyOnly('delivered');
       }
       // The other party of a 1:1 being created.
       function otherMember() {

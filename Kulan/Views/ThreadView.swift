@@ -1669,6 +1669,7 @@ struct ThreadView: View {
         // (read directly in the body), that wasn't enough to refresh the tick, so my ✓ stayed single until a
         // full reload. This body-level read makes the tick flip to ✓✓ the moment the other person reads.
         let _ = repo.otherLastReadMillis
+        let _ = repo.otherDeliveredMillis   // 2026-09-25: two grey ticks arrive live too
         threadContent
         // ⛔ THE SECOND OF THE THREE DARK-MODE LEVERS — see the long note on `dark`.
         //
@@ -2476,6 +2477,7 @@ struct ThreadView: View {
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
                 otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
+                otherDelivered: (msg.authorId == me && !repo.iBlocked) ? repo.otherDeliveredMillis : 0,
                 chatColor: chatColorSpec,
                 isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id),
                 editPending: editPendingIds.contains(msg.id)   // 2026-09-24 feature-audit
@@ -2843,7 +2845,7 @@ struct ThreadView: View {
         // and the group roster's version, which draws sender names and avatars.
         let storiesRepo = StoriesRepository.shared
         let key = [
-            "\(repo.itemsVersion)", "\(repo.otherLastReadMillis)", highlightId ?? "-",
+            "\(repo.itemsVersion)", "\(repo.otherLastReadMillis)", "\(repo.otherDeliveredMillis)", highlightId ?? "-",
             "\(repo.iBlocked)", "\(readReceiptsOn)", "\(dark)",
             "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)",
             // Hashed, not joined: Set's hashValue is order-independent and does not allocate, and
@@ -2874,7 +2876,8 @@ struct ThreadView: View {
             highlightId: highlightId, firstUnreadId: firstUnreadId,
             chatColor: chatColorSpec,
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
-            otherLastReadMillis: repo.otherLastReadMillis, iBlocked: repo.iBlocked,
+            otherLastReadMillis: repo.otherLastReadMillis,
+            otherDeliveredMillis: repo.otherDeliveredMillis, iBlocked: repo.iBlocked,
             searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
@@ -7641,7 +7644,7 @@ struct MessageBubble: View, Equatable {
             && l.isGroup == r.isGroup && l.canPin == r.canPin && l.isPinned == r.isPinned
             && l.isHighlighted == r.isHighlighted && l.searchTerm == r.searchTerm
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
-            && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
+            && l.otherLastRead == r.otherLastRead && l.otherDelivered == r.otherDelivered && l.chatColor == r.chatColor
             && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
             && l.onWallpaper == r.onWallpaper && l.wallpaperBlur == r.wallpaperBlur
             && l.editPending == r.editPending   // 2026-09-24 feature-audit
@@ -7728,6 +7731,7 @@ struct MessageBubble: View, Equatable {
     var isFirstInCluster: Bool = true
     var isLastInCluster: Bool = true
     var otherLastRead: Double = 0
+    var otherDelivered: Double = 0   // 2026-09-25, two faded ticks
     var chatColor: ChatColorSpec? = nil   // per-chat custom bubble colour for MY messages (local)
     var isViewedOnce: Bool = false        // view-once photo already consumed on this device
     var editPending: Bool = false         // 2026-09-24 feature-audit: my edit not yet on the server
@@ -8108,6 +8112,9 @@ struct MessageBubble: View, Equatable {
     private var isRead: Bool {
         message.createdAt.timeIntervalSince1970 * 1000 <= otherLastRead
     }
+    private var isDelivered: Bool {
+        message.createdAt.timeIntervalSince1970 * 1000 <= otherDelivered
+    }
 
     private var timeString: String {
         message.createdAt.formatted(date: .omitted, time: .shortened)
@@ -8148,9 +8155,11 @@ struct MessageBubble: View, Equatable {
                         // Privacy lives on the WRITE (ChatService.markRead returns early when the pref is
                         // off, so we don't broadcast our own reads); hiding information the other side
                         // already sent us was just an inconsistency.
-                        if isRead { Image(systemName: "checkmark") }
+                        // 2026-09-25: two ticks once it reached their phone, too (faded until read).
+                        if isRead || isDelivered { Image(systemName: "checkmark") }
                     }
                     .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(onMyBubble.opacity(isRead ? 1 : 0.55))
                 }
             }
         }

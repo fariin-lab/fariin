@@ -766,6 +766,8 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// per-message flag, for the same reason `lastRead` is one: one small field on a document the chat
     /// already listens to, instead of a write against every message. See `voicePlayedByOther`.
     var lastPlayedVoice: [String: Double]
+    /// 2026-09-25 delivered ticks: per member, the `updatedAt` (ms) their phone confirmed it had.
+    var delivered: [String: Double]
     /// 2026-09-24 decision D13: Mark as Unread is its own per-user flag, not a sign on `unreadCount`.
     /// uid → true while that member has marked the chat unread by hand; cleared when they open it.
     var markedUnread: [String: Bool]
@@ -833,6 +835,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.blockedAt = doubleMap(data["blockedAt"])
         self.pinOrder = doubleMap(data["pinOrder"])
         self.lastPlayedVoice = doubleMap(data["lastPlayedVoice"])
+        self.delivered = doubleMap(data["delivered"])
         self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
@@ -992,6 +995,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// `<= 0`, not `== 0`: somebody who marks YOUR chat unread on their side writes a negative flag,
     /// and they have still read your message — taking your second tick away because they wanted a
     /// reminder would be a lie about them.
+    /// My last message reached the other person's phone (1:1 only; a group has no delivered state).
+    func lastDeliveredToOther(_ me: String) -> Bool {
+        guard !isGroup, updatedAtMillis > 0 else { return false }
+        return (delivered[otherUid(me)] ?? 0) >= updatedAtMillis
+    }
     func lastReadByOther(_ me: String) -> Bool {
         if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 } }
         return (unreadCount[otherUid(me)] ?? 0) <= 0

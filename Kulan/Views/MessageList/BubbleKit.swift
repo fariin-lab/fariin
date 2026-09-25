@@ -348,7 +348,9 @@ enum BubbleShape {
 // ===== The tick glyphs =====
 
 enum BubbleTicks {
-    enum Kind: Equatable { case none, sending, failed, sent, read }
+    /// 2026-09-25, the standard three: `sent` one tick (the server has it), `delivered` two faded
+    /// ticks (it reached their phone), `read` two solid ticks. See `BubbleText.meta` for the ink.
+    enum Kind: Equatable { case none, sending, failed, sent, delivered, read }
 
     /// The pair of overlapping checks the chat list draws. `checkmark.circle.fill` was a single
     /// glyph at the same size and colour, which is why an arriving read receipt looked identical to
@@ -364,7 +366,7 @@ enum BubbleTicks {
             return UIImage(systemName: "exclamationmark.circle.fill",
                            withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))
         case .sent: return UIImage(systemName: "checkmark", withConfiguration: cfg)
-        case .read: return doubleCheck(cfg)
+        case .delivered, .read: return doubleCheck(cfg)
         }
     }
 

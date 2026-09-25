@@ -4018,12 +4018,16 @@ struct ChatRow: View, Equatable {
         }
     }
 
-    // Delivery ticks for MY last message: single grey = sent, double accent = read.
+    // Delivery ticks for MY last message — 2026-09-25, the standard three: one grey = sent (the
+    // server has it), two grey = delivered (it reached their phone), two BLUE = read. Blue here and
+    // not in the bubble: this row sits on the plain list background, where the brand blue always
+    // reads; inside a coloured bubble it would vanish on the blue one (see `BubbleText.meta`).
     @ViewBuilder private var ticksView: some View {
         let read = conv.lastReadByOther(me)
+        let delivered = read || conv.lastDeliveredToOther(me)
         HStack(spacing: -3) {
             Image(systemName: "checkmark")
-            if read { Image(systemName: "checkmark") }
+            if delivered { Image(systemName: "checkmark") }
         }
         // ⛔ `.caption` (12pt), UP FROM A FIXED 10 — owner, 2026-09-02, off build 725: "the one
         // tick or 2 tick now looks small". The 10 was tuned against a 12pt timestamp; the match
@@ -4032,7 +4036,7 @@ struct ChatRow: View, Equatable {
         // a semantic style so the ticks now scale with the phone's text size like the rest of the
         // row does.
         .font(.caption.weight(.bold))
-        .foregroundStyle(read ? Theme.accent(dark) : Color.secondary)
+        .foregroundStyle(read ? Color(hex: 0x0A84FF) : Color.secondary)
     }
 
     private var timeStr: String {

@@ -230,6 +230,10 @@ final class ConversationsRepository {
                 let visible = self.hideAccountBlocked(self.withPinnedExtras(convs), me: uid)
                 UnknownChatArchiver.sweep(visible)
                 self.publish(visible)
+                // 2026-09-25 delivered ticks: this phone has these chats' newest messages now. Only
+                // from the server (a cached snapshot proves nothing arrived), and never for a chat
+                // I blocked, so a blocked sender keeps seeing one tick.
+                if !snap.metadata.isFromCache { Task { @MainActor in DeliveryReceipts.mark(visible, me: uid) } }
 
                 // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY
                 // (was N sequential round-trips → slow cold start). preloadKey is cached, so the

@@ -239,6 +239,7 @@ final class MessageRowCell: UICollectionViewCell {
         case .sending: return "Sending"
         case .failed: return nil          // the failed badge says it, in words, just above
         case .sent: return "Sent"
+        case .delivered: return "Delivered"
         case .read: return "Read"
         }
     }

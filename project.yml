@@ -153,12 +153,44 @@ targets:
         product: LiveKit
       - package: StoryUI
         product: StoryUI
+      # 2026-09-25 delivered ticks: embedded notification extension (see NotificationService/).
+      - target: NotificationService
     # Attaching the tests to the app's own scheme is what makes `xcodebuild test -scheme Kulan`
     # find them. Without it the scheme has no test action and the command passes having run nothing,
     # which is worse than failing.
     scheme:
       testTargets:
         - KulanTests
+
+  # ⛔ THE NOTIFICATION EXTENSION — 2026-09-25, delivered ticks (owner: "one mark offline, two marks
+  # online, coloured seen"). iOS runs it for every push that carries `mutable-content`, even with the
+  # app closed, and it tells the server "this phone has it" (functions `ackDelivered`). It changes
+  # nothing about the notification itself. No Firebase, no App Group, no keychain: the push carries
+  # a signed token, so the extension needs nothing from the app. Its own App ID and profile are made
+  # by the Fastfile. Versions follow the app's, which the App Store requires of an extension.
+  NotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotificationService
+    info:
+      path: NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Fariin
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).NotificationService"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kulan.messenger.native.NotificationService
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.10"
+        APPLICATION_EXTENSION_API_ONLY: YES
 
   # Unit tests for logic that can run with no network and no device: the weak-link pause/resume
   # decision and the upload staging guarantee. Deliberately NOT a UI or integration suite. Anything

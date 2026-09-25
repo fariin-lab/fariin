@@ -135,7 +135,19 @@ enum BubbleText {
         // rotate. Drawing the glyph here as well put a still clock UNDER the spinning one — his
         // 2026-08-26 screenshot, two clocks overlapping. Same image, same size, clear ink: the
         // footer measures identically, so the bubble never resizes when the tick lands.
-        let ink: UIColor = m.tick == .sending ? .clear : (m.tick == .failed ? .systemRed : color)
+        // ⛔ READ IS SOLID, SENT AND DELIVERED ARE FADED — 2026-09-25. My bubble is always a strong
+        // colour with white text (any chat colour, any gradient, a dark photo capsule), so a coloured
+        // "read" tick would vanish on the one that matches it: blue on the default blue bubble. Full
+        // white against half white is readable on every one of them, and the tick COUNT carries the
+        // rest (one = on the server, two = on their phone). The chat list, on a plain background,
+        // is where read turns blue.
+        let ink: UIColor
+        switch m.tick {
+        case .sending: ink = .clear
+        case .failed: ink = .systemRed
+        case .read: ink = color.withAlphaComponent(1)
+        default: ink = color.withAlphaComponent(0.55)
+        }
         a.image = img.withTintColor(ink, renderingMode: .alwaysOriginal)
         // ⛔ CENTRED ON THE CAP HEIGHT, AND IT MUST NOT MAKE THE LINE TALLER — his screenshot,
         // 2026-08-28: on a photo, the timestamp sits low in its dark pill with a visible gap above
