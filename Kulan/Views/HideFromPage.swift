@@ -9,8 +9,61 @@ struct HideFromPage: View {
     @State private var people: [String: UserProfile] = [:]
     @State private var showPicker = false
     @State private var error: String?
+    @State private var loaded = false
+    /// The inline picker's state, used only while nobody is hidden yet.
+    @State private var picked: Set<String> = []
+    @State private var query = ""
 
     var body: some View {
+        Group {
+            // Owner 2026-09-25: with nobody hidden, an "Add People" button in an empty page is one
+            // tap too many. The people are the page until the first one is added; the button only
+            // appears once there is a list for it to add to.
+            if loaded && privacy.hidden.isEmpty {
+                inlinePicker
+            } else {
+                hiddenList
+            }
+        }
+        .navigationTitle("Hide From")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await privacy.load(); loaded = true; await resolve() }
+        .onChange(of: privacy.hidden) { _, _ in Task { await resolve() } }
+        .sheet(isPresented: $showPicker) {
+            HideFromPicker(already: Set(privacy.hidden)) { picked in
+                Task {
+                    do { try await privacy.add(picked) }
+                    catch { self.error = "Could not update the list. \(error.localizedDescription)" }
+                }
+            }
+        }
+    }
+
+    private var inlinePicker: some View {
+        HideFromCandidates(already: [], picked: $picked, query: $query)
+            .safeAreaInset(edge: .top) {
+                if let error {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20).padding(.vertical, 6)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        let chosen = Array(picked)
+                        Task {
+                            do { try await privacy.add(chosen); picked = []; query = "" }
+                            catch { self.error = "Could not update the list. \(error.localizedDescription)" }
+                        }
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(picked.isEmpty)
+                }
+            }
+    }
+
+    private var hiddenList: some View {
         List {
             if let error {
                 Section { Text(error).font(.footnote).foregroundStyle(.red) }
@@ -40,18 +93,6 @@ struct HideFromPage: View {
                 }
             }
         }
-        .navigationTitle("Hide From")
-        .navigationBarTitleDisplayMode(.inline)
-        .task { await privacy.load(); await resolve() }
-        .onChange(of: privacy.hidden) { _, _ in Task { await resolve() } }
-        .sheet(isPresented: $showPicker) {
-            HideFromPicker(already: Set(privacy.hidden)) { picked in
-                Task {
-                    do { try await privacy.add(picked) }
-                    catch { self.error = "Could not update the list. \(error.localizedDescription)" }
-                }
-            }
-        }
     }
 
     private func resolve() async {
@@ -68,6 +109,29 @@ private struct HideFromPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var picked: Set<String> = []
     @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            HideFromCandidates(already: already, picked: $picked, query: $query)
+                .navigationTitle("Add People")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { onDone(Array(picked)); dismiss() }
+                            .fontWeight(.semibold)
+                            .disabled(picked.isEmpty)
+                    }
+                }
+        }
+    }
+}
+
+/// The tick list itself: the sheet above, and the Hide From page while nobody is hidden yet.
+private struct HideFromCandidates: View {
+    let already: Set<String>
+    @Binding var picked: Set<String>
+    @Binding var query: String
 
     private struct Candidate: Identifiable {
         let id: String
@@ -91,40 +155,28 @@ private struct HideFromPicker: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List(candidates) { c in
-                Button {
-                    if picked.contains(c.id) { picked.remove(c.id) } else { picked.insert(c.id) }
-                } label: {
-                    HStack {
-                        PersonRow(name: c.name, handle: "", photoUrl: c.photoUrl)
-                        Spacer()
-                        Image(systemName: picked.contains(c.id) ? "checkmark.circle.fill" : "circle")
-                            .font(.title3)
-                            .foregroundStyle(picked.contains(c.id) ? Color.accentColor : Color.secondary)
-                    }
-                    .contentShape(Rectangle())
+        List(candidates) { c in
+            Button {
+                if picked.contains(c.id) { picked.remove(c.id) } else { picked.insert(c.id) }
+            } label: {
+                HStack {
+                    PersonRow(name: c.name, handle: "", photoUrl: c.photoUrl)
+                    Spacer()
+                    Image(systemName: picked.contains(c.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(picked.contains(c.id) ? Color.accentColor : Color.secondary)
                 }
-                .buttonStyle(.plain)
+                .contentShape(Rectangle())
             }
-            .overlay {
-                if candidates.isEmpty {
-                    ContentUnavailableView(query.isEmpty ? "No chats to choose from" : "No results",
-                                           systemImage: "person.2")
-                }
-            }
-            .searchable(text: $query, prompt: "Search")
-            .navigationTitle("Add People")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { onDone(Array(picked)); dismiss() }
-                        .fontWeight(.semibold)
-                        .disabled(picked.isEmpty)
-                }
+            .buttonStyle(.plain)
+        }
+        .overlay {
+            if candidates.isEmpty {
+                ContentUnavailableView(query.isEmpty ? "No chats to choose from" : "No results",
+                                       systemImage: "person.2")
             }
         }
+        .searchable(text: $query, prompt: "Search")
     }
 }
 
