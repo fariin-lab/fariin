@@ -370,15 +370,6 @@ struct DevicesView: View {
             } footer: {
                 Text("A device not opened for this long signs itself out. The one you are using stays signed in.")
             }
-
-            Section {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "lock.fill").font(.caption)
-                    Text("Messages are end-to-end encrypted and stored on each device. Signing one out stops it receiving anything new. What is already on it stays.")
-                }
-                .font(.footnote).foregroundStyle(.secondary)
-                .listRowBackground(Color.clear)
-            }
         }
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
@@ -601,8 +592,10 @@ struct BlockedUsersView: View {
                 .buttonStyle(.borderless)
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            AvatarView(name: conv.name, photoUrl: conv.photoUrl, size: 44)
-            VStack(alignment: .leading, spacing: 2) {
+            // Owner 2026-09-25: the rows had too much air. 36pt avatar and no extra padding puts
+            // them at the height of a system contacts row.
+            AvatarView(name: conv.name, photoUrl: conv.photoUrl, size: 36)
+            VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     Text(conv.name).font(.body)
                     VerifiedMark(uid: conv.id, size: 13)
@@ -613,7 +606,6 @@ struct BlockedUsersView: View {
             }
             Spacer()
         }
-        .padding(.vertical, 4)
     }
 
     /// One fetch per blocked person, once. Anyone already known is skipped, so re-entering the page
@@ -687,7 +679,14 @@ struct BlockedUsersView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+        // Owner 2026-09-25: a deep empty well sat between the search field and Block User. Same
+        // numbers as New Message, which had the same well.
+        .listSectionSpacing(14)
+        .contentMargins(.top, 6, for: .scrollContent)
+        .environment(\.defaultMinListRowHeight, 44)
+        // The same search as the Calls page, on his word.
+        .searchable(text: $search, prompt: "Search")
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if !blocked.isEmpty || editing {
                 ToolbarItem(placement: .topBarTrailing) {
