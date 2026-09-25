@@ -112,6 +112,17 @@ final class ProfilePhotoLoader {
         return result
     }
 
+    /// Sign-out. Bug hunt 2026-09-25: `SessionWipe` wiped the disk copies but not this memory, so
+    /// until the app was killed the next account on the phone was drawn photos the last account had
+    /// been allowed to see (a url known from a group, say, whose owner hides the photo from them).
+    func reset() {
+        memory.removeAllObjects()
+        lock.lock()
+        inFlight.values.forEach { $0.cancel() }
+        inFlight.removeAll()
+        lock.unlock()
+    }
+
     private func remember(_ img: UIImage, _ url: String) {
         let cost = img.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
         memory.setObject(img, forKey: url as NSString, cost: cost)
@@ -130,6 +141,8 @@ final class ProfilePhotoLoader {
             // A 200 whose body is not an image is a broken response, not an answer: try again, and
             // never file it as "no photo" (that would blank a real picture elsewhere).
             guard UIImage(data: data) != nil else { continue }
+            // Cancelled by a sign-out (`reset`): the bytes must not land on the next account's disk.
+            if Task.isCancelled { return .failed }
             DiskImageCache.shared.storeBytes(data, for: s)
             return .image(data)
         }
