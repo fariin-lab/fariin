@@ -537,7 +537,13 @@ struct PasswordResetCodeView: View {
 /// fariin.com is in the app's `webcredentials` entitlement (the same link passkeys use).
 enum SavePasswordOffer {
     static func offer(password: String) {
-        guard let email = Auth.auth().currentUser?.email, !email.isEmpty, !password.isEmpty else { return }
+        // The address the PASSWORD sign-in is on, not `user.email`: on an Apple or Google account
+        // that is often the Hide My Email relay, and a saved login under it could never be typed
+        // or matched (bug hunt 2026-09-25). Same fallback the password link itself uses.
+        let user = Auth.auth().currentUser
+        let onPassword = user?.providerData.first(where: { $0.providerID == "password" })?.email
+        guard let email = onPassword ?? AuthService.shared.passwordAddress,
+              !email.isEmpty, !password.isEmpty else { return }
         SecAddSharedWebCredential("fariin.com" as CFString, email as CFString, password as CFString) { _ in
             // Saved, declined or unavailable: nothing to do either way.
         }
