@@ -74,12 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PASSKEYS PAGE, USERNAME X.
+            SEARCH BAR, SAVE PASSWORD, BANNER POSITION.
 
-            PASSKEYS: each passkey shows its password manager's name and icon (Apple Passwords, Google Password Manager). Add Passkey opens the system sheet with no spinner, and is the last row of the card. Shorter header text.
+            CHATS: the search field is Apple's own search bar, the same as on Calls.
 
-            USERNAME: an X to close the page without saving.
+            PASSWORD: after you create, change or reset your password, iOS offers Save Password? for the Passwords app.
 
-            PLEASE TEST: Settings > Passkeys (look at the icons, tap Add Passkey); Account > Username X.
+            IN-APP NOTIFICATIONS: the banner sits right under the status bar, over the back button row.
+
+            ALSO: Account > Security order is Username, Passkeys, Security notifications. One X on the Username page (was doubled). Glowers / Glowing switch is taller.
+
+            PLEASE TEST: change your password and look for Save Password?; get a message while in another chat; Glowers page switch.
 
         run: fastlane beta
