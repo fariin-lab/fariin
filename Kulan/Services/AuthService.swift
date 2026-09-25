@@ -837,7 +837,28 @@ final class AuthService: NSObject {
         // 2026-09-24 decision D1: the token from BEFORE, so a two-step session stays through the door
         // after its auth_time changes (TwoStepGate.renewAfterReauth).
         let before = try? await user.getIDTokenResult(forcingRefresh: false)
-        _ = try await user.reauthenticate(with: credential)
+        // ⛔ NOT THE `async` `reauthenticate` — owner's report 2026-09-25: an account signed in with
+        // email, on Delete Account, picked a DIFFERENT Google account and the deletion went through.
+        //
+        // The cause is in the SDK (11.15.0, User.swift): on a wrong account it calls back with BOTH a
+        // result (the other account) AND a mismatch error, and its `async` wrapper checks the result
+        // first, so the mismatch is dropped and the call "succeeds". The completion form below keeps
+        // the error. Then two more checks, each enough on its own: the account that answered must be
+        // THIS account, and this account's own sign-in time must have moved to now.
+        let answered: String = try await withCheckedThrowingContinuation { cont in
+            user.reauthenticate(with: credential) { result, error in
+                if let error { cont.resume(throwing: error); return }
+                guard let uid = result?.user.uid else { cont.resume(throwing: AuthFlowError.notSignedIn); return }
+                cont.resume(returning: uid)
+            }
+        }
+        guard answered == user.uid else {
+            throw NSError(domain: AuthErrorDomain, code: AuthErrorCode.userMismatch.rawValue)
+        }
+        let fresh = try await user.getIDTokenResult(forcingRefresh: true)
+        guard Date().timeIntervalSince(fresh.authDate) < 120 else {
+            throw NSError(domain: AuthErrorDomain, code: AuthErrorCode.userMismatch.rawValue)
+        }
         await TwoStepGate.renewAfterReauth(previous: before)
         // Record it ourselves — see lastReauthAt. Only reached when reauthenticate did NOT throw, so a
         // cancelled or mismatched sign-in never marks the session as verified.
@@ -922,6 +943,8 @@ final class AuthService: NSObject {
         case 17010: return "Too many attempts. Wait a moment and try again."
         case 17014: return "Please sign in again before doing this."
         case 17021: return "Your session expired. Sign in again."
+        // User mismatch: the person picked an account that is not this one (2026-09-25 report).
+        case 17024: return "That's a different account. Choose the account you use for Fariin."
         // 17012 IS REACHED FROM BOTH DIRECTIONS AND THE OLD WORDING ONLY FITTED ONE OF THEM.
         //
         // It used to read "made with Google or Apple... use that button", which is right when
