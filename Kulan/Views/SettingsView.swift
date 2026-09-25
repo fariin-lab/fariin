@@ -1331,26 +1331,12 @@ struct PrivacySettingsView: View {
 // its own Settings page — the old Clear Cache button here also wiped AudioCache, and voice
 // notes are ONLY-copies (mailman model), so that button was silent data loss. Gone.
 struct AboutView: View {
-    /// ⚠️ TEMPORARY — the re-entry scroll jump. Goes with the "Copy scroll log" row below.
-    @State private var jumpLogCopied = false
-    @State private var jumpLogCleared = false
     private var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
     }
     private var buildNumber: String {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "1"
     }
-    /// The build number is the first thing support has to ask for and the last thing anybody can
-    /// read off their own phone, so it travels in the subject line instead.
-    private var reportURL: URL {
-        let subject = "Fariin \(appVersion) (\(buildNumber)) problem report"
-        guard let encoded = subject.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "mailto:support@fariin.com?subject=\(encoded)") else {
-            return URL(string: "mailto:support@fariin.com")!
-        }
-        return url
-    }
-
     /// A row that LEAVES THE APP, and says so.
     ///
     /// Every one of these was a bare `Link`, which draws nothing at all: four rows that hand you to
@@ -1384,7 +1370,8 @@ struct AboutView: View {
                 // holding page reading "Working on it." for a while, and this link pointed at it.
                 // /support still exists and is still linked from inside /help.
                 outLink("Help Center", URL(string: "https://fariin.com/help")!)
-                outLink("Report a Problem", reportURL)
+                // "Report a Problem" (a mailto to support) went on 2026-09-25, owner: a real
+                // in-app reporter comes later. Reporting a PERSON stays on every profile.
             } header: {
                 Text("Help")
             } footer: {
@@ -1395,35 +1382,6 @@ struct AboutView: View {
                 // screen somebody else will ask them to read out.
                 LabeledContent("Version", value: "\(appVersion) (\(buildNumber))")
                     .textSelection(.enabled)
-                // ⚠️ TEMPORARY, 2026-08-29 — the re-entry scroll jump. Delete this row, `JumpLog`
-                // and the `jlog` calls in `NativeMessageList` once the cause is written down.
-                //
-                // A VISIBLE ROW RATHER THAN A LONG-PRESS ON THE VERSION ABOVE, deliberately: that
-                // row is `.textSelection(.enabled)`, so a long press there belongs to UIKit's text
-                // selection and a gesture competing with it is a coin toss. The reproduction has
-                // already been paid for twice; the way to read the result must not be the part that
-                // fails.
-                Button {
-                    UIPasteboard.general.string = JumpLog.shared.text
-                    jumpLogCopied = true
-                    jumpLogCleared = false
-                } label: {
-                    LabeledContent("Copy scroll log",
-                                   value: jumpLogCopied ? "Copied" : "\(JumpLog.shared.count) lines")
-                }
-                .foregroundStyle(.primary)
-                // ⛔ AND A WAY TO EMPTY IT. His report, 2026-08-30: "I tried to clear it and make
-                // another log but it keeps stuck". Putting the log on disk so it would survive a
-                // relaunch also made it survive everything else, and a log you cannot reset is one
-                // reproduction long — every run after the first arrives buried under the one before
-                // it. Clearing is half of the tool.
-                Button(role: .destructive) {
-                    JumpLog.shared.clear()
-                    jumpLogCleared = true
-                    jumpLogCopied = false
-                } label: {
-                    LabeledContent("Clear scroll log", value: jumpLogCleared ? "Cleared" : "")
-                }
                 outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!)
                 outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!)
             } header: {
