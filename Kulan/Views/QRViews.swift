@@ -65,6 +65,8 @@ struct MyQRView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @State private var showScanner = false
+    @State private var savingCard = false
+    @State private var cardToast: String?
     private var dark: Bool { scheme == .dark }
     private var me: UserProfile? { ProfileStore.shared.me }
     private var handle: String { me?.handle ?? "" }
@@ -110,6 +112,27 @@ struct MyQRView: View {
                             .frame(maxWidth: .infinity).frame(height: 54)
                             .background(Color.accentColor, in: Capsule())
                             .foregroundStyle(Theme.onAccent(dark))
+                    }
+                    // Owner, 2026-09-25: save the code as a picture to post or print, laid out the
+                    // way the reference app's saved code is (brand ground, the card, a line saying
+                    // how to use it), not a bare square of code.
+                    Button { saveCodeCard() } label: {
+                        Group {
+                            if savingCard { ProgressView() } else { Text("Download") }
+                        }
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity).frame(height: 48)
+                    }
+                    .disabled(savingCard || handle.isEmpty)
+                }
+                .overlay(alignment: .top) {
+                    if let cardToast {
+                        Text(cardToast)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.regularMaterial, in: Capsule())
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
                 .padding(.horizontal, 24)
@@ -201,6 +224,45 @@ struct MyQRView: View {
                         in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         }
         .padding(.horizontal, 8)
+    }
+
+    /// The saved picture: a phone-shaped image on the brand blue, the white card with the photo on its
+    /// top edge, name and handle, the code with the mark, and one line on how to use it. Rendered
+    /// off-screen at 3x so it is sharp enough to print or scan from another screen. The photo is
+    /// fetched first because an off-screen render cannot wait for a network image.
+    private func saveCodeCard() {
+        guard !handle.isEmpty, let code = qrImage(from: fariinLink(handle)) else { return }
+        savingCard = true
+        Task { @MainActor in
+            var photo: UIImage?
+            if let url = me?.photoUrl, !url.isEmpty { photo = await DiskImageCache.shared.image(for: url) }
+            let art = SavedCodeCard(name: name, handle: handle, photo: photo, code: code)
+                .frame(width: 390, height: 844)
+            let renderer = ImageRenderer(content: art)
+            renderer.scale = 3
+            guard let ui = renderer.uiImage else {
+                savingCard = false; flashCard("Could not save"); return
+            }
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                savingCard = false; flashCard("Photos access is off"); return
+            }
+            var ok = true
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: ui)
+                }
+            } catch { ok = false }
+            savingCard = false
+            flashCard(ok ? "Saved to Photos" : "Could not save")
+        }
+    }
+
+    private func flashCard(_ text: String) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { cardToast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.easeOut(duration: 0.25)) { cardToast = nil }
+        }
     }
 
     /// ALWAYS ON WHITE, in both themes. A QR code is read as dark-on-light and inverting it for dark
@@ -796,5 +858,76 @@ struct ShareProfileSheet: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
             withAnimation(.easeOut(duration: 0.25)) { toast = nil }
         }
+    }
+}
+
+/// The picture "Download" saves from My QR Code. Fixed light colours on purpose: it is an image that
+/// leaves the phone, so it must look the same printed, posted, or opened in dark mode, and the code
+/// must stay dark-on-white for every scanner.
+private struct SavedCodeCard: View {
+    let name: String
+    let handle: String
+    let photo: UIImage?
+    let code: UIImage
+
+    private let brand = Color(hex: 0x0A84FF)
+    private var title: String { name.isEmpty ? "@\(handle)" : name }
+
+    var body: some View {
+        ZStack {
+            brand
+            VStack(spacing: 28) {
+                VStack(spacing: 0) {
+                    VStack(spacing: 4) {
+                        Text(title)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.black)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                        Text(name.isEmpty ? "Fariin contact" : "@\(handle)")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Color.black.opacity(0.55))
+                            .lineLimit(1)
+                    }
+                    .padding(.top, 52)
+                    ZStack {
+                        Image(uiImage: code)
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 230, height: 230)
+                        Circle().fill(.white).frame(width: 56, height: 56)
+                        OfficialAvatar(size: 44)
+                    }
+                    .padding(.top, 18).padding(.bottom, 30)
+                }
+                .frame(width: 310)
+                .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                .overlay(alignment: .top) { avatar.offset(y: -40) }
+
+                Text("Scan or upload this QR code using the Fariin camera to add me on Fariin.")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 290)
+            }
+            .padding(.top, 40)
+        }
+    }
+
+    @ViewBuilder private var avatar: some View {
+        Group {
+            if let photo {
+                Image(uiImage: photo).resizable().scaledToFill()
+            } else {
+                ZStack {
+                    Color(hex: 0xD9DEE6)
+                    Text(String(title.drop(while: { $0 == "@" }).prefix(1)).uppercased())
+                        .font(.system(size: 32, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.6))
+                }
+            }
+        }
+        .frame(width: 80, height: 80)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(.white, lineWidth: 4))
     }
 }
