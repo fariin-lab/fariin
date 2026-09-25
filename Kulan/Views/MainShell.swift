@@ -2380,7 +2380,16 @@ struct ChatsView: View {
                           // `contentInset.bottom` (see `ChatListTable`) is what still keeps the
                           // LAST row reachable above the pill, and it is unchanged — this moves the
                           // view's edge, not the scrolling clearance.
-                          .ignoresSafeArea(.container, edges: .bottom)
+                          //
+                          // ⛔ AND UNDER THE TOP BAR, THE SAME WAY — owner, 2026-09-25: "top header is
+                          // using a hard border, use the Apple soft blur". The same mistake at the
+                          // other end: the table started where the bar ended and clipped every row
+                          // there, a straight hard line with nothing under the bar for iOS 26's soft
+                          // scroll-edge blur to work on. With the top edge ignored the rows run under
+                          // the bar; UIKit's automatic `adjustedContentInset.top` (bar + search field)
+                          // still keeps the first row clear, exactly as `contentInset.bottom` does
+                          // for the last one.
+                          .ignoresSafeArea(.container, edges: [.top, .bottom])
                           // ⚠️ THE SECTION SPLIT MOVED INTO `chatListTable`, WHICH TAKES THE TWO
                           // HALVES SEPARATELY. The branch that used to flatten them into one
                           // `ForEach` when either was empty is gone and is not missed: an empty
