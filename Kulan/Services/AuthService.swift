@@ -315,16 +315,28 @@ final class AuthService: NSObject {
             .call()
     }
 
+    /// ⛔ WHAT THIS PHONE IS, FOR THE SECURITY MESSAGES — 2026-09-25. "Fariin 1.0 (758)", "iPhone 13
+    /// Pro Max", "iOS 27.0": the Device line in the Fariin chat's New login / New passkey / Password
+    /// changed messages. The model name Settings › Devices shows, not the bare "iPhone".
+    static var deviceFields: [String: Any] {
+        ["app": "Fariin \(DeviceRegistry.appVersion)",
+         "device": DeviceNames.name(for: DeviceRegistry.hardwareIdentifier) ?? UIDevice.current.model,
+         "os": "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"]
+    }
+
     func reportLogin() {
         guard let uid, !uid.isEmpty else { return }
         guard !isAnonymousSession else { return }   // no email address to warn
         guard let deviceId = UIDevice.current.identifierForVendor?.uuidString, !deviceId.isEmpty else { return }
-        let model = UIDevice.current.model
+        // 2026-09-25: the model people know ("iPhone 13 Pro Max", as Settings › Devices shows it)
+        // and the app version, for the "New login" message in the Fariin chat.
+        let model = DeviceNames.name(for: DeviceRegistry.hardwareIdentifier) ?? UIDevice.current.model
         let os = "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
+        let app = "Fariin \(DeviceRegistry.appVersion)"
         Task.detached {
             _ = try? await Functions.functions(region: "me-central1")
                 .httpsCallable("notifyNewLogin")
-                .call(["deviceId": deviceId, "device": model, "os": os])
+                .call(["deviceId": deviceId, "device": model, "os": os, "app": app])
         }
     }
 
@@ -440,7 +452,7 @@ final class AuthService: NSObject {
         let stamp = Date().formatted(date: .abbreviated, time: .shortened)
         _ = try? await Functions.functions(region: "me-central1")
             .httpsCallable("notifyPasswordChanged")
-            .call(["when": stamp, "first": isFirst])
+            .call((["when": stamp, "first": isFirst] as [String: Any]).merging(Self.deviceFields) { a, _ in a })
     }
 
     /// Walk away from a session that never finished being set up.

@@ -503,7 +503,9 @@ struct PasswordResetCodeView: View {
         error = nil
         defer { working = false }
         do {
-            try await AccountCall.run("confirmPasswordReset", ["code": code, "newPassword": password])
+            try await AccountCall.run("confirmPasswordReset",
+                                      (["code": code, "newPassword": password] as [String: Any])
+                                        .merging(AuthService.deviceFields) { a, _ in a })
             // ⚠️ `confirmPasswordReset` revokes EVERY refresh token, this phone's included, so without
             // a fresh sign-in this device would be thrown out at its next token refresh. Signing
             // straight back in with the password just set keeps it in. Best effort: if it fails the

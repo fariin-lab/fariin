@@ -151,7 +151,8 @@ enum Passkeys {
             ],
         ]
         _ = try await AccountCall.run("passkeyRegistrationVerify",
-                                      ["challengeId": challengeId, "response": response, "label": label])
+                                      (["challengeId": challengeId, "response": response, "label": label] as [String: Any])
+                                        .merging(AuthService.deviceFields) { a, _ in a })
     }
 
     /// Sign in with a passkey, with no session yet. Returns once Firebase has accepted the custom

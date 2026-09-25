@@ -65,6 +65,7 @@ struct OfficialChatView: View {
                 case .storage:       StorageDataView()
                 case .notifications: NotificationsSettingsView()
                 case .invite:        EmptyView()   // handled by the share sheet, never pushed
+                case .devices:       DevicesView()
                 }
             }
             .fullScreenCover(item: Binding(get: { zoomedImage.map(ZoomTarget.init) },

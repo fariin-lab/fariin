@@ -134,6 +134,8 @@ struct AnnouncementButton: Equatable, Identifiable {
     /// provide — a button that opens a page whose main action does nothing is worse than no button.
     enum Screen: String, CaseIterable, Identifiable {
         case appearance, chats, stories, privacy, storage, notifications, invite
+        /// Settings › Devices. The security messages' button (2026-09-25): "review your devices".
+        case devices
 
         var id: String { rawValue }
         var label: String {
@@ -145,6 +147,7 @@ struct AnnouncementButton: Equatable, Identifiable {
             case .storage:       return "Storage and Data"
             case .notifications: return "Notifications"
             case .invite:        return "Invite Friends"
+            case .devices:       return "Devices"
             }
         }
     }
