@@ -44,32 +44,23 @@ struct GlowPeopleListView: View {
     }
 
     @State private var tab: Side = .glowers
-    @State private var query = ""
     @State private var loader = GlowPeopleLoader()
     private var glow = GlowService.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabs
-            list
-        }
+        list
         .navigationTitle(title.isEmpty ? "Glow" : title)
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
-        // ⛔ THE CHAT LIST'S SEARCH FIELD, WHICH IS THE SYSTEM'S — owner, 2026-09-11: "the search bar
-        // looks different, make it like the one you made in the chat list".
-        //
-        // ⚠️ IT WAS A HAND-BUILT CAPSULE: a magnifier, a `TextField`, a clear ✕ and a stated 36pt
-        // height, laid out in this page's own `VStack`. Every one of those is a number somebody
-        // chose, and none of them tracks what iOS does with a search field — the focus animation,
-        // the Cancel button, the scroll-away behaviour, Dynamic Type, or whatever iOS 26 changes
-        // next. `.searchable` in the navigation bar's drawer is the same call the chat list makes
-        // (`MainShell`), so the two are the same control rather than two drawings of one.
-        //
-        // `query` is untouched — same binding, same filter, same everything downstream.
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Search")
+        // ⛔ THE SWITCH SITS IN THE BAR, SMALL, AND THERE IS NO SEARCH — owner, 2026-09-25, with
+        // both ringed and the Calls page's All/Missed sent as the look: "remove that search, make
+        // Glowers and Glowing that long liquid glass small like this". Same call Calls makes: a
+        // segmented `Picker` as the principal item, a fixed compact width. It takes the title's
+        // place, as All/Missed does.
+        .toolbar {
+            ToolbarItem(placement: .principal) { tabs }
+        }
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
     }
@@ -93,8 +84,7 @@ struct GlowPeopleListView: View {
     ///
     /// ⚠️ THE `.snappy` ANIMATION IS GONE WITH THEM, and deliberately: a segmented control animates
     /// its own thumb, and a second curve over the top is what makes a native control feel wrong.
-    /// Clearing the query on a tab change stays — a filter left standing across a switch is the
-    /// invisible-filter trap written up on the search button that used to live here.
+    /// (The search that was cleared on a tab change went on 2026-09-25, so there is nothing to clear.)
     private var tabs: some View {
         Picker("", selection: $tab) {
             Text(Side.glowers.title).tag(Side.glowers)
@@ -102,25 +92,12 @@ struct GlowPeopleListView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        // ⛔ AS TALL AS THE SEARCH FIELD ABOVE IT — owner, 2026-09-11: "Glowers and Glowing bar,
-        // make height like search bar". The two sit directly above each other and a segmented
-        // control is shorter than a search field by four points, which is exactly the amount that
-        // reads as "these two were not drawn by the same person".
-        //
-        // ⚠️ 36 IS THE SEARCH FIELD'S NUMBER, NOT A PICKED ONE. `.searchable` in a navigation bar
-        // drawer draws a `UISearchBar`, whose text field is 36 points tall; a `UISegmentedControl`
-        // is 32 by default and nothing in SwiftUI exposes that as a setting. Stating the height is
-        // the only lever, and it is the field's own height rather than a number that happened to
-        // look right.
-        .frame(height: 36)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .onChange(of: tab) { _, _ in query = "" }
+        // Compact like All/Missed (150 there); these two words are longer, so a little wider.
+        .frame(width: 210)
     }
 
-    // ⛔ `searchField` AND `glassTrack` ARE GONE — 2026-09-11. The field is `.searchable` on the
-    // body now, the same call the chat list makes, and the track belonged to the hand-made switch
-    // that a real `Picker` replaced. Do not rebuild either.
+    // ⛔ NO SEARCH ON THIS PAGE — owner, 2026-09-25. It was `.searchable` (2026-09-11) and he asked
+    // for it gone. `searchField` and `glassTrack` went earlier; do not rebuild any of them.
 
     // MARK: - The list
 
@@ -138,19 +115,12 @@ struct GlowPeopleListView: View {
                     .buttonStyle(.borderedProminent)
             }
         case .loaded(let people):
-            let rows = filtered(people)
+            let rows = people
             if rows.isEmpty {
-                // Three different empties, and they must not share a sentence: nobody at all,
-                // nobody on this side, and nothing matching what was typed are three different
-                // things to do something about.
-                if !query.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                } else {
-                    ContentUnavailableView {
-                        Label { Text(tab.title) } icon: { GlowStyle.mark(48) }
-                    } description: {
-                        Text(tab.emptyHint)
-                    }
+                ContentUnavailableView {
+                    Label { Text(tab.title) } icon: { GlowStyle.mark(48) }
+                } description: {
+                    Text(tab.emptyHint)
                 }
             } else {
                 List(rows) { p in
@@ -174,14 +144,6 @@ struct GlowPeopleListView: View {
         // `display*`, not the raw sets: the demo people have to be in the LIST as well as in the
         // count above it, or his own screen would say "4 Glowers" over three rows.
         Array(tab == .glowers ? glow.displayGlowers : glow.displayGlowing).sorted()
-    }
-
-    private func filtered(_ people: [GlowPerson]) -> [GlowPerson] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return people }
-        return people.filter {
-            $0.name.lowercased().contains(q) || $0.handle.lowercased().contains(q)
-        }
     }
 
     private func reload() async {
