@@ -20,6 +20,28 @@ final class PhotoPrivacy {
     private(set) var loaded = false
     private var loadedFor: String?
 
+    /// ⛔ THE LAST KNOWN LIST, KEPT — owner, 2026-09-25: Hide From opened on "Add People" and flipped
+    /// to the people a second later, because nothing was known until the server answered. The list is
+    /// kept per account, so the page draws the right face on its first frame and `load()` refreshes
+    /// it behind. Account ids only.
+    private static func cacheKey(_ uid: String) -> String { "photoHiddenFrom.\(uid)" }
+
+    private init() { seedFromCache() }
+
+    /// Takes the stored list for whoever is signed in now, if there is one.
+    func seedFromCache() {
+        guard let uid = Auth.auth().currentUser?.uid, loadedFor != uid,
+              let cached = UserDefaults.standard.stringArray(forKey: Self.cacheKey(uid)) else { return }
+        hidden = cached
+        loaded = true
+        loadedFor = uid
+    }
+
+    private func storeCache() {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        UserDefaults.standard.set(hidden, forKey: Self.cacheKey(uid))
+    }
+
     private func col(_ uid: String) -> CollectionReference {
         Firestore.firestore().collection("users").document(uid).collection("photoHiddenFrom")
     }
@@ -30,6 +52,7 @@ final class PhotoPrivacy {
         hidden = snap.documents.map(\.documentID)
         loaded = true
         loadedFor = uid
+        storeCache()
     }
 
     func add(_ uids: [String]) async throws {
@@ -40,6 +63,7 @@ final class PhotoPrivacy {
         for u in fresh { batch.setData(["at": FieldValue.serverTimestamp()], forDocument: col(me).document(u)) }
         try await batch.commit()
         hidden.insert(contentsOf: fresh, at: 0)
+        storeCache()
         await ProfileStore.shared.republishPhoto()
     }
 
@@ -47,6 +71,7 @@ final class PhotoPrivacy {
         guard let me = Auth.auth().currentUser?.uid else { return }
         try await col(me).document(uid).delete()
         hidden.removeAll { $0 == uid }
+        storeCache()
         await ProfileStore.shared.republishPhoto()
     }
 

@@ -6,10 +6,17 @@ import FirebaseAuth
 /// audience above says. Enforced by storage.rules (`canSeePhoto`); this page only edits the list.
 struct HideFromPage: View {
     private var privacy = PhotoPrivacy.shared
+
+    init() {
+        PhotoPrivacy.shared.seedFromCache()
+        _loaded = State(initialValue: PhotoPrivacy.shared.loaded)
+    }
     @State private var people: [String: UserProfile] = [:]
     @State private var showPicker = false
     @State private var error: String?
-    @State private var loaded = false
+    /// True from the first frame when the list is already known on this phone (see
+    /// `PhotoPrivacy.seedFromCache`), so the page never flips from one face to the other.
+    @State private var loaded: Bool
     /// The inline picker's state, used only while nobody is hidden yet.
     @State private var picked: Set<String> = []
     @State private var query = ""
@@ -19,7 +26,12 @@ struct HideFromPage: View {
             // Owner 2026-09-25: with nobody hidden, an "Add People" button in an empty page is one
             // tap too many. The people are the page until the first one is added; the button only
             // appears once there is a list for it to add to.
-            if loaded && privacy.hidden.isEmpty {
+            //
+            // ⚠️ NEITHER FACE UNTIL THE LIST IS KNOWN. Showing the list face while loading is what
+            // flipped "Add People" into the people a second later (his screen recording).
+            if !loaded {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if privacy.hidden.isEmpty {
                 inlinePicker
             } else {
                 hiddenList
