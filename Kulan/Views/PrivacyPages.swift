@@ -39,7 +39,7 @@ enum Audience: String, CaseIterable {
         // ⛔ "ONLY MY CHATS", NOT "NOBODY" — owner, 2026-09-25: he set Nobody, a friend called, the
         // call rang, and he read it as broken ("is mismatch"). The behaviour was right (people you
         // already chat with can call); the word promised more than it does. Same stored value.
-        case ("calls", .contacts), ("calls", .nobody): return "Only My Chats"
+        case ("calls", .contacts), ("calls", .nobody): return "My Chats"   // owner, 2026-09-25: not "Only My Chats"
         // Sentence case, his mockup's own words (2026-09-11, "make it like this").
         case ("messages", .contacts): return "People who know my key"
         default: return label

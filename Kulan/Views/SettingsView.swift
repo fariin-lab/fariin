@@ -1229,7 +1229,7 @@ struct PrivacySettingsView: View {
                             // ⛔ TWO CHOICES — owner, 2026-09-11: "Everyone should mean everyone,
                             // including people who send message requests"; Nobody is nobody NEW.
                             // People in your chats can always call; a block always wins.
-                            footerText: "Who can call you. Only My Chats: people you already chat with, including anyone who used your Chat Key.")
+                            footerText: "My Chats: people you already chat with, including anyone who used your Chat Key.")
                 // ⛔ STORIES, AND IT IS A DOOR RATHER THAN A PICKER — owner, 2026-09-16: "add Stories
                 // like next call, when user click is going stories page".
                 //
