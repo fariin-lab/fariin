@@ -41,8 +41,6 @@ struct GlowProfileView: View {
     private var glow = GlowService.shared
     /// The Edit sheet — my own profile only. See `editItem`, the trailing bar button.
     @State private var showEdit = false
-    /// The share-profile sheet — see `ShareProfileSheet` and the toolbar item that opens it.
-    @State private var showShare = false
     /// Is the photograph still the thing behind the navigation bar? Drives whether the bar keeps
     /// its own material or gets out of the picture's way — see the note on the scroll view.
     ///
@@ -267,10 +265,6 @@ struct GlowProfileView: View {
         // Two detents so it can be pulled up over the whole page, but it opens at the size his
         // screenshot shows: the code, the handle and the four actions, with the profile still
         // visible behind it.
-        .sheet(isPresented: $showShare) {
-            ShareProfileSheet()
-                .presentationDetents([.large])
-        }
         // The page is a coloured photograph whatever the phone is set to — the same rule the chat
         // with a wallpaper follows, and for the same reason: light chrome on a lit picture washes
         // out. `\.colorScheme`, never `preferredColorScheme` — see the note in ThreadView.
@@ -406,34 +400,9 @@ struct GlowProfileView: View {
     /// photograph. Only the letters are ours; the capsule behind them is the system's.
     @ToolbarContentBuilder private var editItem: some ToolbarContent {
             // 2026-09-24 fix-all #90: this was wrapped in `if isMe`, which was always true.
-            // ⛔ SHARE, BESIDE EDIT — owner, 2026-09-11, with the gap between the back chevron and
-            // Edit ringed in red: "right side in my profile add new button for share profile; when I
-            // click, open sheet looks like image 2". It opens `ShareProfileSheet`.
-            //
-            // ⚠️ AN ICON HERE, AND EDIT STAYS A WORD. His 2026-09-09 ruling was that EDIT must be
-            // text rather than a glyph, and that ruling is about the one button people press by
-            // mistake on somebody else's page. Two words side by side in a navigation bar is a
-            // crowded bar; the share glyph is the system's own and needs no label.
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showShare = true } label: {
-                    Image(systemName: "square.and.arrow.up")
-                }
-                .tint(.white)
-                .accessibilityLabel("Share profile")
-            }
-            // ⛔ TWO BUTTONS, NOT ONE — owner, 2026-09-11, with them photographed fused into a
-            // single glass capsule: "share profile and edit button, don't make one button, make
-            // each one alone button."
-            //
-            // ⚠️ THAT FUSING IS iOS 26 DOING ITS JOB. Adjacent items in one placement are drawn as
-            // ONE grouped glass pill now — it is how the system says "these belong together", and
-            // it is why the bell and the add-story button on the Stories page share a capsule on
-            // purpose. Here they do not belong together: one edits the page, the other hands it to
-            // somebody else.
-            //
-            // `ToolbarSpacer(.fixed)` is the system's own way to say so, and it is the only way:
-            // padding inside the labels widens the shared capsule rather than splitting it.
-            ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            // ⛔ NO SHARE BUTTON HERE — owner, 2026-09-25, with it ringed: "remove the share link in
+            // profile preview". It was added 2026-09-11; your own code and link are shared from My
+            // QR Code, so Edit stands alone.
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { showEdit = true }.tint(.white)
             }
