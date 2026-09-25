@@ -74,14 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            NEW CHAT SEARCH, BOTTOM SEARCH BARS, DEVICES FIX.
+            PASSKEYS PAGE, USERNAME X.
 
-            CHATS SEARCH: glass search field. Tap it: the top bar slides away and the field moves up. X brings everything back and the list does not move. Open a chat from search and go Back: your search is still there.
+            PASSKEYS: each passkey shows its password manager's name and icon (Apple Passwords, Google Password Manager). Add Passkey opens the system sheet with no spinner, and is the last row of the card. Shorter header text.
 
-            BLOCKED USERS and GLOWERS: search is now a glass bar at the bottom. The Glowers / Glowing switch is taller.
+            USERNAME: an X to close the page without saving.
 
-            DEVICES: the page no longer stays on Loading.
-
-            PLEASE TEST: chat list search (tap, X, open a chat and Back); Blocked Users search; Settings > Devices.
+            PLEASE TEST: Settings > Passkeys (look at the icons, tap Add Passkey); Account > Username X.
 
         run: fastlane beta
