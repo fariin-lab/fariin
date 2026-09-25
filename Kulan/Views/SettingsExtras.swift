@@ -282,7 +282,7 @@ struct DevicesView: View {
         List {
             Section {
                 if let this = sessions.first(where: { $0.isThisDevice }) {
-                    row(this)
+                    NavigationLink { DeviceDetailView(session: this) } label: { row(this) }
                 } else if loaded {
                     // Registration failed or has not landed yet: say so rather than draw a
                     // device card out of thin air.
@@ -313,7 +313,12 @@ struct DevicesView: View {
                     }
                 } else {
                     ForEach(others) { s in
-                        row(s)
+                        // Tap for the details page and its Sign Out button (owner, 2026-09-25:
+                        // "this page looks too basic"). The swipe stays for people who know it.
+                        NavigationLink {
+                            DeviceDetailView(session: s)
+                        } label: { row(s) }
+                            .disabled(signingOut.contains(s.id))
                             .swipeActions(edge: .trailing) {
                                 // `.tint(.red)` explicitly. `role: .destructive` only colours a
                                 // swipe action while the app has not tinted itself, and this one
@@ -439,20 +444,14 @@ struct DevicesView: View {
         HStack(spacing: 14) {
             // A colored device tile — the flat grey glyph read as unfinished (user feedback,
             // the reference app's device tiles as the reference; our green, our glyph).
-            Image(systemName: "iphone")
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(
-                    LinearGradient(colors: [Color.green.opacity(0.95), Color.green.opacity(0.65)],
-                                   startPoint: .top, endPoint: .bottom),
-                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            DeviceTile(session: s, size: 40)
             VStack(alignment: .leading, spacing: 3) {
                 // NO "This device" PILL. It could only ever appear in the section whose header
                 // already says "This device", so it was the same two words twice, eight points
                 // apart, and it put a second coloured shape in a row that already has a green tile
                 // and a green status dot.
-                Text(s.model).font(.body.weight(.semibold))
+                // The real model ("iPhone 16 Pro"), owner 2026-09-25: every row read "iPhone".
+                Text(s.displayName).font(.body.weight(.semibold))
                 Text([s.os, s.appVersion.isEmpty ? nil : "Fariin \(s.appVersion)"]
                         .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)

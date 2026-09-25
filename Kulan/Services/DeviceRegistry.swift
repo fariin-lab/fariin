@@ -317,12 +317,19 @@ struct DeviceSession: Identifiable, Hashable {
     let appVersion: String
     let createdAt: Date?
     let lastSeenAt: Date
+    /// "iPhone17,1", written by every build that registers (see `registerThisDevice`).
+    let hardware: String
 
     var isThisDevice: Bool { id == DeviceRegistry.thisDeviceId }
+    /// "iPhone 16 Pro" — owner, 2026-09-25: every row read "iPhone". Falls back to the plain model
+    /// for a code this table does not know yet (a phone newer than this build), never a guess.
+    var displayName: String { DeviceNames.name(for: hardware) ?? model }
+    var isPad: Bool { hardware.hasPrefix("iPad") || model == "iPad" }
 
     init?(_ doc: QueryDocumentSnapshot) {
         let d = doc.data()
         self.id = doc.documentID
+        self.hardware = d["hardware"] as? String ?? ""
         self.model = d["model"] as? String ?? "Phone"
         self.os = d["os"] as? String ?? ""
         self.appVersion = d["appVersion"] as? String ?? ""
@@ -331,4 +338,38 @@ struct DeviceSession: Identifiable, Hashable {
         // enough: it is being written by a device that is active this second.
         self.lastSeenAt = (d["lastSeenAt"] as? Timestamp)?.dateValue() ?? Date()
     }
+}
+
+/// Apple's hardware codes to the names people know. Only codes that are certain are listed; an
+/// unknown one returns nil and the row shows the plain "iPhone" / "iPad" it always did.
+enum DeviceNames {
+    static func name(for hardware: String) -> String? {
+        if hardware == "x86_64" || hardware == "arm64" { return "Simulator" }
+        if let n = iPhones[hardware] { return n }
+        if hardware.hasPrefix("iPad") { return "iPad" }
+        return nil
+    }
+
+    private static let iPhones: [String: String] = [
+        "iPhone10,1": "iPhone 8", "iPhone10,4": "iPhone 8",
+        "iPhone10,2": "iPhone 8 Plus", "iPhone10,5": "iPhone 8 Plus",
+        "iPhone10,3": "iPhone X", "iPhone10,6": "iPhone X",
+        "iPhone11,2": "iPhone XS", "iPhone11,4": "iPhone XS Max", "iPhone11,6": "iPhone XS Max",
+        "iPhone11,8": "iPhone XR",
+        "iPhone12,1": "iPhone 11", "iPhone12,3": "iPhone 11 Pro", "iPhone12,5": "iPhone 11 Pro Max",
+        "iPhone12,8": "iPhone SE",
+        "iPhone13,1": "iPhone 12 mini", "iPhone13,2": "iPhone 12",
+        "iPhone13,3": "iPhone 12 Pro", "iPhone13,4": "iPhone 12 Pro Max",
+        "iPhone14,4": "iPhone 13 mini", "iPhone14,5": "iPhone 13",
+        "iPhone14,2": "iPhone 13 Pro", "iPhone14,3": "iPhone 13 Pro Max",
+        "iPhone14,6": "iPhone SE",
+        "iPhone14,7": "iPhone 14", "iPhone14,8": "iPhone 14 Plus",
+        "iPhone15,2": "iPhone 14 Pro", "iPhone15,3": "iPhone 14 Pro Max",
+        "iPhone15,4": "iPhone 15", "iPhone15,5": "iPhone 15 Plus",
+        "iPhone16,1": "iPhone 15 Pro", "iPhone16,2": "iPhone 15 Pro Max",
+        "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max",
+        "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus", "iPhone17,5": "iPhone 16e",
+        "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max",
+        "iPhone18,3": "iPhone 17", "iPhone18,4": "iPhone Air",
+    ]
 }
