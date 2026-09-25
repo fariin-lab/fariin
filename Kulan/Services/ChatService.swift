@@ -463,6 +463,12 @@ enum ChatService {
                 update["names.\(u)"] = nm
                 addedNames.append(nm)
                 if let ph = p.photoUrl, !ph.isEmpty { update["photos.\(u)"] = ph }
+                // 2026-09-25 photo audit: the large photo too, so a new member's profile opens with
+                // their poster instead of waiting for their next photo change. ADMIN ONLY: the
+                // members-can-add rule does not list `posters`, and one refused field would refuse
+                // the whole add. Everyone else's gap is closed by the member's own phone
+                // (`ProfileStore.healMyMirrors`), which the own-entry rule allows.
+                if iAmGroupAdmin, let pu = p.posterUrl, !pu.isEmpty { update["posters.\(u)"] = pu }
                 if (p.publicKeyB64 ?? "").isEmpty { keyless.append(nm) }   // hasn't opened Fariin
             } else {
                 addedNames.append("New member")   // fallback so the event isn't blank

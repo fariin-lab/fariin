@@ -545,6 +545,49 @@ final class ProfileStore {
 
     static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
+    /// ⛔ MY OWN ENTRY IN EVERY CHAT'S PHOTO MIRRORS IS KEPT RIGHT BY MY PHONE — 2026-09-25 photo audit.
+    ///
+    /// Every conversation carries `photos.{uid}` / `posters.{uid}` so a list can draw on its first
+    /// frame. Two things left mine missing or stale: a photo change's fan-out is best-effort (a failed
+    /// chunk or group write is simply skipped), and a group I was added to by a non-admin never got my
+    /// poster (the members-can-add rule does not allow that field). The rules DO let any member write
+    /// their own entry, so my phone compares and repairs, per conversation, whenever the list changes.
+    ///
+    /// ⚠️ NEWER ONLY, NEVER BACKWARDS. `me` is fetched, not listened to, so it can be older than a
+    /// change made on my other phone. Each name carries its upload time (`?v=`), so this writes only
+    /// when my copy is strictly newer than the mirror's. A removed photo is not healed here for the
+    /// same reason (an empty value has no time to compare); `removePhoto` clears every copy itself and
+    /// a group I join afterwards reads my empty profile when I am added.
+    @ObservationIgnored private var healWritten: [String: String] = [:]   // cid -> the value last attempted, one try each
+
+    func healMyMirrors() async {
+        guard let uid = Auth.auth().currentUser?.uid, let me, me.id == uid else { return }
+        let photo = me.photoUrl ?? "", poster = me.posterUrl ?? ""
+        guard !photo.isEmpty else { return }
+        for c in ConversationsRepository.shared.conversations where c.users.contains(uid) {
+            var fields: [String: Any] = [:]
+            if Self.isNewer(photo, than: c.photos[uid]) { fields["photos.\(uid)"] = photo }
+            if !poster.isEmpty, Self.isNewer(poster, than: c.posters[uid]) { fields["posters.\(uid)"] = poster }
+            guard !fields.isEmpty else { continue }
+            let attempt = "\(photo)|\(poster)"
+            guard healWritten[c.id] != attempt else { continue }
+            healWritten[c.id] = attempt
+            try? await db.collection("conversations").document(c.id).updateData(fields)
+        }
+    }
+
+    /// `mine` is a strictly later upload than `theirs`, or `theirs` is missing. A legacy download link
+    /// with no `v` counts as time zero, so it is always replaced by a private name.
+    static func isNewer(_ mine: String, than theirs: String?) -> Bool {
+        guard mine != theirs else { return false }
+        guard let theirs, !theirs.isEmpty else { return true }
+        return version(mine) > version(theirs)
+    }
+
+    static func version(_ url: String) -> Int64 {
+        URLComponents(string: url)?.queryItems?.first(where: { $0.name == "v" })?.value.flatMap { Int64($0) } ?? 0
+    }
+
     /// The photo half of Edit Profile's Save, as ONE pass. This replaced uploadPhoto +
     /// uploadPoster called in sequence, which was the owner's "save takes too long": two storage
     /// uploads one after the other, THREE separate conversation sweeps (photo batch, poster

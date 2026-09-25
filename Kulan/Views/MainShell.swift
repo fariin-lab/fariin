@@ -458,15 +458,15 @@ struct MainShell: View {
         // returned — leaving `settingsIcon` holding the photograph that had just been deleted. The
         // tab kept showing it for the rest of the session, and it is the one place in the app that
         // draws your picture without going through `AvatarView`.
-        guard let s = profile.me?.photoUrl, !s.isEmpty, let url = URL(string: s) else {
+        guard let s = profile.me?.photoUrl, !s.isEmpty else {
             await MainActor.run { settingsIcon = nil }
             return
         }
         // Persistent cache first (same store as every other avatar) — was a raw URLSession fetch that
         // re-downloaded my own profile photo on every launch.
-        var img = await DiskImageCache.shared.image(for: s)
-        if img == nil, let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
-            DiskImageCache.shared.store(ui, data: data, for: s)
+        // 2026-09-25: through `ProfilePhotoLoader`, the one avatar pipeline (shared download, retry).
+        var img = await ProfilePhotoLoader.shared.avatar(s)
+        if img == nil, let ui = await DiskImageCache.shared.image(for: s) {
             img = ui
         }
         guard let img else { return }
@@ -1526,7 +1526,7 @@ struct ChatsView: View {
         HStack(spacing: 12) {
             AvatarView(name: u.name.isEmpty ? u.handle : u.name,
                        photoUrl: PrivacyPrefs.allows(u.privacy, "photo",
-                                                     contactOfMine: PrivacyPrefs.isContact(u.id))
+                                                     contactOfMine: PrivacyPrefs.mayViewPhotoOf(u.id))
                                  ? u.photoUrl : nil,
                        size: 56)
                 .padding(.vertical, 12)
@@ -2652,6 +2652,11 @@ struct ChatsView: View {
             // on a chat after launch does not read and decode them inside the tap. See `prewarm`.
             .task(id: repo.conversations.prefix(12).map(\.id).joined(separator: ",")) {
                 ThreadMessageCache.shared.prewarm(repo.conversations.prefix(12).map(\.id))
+            }
+            // 2026-09-25 photo audit: repair my own photo entry in any chat whose copy is missing or
+            // older than my profile (a skipped fan-out, a group I was added to). Newer-only.
+            .task(id: "\(repo.conversations.count)|\(ProfileStore.shared.me?.photoUrl ?? "")|\(ProfileStore.shared.me?.posterUrl ?? "")") {
+                await ProfileStore.shared.healMyMirrors()
             }
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back
