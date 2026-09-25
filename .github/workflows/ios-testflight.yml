@@ -74,16 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PROFILE PHOTOS REBUILT, AND A LOT OF SETTINGS FIXES.
+            NEW SIGN-IN AND SIGN-UP.
 
-            PROFILE PHOTOS: one loader for every avatar. The chat header photo no longer sticks on grey, failed downloads retry, the same photo downloads once, and a new photo shows everywhere. Story headers load photos again.
+            LOG IN: shows the account you used before; one tap signs back in. Hold it to remove it.
 
-            CHAT LIST: search stays after Back, no jump on search X, Unread pull removed, select mode has an X, first chat open is faster.
+            SIGN-IN PAGES: new layout (Apple, Google, or, Email), Welcome back / Create account email pages, password typed twice with the 4-rule checklist.
 
-            SETTINGS: Everyone/Glowers pick-first then Hidden Users page, bottom bar hidden on Settings pages, Blocked Users and Block User redesigned, Hide From shows people first, Require Face ID, passkeys open instantly, new Delete Account look.
+            SIGN-UP: Add a Photo now saves reliably, and a 5-page intro tour after your profile.
 
-            ALSO: chosen message sound plays in the app, QR logo block, Links row size, Glowers/Glowing bar, link pill grey without a photo.
+            ALSO: My Profile with no photo no longer puts a letter in the top bar. The app now sends device details for the upcoming security messages in the Fariin chat (server part not live yet).
 
-            PLEASE TEST: open 5 chats right after launch; change your photo and check another phone; airplane mode then back on and the photo should appear within about 6 seconds.
+            PLEASE TEST: sign out, then Log In from the saved account; create a new account with a photo and go through the tour.
 
         run: fastlane beta
