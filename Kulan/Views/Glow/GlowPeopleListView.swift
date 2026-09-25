@@ -48,19 +48,22 @@ struct GlowPeopleListView: View {
     private var glow = GlowService.shared
 
     var body: some View {
-        list
+        // ⛔ TITLE IN THE BAR, THE SWITCH FULL WIDTH UNDER IT — owner, 2026-09-25 (later the same
+        // day), with a reference: the username as the title and one long Glowers/Glowing capsule
+        // across the page beneath it. This reverses that morning's "switch in the bar, small"
+        // (which had taken the title's place). Still the native segmented `Picker`, no search.
+        VStack(spacing: 0) {
+            tabs
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
+            list
+                .frame(maxHeight: .infinity)
+        }
         .navigationTitle(title.isEmpty ? "Glow" : title)
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
-        // ⛔ THE SWITCH SITS IN THE BAR, SMALL, AND THERE IS NO SEARCH — owner, 2026-09-25, with
-        // both ringed and the Calls page's All/Missed sent as the look: "remove that search, make
-        // Glowers and Glowing that long liquid glass small like this". Same call Calls makes: a
-        // segmented `Picker` as the principal item, a fixed compact width. It takes the title's
-        // place, as All/Missed does.
-        .toolbar {
-            ToolbarItem(placement: .principal) { tabs }
-        }
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
     }
@@ -92,8 +95,8 @@ struct GlowPeopleListView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        // Compact like All/Missed (150 there); these two words are longer, so a little wider.
-        .frame(width: 210)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
     }
 
     // ⛔ NO SEARCH ON THIS PAGE — owner, 2026-09-25. It was `.searchable` (2026-09-11) and he asked
