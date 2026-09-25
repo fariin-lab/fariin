@@ -238,9 +238,12 @@ final class RowAvatarView: UIView {
         guard photoUrl != currentUrl || imageView.image == nil else { return }
         currentUrl = photoUrl
 
-        // The synchronous disk seed, for the same reason the SwiftUI avatar takes it: memory starts
-        // empty on every launch, so without it every avatar in the chat flashes its letter first.
-        if let warm = DiskImageCache.shared.smallImageSync(photoUrl) {
+        // The synchronous seed, for the same reason the SwiftUI avatar takes it: memory starts empty
+        // on every launch. Through `ProfilePhotoLoader` (2026-09-25), the one avatar pipeline: its own
+        // memory, one shared download per url, and a network failure is no longer recorded as "no
+        // photo" (this path used to note every failed load as missing, which then hid a real photo
+        // on the profile header after a single dropped request).
+        if let warm = ProfilePhotoLoader.shared.cachedAvatar(photoUrl) {
             imageView.image = warm
             imageView.isHidden = false
             return
@@ -248,18 +251,8 @@ final class RowAvatarView: UIView {
         imageView.image = nil
         imageView.isHidden = true
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            var found: UIImage?
-            if let cached = await DiskImageCache.shared.image(for: photoUrl) {
-                found = cached
-            } else if let u = URL(string: photoUrl),
-                      let (data, _) = try? await MediaSession.shared.data(from: u),
-                      let ui = UIImage(data: data) {
-                DiskImageCache.shared.store(ui, data: data, for: photoUrl)
-                found = ui
-            }
-            ProfilePhotoIndex.noteLoad(photoUrl, ok: found != nil)
-            guard let found, self.token == mine else { return }
+            let found = await ProfilePhotoLoader.shared.avatar(photoUrl)
+            guard let self, let found, self.token == mine else { return }
             self.imageView.image = found
             self.imageView.isHidden = false
             self.imageView.alpha = 0

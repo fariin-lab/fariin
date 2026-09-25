@@ -308,7 +308,7 @@ final class StoryAvatarUIView: UIView {
 
         // First frame: memory, then disk. Seeded images are NOT cross-faded — they were already
         // there, and fading them in is the blink this seed exists to remove.
-        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.smallImageSync(u) {
+        if let warm = ProfilePhotoLoader.shared.cachedAvatar(photoUrl) {
             show(warm, animated: false)
         } else {
             show(nil, animated: false)
@@ -334,24 +334,12 @@ final class StoryAvatarUIView: UIView {
         }
     }
 
+    /// Through `ProfilePhotoLoader` (2026-09-25): memory, disk, the shared download, the retry rule
+    /// and the ProfilePhotoIndex bookkeeping are all its job now.
     private func load(_ url: String) async {
-        guard let u = URL(string: url) else { return }
-        if let cached = await DiskImageCache.shared.image(for: url) {
-            guard !Task.isCancelled, photoUrl == url else { return }
-            show(cached, animated: true)
-            ProfilePhotoIndex.noteLoad(url, ok: true)
-            return
-        }
-        if let (data, _) = try? await MediaSession.shared.data(from: u), let ui = UIImage(data: data) {
-            DiskImageCache.shared.store(ui, data: data, for: url)
-            guard !Task.isCancelled, photoUrl == url else { return }
-            show(ui, animated: true)
-            ProfilePhotoIndex.noteLoad(url, ok: true)
-            return
-        }
-        // Nothing behind the url — told to the index, because the profile header has to answer
-        // "circle or big photo" before it draws and cannot wait for a download of its own.
-        ProfilePhotoIndex.noteLoad(url, ok: false)
+        guard let img = await ProfilePhotoLoader.shared.avatar(url),
+              !Task.isCancelled, photoUrl == url else { return }
+        show(img, animated: true)
     }
 
     override func layoutSubviews() {

@@ -364,31 +364,24 @@ final class HeaderAvatarView: UIView {
         guard url != loadedFor else { return }
         if let f = failed, f.url == url, Date().timeIntervalSince(f.at) < 5 { return }
         loadedFor = url
-        // First frame: memory, then disk, synchronously — the same seed AvatarView.init takes.
-        if let warm = DiskImageCache.shared.smallImageSync(url) {
+        // First frame: memory, then disk, synchronously — through `ProfilePhotoLoader`, the one
+        // avatar pipeline (2026-09-25), which also shares the download with every other screen.
+        if let warm = ProfilePhotoLoader.shared.cachedAvatar(url) {
             imageView.image = warm
             imageView.isHidden = false
+            failed = nil
             return
         }
         imageView.image = nil
         imageView.isHidden = true
         loadTask?.cancel()
         loadTask = Task { [weak self] in
-            var found: UIImage?
-            if let cached = await DiskImageCache.shared.image(for: url) {
-                found = cached
-            } else if let real = URL(string: url),
-                      let (data, _) = try? await MediaSession.shared.data(from: real),
-                      let ui = UIImage(data: data) {
-                DiskImageCache.shared.store(ui, data: data, for: url)
-                found = ui
-            }
+            let found = await ProfilePhotoLoader.shared.avatar(url)
             guard !Task.isCancelled, let self, self.loadedFor == url else { return }
             // ⛔ A FAILED LOAD FORGETS ITS URL — 2026-09-25. `loadedFor` was set before the download
             // and kept after a failure, so `guard url != loadedFor` turned every later configure into
-            // a no-op: one dropped request (offline, a slow Storage rule check) meant the placeholder
-            // for the life of the screen. Cleared, the next header update (they are frequent:
-            // presence, typing) simply asks again.
+            // a no-op: one dropped request meant the placeholder for the life of the screen. Cleared,
+            // the next header update (frequent: presence, typing) asks again, at most every 5s.
             guard let found else { self.loadedFor = nil; self.failed = (url, Date()); return }
             self.failed = nil
             self.imageView.image = found

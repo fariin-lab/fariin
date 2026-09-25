@@ -562,7 +562,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             noteAdaptive(warm)
             return
         }
-        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else { image = nil; tone = nil; return }
+        guard let s = photoUrl, !s.isEmpty else { image = nil; tone = nil; return }
         if let cached = await DiskImageCache.shared.image(for: s) {
             image = cached
             tone = PosterTone.sample(cached, for: s)
@@ -570,7 +570,12 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             ProfilePhotoIndex.noteLoad(s, ok: true)
             return
         }
-        if let (data, _) = try? await MediaSession.shared.data(from: url), let ui = UIImage(data: data) {
+        // 2026-09-25: the download is `ProfilePhotoLoader.fetch`, shared with every avatar of the
+        // same person (one request, not two) and with its retry rule. Only a real refusal or absence
+        // is filed as missing below; a network failure used to be filed too, and hid the photo on
+        // the next profile opened.
+        let result = await ProfilePhotoLoader.shared.fetch(s)
+        if case .image(let data) = result, let ui = UIImage(data: data) {
             DiskImageCache.shared.store(ui, data: data, for: s)
             image = ui
             tone = PosterTone.sample(ui, for: s)
@@ -578,6 +583,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             ProfilePhotoIndex.noteLoad(s, ok: true)
             return
         }
+        guard case .noPhoto = result else { return }
         // A FACT ABOUT A URL, not a signal about this layout — the distinction that matters here.
         // Nothing reads this to decide what THIS view does; it is filed for the next profile that
         // has to answer "circle or big photo" before it draws. The old `onPhotoResolved` fed the

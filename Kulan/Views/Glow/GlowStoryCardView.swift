@@ -594,7 +594,7 @@ private struct AddStoryFace: View {
         // starts empty on every launch, so without the disk read the card flashes grey on a cold
         // start even when the file has been on disk for days. The read is a few KB and is gated on
         // the cache's in-memory index, so a miss never touches the filesystem.
-        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.smallImageSync(u) {
+        if let warm = ProfilePhotoLoader.shared.cachedAvatar(photoUrl) {
             _image = State(initialValue: warm)
         }
     }
@@ -637,13 +637,10 @@ private struct AddStoryFace: View {
         .task(id: photoUrl) { await load() }
     }
 
+    /// Through `ProfilePhotoLoader` (2026-09-25), the one avatar pipeline. Its 400px thumbnail is
+    /// sharper than this card needs at 3x.
     private func load() async {
-        guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else { image = nil; return }
-        if let cached = await DiskImageCache.shared.image(for: s) { image = cached; return }
-        if let (data, _) = try? await MediaSession.shared.data(from: url),
-           let ui = UIImage(data: data) {
-            DiskImageCache.shared.store(ui, data: data, for: s)
-            image = ui
-        }
+        guard let s = photoUrl, !s.isEmpty else { image = nil; return }
+        if let img = await ProfilePhotoLoader.shared.avatar(s), !Task.isCancelled { image = img }
     }
 }

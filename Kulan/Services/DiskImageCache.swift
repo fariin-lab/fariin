@@ -205,6 +205,31 @@ final class DiskImageCache {
         return img
     }
 
+    /// The file's bytes, synchronously, WITHOUT touching this cache's memory tier. For
+    /// `ProfilePhotoLoader`, which keeps avatars in a memory cache of its own so gallery browsing
+    /// cannot evict them. Gated on the index like `smallImageSync`, so a miss does no file IO.
+    func bytesSync(_ url: String) -> Data? {
+        guard isCached(url) || mem.object(forKey: url as NSString) != nil else { return nil }
+        let f = existingFileURL(url)
+        guard let data = try? Data(contentsOf: f) else {
+            // Not on disk after all (the uploader's memory-only copy): hand back an encoded copy.
+            return mem.object(forKey: url as NSString)?.jpegData(compressionQuality: 0.9)
+        }
+        touchOnHit(url)
+        return data
+    }
+
+    /// Bytes to disk only (no decoded copy in memory). See `bytesSync`.
+    func storeBytes(_ bytes: Data, for url: String) {
+        let f = fileURL(url)
+        let k = key(url)
+        io.async { [weak self] in
+            try? bytes.write(to: f, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            self?.indexInsert(k)
+            self?.trimIfNeeded()
+        }
+    }
+
     /// Memory only, and synchronous. For a view that has to draw on its FIRST frame: the async path
     /// below costs at least one frame even on a hit, and one frame of placeholder is a visible flash
     /// on anything that animates out of something already on screen. NSCache is thread-safe, so this

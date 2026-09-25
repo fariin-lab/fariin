@@ -510,7 +510,8 @@ struct AvatarView: View {
         // The disk read is synchronous and that is deliberate: an avatar is a few KB, it is gated on
         // the cache's in-memory index so a miss never touches the filesystem, and the result is
         // promoted to memory so each photo pays once per launch.
-        if let u = photoUrl, !u.isEmpty, let warm = DiskImageCache.shared.smallImageSync(u) {
+        // 2026-09-25: through `ProfilePhotoLoader`, the one avatar pipeline.
+        if let warm = ProfilePhotoLoader.shared.cachedAvatar(photoUrl) {
             _image = State(initialValue: warm)
         }
     }
@@ -537,39 +538,21 @@ struct AvatarView: View {
         .onChange(of: image != nil, initial: true) { _, has in onPhotoResolved?(has) }
     }
 
+    /// ⛔ ONE PIPELINE — 2026-09-25 photo audit. Memory, disk, the shared download, the retry rule and
+    /// the ProfilePhotoIndex bookkeeping all live in `ProfilePhotoLoader` now; this view only draws.
+    /// A failed load leaves the placeholder and the next appearance (or a new url) asks again.
     private func load() async {
-        guard hasPhoto, let s = photoUrl, let url = URL(string: s) else { image = nil; return }
-        if let cached = await DiskImageCache.shared.image(for: s) {
-            image = cached
-            ProfilePhotoIndex.noteLoad(s, ok: true)
-            return
+        guard hasPhoto, let s = photoUrl else { image = nil; return }
+        let img = await ProfilePhotoLoader.shared.avatar(s)
+        guard !Task.isCancelled else { return }
+        if let img {
+            image = img
+        } else if ProfilePhotoIndex.knownMissing(s) {
+            // The url changed and the new one is refused or gone (the person hid or removed their
+            // photo): the picture from the OLD url must not stay up. A plain network failure keeps
+            // whatever is drawn.
+            image = nil
         }
-        // ⛔ A NETWORK FAILURE IS RETRIED, AN ANSWER IS NOT — 2026-09-25 photo audit. This view loads
-        // from `.task(id: photoUrl)`, so one dropped request (a blip, the first seconds after launch)
-        // left the placeholder until the url itself changed. Two retries, 2s then 6s, inside the same
-        // task, so leaving the screen or a new url cancels them. A response that is not an image
-        // (a refused or missing photo, see ProfilePhotoURLProtocol) is a real answer and falls
-        // through to the index below exactly as before.
-        for delay in [0.0, 2.0, 6.0] {
-            if delay > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                if Task.isCancelled { return }
-            }
-            guard let (data, _) = try? await MediaSession.shared.data(from: url) else { continue }
-            if let ui = UIImage(data: data) {
-                DiskImageCache.shared.store(ui, data: data, for: s)
-                image = ui
-                ProfilePhotoIndex.noteLoad(s, ok: true)
-                return
-            }
-            break
-        }
-        if Task.isCancelled { return }
-        // NOTHING BEHIND THE URL. Told to the index, because the profile header has to answer
-        // "circle or big photo" before it draws and cannot wait for a download of its own. Avatars
-        // are everywhere — the chat list, the calls list, the story row — so by the time a profile
-        // can be tapped, one of them has usually already found this out. See ProfilePhotoIndex.
-        ProfilePhotoIndex.noteLoad(s, ok: false)
     }
 
     /// ⛔ ONE SILHOUETTE, NOT A COLOURED LETTER — owner, 2026-09-16. See `AvatarPalette.placeholderFill`

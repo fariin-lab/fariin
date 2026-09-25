@@ -137,6 +137,13 @@ enum ProfilePhotoIndex {
 
     private static var failedURLs = Set<String>()
 
+    /// This url answered "refused" or "nothing there" (never a network failure; see
+    /// `ProfilePhotoLoader`, the only writer of a failure).
+    static func knownMissing(_ url: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return failedURLs.contains(url)
+    }
+
     static func facts(_ uid: String) -> Facts? {
         guard !uid.isEmpty else { return nil }
         lock.lock(); defer { lock.unlock() }
