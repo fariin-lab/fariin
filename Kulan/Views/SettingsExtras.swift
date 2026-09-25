@@ -724,7 +724,9 @@ struct BlockedUsersView: View {
         .toolbar {
             // iOS 26: the search field in the bottom bar, in the system's glass.
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
-            if !blocked.isEmpty || editing {
+            // `allBlocked`, not the filtered `blocked` (bug hunt 2026-09-25): a search with no match
+            // took the Edit button away and threw you out of Edit mode.
+            if !allBlocked.isEmpty || editing {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(editing ? "Done" : "Edit") {
                         withAnimation(.snappy(duration: 0.22)) { editing.toggle() }
@@ -734,7 +736,7 @@ struct BlockedUsersView: View {
         }
         // Unblocking the last person leaves Edit mode with nothing to edit and no button left to
         // press to get out of it.
-        .onChange(of: blocked.isEmpty) { _, empty in
+        .onChange(of: allBlocked.isEmpty) { _, empty in
             if empty { withAnimation(.snappy(duration: 0.22)) { editing = false } }
         }
         .sheet(isPresented: $showPicker) { BlockPickerView { blockError = $0 } }
