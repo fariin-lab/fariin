@@ -2661,6 +2661,7 @@ struct ChatsView: View {
             // older than my profile (a skipped fan-out, a group I was added to). Newer-only.
             .task(id: "\(repo.conversations.count)|\(ProfileStore.shared.me?.photoUrl ?? "")|\(ProfileStore.shared.me?.posterUrl ?? "")") {
                 await ProfileStore.shared.healMyMirrors()
+                LastAccount.remember()   // 2026-09-25: the saved-account row on Log In
             }
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back

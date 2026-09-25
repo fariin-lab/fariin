@@ -290,6 +290,7 @@ struct DeleteAccountView: View {
         do {
             await AuthService.shared.reportAccountDeletion()
             try await profile.scheduleDeletion()
+            LastAccount.forget()   // a deleted account is not offered on Log In
             // Same order Settings uses: stop this phone's pushes while we still have auth, then sign out.
             await Push.unregister()
             await DeviceRegistry.shared.removeThisDevice()   // and drop our row in Settings › Devices

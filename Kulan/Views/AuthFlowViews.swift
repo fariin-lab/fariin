@@ -181,6 +181,38 @@ extension View {
         }
     }
 
+    /// ⛔ THE QUIET DOOR — owner's reference, 2026-09-25: Google and Email as raised grey pills with
+    /// a faint edge under the one light Apple button, 54pt like it.
+    func authRaisedPill() -> some View {
+        self.font(.system(size: 17, weight: .medium))
+            .foregroundStyle(.primary)
+            .labelStyle(.titleAndIcon)
+            .frame(maxWidth: .infinity).frame(height: 54)
+            .background(AuthPalette.raised, in: Capsule())
+            .overlay(Capsule().strokeBorder(AuthPalette.hairline, lineWidth: 1))
+            .contentShape(Capsule())
+    }
+
+    /// The email pages' main button: the light pill once it can be pressed, a raised grey pill with
+    /// dim text until then (the reference's disabled look, not a faded copy of the enabled one).
+    func authActionPill(enabled: Bool) -> some View {
+        self.font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(enabled ? AuthPalette.page : Color.primary.opacity(0.3))
+            .frame(maxWidth: .infinity).frame(height: 54)
+            .background(enabled ? Color.primary : AuthPalette.raised, in: Capsule())
+    }
+
+    /// A field box on the email pages: its glyph inside, no label above, outlined while focused.
+    func authField(focused: Bool) -> some View {
+        self.font(.system(size: 17))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 18).frame(height: 56)
+            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(focused ? 0.75 : 0), lineWidth: 1.2))
+            .animation(.easeOut(duration: 0.15), value: focused)
+    }
+
     /// The second choice: OUTLINED, not filled.
     ///
     /// It used to be a light grey capsule with a hairline on top, and grey-on-white is the weakest
@@ -251,14 +283,23 @@ struct ShiningLogo: View {
 
 struct AuthMethodView: View {
     enum Mode { case create, login }
-    let mode: Mode
+    /// State, not a constant: the "Sign up" / "Log in" line at the bottom flips this page in place,
+    /// the way the reference's does, instead of stacking a second copy of it.
+    @State private var mode: Mode
     var onAuthed: () -> Void
+
+    init(mode: Mode, onAuthed: @escaping () -> Void) {
+        _mode = State(initialValue: mode)
+        self.onAuthed = onAuthed
+    }
 
     @Environment(\.colorScheme) private var scheme
     @State private var busy = false
     @State private var error: String?
-
-    private var title: String { mode == .create ? "Create Account" : "Log In" }
+    /// The saved account (see `LastAccount`), Log In only.
+    @State private var saved: LastAccount.Info? = LastAccount.load()
+    @State private var savedPhoto: UIImage? = LastAccount.photo()
+    @State private var emailPrefill: String?
 
     /// Which door to mark "Last used" — ON THE LOG IN SCREEN ONLY.
     ///
@@ -269,103 +310,166 @@ struct AuthMethodView: View {
         mode == .login ? AuthService.lastSignInMethod : nil
     }
 
+    // ⛔ THE DOORS PAGE, ON THE OWNER'S REFERENCE — 2026-09-25, "make it like this, exactly": the
+    // app's name, Apple as the one light button, Google and Email as quiet raised pills with an "or"
+    // between them, the other mode as one line under them, and the terms at the foot. Both modes
+    // are this one page. Log In adds the account this phone last used above the doors.
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
-            VStack(spacing: 14) {
+            VStack(spacing: 0) {
                 Spacer()
-                Text(title)
-                    .font(.system(size: 24, weight: .bold)).foregroundStyle(.primary)
-                Text(mode == .create ? "Pick a door. Takes less than a minute."
-                                     : "Welcome back.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
+                if mode == .login, let saved { savedAccountRow(saved).padding(.bottom, 28) }
+                Text("Fariin")
+                    .font(.system(size: 22, weight: .semibold)).foregroundStyle(.primary)
+                    .padding(.bottom, 28)
 
-                // THE THREE DOORS ARE ONE SET. What made the reference screens (the reference app, and the
-                // "How do you want to log in?" pattern) read as professional was that every choice
-                // is the SAME button — one shape, one height, one weight — and only the brand mark
-                // changes. Apple's own `whiteOutline` style is that button, so we use their API
-                // rather than drawing a look-alike, and Google and Email are matched to it.
-                SignInWithAppleButton(mode == .create ? .signUp : .signIn) { request in
-                    AuthService.shared.prepareAppleRequest(request)
-                } onCompletion: { result in
-                    switch result {
-                    case .success(let auth):
-                        run { try await AuthService.shared.completeApple(authorization: auth,
-                                                                         requireExistingAccount: mode == .login,
-                                                                         requireNewAccount: mode == .create) }
-                    case .failure(let e):
-                        // A cancel says nothing. Every OTHER failure also said nothing (audit
-                        // 2026-09-24): the sheet closed and the page sat there as if never tapped.
-                        if !AuthService.isCancellation(e) {
-                            error = AuthFlowError.appleFailed.errorDescription
-                        }
+                VStack(spacing: 14) {
+                    appleButton
+                    Button {
+                        run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login,
+                                                                            requireNewAccount: mode == .create) }
+                    } label: {
+                        Label(title: { Text("Continue with Google") }, icon: { GoogleGIcon(size: 20) })
+                            .authRaisedPill()
+                            .lastUsedBadge(lastDoor == .google)
                     }
-                }
-                // SOLID FILL, NOT `.whiteOutline`. The outline style draws a 1pt border on the button's
-                // own bounds and the `.clipShape(Capsule())` below slices it off at the corners, which is
-                // the broken-looking Apple button reported earlier. A solid fill clips to a capsule
-                // perfectly.
-                //
-                // Which solid fill follows the phone. `.black` was hard-coded, so on a dark phone it was
-                // a black button on a black page: only its white label showed, and it read as a bare row
-                // of text between two real buttons. Apple's guidelines name `.black` for light
-                // backgrounds and `.white` for dark ones, so this is the compliant pairing rather than a
-                // workaround.
-                .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
-                // ...and the style has to be re-BUILT, not re-applied. This is Apple's own
-                // `ASAuthorizationAppleIDButton`, which takes its colour in its initialiser and
-                // exposes no way to change it afterwards, so the modifier above only decides what
-                // the button is BORN as. Google and Email survive an appearance flip without this
-                // because `Color.primary` is a dynamic colour UIKit repaints in place; nothing has
-                // to re-run for them. The Apple button just kept the instance it already had, which
-                // is how a black button ended up on a black page mid-session.
-                // `.id(scheme)` makes SwiftUI discard it and make a new one when the phone flips.
-                .id(scheme)
-                .frame(height: 50)              // matches authDoorPill exactly
-                .clipShape(Capsule())
-                .lastUsedBadge(lastDoor == .apple)
-                // Same lock as Google below (audit 2026-09-24): this one was tappable mid sign-in.
-                .disabled(busy)
+                    .buttonStyle(.plain)
+                    .disabled(busy)
 
-                Button {
-                    run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login,
-                                                                        requireNewAccount: mode == .create) }
-                } label: {
-                    // Google's brand rules also call for a white button with dark text, so the
-                    // matched set costs us nothing on either company's guidelines.
-                    Label(title: { Text("Continue with Google") },
-                          icon: { GoogleGIcon(size: 20) })
-                        .authDoorPill()
-                        .lastUsedBadge(lastDoor == .google)
-                }
-                .disabled(busy)
+                    orDivider
 
-                NavigationLink { EmailAuthView(mode: mode, onAuthed: onAuthed) } label: {
-                    Label(title: { Text(mode == .create ? "Sign up with Email" : "Log in with Email") },
-                          icon: { Image(systemName: "envelope.fill").font(.system(size: 18)) })
-                        .authDoorPill()
-                        .lastUsedBadge(lastDoor == .email)
+                    NavigationLink { EmailAuthView(mode: mode, onAuthed: onAuthed) } label: {
+                        Text("Continue with Email")
+                            .authRaisedPill()
+                            .lastUsedBadge(lastDoor == .email)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
                 }
-                // And the email door: pushing it mid Google sign-in left that sign-in finishing
-                // behind the email page and calling onAuthed from a screen no longer in front.
-                .disabled(busy)
 
-                if busy { ProgressView().padding(.top, 6) }
+                if busy { ProgressView().padding(.top, 16) }
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
-                        .multilineTextAlignment(.center).padding(.top, 4)
+                        .multilineTextAlignment(.center).padding(.top, 12)
                 }
 
-                // The terms line and the 13+ statement that sat here moved to their own screen
-                // (first-run rebuild, 2026-09-24): `AgreementView` in FirstRunViews.swift, which
-                // every signed-out phone passes before these doors. The reasoning behind the age
-                // line went with it.
+                Button {
+                    error = nil
+                    withAnimation(.easeInOut(duration: 0.2)) { mode = mode == .login ? .create : .login }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(mode == .login ? "Don’t have an account?" : "Already have an account?")
+                            .foregroundStyle(.secondary)
+                        Text(mode == .login ? "Sign up" : "Log in")
+                            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                    }
+                    .font(.subheadline)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 36)
+
                 Spacer()
+                Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .tint(.primary)
+                    .multilineTextAlignment(.center)
+                    .padding(.bottom, 8)
             }
             .padding(.horizontal, 24)
         }
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $emailPrefill) { address in
+            EmailAuthView(mode: .login, prefill: address, onAuthed: onAuthed)
+        }
+    }
+
+    /// Apple's own button, light on a dark phone and dark on a light one (their guidelines), in the
+    /// same capsule as the others. The style is fixed when the button is created, so `.id(scheme)`
+    /// rebuilds it when the phone flips appearance.
+    private var appleButton: some View {
+        SignInWithAppleButton(.continue) { request in
+            AuthService.shared.prepareAppleRequest(request)
+        } onCompletion: { result in
+            switch result {
+            case .success(let auth):
+                run { try await AuthService.shared.completeApple(authorization: auth,
+                                                                 requireExistingAccount: mode == .login,
+                                                                 requireNewAccount: mode == .create) }
+            case .failure(let e):
+                if !AuthService.isCancellation(e) { error = AuthFlowError.appleFailed.errorDescription }
+            }
+        }
+        .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
+        .id(scheme)
+        .frame(height: 54)
+        .clipShape(Capsule())
+        .lastUsedBadge(lastDoor == .apple)
+        .disabled(busy)
+    }
+
+    private var orDivider: some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 0.5)
+            Text("or").font(.subheadline).foregroundStyle(.secondary)
+            Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 0.5)
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// ⛔ THE ACCOUNT I USED BEFORE — owner, 2026-09-25. One row: face, name, handle, and the tap
+    /// goes back in through that account's own door. The menu forgets it from this phone.
+    private func savedAccountRow(_ info: LastAccount.Info) -> some View {
+        Button { continueAs(info) } label: {
+            HStack(spacing: 12) {
+                Group {
+                    if let savedPhoto {
+                        Image(uiImage: savedPhoto).resizable().scaledToFill()
+                    } else {
+                        AvatarView(name: info.name, size: 48)
+                    }
+                }
+                .frame(width: 48, height: 48).clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(info.name.isEmpty ? "@\(info.handle)" : info.name)
+                        .font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                    Text("@\(info.handle)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16).frame(height: 72)
+            .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .contextMenu {
+            Button(role: .destructive) {
+                LastAccount.forget()
+                withAnimation { saved = nil; savedPhoto = nil }
+            } label: { Label("Remove from This Phone", systemImage: "xmark.circle") }
+        }
+    }
+
+    private func continueAs(_ info: LastAccount.Info) {
+        switch AuthService.SignInMethod(rawValue: info.method) {
+        case .apple:
+            run {
+                let request = ASAuthorizationAppleIDProvider().createRequest()
+                AuthService.shared.prepareAppleRequest(request)
+                let ceremony = await PasskeyCeremony()   // holds the controller for the length of the sheet
+                let auth = try await ceremony.run([request])
+                try await AuthService.shared.completeApple(authorization: auth,
+                                                           requireExistingAccount: true, requireNewAccount: false)
+            }
+        case .google:
+            run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: true, requireNewAccount: false) }
+        case .email:
+            emailPrefill = info.email ?? ""
+        case .none:
+            break
+        }
     }
 
     private func run(_ op: @escaping () async throws -> Void) {
@@ -429,42 +533,47 @@ struct AuthMethodView: View {
 // MARK: - Email door
 
 struct EmailAuthView: View {
-    let mode: AuthMethodView.Mode
+    /// State, so "Sign up" / "Sign in" at the bottom flips the page in place (owner's reference).
+    @State private var mode: AuthMethodView.Mode
     var onAuthed: () -> Void
 
-    @State private var email = ""
+    init(mode: AuthMethodView.Mode, prefill: String? = nil, onAuthed: @escaping () -> Void) {
+        _mode = State(initialValue: mode)
+        _email = State(initialValue: prefill ?? "")
+        self.onAuthed = onAuthed
+    }
+
+    @State private var email: String
     @State private var password = ""
+    /// Sign-up only: the same password again (owner, 2026-09-25, "Passwords match").
+    @State private var confirm = ""
     @State private var busy = false
     @State private var error: String?
     @State private var reveal = false
 
     /// Set when the address still has to be proved with a code, which pushes the code screen instead
-    /// of finishing. One optional drives the whole thing through `navigationDestination(item:)`, so
-    /// there is no separate "is it showing" flag that could fall out of step with the purpose.
+    /// of finishing. One optional drives the whole thing through `navigationDestination(item:)`.
     @State private var prove: LoginCodeView.Purpose?
 
-    // No `= false`: FocusState's init takes no arguments and defaults to false on its own.
     @FocusState private var emailFocused: Bool
-    // The password box is a UITextField (see RevealablePasswordField), so its focus CANNOT ride on
-    // @FocusState: setting a FocusState to a value no SwiftUI view claims gets reset to nil by
-    // SwiftUI on the same pass, which would have resigned the keyboard the instant we asked for it.
-    // Plain @State, bridged to first responder inside the representable.
+    // The password boxes are UITextFields (see RevealablePasswordField), so their focus is plain
+    // @State bridged to first responder, not @FocusState (which SwiftUI would reset to nil).
     @State private var passwordFocused = false
+    @State private var confirmFocused = false
 
-    /// Sign-up asks ONE thing at a time: the address, then the password. Log in still shows both,
-    /// because there you are recalling a pair you already know rather than making one up.
+    /// Sign-up asks ONE thing at a time: the address, then the password. Log in shows both.
     @State private var showPassword = false
     private var onEmailStep: Bool { mode == .create && !showPassword }
 
-    /// Sign-up's only rule, checked live so the answer is on screen before the button is pressed
-    /// rather than after a round trip to Firebase.
-    private var passwordLongEnough: Bool { password.count >= 6 }
+    /// ⛔ THE FOUR RULES — owner, 2026-09-25: at least 8 characters, a letter, a number, and the two
+    /// entries matching, ticked off live. The same `PasswordRules` the Settings password pages use,
+    /// so the account's first password and every later one follow one rule.
+    private var rules: PasswordRules { PasswordRules(password: password, confirm: confirm) }
     private var canSubmit: Bool {
-        !email.isEmpty && !password.isEmpty && (mode == .login || passwordLongEnough)
+        !email.isEmpty && !password.isEmpty && (mode == .login || rules.allMet)
     }
 
-    /// Enough of a check to be worth moving on. Not a full RFC address parser: Firebase decides,
-    /// and the point is only to catch the typo BEFORE somebody invents a password behind it.
+    /// Enough of a check to be worth moving on; Firebase decides the rest.
     private var emailLooksValid: Bool {
         let t = email.trimmingCharacters(in: .whitespaces)
         guard let at = t.firstIndex(of: "@"), at != t.startIndex else { return false }
@@ -473,125 +582,149 @@ struct EmailAuthView: View {
     }
     private var primaryEnabled: Bool { onEmailStep ? emailLooksValid : canSubmit }
 
+    private var title: String {
+        switch (mode, onEmailStep) {
+        case (.login, _): return "Welcome back"
+        case (.create, true): return "Create account"
+        case (.create, false): return "Create a password"
+        }
+    }
+    private var subtitle: String {
+        switch (mode, onEmailStep) {
+        case (.login, _): return "Sign in to continue"
+        // True: sign-up always proves the address with a code (see `submit`).
+        case (.create, true): return "We’ll send a verification code to your email."
+        case (.create, false): return "Use at least 8 characters, with a letter and a number."
+        }
+    }
+
+    // ⛔ THE OWNER'S REFERENCE, 2026-09-25: a bold title with one line under it, fields with their
+    // glyph inside and no label above, the focused field outlined, a primary button that stays a
+    // quiet raised pill until it can be pressed, "Forgot password?", and the other mode as one line.
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
                 .dismissesKeyboardOnTap()
-            // TWO SPACERS, not a fixed 40 at the top. Pinned to the top, the form left a dead gap
-            // between the button and the keyboard that made the page look unfinished. Balanced
-            // spacers centre it in whatever room the keyboard leaves, so the block rises with the
-            // keyboard instead of stranding itself above it.
-            VStack(spacing: 14) {
-                Spacer(minLength: 24)
-                Text(mode == .create ? "Sign up with Email" : "Log in with Email")
-                    .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
-                    .padding(.bottom, 4)
+            ScrollView {
+                VStack(spacing: 14) {
+                    VStack(spacing: 6) {
+                        Text(title)
+                            .font(.system(size: 30, weight: .bold)).foregroundStyle(.primary)
+                        Text(subtitle)
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.top, 36).padding(.bottom, 12)
 
-                // Step 2 of sign-up keeps the address on screen, but as a line rather than a box:
-                // you are past it, and it must still be fixable without losing the page.
-                if mode == .create && showPassword {
-                    Button { backToEmail() } label: {
-                        HStack(spacing: 8) {
-                            Text(email).lineLimit(1).truncationMode(.middle)
-                                .foregroundStyle(.secondary)
-                            Text("Change").font(.footnote.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Spacer(minLength: 0)
+                    if mode == .create && showPassword {
+                        Button { backToEmail() } label: {
+                            HStack(spacing: 8) {
+                                Text(email).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                                Text("Change").font(.footnote.weight(.semibold)).foregroundStyle(.primary)
+                                Spacer(minLength: 0)
+                            }
+                            .font(.system(size: 15))
+                            .contentShape(Rectangle())
                         }
-                        .font(.system(size: 15))
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 4)
+                    } else {
+                        HStack(spacing: 12) {
+                            Image(systemName: "envelope").foregroundStyle(.secondary).frame(width: 22)
+                            TextField("Email", text: $email)
+                                .keyboardType(.emailAddress)
+                                .textContentType(.emailAddress)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .focused($emailFocused)
+                                .submitLabel(.next)
+                                .onSubmit {
+                                    if mode == .create { if emailLooksValid { advance() } }
+                                    else { emailFocused = false; passwordFocused = true }
+                                }
+                        }
+                        .authField(focused: emailFocused)
+                    }
+
+                    if !onEmailStep {
+                        passwordBox(text: $password, focused: $passwordFocused,
+                                    placeholder: "Password",
+                                    contentType: mode == .create ? .newPassword : .password,
+                                    onSubmit: {
+                                        if mode == .create { passwordFocused = false; confirmFocused = true }
+                                        else if canSubmit { submit() }
+                                    })
+                        if mode == .create {
+                            passwordBox(text: $confirm, focused: $confirmFocused,
+                                        placeholder: "Confirm password",
+                                        contentType: .newPassword,
+                                        onSubmit: { if canSubmit { submit() } })
+                            PasswordChecklist(rules: rules)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 4).padding(.top, 2)
+                        }
+                    }
+
+                    Button {
+                        if onEmailStep { advance() } else { submit() }
+                    } label: {
+                        Group {
+                            if busy {
+                                ProgressView().tint(AuthPalette.page)
+                            } else if onEmailStep {
+                                Text("Continue")
+                            } else {
+                                Text(mode == .create ? "Create account" : "Sign in")
+                            }
+                        }
+                        .authActionPill(enabled: primaryEnabled || busy)
                     }
                     .buttonStyle(.plain)
-                    .padding(.bottom, 2)
-                } else {
-                    field("Email") {
-                        // NO PLACEHOLDER. "you@example.com" sat here and the owner called it
-                        // unprofessional, which it was: the row already carries an "Email" label
-                        // directly above it, so the ghost text repeated the label and dressed the
-                        // repeat up as a fake address. Apple's own sign-in fields label the row and
-                        // leave the box empty. An empty box under a label is not missing anything.
-                        TextField("", text: $email)
-                            .keyboardType(.emailAddress)
-                            .textContentType(.emailAddress)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .focused($emailFocused)
-                            // Return moves on rather than closing the keyboard, so the whole form is
-                            // fillable without ever reaching for the screen.
-                            .submitLabel(.next)
-                            .onSubmit {
-                                if mode == .create { if emailLooksValid { advance() } }
-                                else { emailFocused = false; passwordFocused = true }
-                            }
-                    }
-                }
+                    .disabled(busy || !primaryEnabled)
+                    .animation(.easeInOut(duration: 0.15), value: primaryEnabled)
+                    .padding(.top, 4)
 
-                if !onEmailStep { passwordStep }
-
-                Button {
-                    if onEmailStep { advance() } else { submit() }
-                } label: {
-                    Group {
-                        if busy {
-                            ProgressView().tint(AuthPalette.page)   // spinner reads on the filled pill
-                        } else if onEmailStep {
-                            Text("Continue")
-                        } else {
-                            Text(mode == .create ? "Create Account" : "Log In")
+                    if mode == .login {
+                        // The code sign-in lives under Forgot Password (owner, 2026-08-08): six
+                        // digits typed here and you are in; setting a new password is optional later.
+                        NavigationLink {
+                            LoginCodeView(email: email, purpose: .forgot, onAuthed: onAuthed)
+                        } label: {
+                            Text("Forgot password?")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
                         }
+                        .padding(.top, 10)
                     }
-                    .authPrimaryPill()
-                }
-                .disabled(busy || !primaryEnabled)
-                // 0.3, not 0.55. At 0.55 the black pill turned a solid mid-grey that read as a
-                // broken button rather than one waiting for you; faded far enough back, it reads
-                // as not-yet.
-                .opacity(primaryEnabled ? 1 : 0.3)
-                .animation(.easeInOut(duration: 0.15), value: primaryEnabled)
-                .padding(.top, 4)
 
-                if mode == .login {
-                    // ONE LINK NOW, NOT TWO. "Log in with a code instead" used to sit above this
-                    // one, and the pair of them made a person choose between two doors that both
-                    // ended in the same place. The owner's call (2026-08-08): the code stops being
-                    // its own advertised way in and becomes the machinery UNDER Forgot Password,
-                    // which is what people actually go looking for. The reference app's model, and his words
-                    // for the old one were "users hate alot steps".
-                    //
-                    // It no longer mails a reset link either. Six digits, typed here, and you are
-                    // in. Setting a password is a separate thing you can do whenever you like from
-                    // Settings › Password, because what somebody locked out actually wants is their
-                    // account back, not homework.
-                    //
-                    // ForgotPasswordView is gone with it. Its whole job was to show the address back
-                    // before firing a send that could not be undone; LoginCodeView shows the same
-                    // address at the top of the code step, so the page had nothing left to do.
-                    //
-                    // Keep `.secondary` here. `.primary` was right for the bold code link that used
-                    // to lead, and this line is not leading anything.
-                    NavigationLink {
-                        LoginCodeView(email: email, purpose: .forgot, onAuthed: onAuthed)
-                    } label: {
-                        Text("Forgot password?")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
                     }
-                    .padding(.top, 2)
-                }
 
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
+                    Button { switchMode() } label: {
+                        HStack(spacing: 5) {
+                            Text(mode == .login ? "Don’t have an account?" : "Already have an account?")
+                                .foregroundStyle(.secondary)
+                            Text(mode == .login ? "Sign up" : "Sign in")
+                                .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                        }
+                        .font(.subheadline)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 24)
                 }
-                Spacer(minLength: 24)
+                .padding(.horizontal, 24)
             }
-            .padding(.horizontal, 24)
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.basedOnSize)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { emailFocused = true }
-        // A PUSH, not a sheet and not an alert. This is the next step of the same errand, not an
-        // interruption of it, and the code screen needs to stay put while somebody leaves the app to
-        // go and read their mail. An alert would be dismissed and gone by the time they came back.
+        .onAppear {
+            // A prefilled address (the saved-account row) goes straight to the password.
+            if mode == .login && !email.isEmpty { passwordFocused = true } else { emailFocused = true }
+        }
+        // A PUSH, not a sheet: the code screen has to stay put while somebody goes to read their mail.
         .navigationDestination(item: $prove) { purpose in
             LoginCodeView(email: email.trimmingCharacters(in: .whitespaces),
                           purpose: purpose,
@@ -599,67 +732,39 @@ struct EmailAuthView: View {
         }
     }
 
-    /// Plain text now rather than a styled `Text`. It was shared so a TextField and a SecureField
-    /// could not drift apart; there is one field left, and it colours its own placeholder.
-    private var passwordPrompt: String {
-        mode == .create ? "At least 6 characters" : "Your password"
+    /// One password box: the lock glyph, the field, and the eye. The field is UIKit so the eye flips
+    /// secure entry on the live field and the keyboard never bounces (see RevealablePasswordField).
+    private func passwordBox(text: Binding<String>, focused: Binding<Bool>, placeholder: String,
+                             contentType: UITextContentType, onSubmit: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock").foregroundStyle(.secondary).frame(width: 22)
+            RevealablePasswordField(text: text, secure: !reveal, focused: focused,
+                                    placeholder: placeholder, contentType: contentType,
+                                    onSubmit: onSubmit)
+            Button { reveal.toggle() } label: {
+                Image(systemName: reveal ? "eye.slash" : "eye")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(reveal ? "Hide password" : "Show password")
+        }
+        .authField(focused: focused.wrappedValue)
     }
 
-    /// The password box and its rule. Its own property only so the step check in `body` stays one
-    /// readable line instead of wrapping fifty.
-    @ViewBuilder private var passwordStep: some View {
-        field("Password") {
-            HStack(spacing: 8) {
-                // ONE field that flips, not two that swap. This used to hold a SwiftUI TextField
-                // and a SecureField and exchange them on every tap of the eye, because SecureField
-                // cannot be told to show its text and no modifier adds that. Swapping REPLACES the
-                // view the keyboard is attached to: first responder dropped, the keyboard started
-                // to leave, and a hand-written `focus = .password` on the next runloop hauled it
-                // back. That bounce is what the owner photographed. UIKit flips `isSecureTextEntry`
-                // on the live field, so nothing is replaced and the keyboard never moves at all.
-                RevealablePasswordField(
-                    text: $password,
-                    secure: !reveal,
-                    focused: $passwordFocused,
-                    placeholder: passwordPrompt,
-                    contentType: mode == .create ? .newPassword : .password,
-                    onSubmit: { if canSubmit { submit() } }
-                )
-
-                if !password.isEmpty {
-                    Button {
-                        reveal.toggle()   // no focus to restore: nothing is being replaced
-                    } label: {
-                        Image(systemName: reveal ? "eye.slash" : "eye")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)   // a real target, not a glyph
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+    private func switchMode() {
+        error = nil
+        password = ""; confirm = ""; reveal = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            mode = mode == .login ? .create : .login
+            showPassword = false
         }
-
-        // The rule, kept ON SCREEN while it is being met. It used to live in the placeholder,
-        // which disappears the moment somebody starts typing — exactly when they need to know how
-        // far they have to go.
-        if mode == .create {
-            HStack(spacing: 6) {
-                Image(systemName: passwordLongEnough ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 12))
-                Text("At least 6 characters")
-                Spacer()
-            }
-            .font(.caption)
-            .foregroundStyle(passwordLongEnough ? .primary : .secondary)
-            .animation(.easeInOut(duration: 0.15), value: passwordLongEnough)
-            .padding(.top, -6)
-        }
+        emailFocused = true
     }
 
-    /// Email step → password step. The email box is removed and the password box created in the
-    /// same pass, so UIKit hands first responder straight over and the keyboard never drops.
+    /// Email step → password step, handing first responder straight over.
     private func advance() {
         error = nil
         email = email.trimmingCharacters(in: .whitespaces)
@@ -667,35 +772,19 @@ struct EmailAuthView: View {
         passwordFocused = true
     }
 
-    /// Back to the address. The password is CLEARED on the way: it was invented for the address on
-    /// screen a second ago, and carrying it silently behind a changed email is how somebody ends up
-    /// with an account whose password they never meant to pair with it.
+    /// Back to the address. Both passwords are CLEARED: they were made for the address on screen.
     private func backToEmail() {
         error = nil
-        password = ""
+        password = ""; confirm = ""
         reveal = false
-        passwordFocused = false
+        passwordFocused = false; confirmFocused = false
         withAnimation(.easeInOut(duration: 0.2)) { showPassword = false }
         emailFocused = true
     }
 
-    private func field<C: View>(_ label: String, @ViewBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            content()
-                .font(.system(size: 17))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 16).frame(height: 50)
-                .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-    }
-
     private func submit() {
-        // The keyboard's return key calls this too (audit 2026-09-24). The button is disabled while
-        // busy but the return key was not, so a second press sent a second createUser / signIn while
-        // the first was still running; on sign-up the second one came back "already has an account".
+        // The keyboard's return key calls this too; one request at a time (audit 2026-09-24).
         guard !busy else { return }
-        // Same early offline refusal as the social doors — say it plainly before trying.
         guard NetworkState.shared.isOnline else {
             error = "No internet connection. Check your connection and try again."
             return
@@ -706,24 +795,13 @@ struct EmailAuthView: View {
                 if mode == .create {
                     try await AuthService.shared.createEmailAccount(email: email.trimmingCharacters(in: .whitespaces),
                                                                     password: password)
-                    // SIGN-UP ALWAYS PROVES THE ADDRESS, and this is the step that closes the typo
-                    // hole for good. `createUser` checks nothing: mean `abdil@`, type `abdi@`, and
-                    // that address is attached to the account on your word alone. Everything the old
-                    // code tried to do about that afterwards (the confirm-before-code wall) could be
-                    // walked past with one click, because the cure it posted went to the very
-                    // mailbox it was defending. Proving it here, before the account is any use, is
-                    // the only version that holds.
-                    //
-                    // NOT `onAuthed()`. The person is signed in to Firebase at this point, but the
-                    // app deliberately does not move on Firebase's state — RootView waits for this
-                    // callback — so the code screen gets its turn.
+                    // SIGN-UP ALWAYS PROVES THE ADDRESS with a code before the account is any use.
+                    // NOT `onAuthed()`: RootView waits for this callback, so the code screen gets its turn.
                     await MainActor.run { prove = .signUp }
                 } else {
                     try await AuthService.shared.signInEmail(email: email.trimmingCharacters(in: .whitespaces),
                                                              password: password)
-                    // EVERY ACCOUNT THAT PREDATES THE LINE ABOVE comes through here unproven, and
-                    // this is where each of them quietly gets fixed, one sign-in at a time, without
-                    // anybody being told to go and click anything in a mailbox.
+                    // Accounts that predate proving are fixed here, one sign-in at a time.
                     if await AuthService.shared.emailNeedsProof {
                         await MainActor.run { prove = .unproven }
                     } else {
@@ -731,16 +809,11 @@ struct EmailAuthView: View {
                     }
                 }
             } catch {
-                await MainActor.run { self.error = plain(error) }
+                await MainActor.run { self.error = AuthService.plainMessage(error) }
             }
             await MainActor.run { busy = false }
         }
     }
-
-    // Moved to AuthService.plainMessage so every door that can reject somebody shares it. It lived
-    // here as a private function, which is exactly why Delete Account was still showing people
-    // "The supplied auth credential is malformed or has expired".
-    private func plain(_ error: Error) -> String? { AuthService.plainMessage(error) }
 }
 
 // MARK: - The password box that can show itself
