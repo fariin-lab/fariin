@@ -88,15 +88,15 @@ struct GlowPeopleListView: View {
     /// ⚠️ THE `.snappy` ANIMATION IS GONE WITH THEM, and deliberately: a segmented control animates
     /// its own thumb, and a second curve over the top is what makes a native control feel wrong.
     /// (The search that was cleared on a tab change went on 2026-09-25, so there is nothing to clear.)
+    /// ⛔ 44pt — owner, 2026-09-25. SwiftUI's segmented `Picker` ignores a height, so this is the
+    /// same native control from UIKit (`UISegmentedControl`), which takes one. Still the system
+    /// control with its own glass, thumb and animation, just at the height he asked for.
     private var tabs: some View {
-        Picker("", selection: $tab) {
-            Text(Side.glowers.title).tag(Side.glowers)
-            Text(Side.glowing.title).tag(Side.glowing)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.large)
-        .frame(maxWidth: .infinity)
+        NativeSegments(titles: [Side.glowers.title, Side.glowing.title],
+                       selected: Binding(get: { tab == .glowers ? 0 : 1 },
+                                         set: { tab = $0 == 0 ? .glowers : .glowing }))
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
     }
 
     // ⛔ NO SEARCH ON THIS PAGE — owner, 2026-09-25. It was `.searchable` (2026-09-11) and he asked
@@ -381,5 +381,32 @@ enum GlowStyle {
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
+    }
+}
+
+/// Apple's segmented control at a height SwiftUI's `Picker` will not take (see `tabs`).
+private struct NativeSegments: UIViewRepresentable {
+    let titles: [String]
+    @Binding var selected: Int
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let c = UISegmentedControl(items: titles)
+        c.selectedSegmentIndex = selected
+        c.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        c.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return c
+    }
+
+    func updateUIView(_ c: UISegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        if c.selectedSegmentIndex != selected { c.selectedSegmentIndex = selected }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject {
+        var parent: NativeSegments
+        init(_ p: NativeSegments) { parent = p }
+        @objc func changed(_ c: UISegmentedControl) { parent.selected = c.selectedSegmentIndex }
     }
 }

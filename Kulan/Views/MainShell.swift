@@ -1867,9 +1867,8 @@ struct ChatsView: View {
             }
             // Native bottom toolbar (like Mail/Photos edit mode) — no custom glass bar.
             ToolbarItemGroup(placement: .bottomBar) {
-                // 2026-09-24 audit: bulk Mute, first, where the reference puts it.
-                bulkMuteMenu
-                Spacer()
+                // No bulk Mute here — owner, 2026-09-25: "remove the mute button when I select
+                // chats". Mute stays on each chat's swipe and long-press menu.
                 Button { archiveSelected() } label: {
                     Image("ic_archive").renderingMode(.template).resizable().scaledToFit()
                         .frame(width: 22, height: 22)

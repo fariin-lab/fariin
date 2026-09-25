@@ -480,7 +480,9 @@ struct GlowProfileView: View {
         // The name tucks up into the photograph's fade. With no photograph there is no fade and
         // nothing to tuck into, so the pull-up is proportional to whichever hero is actually there.
         // The circle has no fade to tuck into either; its slot already carries the gap.
-        .padding(.top, heroCircle ? 0 : -heroHeight * 0.10)
+        // Rides up over a PHOTO's fading edge only. With no photo there is no edge to ride over and
+        // the pull-up put the name on the circle (owner, 2026-09-25: "no space").
+        .padding(.top, (heroCircle || !hasHeroPhoto) ? 0 : -heroHeight * 0.10)
     }
 
     // 2026-09-24 fix-all #90: the Glow / Glowing button lived here, drawn only on somebody else's

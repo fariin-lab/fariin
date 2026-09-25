@@ -24,6 +24,8 @@ struct WelcomeView: View {
     /// The automatic passkey offer runs once per time this screen is built, not on every return
     /// from a pushed door page.
     @State private var passkeyOffered = false
+    @State private var passkeyBusy = false
+    @State private var passkeyError: String?
 
     var body: some View {
         NavigationStack {
@@ -46,6 +48,25 @@ struct WelcomeView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 8)
+                    // ⛔ THE PASSKEY DOOR, ASKED FOR — owner, 2026-09-25. The automatic offer below
+                    // only appears when this phone already holds a Fariin passkey; this link opens the
+                    // system passkey sheet on request, including a passkey on another device.
+                    Button { Task { await passkeyLogin() } } label: {
+                        HStack(spacing: 6) {
+                            if passkeyBusy { ProgressView().controlSize(.small) }
+                            Text("Log in using Passkey")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(passkeyBusy)
+                    .padding(.top, 10)
+                    if let passkeyError {
+                        Text(passkeyError).font(.footnote).foregroundStyle(.red)
+                            .multilineTextAlignment(.center).padding(.horizontal, 24)
+                    }
                     Spacer()
                     Spacer()
                     VStack(spacing: 12) {
@@ -78,6 +99,28 @@ struct WelcomeView: View {
             .toolbar(.hidden, for: .navigationBar)
             .task { await offerPasskey() }
         }
+    }
+
+    /// The link's passkey sign-in: the full system sheet (not `immediateOnly`). A cancel says nothing.
+    private func passkeyLogin() async {
+        guard !passkeyBusy else { return }
+        guard NetworkState.shared.isOnline else {
+            passkeyError = "No internet connection. Check your connection and try again."
+            return
+        }
+        passkeyBusy = true; passkeyError = nil
+        defer { passkeyBusy = false }
+        do {
+            try await Passkeys.signIn(immediateOnly: false)
+        } catch {
+            if !AuthService.isCancellation(error) {
+                passkeyError = "Couldn't sign in with a passkey. Try again or use another way to log in."
+            }
+            return
+        }
+        await AuthService.shared.bootstrap()
+        AuthService.shared.reportLogin()
+        onAuthed()
     }
 
     /// THE FASTEST DOOR, OFFERED WITHOUT ASKING. If this phone holds a Fariin passkey, the system
@@ -181,15 +224,14 @@ extension View {
         }
     }
 
-    /// ⛔ THE QUIET DOOR — owner's reference, 2026-09-25: Google and Email as raised grey pills with
-    /// a faint edge under the one light Apple button, 54pt like it.
+    /// ⛔ THE QUIET DOOR — owner, 2026-09-25: Google and Email in Apple's liquid glass, at Apple's
+    /// standard 50pt button height, under the one light Apple button (also 50).
     func authRaisedPill() -> some View {
         self.font(.system(size: 17, weight: .medium))
             .foregroundStyle(.primary)
             .labelStyle(.titleAndIcon)
-            .frame(maxWidth: .infinity).frame(height: 54)
-            .background(AuthPalette.raised, in: Capsule())
-            .overlay(Capsule().strokeBorder(AuthPalette.hairline, lineWidth: 1))
+            .frame(maxWidth: .infinity).frame(height: 50)
+            .liquidGlass(Capsule(), interactive: true)
             .contentShape(Capsule())
     }
 
@@ -402,7 +444,7 @@ struct AuthMethodView: View {
         }
         .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)
         .id(scheme)
-        .frame(height: 54)
+        .frame(height: 50)   // Apple's standard button height (owner, 2026-09-25)
         .clipShape(Capsule())
         .lastUsedBadge(lastDoor == .apple)
         .disabled(busy)
