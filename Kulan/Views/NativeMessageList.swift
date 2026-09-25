@@ -2775,6 +2775,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private static let jumpButtonHideDistance: CGFloat = 44
     private var jumpButtonVisible = false
     private var shouldShowJumpButton: Bool {
+        // ⛔ NOTHING TO JUMP TO IN A CHAT THAT FITS — owner, 2026-09-25: the arrow sat on the send
+        // button in a new chat with no messages. With the content shorter than the screen there is no
+        // newer place to go; a passing offset while the keyboard rises must not summon it.
+        guard maxContentOffsetY > minContentOffsetY + 1 else { return false }
         let distance = maxContentOffsetY - collectionView.contentOffset.y
         return jumpButtonVisible ? distance > Self.jumpButtonHideDistance
                                  : distance > Self.jumpButtonShowDistance
