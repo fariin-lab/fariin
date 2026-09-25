@@ -74,16 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FIXES FROM YOUR TESTING TODAY.
+            NEW SEARCH, SAVED ACCOUNTS AND ONE-TAP LOG IN.
 
-            CHATS: the top bar blurs the list softly instead of a hard edge. Search Cancel is an X. The send button no longer covers the text on a first message.
+            CHATS SEARCH: rebuilt like the reference app. The Search field is part of the list, it stays after Back, and closing search with X no longer moves the list. Mute is gone from select mode.
 
-            BLOCKING: a chat can no longer block itself after switching accounts (unblock once any chat it already hit). Blocked Users search no longer drops the list on X.
+            LOG IN: up to 5 saved accounts as cards, plus Add another account. Tap a saved account to sign in with no questions (asks again after 30 days unused or a password change). Each card uses its own sign-in, so an email account no longer asks for Apple. New: Log in using Passkey on the welcome page. Glass buttons at Apple size; Google no longer shifts the page.
 
-            PROFILE: link pills in the profile colour with no shadow. My QR Code has the black app mark.
+            ALSO: Glowers/Glowing bar is 44pt. My Profile without a photo has space under the circle.
 
-            SETTINGS: Hide From opens on the right page, 20 long explanations cut short, Calls privacy says My Chats.
-
-            PLEASE TEST: scroll the chat list under the top bar; the first chat must still sit below the search bar.
+            PLEASE TEST: sign in once on the new build, sign out, then tap your saved account. Open a chat, go Back, check the Search field is there.
 
         run: fastlane beta
