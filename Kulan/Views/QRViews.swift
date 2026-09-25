@@ -276,7 +276,7 @@ struct MyQRView: View {
                     // The mark, in the middle, in a cleared white BLOCK (owner 2026-09-25: the
                     // modules crowded the old disc). 64pt of 220 is under 9% of the code, well
                     // inside the 30% the H correction level buys us.
-                    OfficialAvatar(size: 44)
+                    QRCentreMark(size: 44)
                         .frame(width: 64, height: 64)
                         .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
@@ -898,7 +898,7 @@ private struct SavedCodeCard: View {
                         // The same cleared block as the on-screen code, scaled to 230.
                         RoundedRectangle(cornerRadius: 15, style: .continuous)
                             .fill(.white).frame(width: 67, height: 67)
-                        OfficialAvatar(size: 44)
+                        QRCentreMark(size: 44)
                     }
                     .padding(.top, 18).padding(.bottom, 30)
                 }
@@ -932,5 +932,22 @@ private struct SavedCodeCard: View {
         .frame(width: 80, height: 80)
         .clipShape(Circle())
         .overlay(Circle().stroke(.white, lineWidth: 4))
+    }
+}
+
+/// ⛔ THE BLACK MARK IN THE MIDDLE OF THE CODE — owner, 2026-09-25: "make the app logo black, now it
+/// is blue". The black alternate app icon (white bubble on black), the same artwork as the "Black"
+/// icon choice, so the code reads as black and white. Falls back to the usual avatar if the file is
+/// ever missing.
+struct QRCentreMark: View {
+    let size: CGFloat
+    var body: some View {
+        if let ui = UIImage(named: "icon-black") {
+            Image(uiImage: ui).resizable().scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+        } else {
+            OfficialAvatar(size: size)
+        }
     }
 }
