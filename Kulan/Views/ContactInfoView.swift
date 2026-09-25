@@ -133,6 +133,9 @@ struct ContactInfoView: View {
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?   // videos get the PLAYER — the image viewer spun forever
     @State private var showClear = false
+    @State private var exportingChat = false
+    @State private var chatExportFile: ExportFile?
+    @State private var chatExportError: String?
     @State private var showBlock = false
     @State private var showReport = false
     /// The Delete Chat confirmation on a blocked person's page. Deleting a conversation cannot be
@@ -635,7 +638,31 @@ struct ContactInfoView: View {
         // "Share Profile", not "Share Contact" — what it sends is a Fariin profile link, and there is no
         // contact card behind it (no phone book, no numbers).
         Button { showShare = true } label: { Label("Share Profile", systemImage: "square.and.arrow.up") }
+        // ⛔ EXPORT CHAT — 2026-09-25. Messages left "Your Account Data" (see `DataExport`) and are
+        // saved one conversation at a time from here, the way large messengers do it. Only where a
+        // real chat exists: not your own profile, not a profile with no conversation behind it.
+        if !isSelf && hasChat {
+            Button { Task { await exportChat() } } label: {
+                Label("Export Chat", systemImage: "square.and.arrow.down")
+            }
+            .disabled(exportingChat)
+        }
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
+    }
+
+    private var hasChat: Bool {
+        ConversationsRepository.shared.conversations.contains { $0.id == cid && !$0.isGroup }
+    }
+
+    private func exportChat() async {
+        exportingChat = true
+        defer { exportingChat = false }
+        do {
+            chatExportFile = ExportFile(url: try await DataExport.chatExport(
+                cid: cid, otherUid: otherUid, otherName: shownName))
+        } catch {
+            chatExportError = error.localizedDescription
+        }
     }
 
     private var coreScrollBody: some View {
@@ -1065,6 +1092,16 @@ struct ContactInfoView: View {
             // and this page is what says it.
             .sheet(isPresented: $showShare) {
                 SendContactSheet(contactText: shareText, onSent: { flashShareToast($0) })
+            }
+            // Export Chat: the decrypted text is deleted the moment the share sheet closes.
+            .sheet(item: $chatExportFile, onDismiss: { DataExport.cleanup() }) { f in
+                ActivityView(items: [f.url])
+            }
+            .alert("Could not export this chat", isPresented: Binding(
+                get: { chatExportError != nil }, set: { if !$0 { chatExportError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(chatExportError ?? "")
             }
             // Same shape the story viewer's own toast uses — a capsule at the bottom, up on a
             // spring, gone on a fade after a second and a half.

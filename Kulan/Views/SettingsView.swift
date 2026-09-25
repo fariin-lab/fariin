@@ -471,6 +471,7 @@ struct AccountSettingsView: View {
     @State private var deleteError: String?
     @State private var exporting = false
     @State private var exportFile: ExportFile?
+    @State private var exportError: String?
     // Sign-in methods (connect another door to this same account).
     @State private var connecting: AuthService.SignInMethod?
     @State private var connectError: String?
@@ -657,7 +658,14 @@ struct AccountSettingsView: View {
                 }
             }
         }
-        .sheet(item: $exportFile) { f in ActivityView(items: [f.url]) }
+        // The report holds personal details, so it is deleted the moment the sheet closes.
+        .sheet(item: $exportFile, onDismiss: { DataExport.cleanup() }) { f in ActivityView(items: [f.url]) }
+        .alert("Could not create the file", isPresented: Binding(
+            get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(exportError ?? "")
+        }
         .alert("Sign out?", isPresented: $showSignOut) {
             Button("Cancel", role: .cancel) {}
             Button("Sign Out", role: .destructive) {
@@ -926,41 +934,16 @@ struct AccountSettingsView: View {
         }
     }
 
+    /// The account report (2026-09-25). Details in `DataExport`: no message content, a failure is
+    /// shown rather than written as an empty section, and the file is deleted when the sheet closes.
     private func exportData() async {
         exporting = true
-        let me = AuthService.shared.uid ?? ""
-        var out = "Fariin, data export\n\n"
-        out += "Name: \(profile.me?.name ?? "")\n"
-        out += "Username: @\(profile.me?.handle ?? "")\n"
-        if let about = profile.me?.about, !about.isEmpty { out += "Bio: \(about)\n" }
-        out += "Account ID: \(me)\n\n"
-
-        let convs = await MainActor.run {
-            ConversationsRepository.shared.conversations
-                .filter { !$0.isCleared(me) }
-                .filter { Flags.groupsEnabled || !$0.isGroup }
+        defer { exporting = false }
+        do {
+            exportFile = ExportFile(url: try await DataExport.accountReport())
+        } catch {
+            exportError = error.localizedDescription
         }
-        let db = Firestore.firestore()
-        for c in convs {
-            _ = await Crypto.shared.preloadKey(c.otherUid(me))
-            out += "===== Chat with \(c.name(for: me)) =====\n"
-            if let snap = try? await db.collection("conversations").document(c.id)
-                .collection("messages").order(by: "createdAt").getDocuments() {
-                for d in snap.documents {
-                    let m = Message(id: d.documentID, data: d.data(), cid: c.id, crypto: Crypto.shared)
-                    let who = m.authorId == me ? "You" : c.name(for: me)
-                    let when = m.createdAt.formatted(date: .abbreviated, time: .shortened)
-                    let body = m.isImage ? "[Photo]" : (m.isAudio ? "[Voice message]"
-                              : (m.isCall ? "[Call]" : m.text))
-                    out += "[\(when)] \(who): \(body)\n"
-                }
-            }
-            out += "\n"
-        }
-
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Fariin-Data-Export.txt")
-        try? out.write(to: url, atomically: true, encoding: .utf8)
-        await MainActor.run { exportFile = ExportFile(url: url); exporting = false }
     }
 }
 
