@@ -34,14 +34,20 @@ final class PasskeyCeremony: NSObject, ASAuthorizationControllerDelegate,
     private var continuation: CheckedContinuation<ASAuthorization, Error>?
     private var controller: ASAuthorizationController?
 
-    func run(_ requests: [ASAuthorizationRequest]) async throws -> ASAuthorization {
+    /// `immediateOnly`: show the sheet only if this phone already holds a matching passkey, and fail
+    /// quietly (no sheet at all) when it does not. Used by the automatic offer on the sign-in screen.
+    func run(_ requests: [ASAuthorizationRequest], immediateOnly: Bool = false) async throws -> ASAuthorization {
         try await withCheckedThrowingContinuation { cont in
             continuation = cont
             let c = ASAuthorizationController(authorizationRequests: requests)
             c.delegate = self
             c.presentationContextProvider = self
             controller = c
-            c.performRequests()
+            if immediateOnly {
+                c.performRequests(options: .preferImmediatelyAvailableCredentials)
+            } else {
+                c.performRequests()
+            }
         }
     }
 
@@ -127,8 +133,11 @@ enum Passkeys {
     /// ⚠️ THE SERVER'S TOKEN IS THE WHOLE TRUST BOUNDARY HERE. Nothing on this side decides who you
     /// are — the assertion goes up, the server verifies it against a stored public key and a
     /// single-use challenge it issued, and only then is a token minted.
+    ///
+    /// `immediateOnly` passes through to the ceremony: with it, a phone with no Fariin passkey shows
+    /// nothing and this throws, which the caller swallows.
     @MainActor
-    static func signIn() async throws {
+    static func signIn(immediateOnly: Bool = false) async throws {
         let start = try await AccountCall.run("passkeyAuthOptions")
         guard let options = start["options"] as? [String: Any],
               let challengeId = start["challengeId"] as? String,
@@ -140,7 +149,7 @@ enum Passkeys {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: passkeyRelyingParty)
         let request = provider.createCredentialAssertionRequest(challenge: challenge)
 
-        let authorization = try await PasskeyCeremony().run([request])
+        let authorization = try await PasskeyCeremony().run([request], immediateOnly: immediateOnly)
         guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialAssertion else {
             throw AccountCall.Failure.message("That passkey was not recognised.")

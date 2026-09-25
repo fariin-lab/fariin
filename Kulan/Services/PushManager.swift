@@ -314,11 +314,21 @@ enum Push {
     /// Safe to call on every launch once signed in — iOS only prompts once.
     /// Respects the user's own Show Notifications switch: boot calls this unconditionally, so
     /// without the check a launch re-registered a device the user had deliberately turned off.
-    static func register() {
+    ///
+    /// NEVER A COLD POPUP (first-run rebuild, 2026-09-24). On a phone that has not been asked yet,
+    /// this does NOT ask: the first-run explainer screen (`NotificationsExplainerView`) does, after
+    /// saying why. `askIfUndecided` is for the two places a person has just asked for notifications
+    /// themselves: that screen's Continue, and the Show Notifications switch in Settings. A phone
+    /// that already answered is unaffected either way: iOS answers without showing anything.
+    static func register(askIfUndecided: Bool = false) {
         guard UserDefaults.standard.object(forKey: "notif.push") as? Bool ?? true else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
-            guard granted else { return }
-            DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined && !askIfUndecided { return }
+            center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
+                guard granted else { return }
+                DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
+            }
         }
         // SAVE THE TOKEN WE ALREADY HOLD, for whoever is signed in NOW (audit, 2026-09-24). The FCM
         // delegate only fires when the token is minted or rotates, and it drops it when nobody is
@@ -339,6 +349,32 @@ enum Push {
         // listener takes over and syncs on every launch anyway.
         OfficialPushTopics.sync(muted: OfficialChannelStore.shared.state.muted,
                                 signedIn: Auth.auth().currentUser != nil)
+    }
+
+    /// Set once the first-run notifications screen has been answered, Continue or Not now, so it
+    /// is shown once per install. Deleting the app clears it along with every other default.
+    private static let explainerSeenKey = "firstRun.notificationsExplainerSeen"
+
+    /// Should the first-run notifications screen show? Only on a phone iOS has never asked, with
+    /// the Show Notifications switch on, and only until the screen has been answered once. A person
+    /// who already allowed or refused goes straight past it. A local check, no network.
+    static func needsExplainer() async -> Bool {
+        guard !DemoMode.active else { return false }
+        guard UserDefaults.standard.object(forKey: "notif.push") as? Bool ?? true else { return false }
+        guard !UserDefaults.standard.bool(forKey: explainerSeenKey) else { return false }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return settings.authorizationStatus == .notDetermined
+    }
+
+    /// The explainer's answer. Continue shows the system popup and waits for it, so the screen
+    /// stays put underneath until the person has chosen; Not now asks nothing.
+    static func finishExplainer(allow: Bool) async {
+        UserDefaults.standard.set(true, forKey: explainerSeenKey)
+        guard allow else { return }
+        let granted = (try? await UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        guard granted else { return }
+        await MainActor.run { UIApplication.shared.registerForRemoteNotifications() }
     }
 
     /// Stop push to this device: drop its FCM token so the Cloud Function skips it,

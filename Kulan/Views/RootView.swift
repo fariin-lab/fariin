@@ -12,8 +12,15 @@ struct RootView: View {
     /// into the app and the proof would be skipped for good.
     /// 2026-09-24 decision D1: `twoStep` is the additional-password page every new sign-in on a
     /// two-step account meets before the app (see TwoStepGate).
-    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date), twoStep }
+    /// `notifications` (first-run rebuild, 2026-09-24) is the explainer between the profile step and
+    /// the Chats screen, shown only while iOS has never asked this phone (see Push.needsExplainer).
+    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date), twoStep, notifications }
     @State private var phase: Phase = .loading
+    /// When "Agree and continue" was tapped on this install (seconds since 1970), 0 = not yet.
+    @AppStorage(FirstRun.termsAgreedAtKey) private var termsAgreedAt: Double = 0
+    /// A new account's age question waits until the notifications screen is answered, so two
+    /// system sheets never arrive together.
+    @State private var askAgeAfterNotifications = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appLockEnabled") private var lockEnabled = false
@@ -39,8 +46,14 @@ struct RootView: View {
             case .welcome:
                 // Signed out → the front door (Apple / Google / email). After any door
                 // succeeds, route() decides onboarding (new account) vs main (returning).
-                WelcomeView(onAuthed: { Task { await route() } },
-                            onDemo: { phase = .main })
+                // First-run rebuild, 2026-09-24: the agreement is its own screen, in front of the
+                // doors, once per install.
+                if termsAgreedAt > 0 {
+                    WelcomeView(onAuthed: { Task { await route() } },
+                                onDemo: { phase = .main })
+                } else {
+                    AgreementView { termsAgreedAt = Date().timeIntervalSince1970 }
+                }
             case .onboarding:
                 // ⚠️ THE ONLY PLACE THE AGE IS EVER ASKED. Owner's instruction, 2026-08-08: "age
                 // need one at time only when user sing up fist time creating account never ask
@@ -73,8 +86,23 @@ struct RootView: View {
                         DeviceRegistry.shared.start()
                         startOfficialChannel()
                     }
+                    Task {
+                        if await Push.needsExplainer() {
+                            askAgeAfterNotifications = true
+                            phase = .notifications
+                        } else {
+                            phase = .main
+                            await askAgeOnce()
+                        }
+                    }
+                }
+            case .notifications:
+                NotificationsExplainerView {
                     phase = .main
-                    Task { await askAgeOnce() }
+                    if askAgeAfterNotifications {
+                        askAgeAfterNotifications = false
+                        Task { await askAgeOnce() }
+                    }
                 }
             case .proveEmail(let address):
                 // Wrapped in its own NavigationStack because it is standing in for the whole auth
@@ -349,7 +377,8 @@ struct RootView: View {
             Push.register(); Push.saveVoipToken()
             DeviceRegistry.shared.start()   // record this phone in Settings › Devices, and watch for a remote sign-out
             startOfficialChannel()
-            phase = .main
+            // A local settings read, no network: the explainer only for a phone never asked.
+            phase = await Push.needsExplainer() ? .notifications : .main
             Task {   // background refresh + key self-heal, off the boot path
                 // 2026-09-24 decision D1: the two-step answer the boot path timed out on. Before the
                 // deletion check, because a locked token cannot read the profile that check reads.
@@ -421,7 +450,11 @@ struct RootView: View {
             startOfficialChannel()
             Task { await SendQueue.drainAll() }   // queued sends from a previous run (see drainAll)
         }
-        phase = ready ? .main : .onboarding
+        if !ready {
+            phase = .onboarding
+        } else {
+            phase = await Push.needsExplainer() ? .notifications : .main
+        }
     }
 
     /// The official channel, the admin permissions that decide whether the compose screens exist, the

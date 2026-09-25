@@ -67,7 +67,7 @@ struct NotificationsSettingsView: View {
                 Toggle("Show Notifications", isOn: $pushOn)
                     .tint(.green)
                     .onChange(of: pushOn) { _, on in
-                        if on { Push.register() } else { Task { await Push.unregister() } }   // unregister is now async
+                        if on { Push.register(askIfUndecided: true) } else { Task { await Push.unregister() } }   // unregister is now async
                     }
             } footer: {
                 // EVERYTHING BELOW HANGS OFF THIS SWITCH, and the page never said so. Turning it off

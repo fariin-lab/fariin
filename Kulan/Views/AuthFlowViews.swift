@@ -21,6 +21,9 @@ import AuthenticationServices
 struct WelcomeView: View {
     var onAuthed: () -> Void
     var onDemo: () -> Void = {}   // Appetize preview: straight to main, no routing
+    /// The automatic passkey offer runs once per time this screen is built, not on every return
+    /// from a pushed door page.
+    @State private var passkeyOffered = false
 
     var body: some View {
         NavigationStack {
@@ -70,7 +73,28 @@ struct WelcomeView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .task { await offerPasskey() }
         }
+    }
+
+    /// THE FASTEST DOOR, OFFERED WITHOUT ASKING. If this phone holds a Fariin passkey, the system
+    /// passkey sheet comes up on its own as the screen appears; `immediateOnly` means a phone with
+    /// none shows nothing at all, and the three doors below stay exactly as they were. Every
+    /// failure (no passkey, cancelled, offline, server down) is silent for the same reason: this is
+    /// an offer, not a step.
+    private func offerPasskey() async {
+        guard !passkeyOffered else { return }
+        passkeyOffered = true
+        guard !DemoMode.active, NetworkState.shared.isOnline else { return }
+        do {
+            try await Passkeys.signIn(immediateOnly: true)
+        } catch {
+            return
+        }
+        // Same bookkeeping the other doors do after Firebase accepts them.
+        await AuthService.shared.bootstrap()
+        AuthService.shared.reportLogin()
+        onAuthed()
     }
 }
 
@@ -197,7 +221,8 @@ extension View {
 // (2026-08-05): the first thing anybody sees should be the mark itself, and a mark that keeps
 // moving reads as a loading screen rather than a brand. Kept as its own view because the Welcome
 // screen refers to it by name and the artwork note below is worth not losing.
-private struct ShiningLogo: View {
+// Not private: the first-run Welcome screen (FirstRunViews.swift) shows the same mark.
+struct ShiningLogo: View {
     var body: some View {
         ZStack {
             // THE CURRENT MARK, not the retired one. This pointed at `welcome-logo`, a 512px PNG of
@@ -329,36 +354,10 @@ struct AuthMethodView: View {
                         .multilineTextAlignment(.center).padding(.top, 4)
                 }
 
-                if mode == .create {
-                    // THE AGE LINE IS NOT DECORATION, and it is deliberately in the SAME sentence
-                    // as the terms rather than a second line or a tick box.
-                    //
-                    // The privacy policy already promises "Fariin is not intended for children
-                    // under 13. We do not knowingly hold data about them." Nothing in the app asked
-                    // anybody anything, so that promise rested on never finding out. "Not
-                    // knowingly" only holds while you have actually asked, and until now we never
-                    // had.
-                    //
-                    // 13 is the owner's call and it matches two things: the number already written
-                    // in our own privacy policy, and one mainstream messenger, which moved Europe DOWN from 16 to 13
-                    // this year. Another mainstream messenger says 16 and still carries a 17+ App Store rating, so the
-                    // higher number does not buy the thing people assume it buys.
-                    //
-                    // ⚠️ THIS IS THE FLOOR, NOT THE FEATURE. A child can tap past it, exactly as
-                    // they can on either of those apps, neither of which verifies anything either.
-                    // What it buys is the record that we asked. The real protection is Apple's
-                    // Declared Age Range API (iOS 26, which is our floor anyway, so every user has
-                    // it) plus what actually CHANGES for a minor: not findable by username search,
-                    // no public stories, messages from accepted contacts only. A number nobody acts
-                    // on protects nobody.
-                    //
-                    // One sentence on purpose. A separate age checkbox is one more thing to tap on
-                    // the screen where people are already deciding whether to bother.
-                    Text("By continuing you confirm you are 13 or older and agree to Fariin's [Terms](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center).tint(.primary)
-                        .padding(.top, 10)
-                }
+                // The terms line and the 13+ statement that sat here moved to their own screen
+                // (first-run rebuild, 2026-09-24): `AgreementView` in FirstRunViews.swift, which
+                // every signed-out phone passes before these doors. The reasoning behind the age
+                // line went with it.
                 Spacer()
             }
             .padding(.horizontal, 24)
