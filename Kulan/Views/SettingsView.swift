@@ -476,6 +476,9 @@ struct AccountSettingsView: View {
     @State private var connectError: String?
     @State private var connectedTick = 0        // bump to re-read providerData after a link
     @State private var disconnecting: AuthService.SignInMethod?   // → the verify-then-remove screen
+    /// This account already has two-step on (the `twoStep.required` claim). Keeps the row reachable
+    /// while `Flags.twoStepEnabled` is off, so it can be turned off again.
+    @State private var hasTwoStep = false
     @State private var showConnectEmail = false
     /// Setting a FIRST password on the address the account already has. Distinct from
     /// `showConnectEmail`, which asks for an address as well — see `reallyConnect`.
@@ -530,7 +533,11 @@ struct AccountSettingsView: View {
                 // switched on in the portal. The entitlement line and the association file's
                 // `webcredentials` block are in place, and `passkeys.js` is the server.
                 NavigationLink { PasskeysView() } label: { Text("Passkeys") }
-                NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
+                // Hidden while the feature is off (owner, 2026-09-25), except for an account that
+                // already turned it on. See `Flags.twoStepEnabled`.
+                if Flags.twoStepEnabled || hasTwoStep {
+                    NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
+                }
                 NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications") }
             } header: {
                 Text("Security").textCase(nil)
@@ -601,6 +608,12 @@ struct AccountSettingsView: View {
         }
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard !Flags.twoStepEnabled,
+                  let r = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: false),
+                  let c = r.claims["twoStep"] as? [String: Any] else { return }
+            hasTwoStep = (c["required"] as? Bool) == true
+        }
         .sheet(isPresented: $showConnectEmail) {
             ConnectEmailView { email, password in
                 try await AuthService.shared.connectEmail(email: email, password: password)
