@@ -305,7 +305,7 @@ struct PasskeysView: View {
             }
             Button { Task { await add() } } label: {
                 Group {
-                    if working { ProgressView().tint(.white) } else { Text("Create Passkey") }
+                    Text("Create Passkey")   // no spinner: the system sheet is the feedback (see Add Passkey)
                 }
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
@@ -342,35 +342,40 @@ struct PasskeysView: View {
     private var manage: some View {
         List {
             Section {
-                VStack(spacing: 14) {
+                // ⛔ SHORT — owner, 2026-09-25 evening, with the reference app's page: a title and one
+                // line. The where-it-is-stored note is the card's footer, as theirs is.
+                VStack(spacing: 10) {
                     hero
-                    Text("Manage your passkeys").font(.title.weight(.bold))
-                    Text("Sign in to Fariin the same way you unlock your phone: with Face ID, Touch ID or your device passcode.")
+                    Text("Passkeys").font(.title.weight(.bold))
+                    Text("Sign in with Face ID. No password needed.")
                         .font(.body).multilineTextAlignment(.center)
-                    Text("Your passkeys are stored safely in your password manager.")
-                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
 
             Section {
+                ForEach(rows) { row in
+                    passkeyRow(row)
+                }
+
+                // ⛔ LAST IN THE CARD AND NO SPINNER — owner, 2026-09-25: "when I click Add Passkey it
+                // is loading … the reference app is not". The spinner sat beside the row for the whole
+                // time the system sheet was up. The sheet is the feedback; the row only stops a
+                // second tap while it is open.
                 Button { Task { await add() } } label: {
                     HStack(spacing: 14) {
-                        Image(systemName: "plus").font(.system(size: 20, weight: .medium)).frame(width: 28)
+                        Image(systemName: "plus").font(.system(size: 20, weight: .medium)).frame(width: 34)
                         Text("Add Passkey")
                         Spacer()
-                        if working { ProgressView() }
                     }
                     .foregroundStyle(brand)
                 }
                 .disabled(working)
-
-                ForEach(rows) { row in
-                    passkeyRow(row)
-                }
+            } footer: {
+                Text("Your passkeys are stored securely in your password manager.")
             }
 
             if let error {
@@ -381,11 +386,9 @@ struct PasskeysView: View {
 
     private func passkeyRow(_ row: Row) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: "person.badge.key")
-                .font(.system(size: 20))
-                .frame(width: 28)
+            providerIcon(row.name)
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.name)
+                Text(Self.displayName(row.name))
                 Text(subtitle(row)).font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
@@ -411,9 +414,40 @@ struct PasskeysView: View {
     private func subtitle(_ r: Row) -> String {
         let f = Date.FormatStyle(date: .abbreviated, time: .omitted)
         var parts: [String] = []
-        if let c = r.created { parts.append("Created \(c.formatted(f))") }
-        if let u = r.lastUsed { parts.append("Used \(u.formatted(f))") }
+        if let c = r.created { parts.append("created \(c.formatted(f))") }
+        if let u = r.lastUsed { parts.append("used \(u.formatted(f))") }
         return parts.joined(separator: " · ")
+    }
+
+    /// ⛔ THE PASSWORD MANAGER'S OWN NAME AND ICON — owner, 2026-09-25, with the reference app's list:
+    /// "Apple Passwords" with the Passwords app icon, "Google Password Manager" with Google's. Names and
+    /// icons are the community passkey AAGUID list's (github.com/passkeydeveloper/passkey-authenticator-aaguids),
+    /// which is where that list gets them too. The server still says "iCloud Keychain" for Apple's
+    /// (its older name for the same id), so it is renamed here as well.
+    private static func displayName(_ provider: String) -> String {
+        provider.hasPrefix("iCloud Keychain") ? "Apple Passwords" : provider
+    }
+
+    @ViewBuilder private func providerIcon(_ provider: String) -> some View {
+        let name = Self.displayName(provider)
+        let tile = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        if name == "Apple Passwords" {
+            // This icon carries its own white rounded tile.
+            Image("pk_provider_apple").resizable().scaledToFit()
+                .frame(width: 34, height: 34)
+                .clipShape(tile)
+        } else if name == "Google Password Manager" {
+            Image("pk_provider_google").resizable().scaledToFit()
+                .padding(4)
+                .frame(width: 34, height: 34)
+                .background(Color.white, in: tile)
+        } else {
+            Image(systemName: "person.badge.key.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Color.gray, in: tile)
+        }
     }
 
     // MARK: - Data
