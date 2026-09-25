@@ -273,11 +273,12 @@ struct MyQRView: View {
                 .interpolation(.none).resizable().scaledToFit()
                 .frame(width: 220, height: 220)
                 .overlay {
-                    // The mark, in the middle, on its own white disc so it never sits half on a
-                    // black module. Sized against the 30% the H correction level buys us.
+                    // The mark, in the middle, in a cleared white BLOCK (owner 2026-09-25: the
+                    // modules crowded the old disc). 64pt of 220 is under 9% of the code, well
+                    // inside the 30% the H correction level buys us.
                     OfficialAvatar(size: 44)
-                        .padding(5)
-                        .background(.white, in: Circle())
+                        .frame(width: 64, height: 64)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .padding(18)
                 .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -894,7 +895,9 @@ private struct SavedCodeCard: View {
                             .interpolation(.none)
                             .resizable()
                             .frame(width: 230, height: 230)
-                        Circle().fill(.white).frame(width: 56, height: 56)
+                        // The same cleared block as the on-screen code, scaled to 230.
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(.white).frame(width: 67, height: 67)
                         OfficialAvatar(size: 44)
                     }
                     .padding(.top, 18).padding(.bottom, 30)
