@@ -210,15 +210,38 @@ struct PasskeysView: View {
     // not look pro … even you can't delete what you made". It was one emoji, one line, and a delete
     // hidden behind a swipe nobody finds. Now: an intro that explains it and offers one button when
     // there is no passkey, and a manage screen with a visible "…" menu per passkey once there is.
-    private struct Row: Identifiable {
+    private struct Row: Identifiable, Codable {
         let id: String
         let name: String
         let created: Date?
         let lastUsed: Date?
     }
 
-    @State private var rows: [Row] = []
-    @State private var loading = true
+    /// ⛔ THE LAST LIST, KEPT — owner, 2026-09-25: "every time I enter, it is loading". The list was
+    /// @State only, so every visit started empty and showed a spinner until `listPasskeys` answered.
+    /// The reference app draws what it last knew and refreshes behind it. Stored per account in
+    /// UserDefaults: names and dates only, nothing that signs anything.
+    private static func cacheKey() -> String? {
+        Auth.auth().currentUser.map { "passkeys.list.\($0.uid)" }
+    }
+    private static func cachedRows() -> [Row]? {
+        guard let k = cacheKey(), let data = UserDefaults.standard.data(forKey: k) else { return nil }
+        return try? JSONDecoder().decode([Row].self, from: data)
+    }
+    private static func storeRows(_ rows: [Row]) {
+        guard let k = cacheKey(), let data = try? JSONEncoder().encode(rows) else { return }
+        UserDefaults.standard.set(data, forKey: k)
+    }
+
+    @State private var rows: [Row]
+    /// True only when there is nothing cached to show: the first visit ever on this phone.
+    @State private var loading: Bool
+
+    init() {
+        let cached = Self.cachedRows()
+        _rows = State(initialValue: cached ?? [])
+        _loading = State(initialValue: cached == nil)
+    }
     @State private var working = false
     @State private var error: String?
     @State private var toDelete: Row?
@@ -395,7 +418,7 @@ struct PasskeysView: View {
     // MARK: - Data
 
     private func load() async {
-        loading = true
+        // No spinner over a list we already have: the refresh happens behind it.
         defer { loading = false }
         do {
             let d = try await AccountCall.run("listPasskeys")
@@ -410,6 +433,7 @@ struct PasskeysView: View {
                            created: (item["createdAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) },
                            lastUsed: (item["lastUsedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) })
             }
+            Self.storeRows(rows)
             error = nil
         } catch {
             self.error = error.localizedDescription
