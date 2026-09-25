@@ -145,12 +145,21 @@ struct InAppBannerCard: View {
     /// 2026-09-24 fix-all #223: the island test was `>= 39`, which every notch phone (safe top 44
     /// to 50) also passes, so the notch branch below it could never run. Island phones report 54 or
     /// more, notch phones 44 to 50, so the island test is `>= 51` and the notch branch is live.
+    ///
+    /// ⛔ 2026-09-25 night, owner: "use the position the reference app uses". Re-read from its
+    /// `NotificationItemContainerNode.updateLayout`: the numbers hang off the STATUS BAR's height,
+    /// not the safe area's (on an island phone the safe area is 5-8pt taller than the status bar,
+    /// which is how ours sat low). Island: status bar + 6. Status bar >= 44: 8 + 34 = 42. Status bar
+    /// 39-43: 8 + 29 = 37. Shorter (a 20pt bar): 8. `safeTop` is only the fallback when UIKit has no
+    /// status bar height to give.
     private func topInset(safeTop: CGFloat) -> CGFloat {
-        if safeTop >= 51 { return safeTop + 6 }     // Dynamic Island
-        // Notch: just under the status bar, on the back-button row (owner, 2026-09-25). A flat 42
-        // sat above a 47 status bar and clipped the clock.
-        if safeTop >= 44 { return safeTop + 2 }      // notch
-        return 37                                    // everything older
+        let bar = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.statusBarManager?.statusBarFrame.height }
+            .first(where: { $0 > 0 }) ?? safeTop
+        if bar >= 51 { return bar + 6 }     // Dynamic Island
+        if bar >= 44 { return 42 }          // notch
+        if bar >= 39 { return 37 }
+        return 8
     }
 
     var body: some View {
