@@ -1825,10 +1825,11 @@ struct ChatsView: View {
             // entry point, and it goes through `composeStory` because that is the one door with the
             // day's-limit check in it, not a second copy of the check.
         } label: {
-            // The signed-in user's own photo, drawn by the same view Settings uses. 40pt is the
-            // reference app's phone size for this item. No accent while a filter is on: the tick
-            // in the picker already says which filter is active.
-            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 40)
+            // ⛔ NOT THE USER'S PHOTO — owner, 2026-09-24: "the is no bussnes to aviator here". His
+            // photo already sits on the Settings tab; a second copy on the Chats header was a
+            // shortcut to nowhere. A plain "…" in the system glass circle, the same as the Stories
+            // tab's menu button, opens the same menu.
+            Image(systemName: "ellipsis")
         }
     }
     // The two right items, in the reference app's screen order: camera, then compose at the
@@ -1884,16 +1885,11 @@ struct ChatsView: View {
             if let status = connection.state.label {
                 ToolbarItem(placement: .principal) { ConnectionTitleLabel(text: status) }
             }
-            // ⚠️ NO GLASS BEHIND THE AVATAR. `.sharedBackgroundVisibility(.hidden)` is SwiftUI's
-            // name for the reference app's `hidesSharedBackground = true` on this one item: the
-            // photo sits on the bar by itself, with no pill drawn round it. The right items keep
-            // theirs and share one capsule, which is what the group placement draws by default.
-            //
+            // The "…" menu gets the system glass circle (no avatar any more, see `avatarMenu`).
             // `SwipeFade` stands in for the system's own bar-item pop transition: it drops the
             // items to opacity 0 the instant a chat is pushed and brings them back on return.
             // (The deployment target is iOS 26, so there is no pre-26 branch to keep here.)
             ToolbarItem(placement: .topBarLeading) { avatarMenu.modifier(SwipeFade(on: showHeaderIcons)) }
-                .sharedBackgroundVisibility(.hidden)
             ToolbarItemGroup(placement: .topBarTrailing) {
                 cameraButton.modifier(SwipeFade(on: showHeaderIcons))
                 composeButton.modifier(SwipeFade(on: showHeaderIcons))
