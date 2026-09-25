@@ -64,6 +64,8 @@ struct GlowPeopleListView: View {
         .navigationBarTitleDisplayMode(.inline)
         // A pushed page is not a tab — see the note in `GlowNotificationsView`.
         .toolbar(.hidden, for: .tabBar)
+        .searchable(text: $search, prompt: "Search")
+        .toolbar { DefaultToolbarItem(kind: .search, placement: .bottomBar) }
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
     }
@@ -96,11 +98,20 @@ struct GlowPeopleListView: View {
                        selected: Binding(get: { tab == .glowers ? 0 : 1 },
                                          set: { tab = $0 == 0 ? .glowers : .glowing }))
             .frame(maxWidth: .infinity)
-            .frame(height: 44)
+            // ⛔ 52pt — owner, 2026-09-25 evening, with a screenshot: 44 still "looks small".
+            .frame(height: 52)
     }
 
-    // ⛔ NO SEARCH ON THIS PAGE — owner, 2026-09-25. It was `.searchable` (2026-09-11) and he asked
-    // for it gone. `searchField` and `glassTrack` went earlier; do not rebuild any of them.
+    // ⛔ SEARCH IS BACK, AT THE BOTTOM — owner, 2026-09-25 evening: "also bottom add search bar".
+    // (That morning he had it removed from the top.) The system's iOS 26 bottom glass field, as on
+    // Blocked Users; it filters the open tab by name and username.
+    @State private var search = ""
+
+    private func matches(_ p: GlowPerson) -> Bool {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return true }
+        return p.name.lowercased().contains(q) || p.handle.lowercased().contains(q)
+    }
 
     // MARK: - The list
 
@@ -118,8 +129,10 @@ struct GlowPeopleListView: View {
                     .buttonStyle(.borderedProminent)
             }
         case .loaded(let people):
-            let rows = people
-            if rows.isEmpty {
+            let rows = people.filter(matches)
+            if rows.isEmpty && !people.isEmpty {
+                ContentUnavailableView.search(text: search)
+            } else if rows.isEmpty {
                 ContentUnavailableView {
                     Label { Text(tab.title) } icon: { GlowStyle.mark(48) }
                 } description: {
@@ -394,6 +407,9 @@ private struct NativeSegments: UIViewRepresentable {
         c.selectedSegmentIndex = selected
         c.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         c.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        // Text grown with the 52pt bar, so the halves do not read as a small label in a tall track.
+        c.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 16, weight: .medium)], for: .normal)
+        c.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 16, weight: .semibold)], for: .selected)
         return c
     }
 

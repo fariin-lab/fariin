@@ -563,7 +563,6 @@ struct BlockedUsersView: View {
     @State private var profiles: [String: UserProfile] = [:]
     @State private var blockError: String?        // 2026-09-24 audit: a refused block / unblock
     @State private var search = ""
-    @FocusState private var searchFocused: Bool
     @State private var showPicker = false
     /// Not SwiftUI's `EditMode`. That one is welded to `.onDelete`, whose button says "Delete" and
     /// cannot be renamed — the wrong word entirely for taking a block off somebody, and on this
@@ -601,48 +600,6 @@ struct BlockedUsersView: View {
             $0.name.lowercased().contains(q)
                 || (handles[$0.id] ?? "").lowercased().contains(q)
         }
-    }
-
-    /// The system search field's look (magnifier, grey capsule, clear button), plus an ✕ beside it
-    /// while it is in use that clears the text and puts the keyboard away.
-    private var searchField: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search", text: $search)
-                    .focused($searchFocused)
-                    .submitLabel(.search)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                if !search.isEmpty {
-                    Button { search = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Clear")
-                }
-            }
-            .font(.system(size: 17))
-            .padding(.horizontal, 14)
-            .frame(height: 44)
-            .background(Color(.tertiarySystemFill), in: Capsule())
-            if searchFocused || !search.isEmpty {
-                Button {
-                    search = ""
-                    searchFocused = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Cancel")
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .animation(.snappy(duration: 0.2), value: searchFocused)
     }
 
     private func blockedRow(_ conv: BlockedPerson) -> some View {
@@ -696,14 +653,11 @@ struct BlockedUsersView: View {
 
     var body: some View {
         List {
-            // ⛔ THE SEARCH FIELD IS A ROW OF THIS PAGE, NOT `.searchable` — owner, 2026-09-25, twice:
-            // tap the field, tap ✕, and the Block User card and every row dropped down. `.searchable`
-            // puts the field in the NAVIGATION BAR, which changes height as search opens and closes,
-            // and this List did not move back. A field inside the list changes nothing above it, so
-            // there is nothing to jump. Same approach as the archive's own search bar.
-            Section { searchField }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            // ⛔ THE SEARCH FIELD IS AT THE BOTTOM, IN LIQUID GLASS — owner, 2026-09-25 (evening),
+            // with a screenshot of the in-list row: "make it bottom and also liquid glass". It is the
+            // system's iOS 26 bottom search (`.searchable` placed in the bottom bar, see `body`). The
+            // earlier jump came from the field living in the NAVIGATION BAR, whose height changed; a
+            // bottom field never touches the top of the list, so the reason for the in-list row is gone.
             if let blockError {
                 Section { Text(blockError).font(.footnote).foregroundStyle(.red) }
             }
@@ -766,7 +720,10 @@ struct BlockedUsersView: View {
         .contentMargins(.top, 6, for: .scrollContent)
         .environment(\.defaultMinListRowHeight, 44)
         .toolbar(.hidden, for: .tabBar)
+        .searchable(text: $search, prompt: "Search")
         .toolbar {
+            // iOS 26: the search field in the bottom bar, in the system's glass.
+            DefaultToolbarItem(kind: .search, placement: .bottomBar)
             if !blocked.isEmpty || editing {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(editing ? "Done" : "Edit") {
