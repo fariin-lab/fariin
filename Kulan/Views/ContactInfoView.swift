@@ -55,6 +55,11 @@ struct ContactInfoView: View {
     /// [ProfilePhotoIndex] holds the whole rule and the reasons behind it.
     @State private var headerFacts: ProfilePhotoIndex.Header
 
+    /// This person's photo as the live 1:1 conversation mirror has it right now.
+    private var liveMirrorPhoto: String? {
+        ConversationsRepository.shared.conversations.first { $0.id == cid && !$0.isGroup }?.photos[otherUid]
+    }
+
     init(cid: String, name: String, photoUrl: String?, posterUrl: String? = nil,
          source: ProfileSource = .chat, isSelf: Bool = false,
          previewUid: String? = nil,
@@ -718,6 +723,20 @@ struct ContactInfoView: View {
         // the first frame for anyone you have seen before; the notification carries a cold download
         // in afterwards and the page washes to it rather than flashing.
         .task(id: gatedPosterUrl ?? "") { await loadPalette() }
+        // ⛔ A NEW PHOTO WHILE THE PAGE IS OPEN SWAPS THE PICTURE, NOT THE LAYOUT — 2026-09-25 photo
+        // audit, within the rule written on `headerFacts`: the layout is decided once, the image
+        // inside it may change. The conversation mirror is live; when it carries a strictly newer
+        // upload of this person's photo and the page is already showing one, the picture follows.
+        // A photo appearing on a letter layout, or a removal, waits for the next open (that would
+        // be a layout change, which is exactly what the rule forbids).
+        .onChange(of: liveMirrorPhoto) { _, new in
+            guard headerFacts.hasPhoto, let new, !new.isEmpty,
+                  ProfileStore.isNewer(new, than: headerFacts.photoUrl) else { return }
+            let conv = ConversationsRepository.shared.conversations.first { $0.id == cid && !$0.isGroup }
+            let poster = conv?.posters[otherUid].flatMap { $0.isEmpty ? nil : $0 }
+            headerFacts = ProfilePhotoIndex.Header(hasPhoto: true, photoUrl: new,
+                                                   posterUrl: poster ?? new, thumb: headerFacts.thumb)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .profilePaletteReady)) { note in
             guard let u = note.object as? String, u == gatedPosterUrl else { return }
             photoPalette = ProfilePalette.cached(for: u)

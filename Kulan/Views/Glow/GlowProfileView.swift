@@ -883,7 +883,22 @@ struct GlowProfileView: View {
         if profile == nil {
             profile = ProfileStore.shared.me   // 2026-09-24 fix-all #90: own profile only
         }
-        if let p = await ProfileStore.shared.fetch(uid) {
+        if var p = await ProfileStore.shared.fetch(uid) {
+            // ⛔ MY SAVE MUST NOT BE UNDONE BY A READ THAT LEFT BEFORE IT — 2026-09-25 photo audit.
+            // This runs when the Edit sheet closes, and Save does not wait for the upload: a fetch
+            // landing first brought the old photo back (or a removed one). `ProfileStore.me` holds
+            // the change already, so it wins while a change or removal is still being sent
+            // (`photoUploading`), or when its `?v=` is strictly later. A change made on my other
+            // phone is newer on the server and still wins there.
+            if let mine = ProfileStore.shared.me, mine.id == uid, mine.photoUrl != p.photoUrl {
+                let local = mine.photoUrl ?? ""
+                let server = p.photoUrl ?? ""
+                if ProfileStore.shared.photoUploading
+                    || (ProfileStore.isPublished(local) && ProfileStore.version(local) > ProfileStore.version(server)) {
+                    p.photoUrl = mine.photoUrl
+                    p.posterUrl = mine.posterUrl
+                }
+            }
             profile = p
             // The server's photo may differ from the one the push carried (changed since, or none
             // was passed), so this still runs — it is the correction, no longer the first paint.
