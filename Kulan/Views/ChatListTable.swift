@@ -939,6 +939,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if let bar = item.searchController?.searchBar {
             let shouldShow = item.searchController?.isActive ?? false
             if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
+            if shouldShow { Self.useXGlyph(onCancelIn: bar) }
             // The search bar's own background and top hairline are the system's now: the 09-23
             // `backgroundImage = UIImage()` went with the appearance override it was paired with.
             // The reference app leaves both alone.
@@ -953,6 +954,30 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     // the system's own glass, hairline and scroll-edge transition draw. If a band or a line is
     // reported up here again, an override is not the answer; the five-report history of that band
     // (09-11 to 09-23) is in the memory notes.
+
+    /// ⛔ ✕, NOT THE WORD "Cancel" — owner, 2026-09-25, the same glyph the app's other dismiss
+    /// buttons wear. UISearchBar has no public way to give its cancel button an image, so the button
+    /// is found by walking the bar's own views (no private keys) and restyled in place. Called from
+    /// `reassertNavChrome`, i.e. on every layout pass while search is active, so a redraw by UIKit
+    /// is simply restyled again. If a future iOS stops using a UIButton here, nothing breaks: the
+    /// walk finds nothing and the system button stays as it is.
+    private static func useXGlyph(onCancelIn bar: UISearchBar) {
+        func find(_ v: UIView) -> UIButton? {
+            if let b = v as? UIButton, b.superview !== bar.searchTextField,
+               !(b.isDescendant(of: bar.searchTextField)) { return b }
+            for s in v.subviews { if let hit = find(s) { return hit } }
+            return nil
+        }
+        guard let cancel = find(bar) else { return }
+        guard cancel.image(for: .normal) == nil || cancel.title(for: .normal)?.isEmpty == false else { return }
+        let glyph = UIImage(systemName: "xmark",
+                            withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
+        cancel.setTitle(nil, for: .normal)
+        cancel.setAttributedTitle(nil, for: .normal)
+        cancel.setImage(glyph, for: .normal)
+        cancel.tintColor = .label
+        cancel.accessibilityLabel = "Cancel"
+    }
 
     private func registerAsContentScrollView() {
         setContentScrollView(tableView, for: .all)
