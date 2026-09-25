@@ -179,9 +179,13 @@ enum Passkeys {
 // MARK: - The page
 
 struct PasskeysView: View {
+    // ⛔ REBUILT 2026-09-25 — owner, with the reference app's two screens: "why does our passkey page
+    // not look pro … even you can't delete what you made". It was one emoji, one line, and a delete
+    // hidden behind a swipe nobody finds. Now: an intro that explains it and offers one button when
+    // there is no passkey, and a manage screen with a visible "…" menu per passkey once there is.
     private struct Row: Identifiable {
         let id: String
-        let label: String
+        let name: String
         let created: Date?
         let lastUsed: Date?
     }
@@ -190,17 +194,104 @@ struct PasskeysView: View {
     @State private var loading = true
     @State private var working = false
     @State private var error: String?
+    @State private var toDelete: Row?
+
+    private let brand = Color(hex: 0x0A84FF)
 
     var body: some View {
+        Group {
+            if loading && rows.isEmpty {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if rows.isEmpty {
+                intro
+            } else {
+                manage
+            }
+        }
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .navigationTitle("Passkeys")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .task { await load() }
+        .alert("Delete passkey?", isPresented: Binding(get: { toDelete != nil },
+                                                       set: { if !$0 { toDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let r = toDelete { Task { await remove(r) } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You will no longer be able to sign in to Fariin with this passkey.")
+        }
+    }
+
+    // MARK: - No passkey yet
+
+    private var intro: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 28) {
+                    hero
+                    Text("Sign in securely and protect your account")
+                        .font(.title.weight(.bold))
+                        .multilineTextAlignment(.center)
+                    VStack(alignment: .leading, spacing: 22) {
+                        point("checkmark.shield", "Create a passkey for a secure, easy way to sign in to your account.")
+                        point("faceid", "Sign in to Fariin with Face ID, Touch ID or your device passcode.")
+                        point("laptopcomputer.and.iphone", "Your passkey is stored safely in your password manager, such as iCloud Keychain.")
+                    }
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
+                    }
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+            }
+            Button { Task { await add() } } label: {
+                Group {
+                    if working { ProgressView().tint(.white) } else { Text("Create Passkey") }
+                }
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity).frame(height: 54)
+                .background(brand, in: Capsule())
+            }
+            .disabled(working)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
+        }
+    }
+
+    private func point(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            Image(systemName: icon)
+                .font(.system(size: 24, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: 32)
+            Text(text).font(.body).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var hero: some View {
+        ZStack {
+            Circle().fill(brand.opacity(0.14)).frame(width: 112, height: 112)
+            Image(systemName: "person.badge.key.fill")
+                .font(.system(size: 50, weight: .medium))
+                .foregroundStyle(brand)
+        }
+    }
+
+    // MARK: - Manage
+
+    private var manage: some View {
         List {
             Section {
-                VStack(spacing: 8) {
-                    Text("🔑").font(.system(size: 88))
-                    Text("Passkeys").font(.system(size: 30, weight: .bold))
-                    Text("Log in safely and keep your account secure.")
-                        .font(.body).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 14) {
+                    hero
+                    Text("Manage your passkeys").font(.title.weight(.bold))
+                    Text("Sign in to Fariin the same way you unlock your phone: with Face ID, Touch ID or your device passcode.")
+                        .font(.body).multilineTextAlignment(.center)
+                    Text("Your passkeys are stored safely in your password manager.")
+                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -209,47 +300,66 @@ struct PasskeysView: View {
             }
 
             Section {
-                if loading {
-                    HStack { Spacer(); ProgressView(); Spacer() }
-                } else {
-                    ForEach(rows) { row in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(row.label)
-                            Text(subtitle(row)).font(.footnote).foregroundStyle(.secondary)
-                        }
-                        .swipeActions {
-                            Button("Remove", role: .destructive) { Task { await remove(row) } }
-                        }
-                    }
-                }
-                // The green add row, at the bottom of the same card — his layout.
                 Button { Task { await add() } } label: {
-                    Label("Add Passkey", systemImage: "plus")
-                        .foregroundStyle(Color.green)
+                    HStack(spacing: 14) {
+                        Image(systemName: "plus").font(.system(size: 20, weight: .medium)).frame(width: 28)
+                        Text("Add Passkey")
+                        Spacer()
+                        if working { ProgressView() }
+                    }
+                    .foregroundStyle(brand)
                 }
                 .disabled(working)
-            } footer: {
-                Text("Your passkeys are stored securely in your password manager.")
+
+                ForEach(rows) { row in
+                    passkeyRow(row)
+                }
             }
 
             if let error {
                 Section { Text(error).font(.footnote).foregroundStyle(.red) }
             }
         }
-        .navigationTitle("Passkeys")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
-        .task { await load() }
+    }
+
+    private func passkeyRow(_ row: Row) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: "person.badge.key")
+                .font(.system(size: 20))
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.name)
+                Text(subtitle(row)).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu {
+                Button(role: .destructive) { toDelete = row } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .disabled(working)
+        }
+        .padding(.vertical, 4)
+        .swipeActions {
+            Button("Delete", role: .destructive) { toDelete = row }.tint(.red)
+        }
     }
 
     private func subtitle(_ r: Row) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "d MMM yyyy"
+        let f = Date.FormatStyle(date: .abbreviated, time: .omitted)
         var parts: [String] = []
-        if let c = r.created { parts.append("created \(f.string(from: c))") }
-        if let u = r.lastUsed { parts.append("used \(f.string(from: u))") }
+        if let c = r.created { parts.append("Created \(c.formatted(f))") }
+        if let u = r.lastUsed { parts.append("Used \(u.formatted(f))") }
         return parts.joined(separator: " · ")
     }
+
+    // MARK: - Data
 
     private func load() async {
         loading = true
@@ -257,11 +367,15 @@ struct PasskeysView: View {
         do {
             let d = try await AccountCall.run("listPasskeys")
             let list = d["passkeys"] as? [[String: Any]] ?? []
-            rows = list.map {
-                Row(id: $0["id"] as? String ?? UUID().uuidString,
-                    label: $0["label"] as? String ?? "Passkey",
-                    created: ($0["createdAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) },
-                    lastUsed: ($0["lastUsedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) })
+            rows = list.map { item in
+                // The password manager's name when the server knows it ("iCloud Keychain"); the label
+                // saved with an older passkey otherwise.
+                let provider = item["provider"] as? String ?? ""
+                let label = item["label"] as? String ?? "Passkey"
+                return Row(id: item["id"] as? String ?? UUID().uuidString,
+                           name: provider.isEmpty ? label : provider,
+                           created: (item["createdAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) },
+                           lastUsed: (item["lastUsedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) })
             }
             error = nil
         } catch {
@@ -270,11 +384,12 @@ struct PasskeysView: View {
     }
 
     private func add() async {
+        guard !working else { return }
         working = true
         error = nil
         defer { working = false }
         do {
-            try await Passkeys.register(label: UIDevice.current.name)
+            try await Passkeys.register(label: "Passkey")
             await load()
         } catch let e as ASAuthorizationError where e.code == .canceled {
             // Backing out of the system sheet is not a failure and must not be reported as one.
@@ -284,8 +399,6 @@ struct PasskeysView: View {
     }
 
     private func remove(_ row: Row) async {
-        // The swipe's Remove is not covered by `.disabled(working)` (audit 2026-09-24), so a second
-        // swipe during a slow delete sent a second delete, and one during an Add raced its reload.
         guard !working else { return }
         working = true
         error = nil
