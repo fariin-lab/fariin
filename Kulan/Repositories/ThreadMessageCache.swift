@@ -52,6 +52,8 @@ final class ThreadMessageCache {
     }
 
     private var byCid: [String: [Message]] = [:]
+    /// Bumped by `removeAll`, read by `prewarm`.
+    private var generation = 0
     private let cap = 200            // bound memory — the recent window is all the first screen needs
     private let backgroundCap = 60   // ~2 screens; enough for an instant reopen after backgrounding
 
@@ -75,6 +77,33 @@ final class ThreadMessageCache {
         guard let cold = loadFromDisk(cid), !cold.isEmpty else { return nil }
         byCid[cid] = cold   // one read per chat per launch; every reopen after is the warm path
         return cold
+    }
+
+    /// ⛔ READ THE TOP CHATS BEFORE THE FINGER DOES — owner, 2026-09-25: "first time in the app, I tap
+    /// a chat, the row stays grey and the chat takes time to open." The first open of each chat did
+    /// the disk read and the JSON decode of `messages(for:)` on the main thread, inside the tap,
+    /// before the push could start; the row's deselect animation waited behind it. Messengers warm
+    /// the chats you are likely to open while the list is on screen. This does the read and decode
+    /// on the disk queue and only hands the result to the main thread, which is all `byCid` needs.
+    /// A chat already in memory is skipped, and a chat opened meanwhile keeps what it loaded itself.
+    func prewarm(_ cids: [String]) {
+        let wanted = cids.filter { byCid[$0] == nil }
+        guard !wanted.isEmpty else { return }
+        let gen = generation
+        io.async { [weak self] in
+            guard let self else { return }
+            var loaded: [(String, [Message])] = []
+            for cid in wanted {
+                if let cold = self.loadFromDisk(cid), !cold.isEmpty { loaded.append((cid, cold)) }
+            }
+            guard !loaded.isEmpty else { return }
+            DispatchQueue.main.async {
+                // ⚠️ A sign-out in between wiped this cache; these are the OLD account's decrypted
+                // messages and must not come back into memory.
+                guard self.generation == gen else { return }
+                for (cid, msgs) in loaded where self.byCid[cid] == nil { self.byCid[cid] = msgs }
+            }
+        }
     }
 
     // UNSENT MESSAGES, kept across leaving and re-entering a chat.
@@ -105,6 +134,7 @@ final class ThreadMessageCache {
     /// another account's session on this device.
     func removeAll() {
         byCid = [:]; pendingByCid = [:]; lastPersisted = [:]
+        generation += 1   // an in-flight `prewarm` must not land after this
         // ⚠️ AND THE DISK COPY. This used to be memory only, so signing out was enough on its own;
         // it is not any more, and a folder of decrypted conversations left behind would be the worst
         // thing in this file.

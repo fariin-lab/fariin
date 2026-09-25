@@ -2653,6 +2653,11 @@ struct ChatsView: View {
             .task(id: chatSearch) { await lookUpPeople(chatSearch) }
             // 2026-09-24 feature-audit: search text or a filter other than All fetches the whole list.
             .task(id: needsWholeList) { repo.needWholeList("chats", needsWholeList) }
+            // 2026-09-25: warm the top chats' saved messages off the main thread, so the first tap
+            // on a chat after launch does not read and decode them inside the tap. See `prewarm`.
+            .task(id: repo.conversations.prefix(12).map(\.id).joined(separator: ",")) {
+                ThreadMessageCache.shared.prewarm(repo.conversations.prefix(12).map(\.id))
+            }
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back
             // drag); reveal them only when we're fully back at the root list.
