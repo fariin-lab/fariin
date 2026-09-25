@@ -43,6 +43,7 @@ struct DeleteAccountView: View {
         }
         .navigationTitle("Delete Account")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .interactiveDismissDisabled(step == .working)
         .disabled(step == .working)
     }
@@ -58,53 +59,50 @@ struct DeleteAccountView: View {
 
     // MARK: - Step 2 as a page
 
+    /// ⛔ CALM, NOT ALARMING — owner, 2026-09-25: "redesign, good design, clean and minimalist, Apple
+    /// style". The red shield and the maroon disabled button read as an error screen. Apple's own
+    /// confirm steps lead with WHO (the account's face and name), one plain sentence, the sign-in
+    /// door, and put the consequence in small print. Red is kept for the one button that deletes,
+    /// and only once it can be pressed.
     private var verifyPage: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                Spacer(minLength: 40)
-                VStack(spacing: 12) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.red)
-                    Text("Verify it's you").font(.title2.weight(.bold))
-                    Text("Confirm your account to finish deleting it. Nothing has been deleted yet.")
+            VStack(spacing: 28) {
+                VStack(spacing: 10) {
+                    AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 76)
+                        .padding(.bottom, 6)
+                    Text("Confirm It's You").font(.title2.weight(.bold))
+                    Text(handle.isEmpty
+                         ? "Sign in again to delete your account. Nothing has been deleted yet."
+                         : "Sign in again to delete @\(handle). Nothing has been deleted yet.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.horizontal, 32)
+                .padding(.horizontal, 12)
+                .padding(.top, 28)
 
                 VStack(spacing: 12) { verifyControls }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 32)
                     .opacity(verifying ? 0.5 : 1)   // 2026-09-24 fix-all #144
 
-                // 2026-09-24 fix-all #144: progress in place while the re-auth and the scheduling run.
-                if verifying {
-                    ProgressView().padding(.top, 16)
-                }
-
-                // IT CONTRADICTED THE PREVIOUS SCREEN, about the most consequential action in the
-                // app. Step one says the account is hidden at once and deleted for good after the
-                // grace period, and that you can sign in before then to bring it back — which is what
-                // `ProfileStore` actually does, and what the deletion email says. This step said it
-                // was deleted the moment you verified. One of them had to be wrong and it was this
-                // one, in the direction that would stop somebody trying to recover an account they
-                // still could have had back.
-                Text("Once verified, your account is hidden immediately and permanently deleted after \(ProfileStore.gracePeriodDays) days. Sign in before then to restore it.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32).padding(.top, 14)
+                if verifying { ProgressView() }   // 2026-09-24 fix-all #144
 
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32).padding(.top, 12)
                 }
-                Spacer(minLength: 40)
+
+                // Must agree with step one and with `ProfileStore`: hidden now, gone after the grace
+                // period, restorable by signing in before then.
+                Text("Your account is hidden as soon as you confirm and deleted for good after \(ProfileStore.gracePeriodDays) days. Sign in before then to restore it.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 32)
             .frame(maxWidth: .infinity)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 
@@ -179,8 +177,8 @@ struct DeleteAccountView: View {
                 // Changed together on purpose — a report about one of these has already left the
                 // other behind once on this project.
                 .id(scheme)
-                .frame(height: 50)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(height: 52)
+                .clipShape(Capsule())
             }
 
             if methods.contains(.google) {
@@ -193,28 +191,28 @@ struct DeleteAccountView: View {
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(Color(.systemBackground))
                     }
-                    .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(Color.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .background(Color.primary, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
 
             if methods.contains(.email) {
-                SecureField("Your password", text: $password)
+                SecureField("Password", text: $password)
                     .textContentType(.password)
-                    .padding(.horizontal, 14).frame(height: 50)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .submitLabel(.done)
+                    .padding(.horizontal, 18).frame(height: 52)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
                 Button {
                     run { try await AuthService.shared.reauthEmail(password: password) }
                 } label: {
-                    Text("Verify and Delete").fontWeight(.semibold)
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .foregroundStyle(.white)
-                        .background(password.isEmpty ? Color.red.opacity(0.4) : Color.red,
-                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    // Grey until there is a password, the way a system button is disabled; red only
+                    // once pressing it would actually delete.
+                    Text("Delete Account").fontWeight(.semibold)
+                        .frame(maxWidth: .infinity).frame(height: 52)
+                        .foregroundStyle(password.isEmpty ? Color.secondary : Color.white)
+                        .background(password.isEmpty ? Color(uiColor: .tertiarySystemFill) : Color.red,
+                                    in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(password.isEmpty)
@@ -225,9 +223,9 @@ struct DeleteAccountView: View {
             if methods.isEmpty {
                 Button { deleteNow() } label: {
                     Text("Delete Account").fontWeight(.semibold)
-                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .frame(maxWidth: .infinity).frame(height: 52)
                         .foregroundStyle(.white)
-                        .background(Color.red, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(Color.red, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
