@@ -684,8 +684,11 @@ struct BlockedUsersView: View {
         .listSectionSpacing(14)
         .contentMargins(.top, 6, for: .scrollContent)
         .environment(\.defaultMinListRowHeight, 44)
-        // The same search as the Calls page, on his word.
-        .searchable(text: $search, prompt: "Search")
+        // ⛔ PINNED, NOT FOLDING — owner, 2026-09-25: tap the field, tap ✕, and the Block User card
+        // and every blocked row jumped down. The default placement (copied from Calls that morning)
+        // folds the field away and brings it back, and ✕ is the moment it comes back and pushes the
+        // list. `.always` keeps the same field in the same place, so nothing under it moves.
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if !blocked.isEmpty || editing {
