@@ -1051,6 +1051,9 @@ struct ChatsView: View {
     /// place rather than pushing a separate results screen, so the row you tap is the row you
     /// were already looking at.
     @State private var chatSearch = ""
+    /// The search page is open (2026-09-25: our own field, not `.searchable`; see
+    /// `ChatListSearchHeader`).
+    @State private var chatSearchActive = false
     /// ⛔ THE CHAT LIST'S SEARCH REACHES PAST THE CHAT LIST — owner, 2026-09-02: "the search inside
     /// the chat list must work like global; when the user wants to search: chats, users, new users".
     ///
@@ -1567,6 +1570,12 @@ struct ChatsView: View {
                 dark: dark,
                 // 2026-09-24 feature-audit: older chats still arriving is not "no results" yet either.
                 searching: searchingUsers || repo.loadingWholeList,
+                isSearching: chatSearchActive,
+                dismissSearch: {
+                    chatSearchActive = false
+                    chatSearch = ""
+                },
+                text: $chatSearch,
                 chats: { visible },
                 people: { newPeople },
                 personRow: { AnyView(newPersonRow($0)) },
@@ -2321,7 +2330,9 @@ struct ChatsView: View {
             },
             // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
             // asked for by scrolling and for a search or filter fetching the whole list.
-            loadingMore: repo.loadingOlder || repo.loadingWholeList
+            loadingMore: repo.loadingOlder || repo.loadingWholeList,
+            // 2026-09-25: the in-list search field opens the search page.
+            onSearchTap: { if !selecting { chatSearchActive = true } }
         )
     }
 
@@ -2653,8 +2664,14 @@ struct ChatsView: View {
             // the whole conversation list on every read (see `visible`'s own note); handed as values
             // they would be computed on every pass of this body whether anyone is searching or not.
             // The page calls them only when it actually has results to draw.
+            // ⛔ NO `.searchable` SINCE 2026-09-25 — owner, "make it like the reference app, 100%",
+            // after the field vanished on Back and the list jumped on ✕ through four rounds of
+            // fixes. Both came from the system search field living in the navigation bar: SwiftUI
+            // re-installs it on every re-render (so a fix on it is lost on the next pop), and it
+            // changes the bar's height as it opens and closes (so the list under it moves). The field
+            // is now the list's own first thing (`ChatListSearchHeader`, tap = `chatSearchActive`),
+            // and the page above carries the real field and the ✕. The bar never changes.
             .overlay { chatSearchOverlay }
-            .searchable(text: $chatSearch, prompt: "Search")
             // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.

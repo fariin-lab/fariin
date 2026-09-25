@@ -46,12 +46,19 @@ struct ChatSearchOverlay: View {
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
 
-    @Environment(\.isSearching) private var isSearching
+    /// Whether search is open. Passed in since 2026-09-25: the field is the chat list's own now
+    /// (the reference app's design), not `.searchable`, so there is no `\.isSearching` to read.
+    var isSearching: Bool
+    var dismissSearch: () -> Void
+    /// The text itself, typed into this page's own field (see `searchBar`).
+    @Binding var text: String
+    @FocusState private var fieldFocused: Bool
 
     /// ⚠️ SPELLED OUT, NOT SYNTHESISED. A single PRIVATE stored property — the environment read
     /// above — makes Swift's memberwise initialiser private too, and the call site in another file
     /// then cannot see it. That has cost this app a CI round before; it is in the build notes.
     init(query: String, me: String, dark: Bool, searching: Bool,
+         isSearching: Bool, dismissSearch: @escaping () -> Void, text: Binding<String>,
          chats: @escaping () -> [Conversation],
          people: @escaping () -> [UserProfile],
          personRow: @escaping (UserProfile) -> AnyView,
@@ -61,6 +68,9 @@ struct ChatSearchOverlay: View {
         self.me = me
         self.dark = dark
         self.searching = searching
+        self.isSearching = isSearching
+        self.dismissSearch = dismissSearch
+        self._text = text
         self.chats = chats
         self.people = people
         self.personRow = personRow
@@ -70,10 +80,60 @@ struct ChatSearchOverlay: View {
 
     var body: some View {
         if isSearching {
-            ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
-                           chats: chats, people: people, personRow: personRow,
-                           onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
+            // ⛔ THE REAL FIELD LIVES ON THIS PAGE — 2026-09-25, the reference app's design: the list
+            // shows a placeholder (`ChatListSearchHeader`), tapping it puts this page over the list
+            // with the field in the same place and the keyboard up, and ✕ takes it away. The list
+            // under it is never moved or re-inset, so closing search cannot make it jump.
+            VStack(spacing: 0) {
+                searchBar
+                ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
+                               dismissSearch: dismissSearch,
+                               chats: chats, people: people, personRow: personRow,
+                               onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
+            }
+            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            .onAppear { fieldFocused = true }
         }
+    }
+
+    /// Same capsule and position as the list's placeholder, so the field appears to stay put while
+    /// it becomes editable. The ✕ beside it closes search (owner, 2026-09-25: an icon, not "Cancel").
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $text)
+                    .focused($fieldFocused)
+                    .submitLabel(.search)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !text.isEmpty {
+                    Button { text = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear")
+                }
+            }
+            .font(.system(size: 17))
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+            Button {
+                fieldFocused = false
+                dismissSearch()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel")
+        }
+        .padding(.leading, 16).padding(.trailing, 8)
+        .padding(.top, 6).padding(.bottom, 6)
     }
 }
 
@@ -261,11 +321,12 @@ struct ChatSearchPage: View {
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
 
-    @Environment(\.dismissSearch) private var dismissSearch
+    var dismissSearch: () -> Void
     private var repo = ConversationsRepository.shared
     private var recents = RecentSearches.shared
 
     init(query: String, me: String, dark: Bool, searching: Bool,
+         dismissSearch: @escaping () -> Void,
          chats: @escaping () -> [Conversation],
          people: @escaping () -> [UserProfile],
          personRow: @escaping (UserProfile) -> AnyView,
@@ -275,6 +336,7 @@ struct ChatSearchPage: View {
         self.me = me
         self.dark = dark
         self.searching = searching
+        self.dismissSearch = dismissSearch
         self.chats = chats
         self.people = people
         self.personRow = personRow
