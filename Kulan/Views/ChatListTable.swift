@@ -429,6 +429,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         // and a guarded comparison costs nothing. See `reassertNavChrome` for what it no longer
         // does.
         vc.reassertNavChrome()
+        vc.setSearching(context.environment.isSearching)   // 2026-09-25: the ✕ jump
         vc.setLoadingMore(loadingMore)   // 2026-09-24 feature-audit
         vc.setSelecting(selecting)
         vc.apply(state: .make(pinned: pinned.map(\.id),
@@ -816,11 +817,31 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // for no gain. `didMove(toParent:)` has always done the real registration.
         if tableView.window == nil { registerAsContentScrollView() }
         isInTransition = true
+        // ⛔ THE SEARCH FIELD COMES BACK WITH THE LIST — owner, 2026-09-25: "open a chat, tap Back,
+        // and the search bar has disappeared", the list sitting at its top with the field folded.
+        // The reference app keeps the field where it was; at the top of the list that is open.
+        // UIKit has no "expand the search" call. The standard way is to switch hide-on-scroll off
+        // for the arrival and back on once it has landed (`viewDidAppear`), which draws the field
+        // expanded and keeps hide-on-scroll for every scroll after. Only at the top: a list you
+        // scrolled down keeps its folded field, as the reference does.
+        if tableView.contentOffset.y <= -tableView.adjustedContentInset.top + 1,
+           let item = searchHostItem() {
+            item.hidesSearchBarWhenScrolling = false
+            searchRevealPending = true
+        }
     }
+
+    /// Set while `viewWillAppear` has pinned the search field open for the arrival.
+    private var searchRevealPending = false
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         isInTransition = false
+        // A cancelled swipe-back arrives here without `viewDidAppear`; never leave the field pinned.
+        if searchRevealPending {
+            searchRevealPending = false
+            searchHostItem()?.hidesSearchBarWhenScrolling = true
+        }
     }
 
     /// The cancel-button invariant (`reassertNavChrome`) is re-checked on every layout pass. A
@@ -837,6 +858,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The arrival has settled: let the footer resize again and replay whatever the transition
         // held back, in one pass rather than one per frame.
         isInTransition = false
+        if searchRevealPending {
+            searchRevealPending = false
+            searchHostItem()?.hidesSearchBarWhenScrolling = true
+        }
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
@@ -1736,9 +1761,34 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private var isInTransition = false {
         didSet {
             guard isInTransition != oldValue else { return }
-            (tableView as? ChatListSelfSizingTable)?.suspendFooterUpdates = isInTransition
+            holdFooterIfNeeded()
             if !isInTransition { flushDeferredState() }
         }
+    }
+
+    /// ⛔ SEARCH OPENING AND CLOSING IS A TRANSITION TOO — owner, 2026-09-25: "I tap search, then ✕,
+    /// and the chat list jumps down." Focusing the field hides the title and shrinks the bar; ✕
+    /// grows it back, animated. That moves `adjustedContentInset` every frame exactly as a pop does,
+    /// and the footer was resizing (and so moving `contentSize`, and so clamping the offset) through
+    /// all of it. Held for the whole search and for the bar's settle after ✕, then replayed once.
+    /// Not an offset correction: see the note above `ChatListCell`.
+    private var searchHold = false {
+        didSet { if searchHold != oldValue { holdFooterIfNeeded() } }
+    }
+    private var searchReleaseWork: DispatchWorkItem?
+
+    func setSearching(_ on: Bool) {
+        searchReleaseWork?.cancel()
+        if on { searchHold = true; return }
+        guard searchHold else { return }
+        // The bar animates back after ✕; let it land before the footer measures again.
+        let w = DispatchWorkItem { [weak self] in self?.searchHold = false }
+        searchReleaseWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+    }
+
+    private func holdFooterIfNeeded() {
+        (tableView as? ChatListSelfSizingTable)?.suspendFooterUpdates = isInTransition || searchHold
     }
 
     /// Scrolling has genuinely stopped: put the newest state on screen.
