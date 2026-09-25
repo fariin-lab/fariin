@@ -405,7 +405,9 @@ struct AuthMethodView: View {
                 }
                 }
 
-                if busy { ProgressView().padding(.top, 16) }
+                // Space always kept, spinner faded in (owner, 2026-09-25): inserting it on Google's
+                // tap grew this centred block and slid every card up, then back down when it went.
+                ProgressView().padding(.top, 16).opacity(busy ? 1 : 0)
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
                         .multilineTextAlignment(.center).padding(.top, 12)
