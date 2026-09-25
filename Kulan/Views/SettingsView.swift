@@ -542,15 +542,8 @@ struct AccountSettingsView: View {
                 // `webcredentials` is a second service under the same capability. Nothing had to be
                 // switched on in the portal. The entitlement line and the association file's
                 // `webcredentials` block are in place, and `passkeys.js` is the server.
-                NavigationLink { PasskeysView() } label: { Text("Passkeys") }
-                // Hidden while the feature is off (owner, 2026-09-25), except for an account that
-                // already turned it on. See `Flags.twoStepEnabled`.
-                if Flags.twoStepEnabled || hasTwoStep {
-                    NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
-                }
-                NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications") }
-                // ⛔ USERNAME, BESIDE PASSKEYS AND SECURITY NOTIFICATIONS — owner, 2026-09-25: the
-                // username, who can reach you by it, and the Chat Key on one page.
+                // ⛔ USERNAME FIRST, THEN PASSKEYS, THEN SECURITY NOTIFICATIONS — owner, 2026-09-25
+                // night, his order. The page: the username, who can reach you by it, and the Chat Key.
                 NavigationLink { MessagesPrivacyPage(usernameMode: true) } label: {
                     HStack {
                         Text("Username")
@@ -558,6 +551,13 @@ struct AccountSettingsView: View {
                         Text(profile.me.map { "@\($0.handle)" } ?? "").foregroundStyle(.secondary)
                     }
                 }
+                NavigationLink { PasskeysView() } label: { Text("Passkeys") }
+                // Hidden while the feature is off (owner, 2026-09-25), except for an account that
+                // already turned it on. See `Flags.twoStepEnabled`.
+                if Flags.twoStepEnabled || hasTwoStep {
+                    NavigationLink { TwoStepVerificationView() } label: { Text("Two-step verification") }
+                }
+                NavigationLink { SecurityNotificationsView() } label: { Text("Security notifications") }
             } header: {
                 Text("Security").textCase(nil)
             } footer: {
