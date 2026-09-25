@@ -285,9 +285,8 @@ struct ProfileLinkChips: View {
     /// Passed in rather than read from `\.profilePalette`, because only one of the two pages that
     /// draw these publishes that environment, and a pill that follows the colour on one profile and
     /// not the other is worse than one that follows it on neither.
-    /// ⚠️ ACCEPTED AND NO LONGER USED, on purpose — see the fill below. Kept so the three call sites
-    /// (both headers in `ContactInfoView`, the Glow profile) do not have to change and so the palette
-    /// is one line away if he asks for colour back; a struct property costs nothing unread.
+    /// USED AGAIN since 2026-09-25, as the tint of the glass (see the fill below), the same colour
+    /// the action circles are tinted with. Nil means plain glass.
     var tint: Color?
     @Environment(\.openURL) private var openURL
 
@@ -303,15 +302,15 @@ struct ProfileLinkChips: View {
                         // ⛔ SMALLER — owner, 2026-09-16: "make small badge". One step down on both
                         // the glyph and the label, and the gutters tightened to match, so the pill
                         // shrinks around its text instead of just losing its type size.
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
                             Image(systemName: "link")
-                                .font(.caption2.weight(.semibold))
+                                .font(.caption.weight(.semibold))
                             Text(link.title)
-                                .font(.caption.weight(.medium))
+                                .font(.footnote.weight(.semibold))
                                 .lineLimit(1)
                         }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
                         // ⛔ THE PALETTE TINT IS OFF — owner, 2026-09-16, TWO reports in one sitting
                         // that are the same fill seen against two backgrounds. Over his snow photo
                         // the extracted card colour came out pale grey and he read it as a drop
@@ -325,7 +324,15 @@ struct ProfileLinkChips: View {
                         // no-palette fallback in that same commit, so this is not a new design — it
                         // is the one branch of it, taken always, which is the only way the pill reads
                         // the same on a photograph, on a letter avatar and in both themes.
-                        .background { Capsule().fill(.ultraThinMaterial) }
+                        //
+                        // ⛔ LIQUID GLASS IN THE PROFILE'S COLOUR — owner, 2026-09-25: "make it liquid
+                        // glass, looks like profile colour, visible, professional". It is now the
+                        // exact glass the five action circles under it use: the same helper, tinted
+                        // with the same `card` colour, so pill and circles read as one set. The two
+                        // 09-16 complaints stay answered: the glass keeps an edge of its own (no grey
+                        // smear that reads as a shadow), and with no photo it is plain glass, as the
+                        // circles are, never a blue capsule.
+                        .liquidGlass(Capsule(), interactive: true, tint: tint)
                     }
                     .buttonStyle(.plain)
                 }
