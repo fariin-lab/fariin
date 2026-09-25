@@ -35,7 +35,13 @@ struct ProfileLinksView: View {
                     NavigationLink {
                         ProfileLinkEditView(existing: nil) { saved in add(saved) }
                     } label: {
-                        row(icon: "plus", title: "Add link", subtitle: nil, emphasised: true)
+                        // Owner 2026-09-25: the 40pt disc made this one row taller than a system
+                        // row. A plain glyph and title is the height Settings uses.
+                        Label {
+                            Text("Add Link").foregroundStyle(.primary)
+                        } icon: {
+                            Image(systemName: "plus").foregroundStyle(.primary)
+                        }
                     }
                 }
                 ForEach(links) { link in
