@@ -11,6 +11,10 @@ struct KulanApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                // ⛔ EVERY SWITCH IS GREEN WHEN ON — owner, 2026-09-25: "Sign-in alerts" was white on
+                // white in dark mode. The app tints itself `.primary` (white at night) and a switch
+                // with no tint of its own took it. One rule here instead of one per screen.
+                .toggleStyle(SystemGreenSwitch())
                 .tint(.primary)   // monochrome: no iOS system-blue anywhere
                 .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
                 .onOpenURL { url in handleDeepLink(url) }
@@ -189,5 +193,12 @@ struct KulanApp: App {
         case "s": return .story(value)
         default:  return nil
         }
+    }
+}
+
+/// The iOS switch, green when on, whatever the app's accent is (see `.toggleStyle` above).
+struct SystemGreenSwitch: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration).toggleStyle(.switch).tint(.green)
     }
 }
