@@ -87,8 +87,24 @@ enum Passkeys {
     }
 
     /// Add a passkey to the account that is signed in now.
+    /// The server's one-time challenge for adding a passkey, fetched AHEAD of the tap.
+    ///
+    /// ⛔ WHY AHEAD — owner, 2026-09-25: "when I tap Add Passkey, the passkey sheet takes a bit late".
+    /// The system sheet cannot open until the challenge is back, and that is a round trip to
+    /// me-central1, plus a cold start when the function has been idle. The Passkeys page now fetches
+    /// one as it opens, so the tap goes straight to the sheet. The server keeps a challenge for five
+    /// minutes; one older than four is fetched again rather than risk it expiring mid-sheet.
+    struct Prepared {
+        let challengeId: String
+        let challenge: Data
+        let userId: Data
+        let name: String
+        let fetchedAt: Date
+        var isFresh: Bool { Date().timeIntervalSince(fetchedAt) < 240 }
+    }
+
     @MainActor
-    static func register(label: String) async throws {
+    static func prepareRegistration() async throws -> Prepared {
         let start = try await AccountCall.run("passkeyRegistrationOptions")
         guard let options = start["options"] as? [String: Any],
               let challengeId = start["challengeId"] as? String,
@@ -100,10 +116,21 @@ enum Passkeys {
               let name = user["name"] as? String else {
             throw AccountCall.Failure.message("Could not start adding a passkey.")
         }
+        return Prepared(challengeId: challengeId, challenge: challenge, userId: userId,
+                        name: name, fetchedAt: Date())
+    }
+
+    /// `prepared`: a challenge fetched in advance (see `Prepared`). A stale or missing one is fetched
+    /// now. Either way it is single-use: the server spends it on verify.
+    @MainActor
+    static func register(label: String, prepared: Prepared? = nil) async throws {
+        let p: Prepared
+        if let prepared, prepared.isFresh { p = prepared } else { p = try await prepareRegistration() }
+        let challengeId = p.challengeId
 
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: passkeyRelyingParty)
         let request = provider.createCredentialRegistrationRequest(
-            challenge: challenge, name: name, userID: userId)
+            challenge: p.challenge, name: p.name, userID: p.userId)
 
         let authorization = try await PasskeyCeremony().run([request])
         guard let credential = authorization.credential
@@ -195,6 +222,8 @@ struct PasskeysView: View {
     @State private var working = false
     @State private var error: String?
     @State private var toDelete: Row?
+    /// A challenge fetched as the page opens, so Add goes straight to the sheet (see Passkeys.Prepared).
+    @State private var prepared: Passkeys.Prepared?
 
     private let brand = Color(hex: 0x0A84FF)
 
@@ -212,7 +241,11 @@ struct PasskeysView: View {
         .navigationTitle("Passkeys")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .task { await load() }
+        .task {
+            async let list: Void = load()
+            async let warm: Void = prefetch()
+            _ = await (list, warm)
+        }
         .alert("Delete passkey?", isPresented: Binding(get: { toDelete != nil },
                                                        set: { if !$0 { toDelete = nil } })) {
             Button("Delete", role: .destructive) {
@@ -389,13 +422,22 @@ struct PasskeysView: View {
         error = nil
         defer { working = false }
         do {
-            try await Passkeys.register(label: "Passkey")
+            let ready = prepared
+            prepared = nil   // single-use: the server spends it on verify
+            try await Passkeys.register(label: "Passkey", prepared: ready)
             await load()
         } catch let e as ASAuthorizationError where e.code == .canceled {
             // Backing out of the system sheet is not a failure and must not be reported as one.
         } catch {
             self.error = error.localizedDescription
         }
+        // Whatever happened, the next tap should be instant too.
+        await prefetch()
+    }
+
+    /// Quietly fetch the next challenge. A failure here is not shown: the tap fetches its own.
+    private func prefetch() async {
+        prepared = try? await Passkeys.prepareRegistration()
     }
 
     private func remove(_ row: Row) async {
