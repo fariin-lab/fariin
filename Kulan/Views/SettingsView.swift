@@ -21,8 +21,9 @@ struct SettingsRowLabel: View {
     init(_ title: String, system: String) { self.title = title; self.image = system; self.system = true }
     var body: some View {
         Label {
+            // No extra padding — owner, 2026-09-25, beside iOS Settings and another messenger: the rows
+            // were ~62pt against their ~52. The system row height is the right one.
             Text(title).font(.system(size: 17))
-                .padding(.vertical, 6)   // lifts the row to the reference app's roomy height
         } icon: {
             Group {
                 if system {
