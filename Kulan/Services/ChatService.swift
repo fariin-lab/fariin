@@ -129,17 +129,8 @@ enum ChatService {
             seed.removeValue(forKey: "typing")
             try await ref.setData(seed, merge: true)
         }
-        // 2026-09-24 decision D8: opening a chat with somebody on MY account block list gives the chat
-        // its own copy of the block, so the thread shows them as blocked and every screen that reads
-        // `blockedBy` treats it so. `blockedAt` is the list entry's own time, so anything they sent
-        // silently while blocked stays hidden (their writes land; blocking is silent).
-        // `confirmedEntry`, not `entries`: only MY list, loaded for this account, may block a chat.
-        let listedAt = await MainActor.run { BlockList.shared.confirmedEntry(for: other.id) }
-        let alreadyBlocked = ((snapshot?.data()?["blockedBy"] as? [String: Any])?[uid] as? Bool) == true
-        if let listedAt, !alreadyBlocked {
-            let at = listedAt > 0 ? listedAt : Date().timeIntervalSince1970 * 1000
-            try? await ref.updateData(["blockedBy.\(uid)": true, "blockedAt.\(uid)": at])
-        }
+        // 2026-09-26 block rebuild: a block is NOT copied onto the chat any more (the person blocked
+        // is a member and could read it). The thread and every list ask `BlockList` directly.
         return cid
     }
 
@@ -3288,57 +3279,16 @@ enum ChatService {
     /// before (the chat list, the thread and the push all read those). `cid` is still the pair id,
     /// `convId(me, them)`, whether or not that chat exists. The conversation write is an UPDATE now,
     /// so a missing chat is "not found" (fine) instead of a create the rules refuse.
+    ///
+    /// 2026-09-26 block rebuild: ONE write, to my private list, done by `BlockList.setBlocked`
+    /// (serialised per person, history recorded on unblock, stories revoked on block). The chat's
+    /// copy of the block is gone: the other person could read it.
     @discardableResult
     static func setBlocked(_ cid: String, _ value: Bool) async -> Bool {
         let me = uid
         let other = cid.contains("_") ? (cid.split(separator: "_").map(String.init).first { $0 != me } ?? "") : ""
-        // Both at once: each await waits for the server, and one must not hold the other up.
-        async let listOK = setBlockListEntry(me: me, other: other, value)
-        async let convOK = setConversationBlocked(cid, me: me, hasPair: !other.isEmpty, value)
-        let listDone = await listOK
-        let convDone = await convOK
-        let ok = listDone && convDone
-        // REVOKE MY ACTIVE STORIES FROM THEM (audit). The audience is frozen into recipientUids at
-        // post time and nothing ever rewrote it, so blocking someone only affected FUTURE stories:
-        // for up to 24h they kept the ring, kept watching, and kept landing in my Seen-by. Blocking
-        // is the strongest "stop seeing me" action there is, so it has to reach back.
-        if value, !other.isEmpty { await StoriesRepository.shared.revokeAudience(for: other) }
-        return ok
-    }
-
-    /// 2026-09-24 decision D8: my account-level block list entry for `other` (set or removed).
-    private static func setBlockListEntry(me: String, other: String, _ value: Bool) async -> Bool {
-        guard !me.isEmpty, !other.isEmpty, other != me, !other.contains("/") else { return true }
-        let ref = db.collection("users").document(me).collection("blocked").document(other)
-        do {
-            if value { try await ref.setData(["at": FieldValue.serverTimestamp()]) }
-            else { try await ref.delete() }
-            return true
-        } catch {
-            print("block list (\(other), \(value)) refused:", error)
-            return false
-        }
-    }
-
-    /// 2026-09-24 decision D8: the chat's own copy of the block, when the chat exists.
-    private static func setConversationBlocked(_ cid: String, me: String, hasPair: Bool, _ value: Bool) async -> Bool {
-        guard !me.isEmpty else { return false }
-        var data: [String: Any] = ["blockedBy.\(me)": value]
-        let now = Date().timeIntervalSince1970 * 1000
-        // Stamp block start / unblock time so the blocker hides exactly the messages
-        // that arrived DURING the block — and keeps hiding them after unblock
-        // (never delivered, as standard messengers do). Older history stays visible.
-        if value { data["blockedAt.\(me)"] = now } else { data["blockClearedAt.\(me)"] = now }
-        do {
-            try await db.collection("conversations").document(cid).updateData(data)
-            return true
-        } catch {
-            let ns = error as NSError
-            // Not found: no chat with them yet, and the list entry is the whole block.
-            if hasPair, ns.domain == FirestoreErrorDomain, ns.code == 5 { return true }
-            print("setBlocked(\(cid), \(value)) refused:", error)
-            return false
-        }
+        guard !other.isEmpty else { return false }
+        return await BlockList.shared.setBlocked(other, value)
     }
 
     /// File an abuse report. App Store Guideline 1.2 requires users to be able to

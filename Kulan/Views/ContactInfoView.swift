@@ -2239,7 +2239,9 @@ struct ContactInfoView: View {
             let muteUntil = ((d["mutedBy"] as? [String: Any])?[me] as? NSNumber)?.doubleValue ?? 0
             muted = muteUntil > Date().timeIntervalSince1970 * 1000
             mutedUntil = muteUntil
-            blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
+            // 2026-09-26 block rebuild: my list first (always current), the chat's old copy second.
+            blocked = BlockList.snapshot.contains(otherUid)
+                || ((d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false)
         }
         // 2026-09-24 decision D8: somebody blocked with no chat (or before one) is on my account's
         // block list only; the page must offer Unblock for them too.

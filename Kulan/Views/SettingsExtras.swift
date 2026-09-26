@@ -577,7 +577,7 @@ struct BlockedUsersView: View {
     /// 2026-09-24 decision D8: the union of chats I blocked and my account block list.
     private var allBlocked: [BlockedPerson] {
         var rows: [String: BlockedPerson] = [:]
-        for c in repo.conversations where !c.isGroup && c.blockedBy[me] == true {
+        for c in repo.conversations where !c.isGroup && c.isBlockedByMe(me) {
             let uid = c.otherUid(me)
             guard !uid.isEmpty else { continue }
             rows[uid] = BlockedPerson(id: uid, cid: c.id, name: c.name(for: me), photoUrl: c.photoUrl(for: me),

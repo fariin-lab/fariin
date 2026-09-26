@@ -256,7 +256,7 @@ struct ChatSearchView: View {
         var out: [String: String] = [:]
         for c in MessageSearch.searchableConversations(me: me) {
             out[c.id] = "\(c.updatedAtMillis)|\(c.lastMessageCipher.hashValue)|\(c.clearedAt[me] ?? 0)|"
-                + "\(c.blockedBy[me] ?? false)|\(c.name(for: me))|\(c.photoUrl(for: me) ?? "")"
+                + "\(c.isBlockedByMe(me))|\(c.name(for: me))|\(c.photoUrl(for: me) ?? "")"
         }
         return out
     }
@@ -435,6 +435,10 @@ enum MessageSearch {
                         let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
                         if blockCutoff > 0, author != me,
                            date.timeIntervalSince1970 * 1000 > blockCutoff { return nil }
+                        // 2026-09-26 block rebuild: the thread's own rule (`BlockList.hides`): past
+                        // blocks too, and a blocked member's messages in a group.
+                        if author != me,
+                           BlockList.snapshot.hides(author: author, atMillis: date.timeIntervalSince1970 * 1000) { return nil }
                         // Index the SAFE label, not the raw "fariin-…:" payload — contact/location
                         // cards then match and display as "Contact"/"Location", never the marker.
                         let safe = quoteSafeLabel(text)

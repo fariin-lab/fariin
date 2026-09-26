@@ -3780,6 +3780,9 @@ struct ChatRow: View, Equatable {
         if conv.leaksBlocked(me) { return "" }   // don't leak a blocked person's message into the list
         // Group last-message is sealed by its sender → decrypt with the sender's key, not the cid pair.
         if conv.isGroup {
+            // 2026-09-26 block rebuild: a member I blocked is hidden in the group itself, so their
+            // message is not previewed here either.
+            if BlockList.snapshot.hides(author: conv.lastSender, atMillis: conv.updatedAtMillis) { return "" }
             return Crypto.shared.decryptGroupCached(conv.lastMessageCipher, cid: conv.id, authorId: conv.lastSender)   // memoized
         }
         return Crypto.shared.decryptCached(conv.lastMessageCipher, cid: conv.id)   // memoized: no re-decrypt per render

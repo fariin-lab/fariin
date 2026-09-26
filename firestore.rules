@@ -419,10 +419,8 @@ service cloud.firestore {
         return /databases/$(database)/documents/conversations/$(
           request.auth.uid < uid ? request.auth.uid + '_' + uid : uid + '_' + request.auth.uid);
       }
-      match /presence/state {
-        allow read: if signedIn() && (
-          request.auth.uid == uid
-          || get(/databases/$(database)/documents/users/$(uid)).data
+      function presenceAudienceAllows() {
+        return get(/databases/$(database)/documents/users/$(uid)).data
                .get('privacy', {}).get('lastSeen', 'everyone') == 'everyone'
           // 2026-09-24 audit: the conversation branch now applies ONLY to "My Chats" (`contacts`).
           // It used to fire for any stored value, so "No One" let every chat partner read exactly
@@ -430,8 +428,16 @@ service cloud.firestore {
           // as the line above, so it is still one billed read.)
           || (get(/databases/$(database)/documents/users/$(uid)).data
                 .get('privacy', {}).get('lastSeen', 'everyone') == 'contacts'
-              && exists(presencePair())
-              && get(presencePair()).data.get('blockedBy', {}).get(uid, false) != true)
+              && exists(presencePair()));
+      }
+      match /presence/state {
+        // 2026-09-26 block rebuild: A BLOCK HIDES LAST SEEN WHATEVER THE SETTING SAYS. The
+        // "everyone" branch had no block check at all, and the "contacts" branch read only the
+        // chat's copy of the block, so blocking someone you never chatted with hid nothing.
+        // `isBlockedByUser` reads the owner's account list first, the chat's old copy second.
+        allow read: if signedIn() && (
+          request.auth.uid == uid
+          || (!isBlockedByUser(uid) && presenceAudienceAllows())
         );
         allow write: if signedIn() && request.auth.uid == uid;
       }
@@ -448,13 +454,6 @@ service cloud.firestore {
       // no field may appear here that is not on the list, so a future bug cannot quietly start
       // mirroring the audience into a world-readable document.
       match /publicStories/{storyId} {
-        /// The 1:1 conversation id for two people, which is how this project names them: the two
-        /// uids sorted and joined with an underscore (`ChatService.convId`).
-        function convWith(other) {
-          return request.auth.uid < other
-            ? request.auth.uid + '_' + other
-            : other + '_' + request.auth.uid;
-        }
         // ⛔ A PERSON THE AUTHOR BLOCKED CANNOT READ THE MIRROR, AND THE APP WAS THE ONLY THING
         // SAYING SO.
         //
@@ -464,14 +463,13 @@ service cloud.firestore {
         // surface in this app built for reach, which makes it the one place a block has to be
         // enforced by the database.
         //
-        // ⚠️ NO CONVERSATION READS AS NOT BLOCKED. A block is recorded on the shared conversation
-        // document; two people who have never spoken have no such document, and a missing document
-        // must not mean a missing story.
+        // 2026-09-26 block rebuild: the ACCOUNT block list decides (`isBlockedByUser`), so a block
+        // made with no chat hides the stories too. Before, only the chat's copy was read, and two
+        // people who had never spoken had none, so blocking a stranger hid nothing here.
+        // `uid` is the path, not the document, so the profile's list query still evaluates.
         allow read: if signedIn() && (
           request.auth.uid == uid
-          || !exists(/databases/$(database)/documents/conversations/$(convWith(uid)))
-          || get(/databases/$(database)/documents/conversations/$(convWith(uid)))
-               .data.get('blockedBy', {}).get(uid, false) != true
+          || !isBlockedByUser(uid)
         );
         // ⛔ A MODERATOR CAN TAKE THE MIRROR DOWN, AND UNTIL NOW ONLY THE AUTHOR COULD.
         //
@@ -660,10 +658,31 @@ service cloud.firestore {
       // `at`, the server's time of the block.
       match /blocked/{other} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
+        // 2026-09-26: `at` may be EARLIER than now, never later. Moving a block that was recorded
+        // on a chat (the old place) into this list has to keep its original time, or everything
+        // they sent between then and now would appear. Only the owner's own hiding reads it.
         allow create, update: if signedIn() && request.auth.uid == uid
           && other != uid
           && request.resource.data.keys().hasOnly(['at'])
-          && request.resource.data.at == request.time;
+          && request.resource.data.at is timestamp
+          && request.resource.data.at <= request.time;
+      }
+      // 2026-09-26 block rebuild: MY PAST BLOCKS, one document per block that has ended
+      // (`<uid>_<start ms>`). Whatever that person sent between `from` and `to` stays hidden for
+      // good after the unblock, the way the reference apps never deliver what a block held back.
+      // This used to live on the SHARED chat (`blockedAt`, `blockClearedAt`), where the person I
+      // blocked could read it. Owner only, both ways; written once, never edited.
+      match /blockHistory/{span} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['other', 'from', 'to'])
+          && request.resource.data.other is string
+          && request.resource.data.other != uid
+          && span.matches(request.resource.data.other + '_[0-9]+')
+          && request.resource.data.from is timestamp
+          && request.resource.data.to is timestamp
+          && request.resource.data.from <= request.resource.data.to
+          && request.resource.data.to <= request.time;
       }
 
       // OFFICIAL CHANNEL, this person's half: muted, blocked, last read, delete-for-me. Private in
@@ -2197,7 +2216,17 @@ service cloud.firestore {
       function audienceToken(uid) {
         return hashing.sha256('fariin-audience-v1:' + uid).toHexString().lower();
       }
-      allow read: if signedIn() && (
+      // 2026-09-26 block rebuild: A DIRECT FETCH BY SOMEBODY THE AUTHOR BLOCKED IS REFUSED, even
+      // while they are still in `recipientUids` (blocking revokes the audience, but that is an app
+      // write that can fail or lag). On `get` ONLY: the check reads `resource.data.authorUid`, which
+      // a tray QUERY cannot prove, so putting it on `list` would refuse every tray query. The tray
+      // is covered by the audience revoke taking them out of `recipientUids`.
+      allow get: if storyReadable()
+        && (request.auth.uid == resource.data.authorUid
+            || adminCan('moderate')
+            || !isBlockedByUser(resource.data.authorUid));
+      allow list: if storyReadable();
+      function storyReadable() { return signedIn() && (
         request.auth.uid == resource.data.authorUid
         || audienceToken(request.auth.uid) in resource.data.recipientUids
         // ⚠️ THE RAW-UID FORM, FOR THE STORIES THAT WERE ALREADY UP WHEN THIS SHIPPED. They expire
@@ -2209,7 +2238,7 @@ service cloud.firestore {
         // reported it - and without this the one person who has to look at it is the one person who
         // cannot. Reading is gated on the `moderate` permission, which nobody has by default.
         || adminCan('moderate')
-      );
+      ); }
       /// HOW MANY STORIES THIS ACCOUNT HAS POSTED IN THE CURRENT WINDOW — see
       /// `users/{uid}/limits/{name}`, whose own rules are what make the number hard to fake.
       function storyBudget() {
@@ -2577,8 +2606,10 @@ service cloud.firestore {
           && (audienceToken(request.auth.uid) in storyData().recipientUids
               || request.auth.uid in storyData().recipientUids
               || storyData().get('public', false) == true)
+          && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: never in a blocker's Seen-by
           && validReceipt() && reactionAllowed();
         allow update: if signedIn() && request.auth.uid == viewerUid
+          && !isBlockedByUser(storyData().authorUid)   // 2026-09-26: no reaction after a block
           && validReceipt() && reactionAllowed();  // set/clear reaction
         // NO delete — a view receipt is not something a viewer takes back. (Second stray paste of the
         // message-request decline rule; it read conversation fields off a view receipt, so it could

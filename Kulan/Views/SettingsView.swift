@@ -1166,7 +1166,14 @@ struct AppearanceSettingsView: View {
 struct PrivacySettingsView: View {
     private var repo = ConversationsRepository.shared
     private var me: String { AuthService.shared.uid ?? "" }
-    private var blockedCount: Int { repo.conversations.filter { $0.blockedBy[me] == true }.count }
+    /// 2026-09-26 block rebuild: my account list, plus any chat still carrying an old, unmoved copy.
+    private var blockedCount: Int {
+        let list = BlockList.shared.entries
+        let legacy = repo.conversations.filter {
+            !$0.isGroup && $0.blockedBy[me] == true && list[$0.otherUid(me)] == nil
+        }
+        return list.count + legacy.count
+    }
     @AppStorage("defaultDisappearSeconds") private var defaultDisappear = 0
     @AppStorage("priv.lastSeen") private var privLastSeen = "everyone"
     @AppStorage("priv.photo") private var privPhoto = "everyone"

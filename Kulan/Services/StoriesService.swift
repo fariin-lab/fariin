@@ -1142,6 +1142,8 @@ final class StoriesService {
                     return !them.isEmpty && (c.isBlockedByMe(me) || c.isBlockedByMe(them))
                 }
                 .map { $0.otherUid(me) })
+                // 2026-09-26 block rebuild: a glow needs no chat, and neither does a block now.
+                .union(BlockList.snapshot.entries.keys)
         }
         let glowReach = await MainActor.run { GlowService.shared.realGlowRelationship }
             .subtracting(blockedEither)
@@ -2475,10 +2477,14 @@ final class StoriesRepository {
         // only on that flag — so someone the AUTHOR blocked could still watch it from the author's
         // profile, and a rules-refused view write means it need not land in Seen-by to be watched.
         // The block is recorded on the shared conversation doc, which both clients can read.
+        // 2026-09-26 block rebuild: somebody I BLOCKED shows me nothing either. And whether the
+        // author blocked ME is the server's to know, not mine: the mirror's read rule now refuses
+        // it (account list, chat or no chat), the fetch below fails, and there is simply no ring.
+        if BlockList.snapshot.contains(uid) { return nil }
         let cid = ChatService.convId(me, uid)
         if let snap = try? await db.collection("conversations").document(cid).getDocument(),
            ((snap.data()?["blockedBy"] as? [String: Any])?[uid] as? Bool) == true {
-            return nil   // the AUTHOR blocked me → no ring, no story
+            return nil   // the AUTHOR blocked me the old way (a copy still on the chat)
         }
         // READS THE MIRROR, NOT THE STORY COLLECTION. The story documents carry `recipientUids` and
         // are no longer readable by anyone outside the audience — because granting them to strangers
@@ -2847,7 +2853,9 @@ final class StoriesRepository {
 
         // Don't show stories from anyone I've blocked (C3, read side). isBlockedByMe, not
         // leaksBlocked — a quietly-blocked author's stories were still appearing in my row.
+        // 2026-09-26 block rebuild: and everybody on my account list, chat or no chat.
         let blockedAuthors = Set(convs.filter { $0.isBlockedByMe(me) }.map { $0.otherUid(me) })
+            .union(BlockList.snapshot.entries.keys)
 
         var myGroup: StoryGroup?
         var groups: [StoryGroup] = []

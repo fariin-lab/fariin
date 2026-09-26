@@ -186,7 +186,10 @@ service firebase.storage {
     // named after. A 1:1 chat's id is the two uids sorted and joined with "_", as the app builds it.
     function canSeePhoto(owner) {
       return request.auth.uid == owner
-        || (!firestore.exists(/databases/(default)/documents/users/$(owner)/photoHiddenFrom/$(request.auth.uid))
+        // 2026-09-26 block rebuild: somebody the owner BLOCKED never gets the photo, whatever
+        // the setting says (the reference apps hide the photo from a blocked person).
+        || (!firestore.exists(/databases/(default)/documents/users/$(owner)/blocked/$(request.auth.uid))
+            && !firestore.exists(/databases/(default)/documents/users/$(owner)/photoHiddenFrom/$(request.auth.uid))
             && photoAudienceAllows(owner,
                  firestore.get(/databases/(default)/documents/users/$(owner)).data.get('privacy', {}).get('photo', 'everyone')));
     }

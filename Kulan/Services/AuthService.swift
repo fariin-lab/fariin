@@ -470,7 +470,7 @@ final class AuthService: NSObject {
     /// every call site.
     func abandonSession() async {
         // 2026-09-25: this sign-out skipped SessionWipe, so the account's block list stayed in
-        // memory for the next account on this phone (see BlockList.confirmedEntry).
+        // memory for the next account on this phone (see BlockList.Snapshot.owner).
         await MainActor.run { BlockList.shared.stop() }
         try? Auth.auth().signOut()
         uid = nil

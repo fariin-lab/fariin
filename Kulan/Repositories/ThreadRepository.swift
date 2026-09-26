@@ -105,6 +105,7 @@ final class ThreadRepository {
     private var listener: ListenerRegistration?
     private var outboxObserver: NSObjectProtocol?
     private var outboxAddObserver: NSObjectProtocol?
+    private var blockObserver: NSObjectProtocol?
     private var convListener: ListenerRegistration?
     private var userListener: ListenerRegistration?
     /// Separate from `userListener` because presence lives in its own subcollection now, so the
@@ -180,6 +181,8 @@ final class ThreadRepository {
     /// Fires ONCE, at the exact second the next message is due. See `scheduleNextBurn`.
     private var burnTimer: Timer?
     private var otherUid = ""
+    // ⚠️ The OLD, shared copy of a block (see `Conversation.blockedBy`); `BlockList` is the real one.
+    private var legacyBlocked = false
     private var myBlockedAtMillis: Double = 0       // when I blocked
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
     var pinnedMessageIds: [String] = []   // up to 5 pinned messages (standard)
@@ -490,6 +493,16 @@ final class ThreadRepository {
         let isOneToOne = cid.contains("_")
         let other = isOneToOne ? (cid.split(separator: "_").map(String.init).first { $0 != uid } ?? "") : ""
         otherUid = other
+        // 2026-09-26 block rebuild: the block comes from MY list, so it is known before the chat
+        // document answers, and a block or unblock made anywhere (another screen, another of my
+        // devices) re-filters this chat at once.
+        iBlocked = isOneToOne && BlockList.snapshot.contains(other)
+        if blockObserver == nil {
+            blockObserver = NotificationCenter.default.addObserver(
+                forName: BlockList.didChange, object: nil, queue: .main) { [weak self] _ in
+                    self?.blockStateChanged()
+                }
+        }
         // (`stop()` moved to the top of this function; see the note there.)
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
@@ -541,7 +554,10 @@ final class ThreadRepository {
                     }
                 }
                 // Only rebuild when a field that actually FILTERS the list changes.
-                let newBlocked   = (d?["blockedBy"]      as? [String: Any])?[uid] as? Bool ?? false
+                // 2026-09-26: these three are the OLD, shared copy of a block, honoured until
+                // `BlockList.migrate` moves it to my private list; `iBlocked` also reads that list.
+                let legacyBlocked = (d?["blockedBy"]      as? [String: Any])?[uid] as? Bool ?? false
+                let newBlocked   = legacyBlocked || (isOneToOne && BlockList.snapshot.contains(other))
                 let newBlockedAt = ((d?["blockedAt"]      as? [String: Any])?[uid] as? NSNumber)?.doubleValue ?? 0
                 let newClearedAt = ((d?["blockClearedAt"] as? [String: Any])?[uid] as? NSNumber)?.doubleValue ?? 0
                 // Up to 5 pins (array). Fall back to the legacy single `pinnedMessageId`.
@@ -555,6 +571,7 @@ final class ThreadRepository {
                                    newPinned    != self.pinnedMessageIds       ||
                                    newDisappear != self.disappearSeconds
                 self.iBlocked               = newBlocked
+                self.legacyBlocked          = legacyBlocked
                 self.myBlockedAtMillis      = newBlockedAt
                 self.myBlockClearedAtMillis = newClearedAt
                 self.pinnedMessageIds       = newPinned
@@ -1040,11 +1057,13 @@ final class ThreadRepository {
         // honest answer even though it shows more than the old code did.
         let now = Date()
         msgs = msgs.filter { m in m.expiresAt.map { now < $0 } ?? true }
-        if iBlocked {
-            // Also silence the blocked person's reactions on my messages (their activity is hidden).
+        // Also silence reactions from anybody I block (their activity is hidden), in a group too.
+        let blocks = BlockList.snapshot
+        if iBlocked || !blocks.entries.isEmpty {
             msgs = msgs.map { m in
-                guard m.reactions[otherUid] != nil else { return m }
-                var c = m; c.reactions.removeValue(forKey: otherUid); return c
+                let drop = m.reactions.keys.filter { ($0 == otherUid && iBlocked) || blocks.contains($0) }
+                guard !drop.isEmpty else { return m }
+                var c = m; drop.forEach { c.reactions.removeValue(forKey: $0) }; return c
             }
         }
         // Sort on ONE timeline — see the long note above `assignOrderKeys`. Server stamps decide
@@ -1072,14 +1091,23 @@ final class ThreadRepository {
         scheduleNextBurn()
     }
 
-    // Silent block: hide the other person's messages that landed during the block.
-    // While blocked → hide everything after I blocked. After unblock → keep hiding
-    // just the block window (blockedAt … blockClearedAt) so the backlog never arrives.
+    // Silent block: hide what anybody I block sent while I had them blocked. While blocked → hide
+    // everything after I blocked. After unblock → keep hiding the block window so the backlog never
+    // arrives. 2026-09-26 block rebuild: `BlockList` answers (my private list and its history), for
+    // the 1:1 partner AND for a blocked member of a group I share with them (the reference app that
+    // hides them there too). The chat's old copy of the window still counts until it is moved.
     private func hiddenByBlock(_ m: Message) -> Bool {
-        guard m.authorId == otherUid, myBlockedAtMillis > 0 else { return false }
         let t = m.createdAt.timeIntervalSince1970 * 1000
-        if iBlocked { return t > myBlockedAtMillis }
+        if !m.authorId.isEmpty, BlockList.snapshot.hides(author: m.authorId, atMillis: t) { return true }
+        guard m.authorId == otherUid, myBlockedAtMillis > 0 else { return false }
+        if legacyBlocked { return t > myBlockedAtMillis }
         return t > myBlockedAtMillis && t <= myBlockClearedAtMillis
+    }
+
+    /// My block list changed (here, on another screen, or on another of my devices).
+    private func blockStateChanged() {
+        iBlocked = legacyBlocked || (cid.contains("_") && BlockList.snapshot.contains(otherUid))
+        rebuild()
     }
 
     /// Page in the next older window (called on scroll-to-top). `completion` runs after
@@ -1156,6 +1184,8 @@ final class ThreadRepository {
         outboxObserver = nil
         if let outboxAddObserver { NotificationCenter.default.removeObserver(outboxAddObserver) }
         outboxAddObserver = nil
+        if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
+        blockObserver = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil

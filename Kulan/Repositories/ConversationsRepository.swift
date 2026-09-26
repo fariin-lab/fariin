@@ -145,7 +145,9 @@ final class ConversationsRepository {
         // ⚠️ `hasLoaded` is set here as well, which is what disarms the skeleton: having chats on
         // screen IS being loaded, and the shimmer must never appear over rows that are already there.
         if conversations.isEmpty {
-            let cached = ConversationsDiskCache.shared.load(uid: uid)
+            // 2026-09-26 block rebuild: through the block filter too. The disk copy is the RAW list,
+            // and `BlockList.start()` above has already put this account's saved list in memory.
+            let cached = hideAccountBlocked(ConversationsDiskCache.shared.load(uid: uid), me: uid)
             if !cached.isEmpty {
                 conversations = cached
                 hasLoaded = true
@@ -227,6 +229,11 @@ final class ConversationsRepository {
                 self.lastRaw = convs
                 // 2026-09-24 fix-all #6: a pinned chat older than the window stays on the list.
                 self.syncPinnedExtras(convs, uid: uid, fromServer: !snap.metadata.isFromCache)
+                // 2026-09-26 block rebuild: NOTHING IS PUBLISHED BEFORE MY BLOCK LIST HAS ANSWERED.
+                // This listener can beat the block list's own; a chat from somebody I blocked, and
+                // its preview, would be on screen for that moment. `blockListChanged` publishes the
+                // held list the instant the block list lands (from its saved copy, usually at once).
+                guard BlockList.shared.isLoaded else { return }
                 let visible = self.hideAccountBlocked(self.withPinnedExtras(convs), me: uid)
                 UnknownChatArchiver.sweep(visible)
                 self.publish(visible)
@@ -388,27 +395,37 @@ final class ConversationsRepository {
         }
     }
 
-    // MARK: - Account block list (2026-09-24 decision D8)
+    // MARK: - Account block list (2026-09-24 decision D8, rebuilt 2026-09-26)
     //
     // Blocking is SILENT: the rules let a blocked person's new chat and messages land, so they look
-    // sent to them. The blocker must never see them. A 1:1 whose other member is on my account list
-    // is dropped here, before every screen (chat list, requests, search, forward) reads it, UNLESS the
-    // chat carries its own `blockedBy[me]`: that chat existed when I blocked (or I opened it since,
-    // see `ChatService.openConversation`), and the screens already handle it the way they always have.
+    // sent to them. The blocker must never see them.
+    //   · A chat that was ours before the block stays on my list, frozen at the block
+    //     (`Conversation.displayUpdatedAt`, `leaksBlocked`): its history is mine, and the thread
+    //     shows it with an Unblock bar, the way the reference apps do.
+    //   · A REQUEST from somebody I blocked (theirs, never accepted) is dropped here, before every
+    //     screen (chat list, requests, search, forward) reads it: blocking a request removes it, and
+    //     a new one they send while blocked never appears.
     @ObservationIgnored private var lastRaw: [Conversation] = []
 
     private func hideAccountBlocked(_ convs: [Conversation], me: String) -> [Conversation] {
-        let list = BlockList.shared
-        guard !me.isEmpty, !list.entries.isEmpty else { return convs }
+        guard !me.isEmpty else { return convs }
+        let list = BlockList.snapshot
+        guard !list.entries.isEmpty || convs.contains(where: { $0.blockedBy[me] == true }) else { return convs }
         return convs.filter { c in
-            c.isGroup || c.isBlockedByMe(me) || !list.contains(c.otherUid(me))
+            guard !c.isGroup, c.isBlockedByMe(me) else { return true }
+            let theirRequest = !c.accepted && !c.startedBy.isEmpty && c.startedBy != me
+            return !theirRequest
         }
     }
 
-    /// Called by `BlockList` when my list changes, so a block or unblock applies to the list at once.
+    /// Called by `BlockList` when my list changes (or first loads), so a block or unblock applies to
+    /// the list at once, and a list held back for it is published.
     func blockListChanged() {
-        guard listener != nil, !lastRaw.isEmpty, let me = Auth.auth().currentUser?.uid else { return }
-        publish(hideAccountBlocked(withPinnedExtras(lastRaw), me: me))
+        guard listener != nil, !lastRaw.isEmpty, let me = Auth.auth().currentUser?.uid,
+              BlockList.shared.isLoaded else { return }
+        let visible = hideAccountBlocked(withPinnedExtras(lastRaw), me: me)
+        publish(visible)
+        BlockList.shared.migrate(lastRaw)
     }
 
     // MARK: - Pinned chats older than the window (2026-09-24 fix-all #6)

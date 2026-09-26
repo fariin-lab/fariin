@@ -759,8 +759,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var pinnedBy: [String: Bool]
     var archivedBy: [String: Bool]
     var clearedAt: [String: Double]    // delete-for-me, ms
+    // ⚠️ 2026-09-26: THE OLD, SHARED COPY OF A BLOCK, read only until `BlockList.migrate` moves it
+    // to the owner's private list and deletes it here. Nothing writes these any more. Ask
+    // `isBlockedByMe` / `BlockList`, never these maps directly.
     var blockedBy: [String: Bool]
     var blockedAt: [String: Double]    // when each user blocked (ms) — hides later messages
+    var blockClearedAt: [String: Double] = [:]   // when each user unblocked (ms)
     var pinOrder: [String: Double]     // per-user manual order for pinned chats
     /// uid → the createdAt (ms) of the NEWEST voice note that person has played. A watermark, not a
     /// per-message flag, for the same reason `lastRead` is one: one small field on a document the chat
@@ -836,6 +840,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.clearedAt = doubleMap(data["clearedAt"])
         self.blockedBy = boolMap(data["blockedBy"])
         self.blockedAt = doubleMap(data["blockedAt"])
+        self.blockClearedAt = doubleMap(data["blockClearedAt"])
         self.pinOrder = doubleMap(data["pinOrder"])
         self.lastPlayedVoice = doubleMap(data["lastPlayedVoice"])
         self.delivered = doubleMap(data["delivered"])
@@ -973,17 +978,41 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Anything at all to show in the list's badge slot, of either kind.
     func hasUnreadMark(_ me: String) -> Bool { unread(me) > 0 || manuallyUnread(me) }
     func isMuted(_ me: String, now: Double) -> Bool { (mutedBy[me] ?? 0) > now }
-    func isBlockedByMe(_ me: String) -> Bool { blockedBy[me] ?? false }
-    func blockedAtMillis(_ me: String) -> Double { blockedAt[me] ?? 0 }
-    // Silent block in the chat LIST: a chat I blocked whose latest activity is the
-    // blocked person's post-block message — its preview/time/order must be frozen.
-    func leaksBlocked(_ me: String) -> Bool {
-        isBlockedByMe(me) && blockedAtMillis(me) > 0 && updatedAtMillis > blockedAtMillis(me)
+    /// 2026-09-26 block rebuild: `me` has blocked the other person in this 1:1. The account list
+    /// (`BlockList`, private to me) decides; an old copy still on the chat counts until it is moved.
+    /// Called with somebody else's uid it can only see that person's OLD shared copy, which is
+    /// exactly as much as the app is allowed to know about who blocked whom. Never true for a group.
+    func isBlockedByMe(_ me: String) -> Bool {
+        guard !isGroup else { return false }
+        let other = otherUid(me)
+        if !other.isEmpty, other != me, BlockList.snapshot.contains(other) { return true }
+        return blockedBy[me] ?? false
     }
-    /// Sort/time key that ignores the blocked person's later messages (freezes at block time).
-    func displayUpdatedAt(_ me: String) -> Double {
-        leaksBlocked(me) ? blockedAtMillis(me) : updatedAtMillis
+    func blockedAtMillis(_ me: String) -> Double {
+        if !isGroup, let at = BlockList.snapshot.entries[otherUid(me)], at > 0 { return at }
+        return blockedAt[me] ?? 0
     }
+    /// When the chat's latest activity is a message the block holds back (sent while I had them
+    /// blocked, now or in a past block), the time the list must freeze at instead; nil when the
+    /// latest activity may be shown. Silent block in the chat LIST: its preview/time/order freeze.
+    private func hiddenLastSince(_ me: String) -> Double? {
+        guard !isGroup, updatedAtMillis > 0 else { return nil }
+        let other = otherUid(me)
+        if isBlockedByMe(me) {
+            let since = blockedAtMillis(me)
+            return since > 0 && updatedAtMillis > since ? since : nil
+        }
+        // An ENDED block: only when the last message is theirs, from inside that block.
+        guard lastSender == other else { return nil }
+        let snap = BlockList.snapshot
+        if let span = snap.spans[other]?.first(where: { $0.contains(updatedAtMillis) }) { return span.lowerBound }
+        let at = blockedAt[me] ?? 0, cleared = blockClearedAt[me] ?? 0
+        if at > 0, cleared >= at, (at...cleared).contains(updatedAtMillis) { return at }
+        return nil
+    }
+    func leaksBlocked(_ me: String) -> Bool { hiddenLastSince(me) != nil }
+    /// Sort/time key that ignores the blocked person's held-back messages (freezes at block time).
+    func displayUpdatedAt(_ me: String) -> Double { hiddenLastSince(me) ?? updatedAtMillis }
     func isPinned(_ me: String) -> Bool { pinnedBy[me] ?? false }
     /// Manual order for pinned chats; defaults to recency so never-moved pins stay sensible.
     /// FROZEN recency (audit): the raw fallback let a silently-blocked pinned chat jump to the top

@@ -1870,6 +1870,31 @@ final class CallService: NSObject {
     }
     var restrictedCallee: RestrictedCallee?
 
+    /// 2026-09-26 block rebuild: a call to somebody I blocked. A UIKit alert on whatever is on top,
+    /// for the same reason as `GroupCallService.presentOverTop` (a dozen dial sites, some in sheets).
+    /// Unblocking does not ring them: the person presses Call again, knowing they have unblocked.
+    @MainActor
+    static func offerUnblock(uid: String, name: String, tries: Int = 4) {
+        guard let top = WebLink.topViewController(), !(top is UIAlertController) else { return }
+        if top.isBeingPresented || top.isBeingDismissed {
+            guard tries > 0 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                offerUnblock(uid: uid, name: name, tries: tries - 1)
+            }
+            return
+        }
+        let who = name.isEmpty ? "this person" : name
+        let alert = UIAlertController(title: "Unblock \(who)?",
+                                      message: "You blocked \(who). Unblock them to call.",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Unblock", style: .default) { _ in
+            Task { await BlockList.shared.setBlocked(uid, false) }
+        })
+        top.present(alert, animated: true)
+    }
+
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false,
                    fromProfile: Bool = false) {
         guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
@@ -1887,9 +1912,16 @@ final class CallService: NSObject {
         // every other dial site — the Calls tab row button, its long-press menu, New Call, Calls
         // search — still rang a person the user had blocked. Gating here covers all of them at once
         // and cannot be missed by a future entry point.
-        let blocked = ConversationsRepository.shared.conversations
-            .first { $0.id == ChatService.convId(me, uid) }?.isBlockedByMe(me) ?? false
-        guard !blocked else { return }
+        // 2026-09-26 block rebuild: my account list decides, so a person blocked with no chat is
+        // covered too; and the answer is a question, not silence: "Unblock <name>?", the way the
+        // reference apps meet a call to somebody you blocked.
+        let blocked = BlockList.snapshot.contains(uid)
+            || (ConversationsRepository.shared.conversations
+                .first { $0.id == ChatService.convId(me, uid) }?.isBlockedByMe(me) ?? false)
+        guard !blocked else {
+            MainActor.assumeIsolated { Self.offerUnblock(uid: uid, name: name) }
+            return
+        }
         // CALL PRIVACY, CHECKED BEFORE THE PHONE RINGS (owner 2026-08-04). The buttons stay live for
         // everyone — hiding them would tell you what somebody chose in their settings, which is
         // nobody's business — so the answer arrives when you press one.
@@ -2394,7 +2426,11 @@ final class CallService: NSObject {
 
     /// The gate's actual decision, split out so the live read and the cache fallback cannot drift.
     private func decideAllowed(_ cs: DocumentSnapshot?) -> Bool {
-        let blocked = ((cs?.data()?["blockedBy"] as? [String: Any])?[me] as? Bool) ?? false
+        // 2026-09-26 block rebuild: my account list (the caller is the other half of the pair id),
+        // then the chat's old copy. The server already refuses such a call; this is the phone's wall.
+        let caller = cs?.documentID.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+        let blocked = (!caller.isEmpty && BlockList.snapshot.contains(caller))
+            || (((cs?.data()?["blockedBy"] as? [String: Any])?[me] as? Bool) ?? false)
         let audience = PrivacyPrefs.mine("calls")   // same default as the settings screen — see PrivacyPrefs
         // An ACCEPTED chat, not "a last message" — the same test as `iAmContactOf` on the caller's
         // phone, so a Chat PIN opens calls the moment it opens the chat, and a stranger's one
