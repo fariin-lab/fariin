@@ -73,8 +73,8 @@ struct MetaChrome: Equatable {
     /// will be there forever. Theirs puts a shrinking hourglass in the footer beside the timestamp
     /// for precisely this — the state is not a detail, it is the whole point of the feature.
     ///
-    /// ⚠️ NOT PART OF THE FOOTER'S MEASURED WIDTH. The glyph is drawn in the slot the reservation
-    /// already leaves (see `BubbleText.reservation`), so a message does not change size as its timer
+    /// ⚠️ NOT PART OF THE FOOTER'S DRAWN TEXT. Its room is counted once in `BubbleText.footerWidth`
+    /// (the expiry never changes), so a message does not change size as its timer
     /// runs down — a bubble that resized every second would be the bloom this file's notes warn
     /// about, once a second, on every expiring row on screen.
     var expiresAt: Date?

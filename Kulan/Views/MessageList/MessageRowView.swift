@@ -1202,8 +1202,8 @@ final class MessageRowView: UIView {
     /// shrinking hourglass in the footer for this, and it is not a decoration — the whole feature is
     /// the fact that this message is going away.
     ///
-    /// ⚠️ DRAWN OVER THE FOOTER, ADDING NO WIDTH AND NO HEIGHT. It sits in the lane the invisible
-    /// reservation already leaves, exactly as the sending clock does, so the bubble does not resize
+    /// ⚠️ DRAWN OVER THE FOOTER, ADDING NO WIDTH AND NO HEIGHT. It sits in the room
+    /// `BubbleText.footerWidth` counts for it, exactly as the sending clock does, so the bubble does not resize
     /// while the timer runs. A footer that re-measured every second would re-bloom every expiring row
     /// on screen, once a second, which is the failure mode this file's own notes keep warning about.
     ///

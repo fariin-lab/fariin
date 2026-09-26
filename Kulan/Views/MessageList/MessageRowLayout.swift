@@ -481,6 +481,7 @@ enum MessageRowLayout {
         var bodyAttr = NSAttributedString()
         var links: [BubbleText.LinkRun] = []
         var metaOwnLine = false
+        var inlineMinW: CGFloat = 0        // last line + footer, when the footer shares it
         var bodySize: CGSize = .zero
         var isTombstone = false
         var isJumbo = false
@@ -492,6 +493,7 @@ enum MessageRowLayout {
             bodyAttr = built.body
             links = built.links
             metaOwnLine = built.metaOnOwnLine
+            inlineMinW = built.minContentWidth
             bodySize = BubbleText.size(bodyAttr, width: maxContent)
         case .jumbomoji(let glyphs):
             isJumbo = true
@@ -647,6 +649,9 @@ enum MessageRowLayout {
         // On its own line the footer is a real row, so it can drive the bubble wider than the words
         // do — a two-character message from me still has to fit "12:34 ✓✓".
         if metaOwnLine { contentW = max(contentW, metaSize.width) }
+        // Sharing the last line, the bubble widens until that line and the footer both fit — the
+        // reference app's `contentWidth + statusWidth`. `build` already checked it is within the cap.
+        else { contentW = max(contentW, inlineMinW) }
         // A link card does not hug: it is drawn full-width, so it takes the bubble to the cap.
         if linkCard != nil { contentW = maxContent }
         contentW = min(maxContent, ceil(contentW))
@@ -691,7 +696,7 @@ enum MessageRowLayout {
                               width: metaSize.width, height: metaSize.height)
             innerY += metaSize.height
         } else {
-            // Overlaid bottom-trailing on the gap the reservation left in the last line.
+            // Overlaid bottom-trailing on the last line, in the room `inlineMinW` made beside it.
             metaRect = CGRect(x: hPad + contentW - metaSize.width,
                               y: innerY - metaSize.height - 1,
                               width: metaSize.width, height: metaSize.height)
@@ -817,13 +822,23 @@ enum MessageRowLayout {
                 let gapBelow = BubbleMetrics.vPad
                 let stripH = gapAbove + height + gapBelow
 
+                // ⛔ THE FOOTER JOINS THE REACTION ROW WHEN IT FITS — the reference app's rule
+                // (its status node: `currentRowWidth + layoutSize.width > constrainedSize.width`
+                // decides), owner 2026-09-26: a reacted voice note kept its time up on the duration
+                // row. An inline footer and a voice footer are overlays and just move. A text
+                // footer on a row of its own gives that row back, so no empty band is left above
+                // the pills. When it does not fit, it stays where it was.
+                let metaW = BubbleMetrics.metaInlineGap + plan.meta.width
+                let fitsOnRow = padH + total + metaW + padH <= columnW
+                let ownTextRow = plan.metaOnOwnLine && plan.text != .zero
+                let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
+
                 var grown = plan.bubble
+                if metaJoins && ownTextRow { grown.size.height -= BubbleMetrics.metaGap + plan.meta.height }
                 grown.size.height += stripH
 
-                // The meta joins this row, so it has to carry both. Widen only if it must, and never
-                // past the column the bubble was measured against.
-                let metaOnRow = !plan.metaOnOwnLine
-                let need = padH + total + (metaOnRow ? 8 + plan.meta.width : 0) + padH
+                // Widen only if it must, and never past the column the bubble was measured against.
+                let need = padH + total + (metaJoins ? metaW : 0) + padH
                 if need > grown.width {
                     let want = min(need, columnW)
                     let delta = want - grown.width
@@ -833,19 +848,8 @@ enum MessageRowLayout {
                 }
                 plan.bubble = grown
 
-                // The meta joins this row at its trailing end — but ONLY if it was sharing the last
-                // line of text.
-                //
-                // ⚠️ A META THAT ALREADY HAD ITS OWN LINE IS LEFT WHERE IT IS, and that is not
-                // tidiness. `BubbleText` reserves the space the meta occupies while it measures: an
-                // inline meta is a trailing gap on the last line, and an own-line meta is a whole
-                // EXTRA LINE inside the bubble. Moving the second kind down here would leave that
-                // reserved line empty and open a band of nothing above the reactions. Re-measuring
-                // the text without it is the only way to reclaim it, and that belongs in
-                // `BubbleText`, not here.
-                //
                 // Meta is in BUBBLE coordinates; the chips are in ROW coordinates.
-                if !plan.metaOnOwnLine {
+                if metaJoins {
                     plan.metaOnOwnLine = true
                     plan.meta.origin.x = grown.width - padH - plan.meta.width
                     plan.meta.origin.y = grown.height - stripH + gapAbove + (height - plan.meta.height) / 2
@@ -981,9 +985,8 @@ enum MessageRowLayout {
     /// `HStack { Text; Spacer; meta }`, and an HStack reserves its siblings' width for the FULL
     /// HEIGHT of the row — so the timestamp cut ~70pt off EVERY line of the caption, not just the
     /// last one. On a long caption that reads as a bubble with a tall empty column down its right
-    /// side. It uses the same two branches the text bubble does, for the same reasons: the
-    /// invisible trailing reservation when the footer fits on the last line, and a real row of its
-    /// own when it does not.
+    /// side. It uses the same two branches the text bubble does (`BubbleText.build`): the footer
+    /// on the last line when that line has room for it, and a real row of its own when it does not.
     private static func media(_ m: BubbleBody.MediaBody, row b: BubbleRow,
                               originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
                               maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
@@ -1440,7 +1443,7 @@ enum MessageRowLayout {
                                 y: y, width: bubbleW, height: innerY)
         var out = BubblePlan(
             bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
-            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            text: .zero, meta: metaRect, metaOnOwnLine: false,   // an overlay: it can join the reaction row
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
@@ -1911,7 +1914,7 @@ enum MessageRowLayout {
         var bottom = textTop + size.height
         let metaRect: CGRect
         if built.metaOnOwnLine {
-            bottom += 2
+            bottom += BubbleMetrics.metaGap   // the text bubble's own-row gap; was a lone 2
             metaRect = CGRect(x: inset + avail - metaSize.width, y: bottom,
                               width: metaSize.width, height: metaSize.height)
             bottom += metaSize.height

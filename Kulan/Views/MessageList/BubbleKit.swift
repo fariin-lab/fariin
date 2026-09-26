@@ -20,7 +20,10 @@ enum BubbleMetrics {
     static let vPad: CGFloat = 10          // bubble text inset, vertical
     static let bigCorner: CGFloat = 18
     static let smallCorner: CGFloat = 6        // the interior corner of a fused cluster
-    static let metaGap: CGFloat = 8            // gap between the last word and the timestamp
+    static let metaGap: CGFloat = 8            // gap above a timestamp on its own row
+    /// Between the last word and a timestamp sharing its line: the reference app's `leftInset`
+    /// for an in-bubble footer.
+    static let metaInlineGap: CGFloat = 5
     static let maxWidthFraction: CGFloat = 0.72
     static let avatarSize: CGFloat = 28
     static let avatarGap: CGFloat = 6
@@ -59,8 +62,10 @@ enum BubbleMetrics {
     static let rimWidth: CGFloat = Theme.bubbleRimWidth
 
     static let bodyFont = UIFont.systemFont(ofSize: 17)
-    static let metaFont = UIFont.systemFont(ofSize: 10)
-    static let metaItalicFont = UIFont.italicSystemFont(ofSize: 10)
+    // ⛔ 11pt — owner, 2026-09-26, "my timestamp looks small". The reference app's date font is
+    // floor(chat font × 11/17): 11 at its default 17, which is our body size.
+    static let metaFont = UIFont.systemFont(ofSize: 11)
+    static let metaItalicFont = UIFont.italicSystemFont(ofSize: 11)
     static let senderNameFont = UIFont.systemFont(ofSize: 12, weight: .semibold)
     static let forwardedFont = UIFont.italicSystemFont(ofSize: 11)
     static let quoteNameFont = UIFont.systemFont(ofSize: 12, weight: .semibold)
@@ -365,8 +370,9 @@ enum BubbleTicks {
         case .failed:
             return UIImage(systemName: "exclamationmark.circle.fill",
                            withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))
-        case .sent: return UIImage(systemName: "checkmark", withConfiguration: cfg)
-        case .delivered, .read: return doubleCheck(cfg)
+        // The one drawn check, alone or paired, so sent and read are visibly the same mark.
+        case .sent: return drawnChecks(1)
+        case .delivered, .read: return drawnChecks(2)
         }
     }
 
@@ -374,14 +380,17 @@ enum BubbleTicks {
     /// mark redesign, make exactly like this". Two thin round-capped checks, the second starting
     /// halfway along the first, so its short stroke lands on the first one's long stroke. The two
     /// semibold symbols side by side read heavy and cramped next to the time.
-    private static func doubleCheck(_ cfg: UIImage.SymbolConfiguration) -> UIImage? {
-        if let hit = doubleCheckCache[9] { return hit }
-        let checkW: CGFloat = 10.5, checkH: CGFloat = 7.5, step: CGFloat = 5, line: CGFloat = 1.2
+    private static func drawnChecks(_ count: Int) -> UIImage? {
+        let key = CGFloat(count)
+        if let hit = doubleCheckCache[key] { return hit }
+        // The reference app's check: 11 × 9 at the default text size, the second 6pt to the right.
+        let checkW: CGFloat = 11, checkH: CGFloat = 8, step: CGFloat = 6, line: CGFloat = 1.2
         let pad = line / 2
-        let size = CGSize(width: checkW + step + line, height: checkH + line)
+        let offsets: [CGFloat] = count == 1 ? [0] : [0, step]
+        let size = CGSize(width: checkW + (offsets.last ?? 0) + line, height: checkH + line)
         let img = UIGraphicsImageRenderer(size: size).image { _ in
             let p = UIBezierPath()
-            for dx in [0, step] {
+            for dx in offsets {
                 p.move(to: CGPoint(x: pad + dx, y: pad + checkH * 0.52))
                 p.addLine(to: CGPoint(x: pad + dx + checkW * 0.34, y: pad + checkH))
                 p.addLine(to: CGPoint(x: pad + dx + checkW, y: pad))
@@ -392,7 +401,7 @@ enum BubbleTicks {
             UIColor.black.setStroke()
             p.stroke()
         }.withRenderingMode(.alwaysTemplate)
-        doubleCheckCache[9] = img
+        doubleCheckCache[key] = img
         return img
     }
 }
