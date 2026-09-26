@@ -74,16 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BLOCKING, REACTIONS, MEDIA DOWNLOADS, SIGN-IN.
+            CHATS SEARCH, VIDEO CONTROLS, ALBUM CANCEL, SIGN OUT AND IN.
 
-            BLOCKING: rebuilt. Your block list is private and the server enforces it.
+            CHATS: the search field is Apple's own in the top bar again and folds away as you scroll. Swiping a row shows one rounded card every time. No-photo avatars are drawn flat.
 
-            CHATS: reacting to the last message no longer pushes it under the composer. The default disappearing timer in Settings now applies to chats you start.
+            SIGN OUT / IN: the chat list and its previews are there at once after signing back in.
 
-            MEDIA: photos, videos and album tiles download with clear states; tap to start or cancel. Signing out and back in keeps received media and previews.
+            VIDEO: the viewer's controls are rebuilt: a time capsule with elapsed and remaining time, share / play / forward buttons, tap to show or hide them, drag the bar to seek.
 
-            LOOK: profile link pills are Liquid Glass; Glowers/Glowing bar matches the search field; sign-in has a blue passkey link, glass buttons and a tighter Sign up line.
+            MESSAGES: long-pressing a long message zooms it out whole. Sending two photos and cancelling one leaves a single photo.
 
-            PLEASE TEST: block and unblock someone; react to the last message; set a default timer and start a new chat.
+            SETTINGS: Hide From lists people A-Z like Block User, one tap hides. The contact page's avatar is larger; the Glowers/Glowing bar matches the search field.
+
+            PLEASE TEST: sign out and back in; scroll the chat list; open a video; send two photos and cancel one; long-press a long message.
 
         run: fastlane beta
