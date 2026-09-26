@@ -4064,8 +4064,11 @@ struct ChatRow: View, Equatable {
                 // label that reserves this row's height. A fixed 15 and a semantic 15 are the same
                 // size at the default text setting and diverge at every other one — which would
                 // have left the reserve measuring one thing and the words another.
-                .font(.subheadline.weight(unread > 0 ? .semibold : .regular))
-                .foregroundStyle(unread > 0 ? Color.primary : .secondary).lineLimit(2)   // darker when unread
+                // ⛔ SAME GREY, SAME WEIGHT READ OR UNREAD — owner, 2026-09-26, with the reference
+                // app's row beside ours: an unread preview went bold and black, and he wants it to
+                // look as it does after opening. The count badge and the time say "unread".
+                .font(.subheadline)
+                .foregroundStyle(.secondary).lineLimit(2)
         }
     }
 
