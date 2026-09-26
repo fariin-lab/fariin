@@ -173,7 +173,7 @@ final class MediaBubbleView: UIView {
         durationLabel.alpha = a
         metaCapsule.alpha = a
         ring?.alpha = a
-        status?.alpha = a
+        download.alpha = a
     }
 
     func configure(_ m: BubbleBody.MediaBody, plan: MediaPlan, cid: String) {
@@ -292,94 +292,142 @@ final class MediaBubbleView: UIView {
 
     // MARK: - Receiving: the download's own states (2026-09-26 media pass)
     //
-    // Both references draw the incoming media's network state on the media itself, from one enum:
-    // waiting → Download arrow (and the size), fetching → a ring filled by bytes with an X that
-    // cancels, local → nothing on a photo / the play button on a video, failed → try again. A video
-    // is downloaded HERE, not by opening the player, because the clip is sealed as one piece and
-    // cannot be streamed — the reference's non-streamable path is exactly this.
+    // Both references draw the incoming media's network state on the media itself, from one enum -
+    // see `MediaDownloadOverlay`, shared with every album tile.
 
-    private var status: MediaDownloadBadge?
-    private var watched: (url: String, id: UUID)?
-    private var download: (url: String, isVideo: Bool, body: BubbleBody.MediaBody, cid: String)?
+    private lazy var download = MediaDownloadOverlay(host: self, playBadge: playBadge)
 
     private func configureDownload(_ m: BubbleBody.MediaBody, plan: MediaPlan, cid: String) {
-        unwatchDownload()
-        download = nil
         // My own send in flight wears the upload ring; nothing to download there.
         let receiving = plan.uploadRing == nil && m.localData == nil
-        let target: (String, Bool)? = {
-            guard receiving else { return nil }
+        var target: MediaDownloadOverlay.Target?
+        if receiving {
             switch m.kind {
             case .photo:
-                guard let u = m.url, !u.isEmpty, !DiskImageCache.shared.isCached(u) else { return nil }
-                return (u, false)
+                if let u = m.url, !u.isEmpty {
+                    target = .init(url: u, isVideo: false, enc: m.enc, cid: cid,
+                                   itemId: m.messageId, authorId: m.authorId, gated: m.gated)
+                }
             case .video:
-                guard let u = m.videoUrl, !u.isEmpty, VideoCache.url(for: m.messageId) == nil else { return nil }
-                return (u, true)
+                if let u = m.videoUrl, !u.isEmpty {
+                    target = .init(url: u, isVideo: true, enc: m.enc, cid: cid,
+                                   itemId: m.messageId, authorId: m.authorId, gated: true)
+                }
             case .gif:
-                return nil
+                break
             }
-        }()
-        guard let target else {
-            status?.isHidden = true
-            return
         }
-        let (url, isVideo) = target
-        download = (url, isVideo, m, cid)
-        let v = status ?? {
+        // The photo view's own small spinner would sit under the ring; the ring replaces it.
+        if target != nil { picture.showsLoadingIndicator = false }
+        download.configure(target, frame: plan.media)
+    }
+
+    private func unwatchDownload() { download.reset() }
+
+    /// The tap on the media, asked BEFORE it opens anything. See `MediaDownloadOverlay.handleTap`.
+    func handleDownloadTap() -> Bool { download.handleTap() }
+}
+
+/// ⛔ ONE RECEIVE-SIDE DOWNLOAD, DRAWN AND TAPPED THE SAME WAY EVERYWHERE — 2026-09-26 media pass.
+///
+/// Both references draw an incoming item's network state on the item itself, from one enum:
+/// waiting → Download arrow (and the size), fetching → a ring filled by bytes with an X that cancels,
+/// local → nothing on a photo / the play button on a video, failed → try again. A video is downloaded
+/// IN PLACE, not by opening the player, because the clip is sealed as one piece and cannot be
+/// streamed — the reference's non-streamable path is exactly this. Owned by the single-media bubble
+/// and by every album tile, so the two cannot drift.
+@MainActor
+final class MediaDownloadOverlay {
+    struct Target {
+        var url: String
+        var isVideo: Bool
+        var enc: EncMeta?
+        var cid: String
+        /// VideoCache's and DeadMedia's key: the message id, or "<messageId>-<index>" in an album.
+        var itemId: String
+        var authorId: String
+        /// The photos policy and the automatic ceiling apply (videos always obey the videos policy).
+        var gated: Bool
+    }
+
+    private weak var host: UIView?
+    private weak var playBadge: UIView?
+    private var badge: MediaDownloadBadge?
+    private var target: Target?
+    private var watched: (url: String, id: UUID)?
+    private var sizeAskedFor: String?
+
+    init(host: UIView, playBadge: UIView?) {
+        self.host = host
+        self.playBadge = playBadge
+    }
+
+    var alpha: CGFloat = 1 { didSet { badge?.alpha = alpha } }
+
+    /// nil, or a file that is already on the phone: nothing is drawn and taps open as before.
+    func configure(_ t: Target?, frame: CGRect) {
+        reset()
+        guard let t, let host, !isLocal(t) else { badge?.isHidden = true; return }
+        target = t
+        let v = badge ?? {
             let v = MediaDownloadBadge(frame: .zero)
-            addSubview(v)
-            status = v
+            host.addSubview(v)
+            badge = v
             return v
         }()
+        v.alpha = alpha
         v.isHidden = false
-        v.frame = plan.media
-        bringSubviewToFront(v)
-        // The photo view's own small spinner would sit under this ring; the ring replaces it.
-        picture.showsLoadingIndicator = false
-        if isVideo {
-            if DeadMedia.contains(m.messageId) {
+        v.frame = frame
+        host.bringSubviewToFront(v)
+        if t.isVideo {
+            if DeadMedia.contains(t.itemId) {
                 v.show(.failed(permanent: true), size: nil, isVideo: true)
-                playBadge.isHidden = true
+                playBadge?.isHidden = true
                 return
             }
             // The row being laid out is the trigger, as in the reference (and the sweep on chat open
-            // covers the rest). The policy decides whether this starts or waits for a tap.
-            MediaFetch.requestVideo(url: url, enc: m.enc, cid: cid, messageId: m.messageId,
-                                    authorId: m.authorId, priority: .auto)
+            // covers single videos too). The policy decides whether this starts or waits for a tap.
+            MediaFetch.requestVideo(url: t.url, enc: t.enc, cid: t.cid, messageId: t.itemId,
+                                    authorId: t.authorId, priority: .auto)
         }
-        let id = MediaDownloads.shared.observe(url) { [weak self] state in
-            self?.render(state)
-        }
+        let url = t.url
+        let id = MediaDownloads.shared.observe(url) { [weak self] state in self?.render(state) }
         watched = (url, id)
     }
 
-    /// The size for a Download button, asked once per configure and only when one is showing — a
-    /// photo that simply downloads learns its length from the response and never costs this call.
-    private var sizeAskedFor: String?
+    func reset() {
+        if let w = watched { MediaDownloads.shared.stopObserving(w.url, w.id) }
+        watched = nil
+        target = nil
+    }
+
+    private func isLocal(_ t: Target) -> Bool {
+        t.isVideo ? VideoCache.url(for: t.itemId) != nil : DiskImageCache.shared.isCached(t.url)
+    }
+
+    /// The size for a Download button, asked once and only when one is showing — a file that simply
+    /// downloads learns its length from the response and never costs this call.
     private func askSizeIfNeeded(_ url: String) {
         guard sizeAskedFor != url, MediaDownloads.shared.knownSize(for: url) == nil else { return }
         sizeAskedFor = url
         Task { @MainActor [weak self] in
             _ = await MediaDownloads.shared.fetchSize(url)
-            guard let self, self.download?.url == url else { return }
+            guard let self, self.target?.url == url else { return }
             self.render(MediaDownloads.shared.state(for: url))
         }
     }
 
     private func render(_ state: MediaDownloadState) {
-        guard let d = download, let v = status else { return }
-        let size = MediaDownloads.shared.knownSize(for: d.url)
+        guard let t = target, let v = badge else { return }
         switch state {
         case .done:
             v.isHidden = true
-            if d.isVideo { playBadge.isHidden = false }
-            unwatchDownload()
-            download = nil
+            if t.isVideo { playBadge?.isHidden = false }
+            reset()
             return
-        case .failed(true) where d.isVideo:
-            DeadMedia.mark(d.body.messageId)
-        case .none where !d.isVideo:
+        case .failed(true) where t.isVideo:
+            DeadMedia.mark(t.itemId)
+        case .none where !t.isVideo:
             // A photo with no job yet: the picture view is about to ask. Draw nothing rather than
             // flash a Download arrow at a photo that is on its way by itself.
             v.isHidden = true
@@ -388,44 +436,32 @@ final class MediaBubbleView: UIView {
             break
         }
         v.isHidden = false
-        if d.isVideo { playBadge.isHidden = true }
+        if t.isVideo { playBadge?.isHidden = true }
         switch state {
-        case .waitingTap, .none: askSizeIfNeeded(d.url)
+        case .waitingTap, .none: askSizeIfNeeded(t.url)
         default: break
         }
-        v.show(state, size: size, isVideo: d.isVideo)
-    }
-
-    private func unwatchDownload() {
-        if let w = watched { MediaDownloads.shared.stopObserving(w.url, w.id) }
-        watched = nil
+        v.show(state, size: MediaDownloads.shared.knownSize(for: t.url), isVideo: t.isVideo)
     }
 
     /// The tap on the media, asked BEFORE it opens anything. True when the tap was the download's:
-    /// start it (waiting or failed), or cancel it (downloading) — both references. A finished file
-    /// returns false and opens as it always did, so a tap can never restart a download that is done.
-    func handleDownloadTap() -> Bool {
-        guard let d = download else { return false }
-        if d.isVideo, VideoCache.url(for: d.body.messageId) != nil { return false }
+    /// start it (waiting or failed), or cancel it (downloading) — both references. A file that is
+    /// here returns false and opens as it always did, so a tap never restarts a finished download.
+    func handleTap() -> Bool {
+        guard let t = target, !isLocal(t) else { return false }
         // Known gone: the player says so in words; a download would only 404 again.
-        if d.isVideo, DeadMedia.contains(d.body.messageId) { return false }
-        if !d.isVideo, DiskImageCache.shared.isCached(d.url) { return false }
-        switch MediaDownloads.shared.state(for: d.url) {
+        if t.isVideo, DeadMedia.contains(t.itemId) { return false }
+        switch MediaDownloads.shared.state(for: t.url) {
         case .downloading:
-            MediaDownloads.shared.cancel(d.url)
-        case .done:
-            return false
-        case .failed(true):
-            // Gone from the server: let the viewer/player say so in words.
+            MediaDownloads.shared.cancel(t.url)
+        case .done, .failed(true):
             return false
         case .none, .waitingTap, .failed(false):
-            if d.isVideo {
-                MediaFetch.requestVideo(url: d.url, enc: d.body.enc, cid: d.cid,
-                                        messageId: d.body.messageId, authorId: d.body.authorId,
-                                        priority: .user)
+            if t.isVideo {
+                MediaFetch.requestVideo(url: t.url, enc: t.enc, cid: t.cid, messageId: t.itemId,
+                                        authorId: t.authorId, priority: .user)
             } else {
-                MediaFetch.requestPhoto(url: d.url, enc: d.body.enc, cid: d.cid, gated: true,
-                                        priority: .user)
+                MediaFetch.requestPhoto(url: t.url, enc: t.enc, cid: t.cid, gated: t.gated, priority: .user)
             }
         }
         return true
@@ -600,6 +636,11 @@ final class AlbumBubbleView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// A tap on tile `i` that belongs to its download (start / cancel / retry) rather than the viewer.
+    func handleDownloadTap(tile i: Int) -> Bool {
+        tiles.indices.contains(i) ? tiles[i].handleDownloadTap() : false
+    }
+
     private func applyVisibility(hiddenId id: String?) {
         for (i, v) in tiles.enumerated() {
             let key = i < flightKeys.count ? flightKeys[i] : ""
@@ -669,6 +710,8 @@ final class AlbumTileView: UIView {
     private let extraScrim = UIView()
     private let extraLabel = UILabel()
     private var ring: UploadRingView?
+    /// The receive side's download states, the same helper the single-media bubble uses.
+    private lazy var download = MediaDownloadOverlay(host: self, playBadge: playBadge)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -701,6 +744,9 @@ final class AlbumTileView: UIView {
             // thumb nor a blurhash, so without an indicator it was a flat grey square with nothing
             // to say whether it was downloading, stuck, or broken.
             picture.showsLoadingIndicator = true
+            // A photo tile obeys the photos policy like a single photo; a video tile's poster always loads.
+            // (Not the "+N" tile: it has no Download button to lift a hold, so it always loads.)
+            picture.gated = !(model?.isVideo ?? false) && tile.extraAttr == nil
             picture.configure(url: model?.url, enc: model?.enc, cid: cid, placeholder: placeholder)
         }
 
@@ -733,6 +779,22 @@ final class AlbumTileView: UIView {
             extraScrim.isHidden = true; extraLabel.isHidden = true
         }
 
+        // Receiving: the tile's own download state, drawn after the play badge it may hide. A tile
+        // still uploading (its ring below) or holding local bytes is not a download.
+        var target: MediaDownloadOverlay.Target?
+        // Not on the "+N" tile: its tap opens the whole album, and the badge would cover the count.
+        if let model, tile.ring == nil, tile.extraAttr == nil, model.localData == nil {
+            if model.isVideo, let v = model.videoUrl, !v.isEmpty {
+                target = .init(url: v, isVideo: true, enc: model.videoEnc, cid: cid,
+                               itemId: model.itemId, authorId: model.authorId, gated: true)
+            } else if !model.isVideo, let u = model.url, !u.isEmpty {
+                target = .init(url: u, isVideo: false, enc: model.enc, cid: cid,
+                               itemId: model.itemId, authorId: model.authorId, gated: true)
+            }
+        }
+        if target != nil { picture.showsLoadingIndicator = false }
+        download.configure(target, frame: local)
+
         if let r = tile.ring {
             let v = ring ?? {
                 let v = UploadRingView(frame: .zero); addSubview(v); ring = v; return v
@@ -755,7 +817,10 @@ final class AlbumTileView: UIView {
         picture.reset()
         picture.alpha = 1
         ring?.stop()
+        download.reset()
     }
+
+    func handleDownloadTap() -> Bool { download.handleTap() }
 }
 
 // ── A document ──

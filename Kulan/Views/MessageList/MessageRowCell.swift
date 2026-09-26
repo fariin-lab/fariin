@@ -381,6 +381,8 @@ final class MessageRowCell: UICollectionViewCell {
                 return
             }
             if let tile = rowView.albumTileIndex(at: p) {
+                // A tile not downloaded yet: the tap is its download's, as for a single photo.
+                if rowView.handleAlbumDownloadTap(tile: tile) { return }
                 rowView.refreshFlightRects()
                 delegate?.rowCell(self, didTapAlbumTile: tile)
                 return

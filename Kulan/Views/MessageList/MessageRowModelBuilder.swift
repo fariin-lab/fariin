@@ -423,7 +423,11 @@ enum MessageRowModelBuilder {
                 isVideo: isVideo, durationText: duration,
                 localData: m.localAlbum.indices.contains(i) ? m.localAlbum[i] : nil,
                 flightKey: MediaOpenRects.key(.chat, "\(m.id)-\(i)"),
-                uploadKey: m.clientId.map { MediaSend.itemKey($0, i) }))
+                uploadKey: m.clientId.map { MediaSend.itemKey($0, i) },
+                videoUrl: isVideo ? item?.videoUrl : nil,
+                videoEnc: isVideo ? item?.videoEnc : nil,
+                itemId: "\(m.id)-\(i)",
+                authorId: m.authorId))
         }
         let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
             text: m.text, searchTerm: ctx.searchTerm,

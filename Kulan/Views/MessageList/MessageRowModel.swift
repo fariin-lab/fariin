@@ -197,6 +197,12 @@ enum BubbleBody: Equatable {
             /// its overlay while its siblings uploaded, and with its bytes gone from UploadProgress
             /// the ring degraded into a forever-spinner.
             var uploadKey: String?
+            /// A video tile's clip and its cache key "<messageId>-<index>" (VideoCache's, DeadMedia's,
+            /// the player's), so the tile can download in place like a single video.
+            var videoUrl: String? = nil
+            var videoEnc: EncMeta? = nil
+            var itemId: String = ""
+            var authorId: String = ""
         }
         var tiles: [Tile]
         var extra: Int                   // "+N" on the last tile, past the 10-item ceiling

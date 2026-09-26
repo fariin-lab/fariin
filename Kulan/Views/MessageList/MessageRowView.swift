@@ -1312,6 +1312,8 @@ final class MessageRowView: UIView {
     /// A tap on media that is not on the phone yet belongs to its download (start / cancel / retry),
     /// not to the viewer. False when the file is here and the tap should open it as before.
     func handleMediaDownloadTap() -> Bool { mediaView?.handleDownloadTap() ?? false }
+    /// The same for one album tile.
+    func handleAlbumDownloadTap(tile i: Int) -> Bool { albumView?.handleDownloadTap(tile: i) ?? false }
 
     /// Is this point on the picture? A tap there opens the viewer; a tap on the CAPTION does not,
     /// which is why this asks about the media rect and not about the whole bubble.
