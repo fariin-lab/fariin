@@ -2210,19 +2210,40 @@ final class ChatListSectionHeader: UIView {
 /// It is the table's `tableHeaderView`, so it scrolls away with the rows and is exactly where it
 /// was when you come back from a chat; no inset changes, so no jump.
 final class ChatListSearchHeader: UIView {
-    /// ⛔ APPLE'S OWN SEARCH BAR, THE ONE THE CALLS PAGE HAS — owner, 2026-09-25 night, with a
-    /// screenshot of the glass pill: "make it look like the search bar in the call list". Calls uses
-    /// `.searchable`, i.e. a real `UISearchBar`; this is the same control, so the two cannot differ.
-    /// It is only a picture here (touches off); the tap target on top opens the search page.
+    /// ⛔ THE CALLS PAGE'S FIELD, DRAWN FLAT — owner, 2026-09-26, the two pages side by side in
+    /// dark mode: "the call list search bar looks native for Apple, make it like that".
+    ///
+    /// ⚠️ THE 09-25 ANSWER WAS THE RIGHT CONTROL IN THE WRONG PLACE. Calls' field is a
+    /// `UISearchBar` INSIDE A NAVIGATION BAR, and iOS 26 draws that one as a flat filled capsule. The
+    /// same control standing on its own, as it did here, is drawn as a glass pill with a rim and a
+    /// shadow, which is exactly the difference in his screenshots. There is no public switch for
+    /// that, so this draws the navigation bar's version: Apple's `tertiarySystemFill` capsule, the
+    /// magnifier in the label colour, "Search" in the placeholder colour at 17. Measured off his
+    /// Calls screenshot: 20pt from each edge, 44 tall, the glyph 14 in and the words 10 after it.
+    /// It is only a picture; the tap target opens the search page.
     static let height: CGFloat = 60
     var onTap: () -> Void = {}
 
-    private let bar: UISearchBar = {
-        let b = UISearchBar()
-        b.searchBarStyle = .minimal
-        b.placeholder = "Search"
-        b.isUserInteractionEnabled = false
-        return b
+    private let field: UIView = {
+        let v = UIView()
+        v.backgroundColor = .tertiarySystemFill
+        v.layer.cornerCurve = .continuous
+        v.isUserInteractionEnabled = false
+        return v
+    }()
+    private let glass: UIImageView = {
+        let v = UIImageView(image: UIImage(systemName: "magnifyingglass",
+                                           withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)))
+        v.tintColor = .label
+        v.contentMode = .center
+        return v
+    }()
+    private let prompt: UILabel = {
+        let l = UILabel()
+        l.text = "Search"
+        l.font = .systemFont(ofSize: 17)
+        l.textColor = .placeholderText
+        return l
     }()
     private let hit = UIControl()
 
@@ -2233,19 +2254,22 @@ final class ChatListSearchHeader: UIView {
         hit.accessibilityLabel = "Search"
         hit.accessibilityTraits = [.button, .searchField]
         hit.isAccessibilityElement = true
-        bar.isAccessibilityElement = false
-        addSubview(bar)
+        field.addSubview(glass)
+        field.addSubview(prompt)
+        addSubview(field)
         addSubview(hit)
     }
     required init?(coder: NSCoder) { fatalError("ChatListSearchHeader is never built from a nib") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // The bar insets its own field by 8pt; 8 more puts the field 16pt from each edge, where
-        // the navigation-bar field on Calls sits.
-        let h = bar.sizeThatFits(CGSize(width: bounds.width - 16, height: .greatestFiniteMagnitude)).height
-        bar.frame = CGRect(x: 8, y: (bounds.height - h) / 2, width: bounds.width - 16, height: h)
-        hit.frame = bar.frame
+        let inset: CGFloat = 20, h: CGFloat = 44
+        field.frame = CGRect(x: inset, y: (bounds.height - h) / 2, width: bounds.width - inset * 2, height: h)
+        field.layer.cornerRadius = h / 2
+        glass.frame = CGRect(x: 14, y: 0, width: 22, height: h)
+        let x = glass.frame.maxX + 10
+        prompt.frame = CGRect(x: x, y: 0, width: max(0, field.bounds.width - x - 14), height: h)
+        hit.frame = field.frame
     }
 
     @objc private func tapped() { onTap() }
