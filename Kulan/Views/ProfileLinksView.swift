@@ -276,6 +276,20 @@ struct ProfileLinkEditView: View {
 /// ⚠️ `.ultraThinMaterial` RATHER THAN A COLOUR, because these sit on a photograph on two of those
 /// three pages and on a plain background on the last. A fixed grey is either invisible on a dark
 /// picture or a grey smear on a light one.
+/// The action circles' glass (`PosterGlassSchemeFix` in ProfilePoster), in a capsule, with the tint
+/// handed in rather than read from `\.profilePalette`, which only one of the two profile pages sets.
+private struct LinkChipGlass: ViewModifier {
+    let tint: Color?
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content.liquidGlass(Capsule(), interactive: true)
+        } else {
+            content.liquidGlass(Capsule(), interactive: true, tint: tint)
+        }
+    }
+}
+
 struct ProfileLinkChips: View {
     let links: [ProfileLink]
     /// ⛔ THE PROFILE'S OWN COLOUR — owner, 2026-09-11, with the two pills ringed: "fix colour
@@ -345,9 +359,16 @@ struct ProfileLinkChips: View {
                         // shadow, so it can never be exactly the colour. Now a flat fill of the SAME
                         // `card` colour the cards below are painted with, a hairline edge so it holds
                         // its shape on any photo, and no shadow. No photo: a plain quiet fill.
+                        //
+                        // ⛔ LIQUID GLASS AGAIN — owner, 2026-09-26: "I miss the liquid glass link
+                        // profile badge". The SAME glass as the five action circles under it
+                        // (`PosterGlassSchemeFix`): on iOS 27 plain glass, which reads the backdrop
+                        // itself; on iOS 26 glass tinted with the profile's `card` colour, because
+                        // 26's glass has nothing to refract and resolves dark on this page. No photo:
+                        // plain glass, as the circles are. Not the 09-25 version, which drew its own
+                        // tint the circles did not share; this is their rule exactly.
                         .foregroundStyle(tint == nil ? Color.primary : Color.white)
-                        .background(tint ?? Color.primary.opacity(0.10), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(tint == nil ? 0.08 : 0.22), lineWidth: 0.75))
+                        .modifier(LinkChipGlass(tint: tint))
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
