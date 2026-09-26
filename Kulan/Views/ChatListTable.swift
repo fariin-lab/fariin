@@ -2136,8 +2136,18 @@ private final class ChatListCell: UITableViewCell {
         // the swiped state. This cell pinned `.clear` for every state, so a swiped row here slid on
         // nothing. Resolving the same system configuration for `isSwiped` is that card with no
         // colour or radius of ours — the objection to the 09-11 plate was that it was hand-drawn.
+        // ⛔ FOR THE SWIPED STATE ALONE — owner, 2026-09-26, two crops side by side: "when I swipe,
+        // the grey is sometimes rounded and sometimes not". A finger that pressed long enough to
+        // highlight the row before it started panning is still on it as the platter opens, so the
+        // state handed here is highlighted AND swiped, and the system resolves that as its flat
+        // press fill, square-cornered and darker. A quick flick never highlights and gets the
+        // rounded card. Resolving with the press cleared gives the one card every time; the press
+        // fill above still draws while a finger is merely down.
         if state.isSwiped {
-            background = UIBackgroundConfiguration.listPlainCell().updated(for: state)
+            var swiped = state
+            swiped.isHighlighted = false
+            swiped.isSelected = false
+            background = UIBackgroundConfiguration.listPlainCell().updated(for: swiped)
         }
         backgroundConfiguration = background
     }
