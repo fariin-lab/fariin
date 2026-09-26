@@ -2023,6 +2023,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0
             if delta != 0 { self.verifyAnchor(landedAnchor) }
+            // ⛔ A ROW THAT GREW UNDER A READER AT THE NEWEST MESSAGE GROWS UPWARD — owner,
+            // 2026-09-26, two screenshots: reacting to the last message put its reaction row under
+            // the composer. The anchor above is top-biased, so the grown row's extra height went
+            // DOWN, past the bound, and `restoreReaderPosition` — whose invariant 2 is exactly "a
+            // reader at the newest message stays at it" — only runs from the controller's own
+            // layout pass, which a collection view re-laying out its cells does not trigger. The
+            // reference app keeps the bottom edge still when the last message changes size.
+            if heightChanged { self.restoreReaderPosition() }
         }
     }
 
@@ -2331,6 +2339,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 self.collectionView.layoutIfNeeded()
                 self.restoreRecordedDistance()
             }
+            // ⛔ THE BOTTOM ANCHOR CANNOT SEE ITS OWN ROW GROW — owner, 2026-09-26 (a reaction on the
+            // last message went under the composer). When the bottom-most visible row IS the one that
+            // changed size, its top does not move, the delta is zero, and the growth goes downward past
+            // the bound. Invariant 2 of `restoreReaderPosition` puts a reader who was at the newest
+            // message back at it; a reader further up is not touched by it.
+            if scrollTarget == nil, !glide { self.restoreReaderPosition() }
             // Post-land auto-load re-check, async so it is never re-entrant inside the land: a short page
             // can leave the reader still within the load threshold.
             DispatchQueue.main.async { [weak self] in self?.autoLoadMoreIfNeeded() }
@@ -4289,6 +4303,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if restoringKeyboard, menu.keyboardWasUp { onMenuRestoreKeyboard() }
         interactionHoldUntil = Date()
         settleFlush()   // land everything the menu held back
+        // A reaction picked from this menu usually lands while the menu is still up, when
+        // `restoreReaderPosition` stands down; this is the first moment it may act on it.
+        restoreReaderPosition()
     }
 
     // THE REAL MENU LIFETIME, from UIKit, replacing a long-press proxy that could not see it.
