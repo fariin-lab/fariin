@@ -1161,9 +1161,17 @@ struct ThreadView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Allow microphone access in Settings to record voice messages.") }
-        .alert("You're on a call", isPresented: $recordingBlockedByCall) {
-            Button("OK", role: .cancel) {}
-        } message: { Text("Can't record voice messages during a call.") }
+        // ⛔ NO TITLE — owner, 2026-09-26, with the reference app's alert: the one sentence and OK.
+        // SwiftUI's `.alert` always draws a title, so this is a UIKit alert with `title: nil`.
+        .onChange(of: recordingBlockedByCall) { _, on in
+            guard on else { return }
+            recordingBlockedByCall = false
+            guard let top = WebLink.topViewController() else { return }
+            let a = UIAlertController(title: nil, message: "Can't record voice messages during a call.",
+                                      preferredStyle: .alert)
+            a.addAction(UIAlertAction(title: "OK", style: .cancel))
+            top.present(a, animated: true)
+        }
         // 2026-09-24 feature-audit: the sendVoice restriction, said before a note is recorded.
         .alert("You're restricted in this group", isPresented: $voiceRestricted) {
             Button("OK", role: .cancel) {}

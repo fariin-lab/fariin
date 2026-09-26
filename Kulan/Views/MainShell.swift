@@ -3810,7 +3810,12 @@ struct ChatRow: View, Equatable {
         if s == "View-once photo"          { return ("1.circle.fill", "View-once photo") }
         // A deleted newest message writes plain words too, for the same reason and with the same
         // result: no icon, while everything around it had one.
-        if s == "This message was deleted" { return ("slash.circle", "This message was deleted") }
+        // ⛔ "You deleted this message" ON MY OWN, AND APPLE'S `nosign` — owner, 2026-09-26, with the
+        // reference app's list: theirs says whose deletion it was, and its mark slants the other
+        // way from `slash.circle`.
+        if s == "This message was deleted" {
+            return ("nosign", mine ? "You deleted this message" : "This message was deleted")
+        }
         if s.hasPrefix("🎥 Video") {   // video MESSAGE (🎥) — distinct from 📹 call markers
             return ("video.fill", "Video" + String(s.dropFirst("🎥 Video".count)))
         }
@@ -3857,14 +3862,15 @@ struct ChatRow: View, Equatable {
     /// composer's attachment tiles use. It exists here because of the GIF row: SF Symbols has no GIF
     /// glyph at all, which is why that preview wore `sparkles` and read as anything but a GIF.
     private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil,
-                            textTint: Color? = nil, weight: Font.Weight = .regular) -> some View {
+                            textTint: Color? = nil, weight: Font.Weight = .regular,
+                            iconSize: CGFloat = 13) -> some View {
         HStack(spacing: 5) {
             Group {
                 if icon.hasPrefix("ic_") {
                     Image(icon).renderingMode(.template).resizable().scaledToFit()
                         .frame(width: 14, height: 14)
                 } else {
-                    Image(systemName: icon).font(.system(size: 13, weight: weight))
+                    Image(systemName: icon).font(.system(size: iconSize, weight: weight))
                 }
             }
             .foregroundStyle(iconTint ?? Color.secondary)
@@ -4020,7 +4026,9 @@ struct ChatRow: View, Equatable {
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 Text(lastSenderPrefix + photoPreviewLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
-        } else if let badge = previewBadge(conv.lastMessageCipher, mine: lastIsCall && conv.lastIsMine(me)) {
+        } else if let badge = previewBadge(conv.lastMessageCipher,
+                                           mine: (lastIsCall || conv.lastMessageCipher == "This message was deleted")
+                                               && conv.lastIsMine(me)) {
             // A MISSED CALL IS THE ONE PREVIEW THAT IS BAD NEWS, and it was the same grey as
             // "Photo" (owner, 2026-08-23). Red now, icon and words together — the Calls tab has
             // always drawn its missed rows red and the list disagreed with it.
@@ -4038,7 +4046,11 @@ struct ChatRow: View, Equatable {
             let missed = badge.1.hasPrefix("Missed")
             // Unheard voice note = accent mic (like an unread badge, but for your ears).
             previewRow(badge.0, lastSenderPrefix + badge.1,
-                       iconTint: missed ? .red : (voiceUnplayed ? Theme.accent(dark) : nil))
+                       iconTint: missed ? .red : (voiceUnplayed ? Theme.accent(dark) : nil),
+                       // ⛔ THE MIC AT THE TEXT'S OWN SIZE — owner, 2026-09-26: "voice message icon
+                       // looks tiny, use the Apple icon". It is Apple's `mic.fill` already; at the
+                       // shared 13pt its narrow shape reads as a speck beside the words.
+                       iconSize: badge.0 == "mic.fill" ? 15 : 13)
         } else if decodedLast.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
         } else if decodedLast.hasPrefix(Message.contactMarker) {
