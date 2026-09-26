@@ -53,8 +53,11 @@ struct GlowPeopleListView: View {
         // across the page beneath it. This reverses that morning's "switch in the bar, small"
         // (which had taken the title's place). Still the native segmented `Picker`, no search.
         VStack(spacing: 0) {
+            // ⛔ THE SEARCH FIELD'S SIZE — owner, 2026-09-26: "Glowers and Glowing bar, make it
+            // exactly the size of the search bar". Measured off his screenshot of this page: the
+            // bottom search field stands 29pt in from each edge and is 46pt tall.
             tabs
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 29)
                 .padding(.top, 8)
                 .padding(.bottom, 10)
             list
@@ -99,7 +102,8 @@ struct GlowPeopleListView: View {
                                          set: { tab = $0 == 0 ? .glowers : .glowing }))
             .frame(maxWidth: .infinity)
             // ⛔ 52pt — owner, 2026-09-25 evening, with a screenshot: 44 still "looks small".
-            .frame(height: 52)
+            // 46 since 2026-09-26: the search field's own height (see `body`).
+            .frame(height: 46)
     }
 
     // ⛔ SEARCH IS BACK, AT THE BOTTOM — owner, 2026-09-25 evening: "also bottom add search bar".
@@ -426,7 +430,7 @@ private struct NativeSegments: UIViewRepresentable {
     /// Whatever the page offers, taken whole: the width of the row and the height of `tabs`' frame.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width,
-               height: proposal.height ?? 52)
+               height: proposal.height ?? 46)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
