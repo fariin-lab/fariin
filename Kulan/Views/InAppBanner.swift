@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import FirebaseAuth
+import FirebaseFirestore
 
 // Our own in-app message banner, instead of borrowing the iOS one.
 //
@@ -75,6 +76,29 @@ final class InAppBannerCenter {
     /// The sender's photo out of the chat list we already hold: the group's photo for a group, the
     /// other person's for a 1:1. Nothing is fetched here — a miss just falls back to the coloured
     /// initial, the same as every other avatar in the app.
+    /// ⛔ THE REAL MESSAGE, DECRYPTED ON THIS PHONE — owner, 2026-09-26: the banner only ever said
+    /// "New message". The push cannot carry the words (the server never has them), so its body is
+    /// that placeholder. The conversation is read FRESH rather than taken from the chat list: the
+    /// push can land before the list's listener delivers the new message, and the list would then
+    /// hand us the previous one. Nil = keep the push's own body (a marker we do not name, a key not
+    /// ready, or no network).
+    static func previewBody(cid: String) async -> String? {
+        guard let snap = try? await Firestore.firestore().collection("conversations").document(cid)
+                .getDocument(source: .server),
+              let d = snap.data(), let raw = d["lastMessage"] as? String, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("📷") { return "Photo" }
+        if raw.hasPrefix("🎥") || raw.hasPrefix("🎬") { return "Video" }
+        if raw.hasPrefix("🎤") { return "Voice message" }
+        if raw.hasPrefix("📄") { return "File" }
+        let sender = d["lastSender"] as? String ?? ""
+        // A 1:1 id is the two uids joined by "_"; a group id is not (the rule `setReaction` uses).
+        let text = cid.contains("_")
+            ? Crypto.shared.decryptCached(raw, cid: cid)
+            : Crypto.shared.decryptGroupCached(raw, cid: cid, authorId: sender)
+        guard !text.isEmpty, text != "…", text != "🔒" else { return nil }
+        return text
+    }
+
     private static func photo(forCid cid: String) -> String? {
         guard let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
         else { return nil }

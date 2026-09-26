@@ -165,8 +165,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let wantSound = d.object(forKey: "notif.inAppSound") as? Bool ?? true
         let wantVibrate = d.object(forKey: "notif.inAppVibrate") as? Bool ?? true
         if wantPreview {
+            let body = await InAppBannerCenter.previewBody(cid: cid) ?? content.body
             await MainActor.run {
-                InAppBannerCenter.shared.show(cid: cid, title: content.title, body: content.body)
+                InAppBannerCenter.shared.show(cid: cid, title: content.title, body: body)
             }
         }
         if wantVibrate {
