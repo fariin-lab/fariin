@@ -102,8 +102,11 @@ struct GlowPeopleListView: View {
                                          set: { tab = $0 == 0 ? .glowers : .glowing }))
             .frame(maxWidth: .infinity)
             // ⛔ 52pt — owner, 2026-09-25 evening, with a screenshot: 44 still "looks small".
-            // 46 since 2026-09-26: the search field's own height (see `body`).
-            .frame(height: 46)
+            // 46 on 2026-09-26 morning: the search field's own height (see `body`). 50 that
+            // evening, with a screenshot of the two together: the control draws its capsule inset
+            // inside the frame it is given, so a 46pt frame stood 43pt tall against the field's 46
+            // (measured off that screenshot). At 50 the drawn capsule matches the field.
+            .frame(height: 50)
     }
 
     // ⛔ SEARCH IS BACK, AT THE BOTTOM — owner, 2026-09-25 evening: "also bottom add search bar".
@@ -430,7 +433,7 @@ private struct NativeSegments: UIViewRepresentable {
     /// Whatever the page offers, taken whole: the width of the row and the height of `tabs`' frame.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width,
-               height: proposal.height ?? 46)
+               height: proposal.height ?? 50)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
