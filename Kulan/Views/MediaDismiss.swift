@@ -378,8 +378,16 @@ struct MediaDismissHost: UIViewRepresentable {
                 // Cancel stays reachable, which is the one thing the user liked and the reference app does not
                 // really offer: drag back UP past where you started and the net offset goes negative, so
                 // it springs home. Anything with real downward intent closes.
-                imageCloseLog.info("drag ended: dy \(Int(o.y)) vy \(Int(v.y)) -> \(o.y > 0 ? "finish" : "cancel")")
-                if o.y > 0 {
+                // ⛔ NOT "ANY MOVEMENT" ANY MORE — owner, 2026-09-26: "the image viewer sometimes closes
+                // too quickly when my finger moves or scrolls fast; it should close only on the
+                // intended gesture". `o.y > 0` meant a few points of downward wobble at the end of a
+                // quick movement was a close. The reference app's GALLERY commits on a real flick
+                // (1000pt/s) or a long drag; its distance is a quarter of the screen, which he has
+                // called too heavy before (160pt), so the distance here is 120pt. A drag that is
+                // travelling back up fast when released cancels even past the distance.
+                let commit = (o.y > 120 && v.y > -300) || (v.y > 1000 && o.y > 20)
+                imageCloseLog.info("drag ended: dy \(Int(o.y)) vy \(Int(v.y)) -> \(commit ? "finish" : "cancel")")
+                if commit {
                     finish(offset: o, velocity: v)
                 } else {
                     cancel(velocity: v)
