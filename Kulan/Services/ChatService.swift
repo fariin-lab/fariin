@@ -1465,33 +1465,17 @@ enum ChatService {
             convThumb["lastImageUrl"] = u
             convThumb["lastImageEnc"] = e
         }
-        // ⛔ ONE SURVIVOR IS A PHOTO, NOT AN ALBUM OF ONE — his report, 2026-08-28: send two, cancel
-        // one, and you get the remaining picture plus an empty bubble.
+        // ⛔ ONE SURVIVOR IS A PHOTO, NOT AN ALBUM OF ONE — his report, 2026-08-28 and again
+        // 2026-09-26: send two, cancel one, and you get the remaining picture plus an empty tile
+        // (the mosaic is built for two and up; a lone tile leaves its partner blank).
         //
-        // The X drops a tile from the batch, and the message it was written for is still `type:
-        // "album"`. An album is a MOSAIC: the grid solver is built for two and up, and handed a
-        // single tile it produces a degenerate layout — which is the empty bubble. The count in the
-        // chat-list line was wrong for the same reason, because it was committed before the tiles
-        // finished ("2 Photos" for one picture).
-        //
-        // So the message becomes what it actually is. `type` goes back to "image", the tile's url
-        // and key move to the fields a photo is read from, and the stale `album` array is removed —
-        // a document carrying both would be read as an album again by `isAlbum`.
-        if items.count == 1, let only = items.first,
-           let u = only["imageUrl"], let e = only["enc"] {
-            var single: [String: Any] = [
-                "type": "image", "imageUrl": u, "enc": e,
-                "album": FieldValue.delete(), "albumSizes": FieldValue.delete(),
-            ]
-            if let w = only["width"] { single["width"] = w }
-            if let h = only["height"] { single["height"] = h }
-            // And the chat list must stop announcing a batch that no longer exists.
-            convThumb["lastMessage"] = "📷 Photo"
-            try await attachMedia(single, to: msgRef, conv: convThumb, convRef: convRef)
-            return
-        }
-        // The count the list shows has to be the count that survived, for the same reason.
-        convThumb["lastMessage"] = "📷 \(items.count) Photos"
+        // ⚠️ THE 08-28 ANSWER REWROTE THE DOCUMENT INTO A PHOTO HERE (`type`, `width`, `height`,
+        // `albumSizes`), and the rules' finish-an-upload door allows none of those keys, so that
+        // write was refused. The conversion lives in the READER now: `Message.init(data:)` takes a
+        // one-item album as the photo or video it is, on every phone and for every send path (the
+        // mixed album never had this branch at all). This path writes only what the door allows;
+        // the chat list's line says what survived.
+        convThumb["lastMessage"] = items.count == 1 ? "📷 Photo" : "📷 \(items.count) Photos"
         try await attachMedia(["album": items], to: msgRef, conv: convThumb, convRef: convRef)
     }
 

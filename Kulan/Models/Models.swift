@@ -706,6 +706,32 @@ struct Message: Identifiable, Equatable, Codable {
                              videoEnc: (d["videoEnc"] as? [String: Any]).flatMap(EncMeta.init(map:)),
                              duration: (d["duration"] as? NSNumber)?.doubleValue ?? 0)
         } ?? []
+        // ⛔ A ONE-ITEM ALBUM IS THE PHOTO OR VIDEO IT HOLDS — owner, 2026-08-28 and again
+        // 2026-09-26: send two, cancel one, and the survivor drew beside a BLANK tile, because the
+        // mosaic is built for two and up and a lone tile leaves its partner empty. The sender used
+        // to rewrite the document into a photo and the rules refused that write (see
+        // `ChatService.sendAlbum`); the mixed-album path never tried. Read here instead, once, for
+        // every send path and every phone: the fields the readers already consult become the
+        // item's own, `isAlbum` turns false, and the message is a plain picture from here on. An
+        // album still uploading is left alone — its tiles are not in yet.
+        if type == "album", album.count == 1, !uploading, let only = album.first {
+            album = []
+            albumSizes = []
+            if only.isVideo, let clip = only.videoUrl, let clipEnc = only.videoEnc {
+                type = "video"
+                videoUrl = clip
+                enc = clipEnc            // a video's `enc` is the clip's key; the poster has its own
+                thumbUrl = only.imageUrl
+                thumbEnc = only.enc
+                if only.duration > 0 { duration = only.duration }
+            } else {
+                type = "image"
+                imageUrl = only.imageUrl
+                enc = only.enc
+            }
+            width = only.width
+            height = only.height
+        }
         if let r = data["replyTo"] as? [String: Any] {
             self.replyTo = ReplyRef(
                 id: r["id"] as? String ?? "",
