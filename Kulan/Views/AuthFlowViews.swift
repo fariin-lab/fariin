@@ -57,12 +57,17 @@ struct WelcomeView: View {
                             Text("Log in using Passkey")
                         }
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .frame(minHeight: 44)
+                        // ⛔ BLUE, AND CLOSER — owner, 2026-09-26: "passkey link make it blue, and the
+                        // space between it and the text above smaller". A link reads as a link in the
+                        // system blue. The 44pt row put ~12pt of air above the words on top of the 10pt
+                        // padding; 34 and 4 keep a comfortable tap and bring it to the text.
+                        .foregroundStyle(Color.blue)
+                        .frame(minHeight: 34)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .disabled(passkeyBusy)
-                    .padding(.top, 10)
+                    .padding(.top, 4)
                     if let passkeyError {
                         Text(passkeyError).font(.footnote).foregroundStyle(.red)
                             .multilineTextAlignment(.center).padding(.horizontal, 24)
@@ -70,12 +75,28 @@ struct WelcomeView: View {
                     Spacer()
                     Spacer()
                     VStack(spacing: 12) {
+                        // ⛔ LIQUID GLASS — owner, 2026-09-26: "Create Account and Log In buttons make
+                        // liquid glass". iOS 26's own pair: the main action is glass tinted blue with
+                        // white words, the other is plain glass. Only these two; the other sign-in
+                        // pages keep their pills.
                         NavigationLink { AuthMethodView(mode: .create, onAuthed: onAuthed) } label: {
-                            Text("Create Account").authPrimaryPill()
+                            Text("Create Account")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity).frame(height: 50)
+                                .liquidGlass(Capsule(), interactive: true, tint: Color.blue)
+                                .contentShape(Capsule())
                         }
+                        .buttonStyle(.plain)
                         NavigationLink { AuthMethodView(mode: .login, onAuthed: onAuthed) } label: {
-                            Text("Log In").authSecondaryPill()
+                            Text("Log In")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity).frame(height: 50)
+                                .liquidGlass(Capsule(), interactive: true)
+                                .contentShape(Capsule())
                         }
+                        .buttonStyle(.plain)
                         #if DEBUG
                         // Appetize preview: a Firebase-free local demo account. Debug-only.
                         // READABLE ON PURPOSE. It was `.caption` in `.tertiary`, which on the white
