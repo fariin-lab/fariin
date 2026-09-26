@@ -74,16 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            SEARCH BAR, SAVE PASSWORD, BANNER POSITION.
+            TIMESTAMPS, CALL ROWS, VIDEO PLAYER, SEARCH BAR.
 
-            CHATS: the search field is Apple's own search bar, the same as on Calls.
+            MESSAGES: the time follows the last line of text (never on top of it), 11pt, thin drawn ticks; with reactions it sits beside them. Long-press on a long message shrinks it instead of cutting it.
 
-            PASSWORD: after you create, change or reset your password, iOS offers Save Password? for the Passwords app.
+            CHAT LIST: "Missed voice call" / "Missed video call" with only the icon red; your own calls say Voice call / Video call. Unread previews are not bold. "You deleted this message". "You reacted 😎 to ...". Search field is the flat Calls capsule. Swiped row shows the system card.
 
-            IN-APP NOTIFICATIONS: the banner sits right under the status bar, over the back button row.
+            VIDEO: new player controls (middle play button, thin seek bar with preview, double-tap 15s, hold for 2x). Your own videos open at once; 9:16 videos sized right; sending shows the picture, not "Video".
 
-            ALSO: Account > Security order is Username, Passkeys, Security notifications. One X on the Username page (was doubled). Glowers / Glowing switch is taller.
+            ALSO: in-app banner shows the real message; image viewer no longer closes on a small wobble; All Media swipe is smooth; Hide From rows tighter.
 
-            PLEASE TEST: change your password and look for Save Password?; get a message while in another chat; Glowers page switch.
+            PLEASE TEST: long and short messages (time position); swipe a chat; open a video; drag a photo down slowly and fast.
 
         run: fastlane beta
