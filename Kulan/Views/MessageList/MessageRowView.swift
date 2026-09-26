@@ -541,6 +541,12 @@ final class MessageRowView: UIView {
         // with the default would put the two passes back into disagreement, which is exactly what
         // this whole directory exists to prevent.
         bodyLabel.lineBreakMode = .byWordWrapping
+        // ⛔ NO LINE-BREAK STRATEGY — found 2026-09-26 checking the timestamp fix. A UILabel's
+        // default `.standard` includes `.pushOut`: it moves a word down so a paragraph never ends
+        // on one lone word. `boundingRect` and the layout manager that measure this text do not,
+        // so the drawn last line could be WIDER than the measured one and the time, placed in the
+        // room the measurement promised, landed on the words. Same wrapping in both passes.
+        bodyLabel.lineBreakStrategy = []
         bubbleBox.addSubview(bodyLabel)
         // ⛔ NEVER TRUNCATE THE FOOTER — owner, 2026-08-26: his bubbles read "2:44 PM…" with the
         // ticks replaced by an ellipsis. A UILabel defaults to `.byTruncatingTail`, and the meta's

@@ -113,6 +113,7 @@ final class MediaBubbleView: UIView {
         addSubview(metaCapsule)
         captionLabel.numberOfLines = 0
         captionLabel.lineBreakMode = .byWordWrapping
+        captionLabel.lineBreakStrategy = []   // measured without one — see MessageRowView's bodyLabel
         addSubview(captionLabel)
         // THE SOURCE STEPS ASIDE FOR THE FLIGHT. A swipe-down dismiss carries a copy of the picture
         // back to this rect, so for the length of the drag the same picture would otherwise be on
@@ -301,6 +302,7 @@ final class AlbumBubbleView: UIView {
         addSubview(metaCapsule)
         captionLabel.numberOfLines = 0
         captionLabel.lineBreakMode = .byWordWrapping
+        captionLabel.lineBreakStrategy = []   // measured without one — see MessageRowView's bodyLabel
         addSubview(captionLabel)
         // See `MediaBubbleView`: the tile the dismissing copy is flying home to steps aside so the
         // same picture is not on screen twice for the length of the drag.
