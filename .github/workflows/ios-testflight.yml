@@ -74,16 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            TIMESTAMPS, CALL ROWS, VIDEO PLAYER, SEARCH BAR.
+            BLOCKING, REACTIONS, MEDIA DOWNLOADS, SIGN-IN.
 
-            MESSAGES: the time follows the last line of text (never on top of it), 11pt, thin drawn ticks; with reactions it sits beside them. Long-press on a long message shrinks it instead of cutting it.
+            BLOCKING: rebuilt. Your block list is private and the server enforces it.
 
-            CHAT LIST: "Missed voice call" / "Missed video call" with only the icon red; your own calls say Voice call / Video call. Unread previews are not bold. "You deleted this message". "You reacted 😎 to ...". Search field is the flat Calls capsule. Swiped row shows the system card.
+            CHATS: reacting to the last message no longer pushes it under the composer. The default disappearing timer in Settings now applies to chats you start.
 
-            VIDEO: new player controls (middle play button, thin seek bar with preview, double-tap 15s, hold for 2x). Your own videos open at once; 9:16 videos sized right; sending shows the picture, not "Video".
+            MEDIA: photos, videos and album tiles download with clear states; tap to start or cancel. Signing out and back in keeps received media and previews.
 
-            ALSO: in-app banner shows the real message; image viewer no longer closes on a small wobble; All Media swipe is smooth; Hide From rows tighter.
+            LOOK: profile link pills are Liquid Glass; Glowers/Glowing bar matches the search field; sign-in has a blue passkey link, glass buttons and a tighter Sign up line.
 
-            PLEASE TEST: long and short messages (time position); swipe a chat; open a video; drag a photo down slowly and fast.
+            PLEASE TEST: block and unblock someone; react to the last message; set a default timer and start a new chat.
 
         run: fastlane beta
