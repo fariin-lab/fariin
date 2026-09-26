@@ -4097,11 +4097,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // what the reference does for exactly this case. A photo therefore needs no cap at all: left
         // alone it arrives whole and is scaled to fit. Cropping first threw away pixels that the
         // scaler would have kept.
-        guard !isPictureRow(id) else { return frame }
-        let screen = view.window?.bounds.height ?? view.bounds.height
-        let cap = (screen * 0.34).rounded()          // ~13 lines on his phone
-        guard frame.height > cap else { return frame }
-        return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: cap)
+        // ⛔ NO CAP FOR TEXT EITHER — owner, 2026-09-26, with a long message lifted and ringed:
+        // "the bubble is cut; zoom it out, do not cut it". This reverses his 2026-08-27 "become read
+        // more again" above. The overlay already scales a tall preview to fit (`computeFrames`,
+        // uniformly, down to a tenth) and draws the scaled snapshot whole (`placePreview`), so the
+        // whole message shows, smaller, exactly as a tall photo does. `isPictureRow` stays for the
+        // day a text cap is asked for again.
+        return frame
     }
 
     /// Whether the lifted row is a picture — one photo/video/gif, or an album of them. Asked of the
