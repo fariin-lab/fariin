@@ -246,9 +246,24 @@ enum BubbleText {
     /// insets).
     static func build(_ t: BubbleBody.TextBody, meta: MetaChrome, isMe: Bool,
                       textColor: UIColor, accent: UIColor, textAvail: CGFloat) -> Built {
-        let ownLine = metaNeedsOwnLine(text: t.text, meta: meta, isMe: isMe, textAvail: textAvail)
+        var ownLine = metaNeedsOwnLine(text: t.text, meta: meta, isMe: isMe, textAvail: textAvail)
         let (body, links) = self.body(t, isMe: isMe, textColor: textColor, accent: accent)
-        if !ownLine { body.append(reservation(meta, isMe: isMe, ownLine: false)) }
+        if !ownLine {
+            // ⛔ THE LAST LINE ITSELF DECIDES — owner, 2026-09-26, a long text with the time jammed
+            // into its last line. The longest-word test above only knows that SOME line could hold
+            // the footer, not that the LAST one can. When the last line is nearly full the
+            // reservation wraps onto a short line of its own, too thin for the time, which is then
+            // drawn against the words above it. If the reservation adds height, it did not fit:
+            // give the footer a real row instead.
+            let bare = size(body, width: textAvail).height
+            let reserved = NSMutableAttributedString(attributedString: body)
+            reserved.append(reservation(meta, isMe: isMe, ownLine: false))
+            if size(reserved, width: textAvail).height > bare {
+                ownLine = true
+            } else {
+                return Built(body: reserved, links: links, metaOnOwnLine: false)
+            }
+        }
         return Built(body: body, links: links, metaOnOwnLine: ownLine)
     }
 

@@ -384,8 +384,7 @@ final class CMOverlay: UIView {
         UIView.animate(withDuration: openDuration, delay: 0,
                        usingSpringWithDamping: openDamping, initialSpringVelocity: openVelocity,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
-            self.previewView.transform = .identity
-            self.previewView.frame = frames.preview
+            self.placePreview(frames.preview)
             self.card.transform = .identity
             if self.motion == .launched { self.card.alpha = 1 }
             self.card.frame = frames.menu
@@ -496,7 +495,7 @@ final class CMOverlay: UIView {
                 // the alpha of an already-stripped blur cannot do that.
                 self.blurView.alpha = 0
                 self.setPreviewShadow(false)
-                self.previewView.frame = home
+                self.placePreview(home)
                 self.card.transform = CGAffineTransform(scaleX: 0.01, y: 0.01)
                 self.card.alpha = 0
                 self.bar?.alpha = 0
@@ -522,7 +521,7 @@ final class CMOverlay: UIView {
         UIView.animate(withDuration: springDuration, delay: 0,
                        usingSpringWithDamping: springDamping, initialSpringVelocity: 1.0,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
-            self.previewView.frame = home
+            self.placePreview(home)
             self.card.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
             self.card.alpha = 0
             self.bar?.alpha = 0
@@ -587,6 +586,21 @@ final class CMOverlay: UIView {
         own.windowLevel = UIWindow.Level(rawValue: top + 1)
         own.isHidden = false   // ⛔ NOT `makeKeyAndVisible` — see `presentsAboveKeyboard`
         return own
+    }
+
+    /// ⛔ A SHRUNK PREVIEW IS SCALED, NOT RE-FRAMED — owner, 2026-09-26: a long message's
+    /// long-press preview was cut off at the bottom instead of zooming out. `computeFrames` shrinks
+    /// the rect for a tall message, and assigning that rect as the FRAME only cropped the snapshot
+    /// inside it: a snapshot view does not redraw at a new size. The bounds stay the bubble's own
+    /// size and a transform does the shrinking, so the whole message shows, smaller.
+    private func placePreview(_ r: CGRect) {
+        let base = sourceFrame.size
+        let s = base.height > 0 ? r.height / base.height : 1
+        let scaled = abs(s - 1) >= 0.001
+        previewView.transform = .identity
+        previewView.bounds = CGRect(origin: .zero, size: scaled ? base : r.size)
+        previewView.center = CGPoint(x: r.midX, y: r.midY)
+        if scaled { previewView.transform = CGAffineTransform(scaleX: s, y: s) }
     }
 
     // MARK: The layout math (the reference app's targetPreviewFrame, simplified to our vertical stack)
