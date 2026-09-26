@@ -90,6 +90,7 @@ struct HideFromPage: View {
                     ForEach(privacy.hidden, id: \.self) { uid in
                         PersonRow(name: people[uid]?.name ?? "", handle: people[uid]?.handle ?? "",
                                   photoUrl: people[uid]?.photoUrl)
+                            .listRowInsets(PersonRow.insets)
                     }
                     .onDelete { idx in
                         for i in idx {
@@ -181,6 +182,7 @@ private struct HideFromCandidates: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .listRowInsets(PersonRow.insets)
         }
         .overlay {
             if candidates.isEmpty {
@@ -197,6 +199,11 @@ private struct PersonRow: View {
     let handle: String
     let photoUrl: String?
 
+    /// ⛔ THE STORY PICKER'S 52pt ROW — owner, 2026-09-26, "hide profile pictures users has
+    /// spaces": the grouped list's own ~11pt above and below a 40pt avatar, plus 2 of ours, made a
+    /// ~64pt row. 6 above and below, no padding of our own, as `StoryPeoplePicker.rowInsets`.
+    static let insets = EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
+
     var body: some View {
         HStack(spacing: 12) {
             AvatarView(name: name, photoUrl: photoUrl, size: 40)
@@ -208,6 +215,5 @@ private struct PersonRow: View {
                 }
             }
         }
-        .padding(.vertical, 2)
     }
 }
