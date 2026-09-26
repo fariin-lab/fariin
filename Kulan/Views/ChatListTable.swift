@@ -1510,7 +1510,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             p.onToggleRead(c); done(true)
         }
         read.image = ChatListIcon.symbol(c.hasUnreadMark(p.me) ? "envelope.open.fill" : "envelope.badge.fill")
-        read.backgroundColor = .systemGray
+        read.backgroundColor = .systemBlue
 
         let pinned = c.isPinned(p.me)
         let pin = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, done in
@@ -1529,7 +1529,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // orange, and black on black in the dark.
         pin.image = pinned ? ChatListIcon.symbol("pin.slash.fill")
                            : ChatListIcon.asset("ic_pin_menu")
-        pin.backgroundColor = .systemGray
+        pin.backgroundColor = .systemOrange
 
         return UISwipeActionsConfiguration(actions: [read, pin])
     }
@@ -1584,7 +1584,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             }
         }
         mute.image = ChatListIcon.symbol(muted ? "bell.fill" : "bell.slash.fill")
-        mute.backgroundColor = .systemGray
+        mute.backgroundColor = .systemIndigo
 
         let cfg = UISwipeActionsConfiguration(actions: [archive, del, mute])
         // ⛔ NO FULL-SWIPE DELETE. Theirs leaves `performsFirstActionWithFullSwipe` at its default,
@@ -2106,6 +2106,17 @@ private final class ChatListCell: UITableViewCell {
         // labels underneath are how iOS 26 draws that, not a style of ours, and there is no API to
         // ask for the older pill shape. Nothing to change there; deleting the plate is the whole of
         // what was ours.
+        //
+        // ⛔ THE SYSTEM'S SWIPED CARD, NOT OURS — owner, 2026-09-26, with the Archived list beside
+        // this one: "make the chat swipe look exactly like the reference". The Archived list is a
+        // SwiftUI `List`, and what it draws under a swiped row (a grey card with rounded trailing
+        // corners, the row's content still on it) is the system LIST CELL background resolved for
+        // the swiped state. This cell pinned `.clear` for every state, so a swiped row here slid on
+        // nothing. Resolving the same system configuration for `isSwiped` is that card with no
+        // colour or radius of ours — the objection to the 09-11 plate was that it was hand-drawn.
+        if state.isSwiped {
+            background = UIBackgroundConfiguration.listPlainCell().updated(for: state)
+        }
         backgroundConfiguration = background
     }
 }
