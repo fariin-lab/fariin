@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Observation
 
 // "Go to Chat" event: the open ThreadView for `cid` pops back to itself (out of the profile/gallery
 // push) and scrolls to + flashes `messageId`. The standard behavior â€” return to the conversation at
@@ -42,7 +43,13 @@ struct MediaGalleryView: View {
     /// How far the pager has travelled, in PAGE UNITS — 0 is Media at rest, 1.5 is halfway between
     /// Files and Voice. Written every frame of a drag and read by the tab bar, which is the whole of
     /// "the page and the indicator are one gesture". See `content`.
-    @State private var tabProgress: CGFloat = 0
+    ///
+    /// ⛔ AN OBJECT, READ ONLY BY THE BAR — owner, 2026-09-26, "All Media swiping pages looks
+    /// laggy". As plain `@State` on this view, a write every frame of the drag re-ran this WHOLE
+    /// body every frame: all five pages, `mediaItems` re-expanding and re-filtering every message,
+    /// the header counts filtering it again. Held in an `@Observable` box and read only inside
+    /// `LiveTabBar`, a frame's write invalidates the bar and nothing else.
+    @State private var tabProgress = PagerProgress()
     @State private var mediaFilter: MediaFilter = .all
     @State private var selecting = false
     @State private var preparingShare = false   // Share tapped, items not ready yet (see shareSelected)
@@ -270,12 +277,12 @@ struct MediaGalleryView: View {
     // Apple's segmented control, the same one the Calls page uses for All / Missed (owner's order,
     // 2026-08-03). See MediaTabBar for why it cannot be both that and Liquid Glass on a page.
     private var tabBar: some View {
-        MediaTabBar(titles: Tab.allCases.map(\.label),
-                    selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
-                                       set: { tab = Tab.allCases[$0] }),
-                    // The pager's own live offset. See `content` for why the bar cannot get this
-                    // from `selection`.
-                    progress: tabProgress)
+        LiveTabBar(titles: Tab.allCases.map(\.label),
+                   selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
+                                      set: { tab = Tab.allCases[$0] }),
+                   // The pager's own live offset. See `content` for why the bar cannot get this
+                   // from `selection`.
+                   progress: tabProgress)
         // ⛔ NO HORIZONTAL PADDING HERE — IT WAS BEING APPLIED TWICE AND THAT IS THE WHOLE BUG.
         //
         // `MediaTabBar` already keeps its own 16pt page margin (`pageInset`, on the track itself).
@@ -364,7 +371,7 @@ struct MediaGalleryView: View {
         .onScrollGeometryChange(for: CGFloat.self) { g in
             g.containerSize.width > 1 ? g.contentOffset.x / g.containerSize.width : 0
         } action: { _, p in
-            tabProgress = p
+            tabProgress.value = p
         }
     }
 
@@ -1061,6 +1068,19 @@ struct MediaGalleryView: View {
 /// This type stays what it always was: the MEDIA GALLERY's hairline remover. It is still the wrong
 /// tool for the chat list, because the chat list's problem was a missing background rather than an
 /// unwanted shadow.
+/// The pager's live offset, in page units. A reference, so writing it does not re-run the gallery.
+@Observable final class PagerProgress { var value: CGFloat = 0 }
+
+/// The tab bar, reading the live offset in ITS OWN body so only it redraws while the pages move.
+private struct LiveTabBar: View {
+    let titles: [String]
+    @Binding var selection: Int
+    let progress: PagerProgress
+    var body: some View {
+        MediaTabBar(titles: titles, selection: $selection, progress: progress.value)
+    }
+}
+
 private struct NavBarNoHairline: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let v = UIView(frame: .zero)
