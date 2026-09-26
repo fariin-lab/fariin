@@ -3900,12 +3900,23 @@ struct ChatRow: View, Equatable {
             ? Crypto.shared.decryptGroupCached(enc, cid: conv.id, authorId: conv.lastReactionBy)   // sealed by the reactor
             : Crypto.shared.decryptCached(enc, cid: conv.id)
         guard !emoji.isEmpty else { return nil }
-        if conv.lastReactionBy == me { return "You reacted \(emoji)" }
+        // ⛔ AND WHAT IT WAS ON — owner, 2026-09-26, the reference app's row: 'You reacted 😎 to
+        // "Voice message"'. Sealed by the reactor beside the emoji (`setReaction`); older reactions
+        // carry none and read as before.
+        let on: String = {
+            guard let t = conv.lastReactionToEnc else { return "" }
+            let words = conv.isGroup
+                ? Crypto.shared.decryptGroupCached(t, cid: conv.id, authorId: conv.lastReactionBy)
+                : Crypto.shared.decryptCached(t, cid: conv.id)
+            return words.isEmpty || words == "…" || words == "🔒" ? "" : " to \"\(words)\""
+        }()
+        if conv.lastReactionBy == me { return "You reacted \(emoji)" + on }
         if conv.isGroup {
             let n = conv.names[conv.lastReactionBy] ?? "Someone"
             let first = n.split(separator: " ").first.map(String.init) ?? n
-            return "\(first) reacted \(emoji)"
+            return "\(first) reacted \(emoji)" + on
         }
+        if !on.isEmpty { return "Reacted \(emoji)" + on }
         return conv.lastReactionToAuthor == me ? "Reacted \(emoji) to your message" : "Reacted \(emoji)"
     }
     // Live "recording…" for the list — the voice-note flavour of typingLabel, same synced field.
@@ -4018,7 +4029,7 @@ struct ChatRow: View, Equatable {
                 // without a cap the text stacks one letter per line. See the note on timeStr.
                 .font(.subheadline).lineLimit(2).truncationMode(.tail)
         } else if let r = reactionPreview {
-            Text(r).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            Text(r).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)   // the quoted words may wrap
         } else if isPhotoPreview {
             HStack(spacing: 5) {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)

@@ -2461,7 +2461,8 @@ enum ChatService {
     /// refused reaction simply never appeared with nothing said. Offline is not false: the write
     /// waits and lands on reconnect.
     @discardableResult
-    static func setReaction(cid: String, messageId: String, emoji: String?, toAuthor: String, group: [String]? = nil) async -> Bool {
+    static func setReaction(cid: String, messageId: String, emoji: String?, toAuthor: String,
+                            group: [String]? = nil, targetText: String? = nil) async -> Bool {
         let ref = db.collection("conversations").document(cid)
             .collection("messages").document(messageId)
         let convRef = db.collection("conversations").document(cid)
@@ -2473,6 +2474,7 @@ enum ChatService {
                 try? await convRef.updateData([
                     "lastReactionEnc": FieldValue.delete(), "lastReactionBy": FieldValue.delete(),
                     "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
+                    "lastReactionToEnc": FieldValue.delete(),
                 ])
             }
             return true
@@ -2496,10 +2498,20 @@ enum ChatService {
             // reaction itself still lands even if this one is rejected. Deliberately does NOT
             // bump updatedAt: a reaction shouldn't reorder chats or re-arm unread; the list
             // preview just changes in place while the reaction is the newest event.
+            // ⛔ AND WHAT IT WAS ON, SEALED THE SAME WAY — owner, 2026-09-26: 'You reacted 😎 to
+            // "Voice message"', as the reference app's list says it. Sealed like the emoji, so the
+            // server never has the words. Deleted when absent so a stale one never outlives it.
+            var targetEnc: String?
+            if let t = targetText?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+                let snippet = String(t.prefix(60))
+                if let members { targetEnc = try? await Crypto.shared.encryptForGroup(snippet, members: members) }
+                else { targetEnc = try? await Crypto.shared.encryptForConversation(cid, snippet) }
+            }
             try? await convRef.updateData([
                 "lastReactionEnc": enc, "lastReactionBy": uid,
                 "lastReactionToAuthor": toAuthor,
                 "lastReactionAt": FieldValue.serverTimestamp(),
+                "lastReactionToEnc": targetEnc.map { $0 as Any } ?? FieldValue.delete(),
             ])
         }
         return true
@@ -2816,6 +2828,7 @@ enum ChatService {
         try? await convRef.updateData([
             "lastReactionEnc": FieldValue.delete(), "lastReactionBy": FieldValue.delete(),
             "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
+            "lastReactionToEnc": FieldValue.delete(),
         ])
     }
 

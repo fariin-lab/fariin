@@ -5748,9 +5748,12 @@ struct ThreadView: View {
         // double-tap alike); only the full picker used to record one.
         if let e = emoji { ReactionRecents.add(e) }
         let members = isGroup ? groupMembers : nil
+        // What the reaction is on, in the words a reply quote uses ("🎤 Voice message", the text).
+        let target = repo.items.first(where: { $0.id == messageId }).map { quoteSafeLabel(replyQuoteText($0)) }
         Task {
             let ok = await ChatService.setReaction(cid: cid, messageId: messageId, emoji: emoji,
-                                                   toAuthor: toAuthor, group: members)
+                                                   toAuthor: toAuthor, group: members,
+                                                   targetText: target)
             if !ok { await MainActor.run { showJumpToast("Couldn't update the reaction") } }
         }
     }

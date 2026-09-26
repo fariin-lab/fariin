@@ -1548,6 +1548,7 @@ service cloud.firestore {
                  'unreadCount', 'typing', 'lastRead', 'pinnedBy', 'mutedBy', 'archivedBy',
                  'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt', 'lastPlayedVoice',
                  'lastReactionEnc', 'lastReactionBy', 'lastReactionToAuthor', 'lastReactionAt',
+                 'lastReactionToEnc',
                  'names', 'photos', 'posters', 'pinnedMessageIds',
                  // 2026-09-24 decision D13: Mark as Unread flag, pinned to my key by privateMapsUntouched.
                  'markedUnread'
