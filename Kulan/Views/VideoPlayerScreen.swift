@@ -38,6 +38,8 @@ struct VideoPlayerScreen: View {
     @State private var unavailable = false
     @State private var loadFailed = false   // transient (no network / server hiccup), retryable
     @State private var loadAttempt = 0
+    /// The shared download's byte fraction while the clip is still arriving (nil = length unknown).
+    @State private var dlFraction: Double?
     @State private var isPlaying = true
     @State private var progress: Double = 0        // 0…1 (bound to the scrubber)
     @State private var current: Double = 0         // seconds
@@ -259,10 +261,21 @@ struct VideoPlayerScreen: View {
             }
             .foregroundStyle(.white)
         } else {
-            // Theirs: a 50pt translucent black disc with the ring turning inside it.
-            ProgressView().tint(.white)
-                .frame(width: 50, height: 50)
-                .background(Circle().fill(.black.opacity(0.5)))
+            // Theirs: a 50pt translucent black disc with the ring turning inside it — filled by the
+            // real bytes once the download knows its length.
+            ZStack {
+                Circle().fill(.black.opacity(0.5))
+                if let f = dlFraction {
+                    Circle().stroke(.white.opacity(0.25), lineWidth: 2.5).padding(8)
+                    Circle().trim(from: 0, to: max(0.03, f))
+                        .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90)).padding(8)
+                        .animation(.linear(duration: 0.15), value: f)
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .frame(width: 50, height: 50)
         }
     }
 
@@ -582,43 +595,36 @@ struct VideoPlayerScreen: View {
         // Known-gone (mailman: delivered 1:1 videos are deleted server-side; a 404 is PERMANENT).
         // Terminal state — show unavailable instantly, never re-fetch (the unrecoverable-attachment state).
         if DeadMedia.contains(message.id) { await MainActor.run { unavailable = true }; return }
-        guard let s = message.videoUrl, let url = URL(string: s), let meta = message.enc else {
+        guard let s = message.videoUrl, !s.isEmpty, message.enc != nil else {
             await MainActor.run { unavailable = true }; return
         }
-        // ⛔ A DROPPED CONNECTION IS NOT "NO LONGER AVAILABLE" (audit, 2026-09-24). Opening a video
-        // with no signal said "Video no longer available. It was delivered and removed from the
-        // server." and offered nothing else, though the clip was still there waiting. Transient
-        // failures now say they could not load and offer Try Again; only a 403/404 is terminal.
-        guard let (cipher, resp) = try? await MediaSession.shared.data(from: url) else {
-            if Task.isCancelled { return }
-            await MainActor.run { loadFailed = true }; return   // transient network failure — NOT terminal
-        }
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        if code != 200, code != 403, code != 404 {
-            await MainActor.run { loadFailed = true }; return   // server hiccup — also not terminal
-        }
-        guard code == 200, let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
-            if code == 403 || code == 404 { DeadMedia.mark(message.id) }   // object deleted → permanent, never re-fetch
-            await MainActor.run { unavailable = true }
+        // ⛔ THE SHARED JOB, NOT A SECOND DOWNLOAD — 2026-09-26 media pass. This screen used to fetch
+        // the whole clip itself, beside whatever the bubble or the chat-open sweep was already
+        // fetching, and lost everything it had when it was closed. It joins that one job now: the
+        // bytes keep coming after a close, a retry continues from where it stopped, and the mailman
+        // delete runs in the job's finisher once the local copy is really on this phone.
+        // Through the binding: the observer outlives this call, and a captured copy of the view
+        // struct is not a handle on its live storage (the same rule SecureImageView follows).
+        let fraction = $dlFraction
+        let ok: Bool = await MainActor.run { () -> Task<Bool, Never> in
+            let watch = MediaDownloads.shared.observe(s) { state in fraction.wrappedValue = state.fraction }
+            return Task { @MainActor in
+                defer { MediaDownloads.shared.stopObserving(s, watch) }
+                return await MediaDownloads.shared.download(
+                    s, priority: .user,
+                    finish: MediaFetch.videoFinisher(url: s, enc: message.enc, cid: cid,
+                                                     messageId: message.id, authorId: message.authorId))
+            }
+        }.value
+        if Task.isCancelled { return }
+        if let local = VideoCache.url(for: message.id) {
+            await MainActor.run { startPlayer(local) }
             return
         }
-        // ⛔ THE SERVER COPY GOES ONLY IF THE LOCAL ONE ARRIVED. `VideoCache.store` is a `try?` write
-        // that swallows every failure — a full disk, a protection class refusing while the device is
-        // locked — and under the mailman model the server object is the ONLY other copy. The line
-        // below already gated the player on the file existing; the delete did not, so opening a video
-        // with no room to save it destroyed the video permanently.
-        VideoCache.store(data, for: message.id)
-        guard let local = VideoCache.url(for: message.id) else {
-            await MainActor.run { unavailable = true }
-            return
-        }
-        // Closed while the clip was downloading or decrypting: `.task` is cancelled and `cleanup`
-        // has already run, so starting the player now played the sound with no screen and no way
-        // to stop it (audit, 2026-09-24). The clip is cached, so the next open is instant.
-        if !Task.isCancelled { await MainActor.run { startPlayer(local) } }
-        if cid.contains("_"), message.authorId != AuthService.shared.uid {
-            try? await Storage.storage().reference(forURL: s).delete()
-        }
+        _ = ok
+        let permanent = await MainActor.run { MediaDownloads.shared.state(for: s) == .failed(permanent: true) }
+        if permanent { DeadMedia.mark(message.id) }   // object deleted → permanent, never re-fetch
+        await MainActor.run { if permanent { unavailable = true } else { loadFailed = true } }
     }
 
     @MainActor private func startPlayer(_ url: URL) {

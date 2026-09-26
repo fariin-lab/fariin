@@ -86,7 +86,7 @@ enum AutoDownloadPrefs {
 // Prefetches a chat's media into the local caches per policy, so tapping plays
 // instantly. Files over 200 MB never auto-download (reference rule).
 enum MediaAutoDownloader {
-    private static let maxAutoBytes = 200 * 1024 * 1024
+    static let maxAutoBytes: Int64 = 200 * 1024 * 1024
 
     /// ⛔ THE CEILING FOR AUTO-DOWNLOADING A PHOTO, his instruction 2026-08-27: "between 1 and 10 MB".
     ///
@@ -104,8 +104,6 @@ enum MediaAutoDownloader {
     /// ⚠️ MEASURED ON THE CIPHERTEXT, because that is what the response reports and what actually
     /// crosses the network. The padding over plaintext is small and always in the safe direction.
     static let photoAutoBytes: Int64 = 8 * 1024 * 1024
-    private static var inFlight = Set<String>()
-    private static let lock = NSLock()
 
     /// ⛔ VOICE NOTES FETCH AT ONCE, AHEAD OF EVERYTHING ELSE — his report, 2026-08-27: a received
     /// voice message takes too long to become playable, and the reference app he named is instant.
@@ -148,16 +146,19 @@ enum MediaAutoDownloader {
         }
     }
 
-    static func sweep(_ items: [Message], cid: String) {
+    @MainActor static func sweep(_ items: [Message], cid: String) {
         for m in items {
             // "Save to Photos" (Settings > Chats) rides this pass: it is already the one place that
             // walks a chat's media with the keys in hand. It does its own incoming/view-once/
             // already-saved checks, and it is a no-op when the setting is off.
             AutoSaveToPhotos.consider(m, cid: cid)
 
+            // Through the shared downloader with the video finisher, so a clip the sweep is already
+            // fetching is JOINED by the bubble and the player instead of fetched again beside it.
             if m.isVideo, AutoDownloadPrefs.allowedNow(.videos), VideoCache.url(for: m.id) == nil,
-               let u = m.videoUrl, !u.isEmpty {
-                fetch(id: m.id, url: u, meta: m.enc, cid: cid) { VideoCache.store($0, for: m.id) }
+               !DeadMedia.contains(m.id), let u = m.videoUrl, !u.isEmpty {
+                MediaFetch.requestVideo(url: u, enc: m.enc, cid: cid, messageId: m.id,
+                                        authorId: m.authorId, priority: .auto)
             }
             if m.isAudio, AutoDownloadPrefs.allowedNow(.audio), AudioCache.url(for: m.id) == nil,
                let u = m.audioUrl, !u.isEmpty {
@@ -168,7 +169,7 @@ enum MediaAutoDownloader {
             // changed nothing. The file is now fetched, decrypted and written to the exact path
             // ThreadView.openFile opens it from (`DocumentPrefetch.localURL`), and openFile uses that
             // copy when it is there instead of downloading again.
-            if m.isFile, AutoDownloadPrefs.allowedNow(.documents), (m.fileSize ?? 0) <= maxAutoBytes,
+            if m.isFile, AutoDownloadPrefs.allowedNow(.documents), Int64(m.fileSize ?? 0) <= maxAutoBytes,
                let u = m.fileUrl, !u.isEmpty, m.enc != nil,
                DocumentPrefetch.cached(id: m.id, fileName: m.fileName) == nil {
                 let dest = DocumentPrefetch.localURL(id: m.id, fileName: m.fileName)
@@ -177,23 +178,13 @@ enum MediaAutoDownloader {
         }
     }
 
+    /// One shared job per url (see MediaDownloads): retries, resume and dedup come with it. The old
+    /// per-id set here only deduplicated against itself, not against the player or the bubble.
     private static func fetch(id: String, url: String, meta: EncMeta?, cid: String,
-                              store: @escaping (Data) -> Void) {
-        lock.lock()
-        guard !inFlight.contains(id) else { lock.unlock(); return }
-        inFlight.insert(id)
-        lock.unlock()
-        Task.detached(priority: .utility) {
-            defer { lock.lock(); inFlight.remove(id); lock.unlock() }
-            guard let u = URL(string: url),
-                  let (data, _) = try? await MediaSession.shared.data(from: u) else { return }
-            if let meta {
-                if let clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: meta) {
-                    store(clear)
-                }
-            } else {
-                store(data)
-            }
+                              store: @escaping @Sendable (Data) -> Void) {
+        Task { @MainActor in
+            MediaDownloads.shared.request(url, priority: .auto,
+                                          finish: MediaFetch.dataFinisher(enc: meta, cid: cid) { store($0); return true })
         }
     }
 }

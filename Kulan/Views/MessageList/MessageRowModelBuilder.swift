@@ -376,7 +376,10 @@ enum MessageRowModelBuilder {
             cancellable: m.authorId == ctx.me && m.sendState == .sending,
             // A gif is a public url with nothing to hold back; a photo goes through the
             // auto-download policy, which may keep it behind a tap.
-            gated: kind == .photo)
+            gated: kind == .photo,
+            videoUrl: kind == .video ? m.videoUrl : nil,
+            messageId: m.id,
+            authorId: m.authorId)
     }
 
     private static func albumBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.AlbumBody {

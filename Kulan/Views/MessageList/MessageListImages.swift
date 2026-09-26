@@ -86,80 +86,71 @@ final class RowImageView: UIImageView {
         if let warm = DiskImageCache.shared.smallImageSync(url) { image = warm; return }
         image = placeholder
         inFlight = url
-        setLoading(true)
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer {
-                if self.token == mine {
-                    // Cleared whatever happened, so a failure is retryable and a success is not
-                    // re-fetched — `loadedUrl` is what says which of the two it was.
-                    if self.inFlight == url { self.inFlight = nil }
-                    self.setLoading(false)
-                }
-            }
             if let cached = await DiskImageCache.shared.image(for: url) {
                 guard self.token == mine else { return }
                 self.image = cached
                 self.loadedUrl = url
+                if self.inFlight == url { self.inFlight = nil }
                 return
             }
-            guard let u = URL(string: url),
-                  let (data, _) = try? await MediaSession.shared.data(from: u) else { return }
-            // Bytes only here. The decode used to happen on this line as well, on the main actor,
-            // which is half of what kept the blur up — see the note below.
-            let clear: Data?
-            if let enc {
-                clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: enc)
-            } else {
-                clear = data
-            }
-            guard let bytes = clear, self.token == mine else { return }
-            // ⛔ THE PICTURE IS PREPARED OFF THE MAIN THREAD — his report: the blur stays for a
-            // moment AFTER the download has finished.
-            //
-            // This whole task is `@MainActor`, so everything between the bytes arriving and the
-            // assignment was running on main while the blurhash sat on screen: `UIImage(data:)`,
-            // then `boundedForDisplay()`, which is a synchronous decode-and-resize
-            // (`preparingThumbnail`) and is the expensive one — tens of milliseconds for a photo
-            // off a modern camera, longer on an older phone. The download had finished; the main
-            // thread was simply too busy to draw the result yet.
-            //
-            // ⚠️ THE DISK PATH ALREADY DOES THIS CORRECTLY, and the asymmetry is the whole bug:
-            // `DiskImageCache.image(for:)` decodes on its own queue, bounds, and force-prepares the
-            // bitmap before handing it back, with a comment saying exactly why. A photo read from
-            // the cache appeared instantly and the same photo arriving from the network did not.
-            //
-            // ⚠️ AND THE DECODE IS FORCED, not just the resize. `UIImage(data:)` is lazy: assigning
-            // it hands the work to the render server and the bitmap is decoded on the main thread at
-            // DRAW time, which puts the stall back one frame later. Mirrors the disk path's rule —
-            // if `boundedForDisplay` actually resized, the result is already decoded; if it returned
-            // the original untouched, prepare it.
-            //
-            // ⚠️ A QUEUE AND A CONTINUATION, NOT `Task.detached`: `Task`'s success type must be
-            // `Sendable` and `UIImage` is not. This is the same shape `DiskImageCache.image(for:)`
-            // uses two files over, for the same reason.
-            let prepared: UIImage? = await withCheckedContinuation { cont in
-                Self.decodeQueue.async {
-                    guard let raw = UIImage(data: bytes) else { cont.resume(returning: nil); return }
-                    let bounded = raw.boundedForDisplay()
-                    cont.resume(returning: (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw)
-                }
-            }
-            guard let prepared, self.token == mine else { return }
-            // THE PICTURE FIRST, THE BOOKKEEPING AFTER. Storing before the assignment put a memory
-            // insert, a file removal and a disk-write dispatch between the finished image and the
-            // frame that shows it, for no reason — nothing about the cache is owed to this frame.
-            self.image = prepared
-            self.loadedUrl = url
-            // owned: a chat photo is the only copy left once the server's is deleted, so it must
-            // survive the cache trim exactly as the SwiftUI path stores it.
-            DiskImageCache.shared.store(prepared, data: bytes, for: url, owned: true)
+            guard self.token == mine else { return }
+            // ⛔ THE SHARED JOB, WATCHED — 2026-09-26 media pass (see MediaDownloads). This view used
+            // to download the photo itself and, if the cell had been reused by the time the bytes
+            // came, threw them away uncached: scrolling past a loading photo and back started it
+            // again from zero. The job's finisher decrypts and stores whether anyone is still
+            // looking, off the main thread (the decode note that lived here is in `photoFinisher`),
+            // and this view just picks the picture up from the cache when the job says done.
+            self.watch(url, token: mine)
+            MediaFetch.requestPhoto(url: url, enc: enc, cid: cid, gated: self.gated)
         }
+    }
+
+    /// Chat photo bubbles set this: Settings › Storage and Data and the automatic size ceiling may
+    /// hold the download until a tap. Reply thumbnails, album placeholders and link previews leave
+    /// it off — they are small and part of reading the message.
+    var gated = false
+    private var watching: (url: String, id: UUID)?
+
+    private func watch(_ url: String, token mine: Int) {
+        unwatch()
+        let id = MediaDownloads.shared.observe(url) { [weak self] state in
+            guard let self, self.token == mine else { return }
+            switch state {
+            case .downloading:
+                self.inFlight = url
+                self.setLoading(true)
+            case .none:
+                break   // the first callback, before the request below has made the job
+            case .done:
+                self.setLoading(false)
+                self.unwatch()
+                Task { @MainActor [weak self] in
+                    guard let self, let img = await DiskImageCache.shared.image(for: url),
+                          self.token == mine else { return }
+                    self.image = img
+                    self.loadedUrl = url
+                    if self.inFlight == url { self.inFlight = nil }
+                }
+            case .waitingTap, .failed:
+                // Not in flight any more: a later configure (or the bubble's tap) may ask again.
+                self.setLoading(false)
+                if self.inFlight == url { self.inFlight = nil }
+            }
+        }
+        watching = (url, id)
+    }
+
+    private func unwatch() {
+        if let w = watching { MediaDownloads.shared.stopObserving(w.url, w.id) }
+        watching = nil
     }
 
     func reset() {
         token += 1
+        unwatch()
         currentUrl = nil
         loadedUrl = nil
         inFlight = nil

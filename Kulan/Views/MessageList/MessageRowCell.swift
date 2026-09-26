@@ -370,6 +370,9 @@ final class MessageRowCell: UICollectionViewCell {
                 return
             }
             if rowView.hitsMedia(p) {
+                // Not downloaded yet: the tap starts, cancels or retries the download — the reference
+                // apps' rule — and never opens a viewer onto a file that is not here.
+                if rowView.handleMediaDownloadTap() { return }
                 // Re-publish the rect from where the picture is RIGHT NOW. The one written when
                 // this cell was configured is stale the moment the list scrolls, and a flight from
                 // a stale rect leaves the photo out of its own bubble.

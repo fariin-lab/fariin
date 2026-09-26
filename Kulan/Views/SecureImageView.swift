@@ -164,114 +164,44 @@ struct SecureImageView: View {
             waitingTap = true
             return
         }
-        guard let url = URL(string: imageUrl) else { return }
+        guard !imageUrl.isEmpty else { return }
         // ⛔ THE INDICATOR IS RAISED HERE AND DROPPED ON EVERY WAY OUT. Past this line a request is
         // genuinely in flight, which is the only thing that should ever put a spinner on screen.
         downloading = true
         defer { downloading = false; progress = nil }
-        do {
-            // ⛔ THE SIZE GATE AND THE PROGRESS COME FROM THE SAME PLACE: the response. Nothing in a
-            // message says how many bytes its photo is — `fileSize` exists only for documents, and
-            // `EncMeta` carries keys, not lengths — so unlike the reference, which reads the size off
-            // its attachment pointer before it asks for anything, we can only learn it from the
-            // download itself. `totalBytesExpectedToWrite` arrives with the FIRST progress callback,
-            // before the body has meaningfully transferred, so an over-limit photo is dropped after
-            // its headers rather than after its megabytes.
-            let probe = ImageDownloadProbe(
-                limit: MediaAutoDownloader.photoAutoBytes,
-                // A tap is consent: once he has asked for this picture, its size stops mattering.
-                enforceLimit: gated && !userRequested)
-            // ⚠️ THROUGH THE BINDING, NOT THE VIEW. URLSession calls the delegate on its own queue,
-            // and this view is a struct — capturing it in an escaping callback captures a COPY whose
-            // `@State` writes go nowhere. The projected binding is the handle that still points at
-            // the live storage, and the hop puts the write on the main thread where SwiftUI needs it.
-            let progressBinding = $progress
-            probe.onProgress = { p in
-                DispatchQueue.main.async { progressBinding.wrappedValue = p }
-            }
-            let (fileURL, _) = try await MediaSession.shared.download(from: url, delegate: probe)
-            if probe.exceededLimit {
-                // Not a failure — the picture is fine, it is just bigger than we download unasked.
-                // Same destination as the policy hold above: the Download affordance.
-                waitingTap = true
-                return
-            }
-            let data = try Data(contentsOf: fileURL)
-            var ui: UIImage?
-            var clearBytes: Data?
-            if let enc {
-                if let clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: enc) {
-                    ui = UIImage(data: clear); clearBytes = clear
-                }
-            } else {
-                ui = UIImage(data: data); clearBytes = data
-            }
-            if let ui {
-                // Display + memory-cache a display-BOUNDED bitmap (display-decode buckets: a 12MP photo
-                // shouldn't live as a 48MB bitmap per bubble); the ORIGINAL bytes go to disk untouched.
-                let bounded = ui.boundedForDisplay()
-                // owned: this is a CHAT photo, and once the mailman starts deleting server copies
-                // this file is the only one left. It must survive the 250MB trim, Keep Media and
-                // Clear Cache, exactly like VideoCache and AudioCache already do.
-                DiskImageCache.shared.store(bounded, data: clearBytes, for: imageUrl, owned: true)
-                image = bounded
-            } else { failed = true }
-        } catch {
-            // ⚠️ A CANCEL IS NOT A FAILURE. Refusing an over-limit photo cancels its task, and that
-            // surfaces here as a thrown error — without this the picture would wear the broken-image
-            // triangle instead of the Download button it is actually waiting behind.
-            if waitingTap { return }
-            // A task cancelled because the cell moved on to another photo is not a failure either;
-            // marking it failed put the triangle over the NEW photo while it loaded.
-            if Task.isCancelled { return }
-            failed = true
-        }
-    }
-}
-
-/// ⛔ WHERE THE REAL PROGRESS COMES FROM. `URLSession.data(from:)` hands back one finished blob and
-/// says nothing on the way, which is why this view could only ever show a shimmer that meant "still
-/// working" rather than anything about the download. The download API's delegate reports every
-/// chunk, so the ring is drawn from bytes actually received.
-///
-/// ⚠️ IT ALSO ENFORCES THE SIZE CEILING, and it has to be done from in here rather than up front:
-/// `totalBytesExpectedToWrite` is only known once the response lands, and the first callback carries
-/// it. Cancelling there costs the headers and nothing else.
-///
-/// `@unchecked Sendable` because URLSession calls these on its own queue: `exceededLimit` is written
-/// only here and read only after the await has returned, and `onProgress` hops to the main thread
-/// itself before touching anything SwiftUI owns.
-private final class ImageDownloadProbe: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let limit: Int64
-    private let enforceLimit: Bool
-    private(set) var exceededLimit = false
-    var onProgress: ((Double?) -> Void)?
-
-    init(limit: Int64, enforceLimit: Bool) {
-        self.limit = limit
-        self.enforceLimit = enforceLimit
-    }
-
-    func urlSession(_ session: URLSession,
-                    downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64,
-                    totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        if enforceLimit, totalBytesExpectedToWrite > 0, totalBytesExpectedToWrite > limit {
-            exceededLimit = true
-            downloadTask.cancel()
+        // ⛔ THE SHARED JOB — 2026-09-26 media pass (see MediaDownloads). This view used to run its
+        // own download beside the chat bubble's, so opening a photo that was still loading in the
+        // chat fetched it twice. It joins the one job now: same bytes, same progress, and the size
+        // ceiling is enforced by the job at the first response, as the probe here used to.
+        let url = imageUrl
+        // ⚠️ THROUGH THE BINDING, NOT THE VIEW: the observer is an escaping callback, and a captured
+        // copy of this struct is not a handle on its live `@State`.
+        let progressBinding = $progress
+        let watch = MediaDownloads.shared.observe(url) { state in progressBinding.wrappedValue = state.fraction }
+        defer { MediaDownloads.shared.stopObserving(url, watch) }
+        // A tap is consent: once he has asked for this picture, the policy and its size stop mattering.
+        let held = gated && !userRequested
+        let ok = await MediaDownloads.shared.download(
+            url, priority: held ? .auto : .user,
+            autoAllowed: !held || AutoDownloadPrefs.allowedNow(.photos),
+            autoLimit: held ? MediaAutoDownloader.photoAutoBytes : nil,
+            finish: MediaFetch.photoFinisher(url: url, enc: enc, cid: cid))
+        if ok, let stored = await DiskImageCache.shared.image(for: url) {
+            image = stored
             return
         }
-        // A server that sends no Content-Length leaves this at -1, and there is no honest fraction to
-        // draw from that — nil is the reference's `unknownProgress`, and the view shows a spinner.
-        onProgress?(totalBytesExpectedToWrite > 0
-                    ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-                    : nil)
+        // A task cancelled because the cell moved on to another photo is not a failure; the shared
+        // download carries on and the next appearance picks the picture up from the cache.
+        if Task.isCancelled { return }
+        switch MediaDownloads.shared.state(for: url) {
+        case .waitingTap:
+            // Not a failure — the picture is fine, it is just bigger than we download unasked.
+            waitingTap = true
+        case .failed:
+            failed = true
+        default:
+            break
+        }
     }
-
-    /// Required by the protocol. The async `download(from:delegate:)` hands the file back as its
-    /// return value and manages its lifetime, so there is deliberately nothing to do here.
-    func urlSession(_ session: URLSession,
-                    downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {}
 }
+

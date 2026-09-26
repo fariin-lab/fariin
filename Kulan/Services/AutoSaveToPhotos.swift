@@ -115,10 +115,12 @@ enum AutoSaveToPhotos {
         // data with Photos set to Wi-Fi Only or Never. A refusal returns nil, the caller releases the
         // id, and the next sweep on an allowed network (or after the photo is viewed) saves it.
         guard AutoDownloadPrefs.allowedNow(.photos) else { return nil }
-        guard let u = URL(string: s), let (cipher, _) = try? await MediaSession.shared.data(from: u) else { return nil }
-        guard let meta = enc else { return UIImage(data: cipher) }   // legacy plaintext media
-        guard let clear = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
-        return UIImage(data: clear)
+        // The shared job (2026-09-26): the bubble is usually fetching this same photo right now, and
+        // saving it used to download it a second time beside that. Joined, stored once, read back.
+        guard await MediaDownloads.shared.download(s, priority: .auto,
+                                                   finish: MediaFetch.photoFinisher(url: s, enc: enc, cid: cid))
+        else { return nil }
+        return await DiskImageCache.shared.image(for: s)
     }
 
     /// Photos needs a FILE for a video, so the decrypted bytes go through VideoCache — which is
@@ -126,14 +128,11 @@ enum AutoSaveToPhotos {
     private static func videoFile(_ url: String?, enc: EncMeta?, cid: String, cacheAs id: String) async -> URL? {
         if let have = VideoCache.url(for: id) { return have }
         guard AutoDownloadPrefs.allowedNow(.videos) else { return nil }   // 2026-09-24 audit, as for photos
-        guard let s = url, !s.isEmpty, let u = URL(string: s),
-              let (cipher, _) = try? await MediaSession.shared.data(from: u) else { return nil }
-        var clear = cipher
-        if let meta = enc {
-            guard let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
-            clear = dec
-        }
-        VideoCache.store(clear, for: id)
+        guard let s = url, !s.isEmpty else { return nil }
+        // Joined with the sweep's and the bubble's job for the same clip rather than fetched again.
+        _ = await MediaDownloads.shared.download(
+            s, priority: .auto,
+            finish: MediaFetch.dataFinisher(enc: enc, cid: cid) { VideoCache.store($0, for: id) })
         return VideoCache.url(for: id)
     }
 

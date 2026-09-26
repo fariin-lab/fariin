@@ -1309,6 +1309,10 @@ final class MessageRowView: UIView {
         return q.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
     }
 
+    /// A tap on media that is not on the phone yet belongs to its download (start / cancel / retry),
+    /// not to the viewer. False when the file is here and the tap should open it as before.
+    func handleMediaDownloadTap() -> Bool { mediaView?.handleDownloadTap() ?? false }
+
     /// Is this point on the picture? A tap there opens the viewer; a tap on the CAPTION does not,
     /// which is why this asks about the media rect and not about the whole bubble.
     func hitsMedia(_ point: CGPoint) -> Bool {

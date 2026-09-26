@@ -269,6 +269,12 @@ enum BubbleBody: Equatable {
         var cancellable: Bool
         /// The photos auto-download policy may hold the fetch until tapped.
         var gated: Bool
+        /// A video's clip, downloaded IN the bubble with its progress (2026-09-26 media pass) — the
+        /// reference apps' model; the player used to be the only thing that fetched it.
+        var videoUrl: String? = nil
+        /// The MESSAGE id (VideoCache's key and DeadMedia's), and who sent it (the mailman delete).
+        var messageId: String = ""
+        var authorId: String = ""
     }
 
     /// The OG card that travelled WITH the message. Two shapes, and they are not variations of one

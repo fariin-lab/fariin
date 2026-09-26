@@ -173,6 +173,7 @@ final class MediaBubbleView: UIView {
         durationLabel.alpha = a
         metaCapsule.alpha = a
         ring?.alpha = a
+        status?.alpha = a
     }
 
     func configure(_ m: BubbleBody.MediaBody, plan: MediaPlan, cid: String) {
@@ -208,6 +209,8 @@ final class MediaBubbleView: UIView {
                 // A single photo usually has a blurhash to sit behind, but not always — a message
                 // from an older build, or one whose hash did not survive, showed nothing at all.
                 picture.showsLoadingIndicator = true
+                // The photo itself obeys the auto-download policy; a video's poster always loads.
+                picture.gated = m.kind == .photo && m.gated
                 picture.configure(url: url, enc: enc, cid: cid,
                                   placeholder: InlineThumbCache.image(id: m.thumbCacheId,
                                                                       base64: m.inlineThumbBase64)
@@ -271,6 +274,9 @@ final class MediaBubbleView: UIView {
             ring?.isHidden = true
         }
 
+        // After the play badge, which it hides while the clip is not on the phone yet.
+        configureDownload(m, plan: plan, cid: cid)
+
         // Last, because the branches above create the gif view and the ring lazily and a row can be
         // reconfigured in the middle of a drag — a scroll or a reload would otherwise hand the
         // picture back at full alpha while its copy is still in the air.
@@ -281,6 +287,276 @@ final class MediaBubbleView: UIView {
         picture.reset()
         gif?.reset()
         ring?.stop()
+        unwatchDownload()
+    }
+
+    // MARK: - Receiving: the download's own states (2026-09-26 media pass)
+    //
+    // Both references draw the incoming media's network state on the media itself, from one enum:
+    // waiting → Download arrow (and the size), fetching → a ring filled by bytes with an X that
+    // cancels, local → nothing on a photo / the play button on a video, failed → try again. A video
+    // is downloaded HERE, not by opening the player, because the clip is sealed as one piece and
+    // cannot be streamed — the reference's non-streamable path is exactly this.
+
+    private var status: MediaDownloadBadge?
+    private var watched: (url: String, id: UUID)?
+    private var download: (url: String, isVideo: Bool, body: BubbleBody.MediaBody, cid: String)?
+
+    private func configureDownload(_ m: BubbleBody.MediaBody, plan: MediaPlan, cid: String) {
+        unwatchDownload()
+        download = nil
+        // My own send in flight wears the upload ring; nothing to download there.
+        let receiving = plan.uploadRing == nil && m.localData == nil
+        let target: (String, Bool)? = {
+            guard receiving else { return nil }
+            switch m.kind {
+            case .photo:
+                guard let u = m.url, !u.isEmpty, !DiskImageCache.shared.isCached(u) else { return nil }
+                return (u, false)
+            case .video:
+                guard let u = m.videoUrl, !u.isEmpty, VideoCache.url(for: m.messageId) == nil else { return nil }
+                return (u, true)
+            case .gif:
+                return nil
+            }
+        }()
+        guard let target else {
+            status?.isHidden = true
+            return
+        }
+        let (url, isVideo) = target
+        download = (url, isVideo, m, cid)
+        let v = status ?? {
+            let v = MediaDownloadBadge(frame: .zero)
+            addSubview(v)
+            status = v
+            return v
+        }()
+        v.isHidden = false
+        v.frame = plan.media
+        bringSubviewToFront(v)
+        // The photo view's own small spinner would sit under this ring; the ring replaces it.
+        picture.showsLoadingIndicator = false
+        if isVideo {
+            if DeadMedia.contains(m.messageId) {
+                v.show(.failed(permanent: true), size: nil, isVideo: true)
+                playBadge.isHidden = true
+                return
+            }
+            // The row being laid out is the trigger, as in the reference (and the sweep on chat open
+            // covers the rest). The policy decides whether this starts or waits for a tap.
+            MediaFetch.requestVideo(url: url, enc: m.enc, cid: cid, messageId: m.messageId,
+                                    authorId: m.authorId, priority: .auto)
+        }
+        let id = MediaDownloads.shared.observe(url) { [weak self] state in
+            self?.render(state)
+        }
+        watched = (url, id)
+    }
+
+    /// The size for a Download button, asked once per configure and only when one is showing — a
+    /// photo that simply downloads learns its length from the response and never costs this call.
+    private var sizeAskedFor: String?
+    private func askSizeIfNeeded(_ url: String) {
+        guard sizeAskedFor != url, MediaDownloads.shared.knownSize(for: url) == nil else { return }
+        sizeAskedFor = url
+        Task { @MainActor [weak self] in
+            _ = await MediaDownloads.shared.fetchSize(url)
+            guard let self, self.download?.url == url else { return }
+            self.render(MediaDownloads.shared.state(for: url))
+        }
+    }
+
+    private func render(_ state: MediaDownloadState) {
+        guard let d = download, let v = status else { return }
+        let size = MediaDownloads.shared.knownSize(for: d.url)
+        switch state {
+        case .done:
+            v.isHidden = true
+            if d.isVideo { playBadge.isHidden = false }
+            unwatchDownload()
+            download = nil
+            return
+        case .failed(true) where d.isVideo:
+            DeadMedia.mark(d.body.messageId)
+        case .none where !d.isVideo:
+            // A photo with no job yet: the picture view is about to ask. Draw nothing rather than
+            // flash a Download arrow at a photo that is on its way by itself.
+            v.isHidden = true
+            return
+        default:
+            break
+        }
+        v.isHidden = false
+        if d.isVideo { playBadge.isHidden = true }
+        switch state {
+        case .waitingTap, .none: askSizeIfNeeded(d.url)
+        default: break
+        }
+        v.show(state, size: size, isVideo: d.isVideo)
+    }
+
+    private func unwatchDownload() {
+        if let w = watched { MediaDownloads.shared.stopObserving(w.url, w.id) }
+        watched = nil
+    }
+
+    /// The tap on the media, asked BEFORE it opens anything. True when the tap was the download's:
+    /// start it (waiting or failed), or cancel it (downloading) — both references. A finished file
+    /// returns false and opens as it always did, so a tap can never restart a download that is done.
+    func handleDownloadTap() -> Bool {
+        guard let d = download else { return false }
+        if d.isVideo, VideoCache.url(for: d.body.messageId) != nil { return false }
+        // Known gone: the player says so in words; a download would only 404 again.
+        if d.isVideo, DeadMedia.contains(d.body.messageId) { return false }
+        if !d.isVideo, DiskImageCache.shared.isCached(d.url) { return false }
+        switch MediaDownloads.shared.state(for: d.url) {
+        case .downloading:
+            MediaDownloads.shared.cancel(d.url)
+        case .done:
+            return false
+        case .failed(true):
+            // Gone from the server: let the viewer/player say so in words.
+            return false
+        case .none, .waitingTap, .failed(false):
+            if d.isVideo {
+                MediaFetch.requestVideo(url: d.url, enc: d.body.enc, cid: d.cid,
+                                        messageId: d.body.messageId, authorId: d.body.authorId,
+                                        priority: .user)
+            } else {
+                MediaFetch.requestPhoto(url: d.url, enc: d.body.enc, cid: d.cid, gated: true,
+                                        priority: .user)
+            }
+        }
+        return true
+    }
+}
+
+/// The receive-side indicator: a 48pt dimmed disc holding an arrow (waiting), a byte-filled ring
+/// with an X (downloading; the tap cancels), a circular arrow (failed, tap to retry) or a slashed
+/// cloud (gone for good). A size pill in the top-leading corner names the cost: "15 MB" while
+/// waiting, "1.2 / 15 MB" while downloading, the way both references label a pending file.
+final class MediaDownloadBadge: UIView {
+    private let disc = UIView()
+    private let icon = UIImageView()
+    private let track = CAShapeLayer()
+    private let ring = CAShapeLayer()
+    private let pill = UIView()
+    private let pillLabel = UILabel()
+    private var spinning = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        disc.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        addSubview(disc)
+        for l in [track, ring] {
+            l.fillColor = UIColor.clear.cgColor
+            l.lineWidth = 2.5
+            l.lineCap = .round
+            disc.layer.addSublayer(l)
+        }
+        track.strokeColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        ring.strokeColor = UIColor.white.cgColor
+        icon.tintColor = .white
+        icon.contentMode = .center
+        disc.addSubview(icon)
+        pill.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        addSubview(pill)
+        pillLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        pillLabel.textColor = .white
+        pill.addSubview(pillLabel)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show(_ state: MediaDownloadState, size: Int64?, isVideo: Bool) {
+        let symbol: String
+        var fraction: Double? = nil
+        var sizeText: String? = nil
+        var showsRing = false
+        switch state {
+        case .downloading(let received, let total):
+            symbol = "xmark"
+            showsRing = true
+            fraction = state.fraction
+            if let t = total ?? size, t > 0 { sizeText = "\(Self.mb(received)) / \(Self.mb(t))" }
+        case .failed(let permanent):
+            symbol = permanent ? "icloud.slash" : "arrow.clockwise"
+        case .waitingTap(let total):
+            symbol = "arrow.down"
+            if let t = total ?? size { sizeText = Self.mb(t) }
+        case .none, .done:
+            symbol = "arrow.down"
+            if let size { sizeText = Self.mb(size) }
+        }
+        icon.image = UIImage(systemName: symbol,
+                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .bold))
+        track.isHidden = !showsRing
+        ring.isHidden = !showsRing
+        if showsRing {
+            if let fraction {
+                stopSpin()
+                // Never an empty ring: a sliver says "started", the reference's 0.027 floor.
+                ring.strokeEnd = CGFloat(max(0.03, fraction))
+            } else {
+                // No length yet (or queued): an honest spinner, not a guessed fraction.
+                ring.strokeEnd = 0.25
+                startSpin()
+            }
+        } else {
+            stopSpin()
+        }
+        // Size is shown for video always, and for a photo only while it waits for a tap (then it is
+        // the reason it is waiting). A downloading photo shows the ring alone, like the references.
+        let text = (isVideo || { if case .waitingTap = state { return true }; return false }()) ? sizeText : nil
+        pill.isHidden = text == nil
+        pillLabel.text = text
+        setNeedsLayout()
+    }
+
+    private static func mb(_ bytes: Int64) -> String {
+        let m = Double(bytes) / 1_048_576
+        if m < 0.1 { return String(format: "%.0f KB", max(1, Double(bytes) / 1024)) }
+        return m < 10 ? String(format: "%.1f MB", m) : String(format: "%.0f MB", m)
+    }
+
+    private func startSpin() {
+        guard !spinning else { return }
+        spinning = true
+        let a = CABasicAnimation(keyPath: "transform.rotation.z")
+        a.fromValue = 0
+        a.toValue = 2 * Double.pi
+        a.duration = 1
+        a.repeatCount = .infinity
+        a.isRemovedOnCompletion = false
+        ring.add(a, forKey: "spin")
+    }
+
+    private func stopSpin() {
+        guard spinning else { return }
+        spinning = false
+        ring.removeAnimation(forKey: "spin")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let side: CGFloat = 48
+        disc.frame = CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
+        disc.layer.cornerRadius = side / 2
+        icon.frame = disc.bounds
+        let r = side / 2 - 4
+        let path = UIBezierPath(arcCenter: CGPoint(x: side / 2, y: side / 2), radius: r,
+                                startAngle: -.pi / 2, endAngle: 1.5 * .pi, clockwise: true).cgPath
+        for l in [track, ring] {
+            l.frame = disc.bounds
+            l.path = path
+        }
+        pillLabel.sizeToFit()
+        let pw = pillLabel.bounds.width + 14, ph: CGFloat = 20
+        pill.frame = CGRect(x: 8, y: 8, width: pw, height: ph)
+        pill.layer.cornerRadius = ph / 2
+        pillLabel.frame = pill.bounds
+        pillLabel.textAlignment = .center
     }
 }
 
