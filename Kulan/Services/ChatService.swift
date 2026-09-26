@@ -104,6 +104,11 @@ enum ChatService {
             if answered {
                 seed["startedBy"] = uid
                 seed["accepted"] = false
+                // The Settings default timer, born with the chat (see `applyDefaultDisappear`). In
+                // the creating write, not a follow-up: a new 1:1 is a request, and the notice a
+                // follow-up would post is refused on a request (it is not plain text).
+                let def = UserDefaults.standard.integer(forKey: "defaultDisappearSeconds")
+                if def > 0 { seed["disappearSeconds"] = def }
             }
         }
         // ⛔ AND WHEN THE STAMP IS WHAT THE RULES REFUSED, WRITE THE REST — audit C2, 2026-09-11.
@@ -127,11 +132,27 @@ enum ChatService {
             seed.removeValue(forKey: "accepted")
             seed.removeValue(forKey: "unreadCount")
             seed.removeValue(forKey: "typing")
+            seed.removeValue(forKey: "disappearSeconds")   // the chat existed: its timer is its own
             try await ref.setData(seed, merge: true)
         }
         // 2026-09-26 block rebuild: a block is NOT copied onto the chat any more (the person blocked
         // is a member and could read it). The thread and every list ask `BlockList` directly.
         return cid
+    }
+
+    /// ⛔ THE SETTINGS DEFAULT TIMER, ON EVERY CHAT I START — owner, 2026-09-26: "disappearing
+    /// messages in Settings is not working". It was applied in one place, the FIRST TEXT's own
+    /// conversation seed, and only when that send found no chat. But starting a chat goes through
+    /// `openConversation`, which creates the chat before anything is sent, so by the first message
+    /// the chat existed and the default was never written. Now applied when a chat is CREATED
+    /// (1:1 in `openConversation`, groups in `createGroup`). A group goes through `setDisappear`, so the members get the same
+    /// "set disappearing message time" notice as for any timer change — never silent. A new 1:1
+    /// takes it in its creating write instead (see `openConversation`): it is born a request, and
+    /// a request refuses the notice.
+    static func applyDefaultDisappear(_ cid: String) async {
+        let def = UserDefaults.standard.integer(forKey: "defaultDisappearSeconds")
+        guard def > 0 else { return }
+        await setDisappear(cid, seconds: def)
     }
 
     /// `openConversation` for a place that holds only the other person's uid (a group member, a
@@ -181,6 +202,7 @@ enum ChatService {
         try await ref.setData(data)
         // Greet the new group with a system event (also gives the chat list a real preview).
         try? await writeSystemMessage(cid: ref.documentID, text: "\(myName()) created the group")
+        await applyDefaultDisappear(ref.documentID)
         return ref.documentID
     }
 
