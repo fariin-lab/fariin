@@ -708,8 +708,11 @@ struct AccountSettingsView: View {
                     // back the bug `Push.unregister`'s retry exists to fix: tokens left under the
                     // signed-out account keep ringing this phone and showing its notifications.
                     // Waiting visibly is better than leaking a signed-out account's messages.
+                    // Captured before signOut clears it: whose received media stays on this phone
+                    // for their return (it is the only copy — see `SessionWipe.claimKeptMedia`).
+                    let leaving = Auth.auth().currentUser?.uid
                     try? Auth.auth().signOut()
-                    SessionWipe.wipeAccountData()   // this account's on-device state must not leak into the next sign-up
+                    SessionWipe.wipeAccountData(keepingMediaFor: leaving)   // this account's on-device state must not leak into the next sign-up
                     dismiss(); onSignOut()
                 }
             }

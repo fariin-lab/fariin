@@ -14,7 +14,14 @@ import FirebaseFirestore
 @Observable
 final class ConversationsRepository {
     static let shared = ConversationsRepository()
-    private init() {}
+    private init() {
+        // 2026-09-26, owner: after sign-out and sign-in again the whole list said "…". The rows
+        // re-decrypt when a PEER's key is fetched (`republishForKeys` below), but never when MY key
+        // finishes loading, so a list drawn in the moment before it did stayed on the marker.
+        NotificationCenter.default.addObserver(forName: .cryptoIdentityReady, object: nil, queue: nil) { _ in
+            MainActor.assumeIsolated { ConversationsRepository.shared.republishForKeys() }
+        }
+    }
 
     private let db = Firestore.firestore()
     private var listener: ListenerRegistration?
@@ -113,6 +120,9 @@ final class ConversationsRepository {
         // to listen to. This is NOT the "Demo chats" switch, which leaves the real listener running
         // and has its rows added in `publish`.
         if DemoMode.active { hasLoaded = true; return }
+        // Media a Sign Out kept on this phone: back to its own account, or wiped before anyone else's
+        // session sees it. A no-op unless a keep is pending. (2026-09-26)
+        if let signedIn = Auth.auth().currentUser?.uid { SessionWipe.claimKeptMedia(for: signedIn) }
         // 2026-09-24 fix-all #57: ONE LISTENER FOR THE APP, NOT ONE PER SCREEN. The Chats tab, the
         // Archive, and both search pages each call this from their own `onAppear`, and every call
         // used to tear the running listener down and attach a fresh one (a full re-fetch, just for

@@ -162,8 +162,10 @@ struct RootView: View {
                                     Task {
                                         await Push.unregister()
                                         await DeviceRegistry.shared.removeThisDevice()
+                                        // A sign-out, not the deletion: keep the media for their return.
+                                        let leaving = AuthService.shared.uid
                                         await AuthService.shared.abandonSession()   // the signOut
-                                        SessionWipe.wipeAccountData()
+                                        SessionWipe.wipeAccountData(keepingMediaFor: leaving)
                                         await route()
                                     }
                                 }

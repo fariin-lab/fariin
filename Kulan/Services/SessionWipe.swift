@@ -9,7 +9,10 @@ import UserNotifications
 /// of the old documents.
 @MainActor
 enum SessionWipe {
-    static func wipeAccountData() {
+    /// `keepingMediaFor`: a plain Sign Out passes the account's uid, and its received photos,
+    /// videos and voice notes stay on the phone for when it signs back in — see `claimKeptMedia`.
+    /// Everything else (deletion, a revoked device) passes nil and the media goes now.
+    static func wipeAccountData(keepingMediaFor keptUid: String? = nil) {
         // A live call does not survive its account (2026-09-24 audit): signing out mid-call left
         // the audio, the call record and CallKit running under nobody.
         if CallService.shared.state != .idle { CallService.shared.hangUp() }
@@ -75,8 +78,18 @@ enum SessionWipe {
         SendQueue.removeAll()                   // queued unsent plaintext
         PendingOutbox.removeAll()               // forwarded bubbles waiting for a chat to be opened
         StoryOutbox.removeAll()                 // unfinished story posts — never inherited
-        AudioCache.removeAll()                  // decrypted voice notes on disk
-        VideoCache.removeAll()                  // decrypted videos on disk
+        // ⛔ THE RECEIVED MEDIA IS THE ONLY COPY — owner, 2026-09-26: "when I log out and log in
+        // again I lose my messages. Never lose my messages." Under the mailman model the server
+        // deletes a delivered 1:1 photo, video or voice note once this phone has it, so these three
+        // caches are not caches: wiping them on an ordinary Sign Out destroyed that history for good,
+        // and signing back in could not bring it back. The Keychain key already survives sign-out
+        // per account for the same reason. The media now does too: kept, and wiped only if a
+        // DIFFERENT account signs in next (`claimKeptMedia`), or right here on deletion/revocation.
+        if let keptUid, !keptUid.isEmpty {
+            UserDefaults.standard.set(keptUid, forKey: keptMediaKey)
+        } else {
+            wipeReceivedMedia()
+        }
         // ⛔ AND THE THREE DECRYPTED STORES THIS LIST COULD NOT SEE. Each one was missed for the
         // same reason: the two lines above name the caches that hold RECEIVED media, and these hold
         // the same content by another route.
@@ -97,7 +110,7 @@ enum SessionWipe {
         // anything with file access. `wipeEverything` rather than `clear`, because the owned tier is
         // deliberately spared by every cache-management path — and an account leaving the device is
         // not cache management.
-        DiskImageCache.shared.wipeEverything()
+        // (The decrypted photos are wiped with the other received media above — or kept with it.)
         // ⛔ AND THE STAGED UPLOADS. `PendingUploadStore` sits beside the three outboxes above and was
         // missed: it holds the previous account's staged ciphertext and its private upload addresses,
         // and the resume-at-launch path would hand them to whoever signs in next, under their
@@ -124,6 +137,29 @@ enum SessionWipe {
         // next — on their FIRST FRAME, before any listener could correct it.
         ConversationsDiskCache.shared.wipeAll()
         Crypto.shared.wipeIdentity()            // fresh keypair for the next account
+    }
+
+    nonisolated private static let keptMediaKey = "session.keptMediaFor"
+
+    private nonisolated static func wipeReceivedMedia() {
+        UserDefaults.standard.removeObject(forKey: keptMediaKey)
+        AudioCache.removeAll()                  // decrypted voice notes on disk
+        VideoCache.removeAll()                  // decrypted videos on disk
+        // `wipeEverything` rather than `clear`: the owned tier is spared by every cache-management
+        // path, and an account leaving the device is not cache management.
+        DiskImageCache.shared.wipeEverything()
+    }
+
+    /// Called at every sign-in with the uid that signed in. Media kept by a Sign Out belongs to one
+    /// account: the same account gets it back untouched; any other account wipes it first, so the
+    /// photos of the last person on this phone never sit under the next one's session.
+    nonisolated static func claimKeptMedia(for uid: String) {
+        guard let kept = UserDefaults.standard.string(forKey: keptMediaKey) else { return }
+        if kept == uid {
+            UserDefaults.standard.removeObject(forKey: keptMediaKey)
+        } else {
+            wipeReceivedMedia()
+        }
     }
 
     /// ACCOUNT-SCOPED PREFERENCES (audit). These are plain global UserDefaults keys, so the next

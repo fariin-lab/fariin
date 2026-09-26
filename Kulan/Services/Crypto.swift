@@ -99,6 +99,13 @@ final class Crypto {
     private func warmIfNeeded() {
         lock.withLock {
             guard !didWarm else { return }
+            // ⛔ NOT WHILE SIGNED OUT — owner, 2026-09-26: "logout then login again, I lose my
+            // messages; the chat list shows only …". Sign-out resets this flag, but the chat list is
+            // still on screen for a moment and decrypts once more with nobody signed in. That call
+            // found no uid, loaded nothing, and still marked the warm-up done, so after signing back
+            // in the Keychain key was never read synchronously again and every preview drew the
+            // "keys not ready" marker. Only a warm-up that knew WHOSE key to load counts.
+            guard currentUid() != nil else { return }
             didWarm = true
             if let dict = UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String] {
                 for (uid, b64) in dict where pubCache[uid] == nil {
@@ -195,6 +202,10 @@ final class Crypto {
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
+        // Say so. Anything drawn before this with "…" (no key yet) can redraw now; the chat list
+        // only healed when a PEER's key was fetched, so a list whose peers were already warm stayed
+        // on "…" until the next message arrived.
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .cryptoIdentityReady, object: nil) }
 
         // Publish my public key so others can encrypt to me. Fire-and-forget: the
         // keypair is already usable locally (set above), and blocking here made a
@@ -703,6 +714,11 @@ final class Crypto {
         if raw.hasPrefix("encg1:") { return decryptGroup(raw, authorId: authorId) }
         return decrypt(raw, cid: cid)
     }
+}
+
+extension Notification.Name {
+    /// This account's keypair is loaded (posted on main). Views holding "…" previews redraw.
+    static let cryptoIdentityReady = Notification.Name("kulan.cryptoIdentityReady")
 }
 
 // MARK: - Minimal Keychain (replaces expo-secure-store)
