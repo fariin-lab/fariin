@@ -1974,14 +1974,13 @@ enum MessageRowLayout {
     /// ⚠️ Without the floor a portrait video (aspect ~0.46 → ~157pt wide) forced its caption to
     /// 157pt, so a long caption wrapped at roughly one word per line and the bubble became absurdly
     /// tall. The photo path always applied this floor; video never did.
+    ///
+    /// ⛔ SUPERSEDED 2026-09-26 — owner: "a 9:16 video still uses the old size; size it from the
+    /// video's own aspect". The fixed 240 × 340 box above predates the photo rules, so a vertical
+    /// video came out narrower than the same frame as a photo. A video's box is the photo's box now:
+    /// the same aspect clamp, the same 9:16 comfort width, the same caption floor and no-upscale.
     static func videoBox(_ m: BubbleBody.MediaBody, maxBubbleWidth: CGFloat) -> CGSize {
-        var s = displayBox(width: m.pixelWidth, height: m.pixelHeight)
-        guard let caption = m.caption, !caption.text.isEmpty else { return s }
-        let boxMax = min(maxBubbleWidth, 350)
-        let textW = (caption.text as NSString)
-            .size(withAttributes: [.font: BubbleMetrics.bodyFont]).width + 24   // 2 × 12pt insets
-        s.width = min(boxMax, max(s.width, textW))
-        return s
+        photoBox(m, maxBubbleWidth: maxBubbleWidth)
     }
 
     /// A PHOTO's box. The aspect is clamped to [0.35, 2.857]; the caption reserves only a MIN-WIDTH

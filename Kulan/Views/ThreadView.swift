@@ -3253,6 +3253,9 @@ struct ThreadView: View {
                 // why a gif keeps the double-tap-to-react shortcut that photos and videos give up.
                 guard !m.isGif else { return }
                 guard m.sendState == nil else { return }   // only delivered media opens
+                // A video whose clip has not arrived yet draws its poster (see the builder) but has
+                // nothing to play; without this it fell into the PHOTO branch below.
+                guard m.type != "video" || m.isVideo else { return }
                 let key = MediaOpenRects.key(.chat, m.id)
                 if m.isVideo {
                     MediaOpen.flyOrPresent(

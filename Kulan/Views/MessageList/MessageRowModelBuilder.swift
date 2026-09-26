@@ -169,7 +169,12 @@ enum MessageRowModelBuilder {
         // video or a document a photo HAS something to draw meanwhile — the blurhash and thumbnail
         // carried over from the original, at the real aspect ratio, which is exactly what
         // `isPendingImage` was written for.
-        } else if let pending = msg.pendingMediaKind, pending != "audio", pending != "image" {
+        // ⛔ AND NOR IS A VIDEO — owner, 2026-09-26, a screenshot of a spinner and the word "Video"
+        // where the clip should be. `announceVideo` writes the poster, duration and pixel size
+        // BEFORE the transcode, so there is always a real bubble to draw; the ring on it says the
+        // clip is still coming.
+        } else if let pending = msg.pendingMediaKind, pending != "audio", pending != "image",
+                  pending != "video" {
             // Still being prepared: a spinner and a word. The real bubble arrives when the write
             // lands, carrying the poster and the dimensions the placeholder cannot know.
             body = .pill(BubbleBody.PillBody(
@@ -177,7 +182,8 @@ enum MessageRowModelBuilder {
                 spent: false, opens: false, busy: true))
         // `isImage` needs a URL or local bytes, so a pending photo is not `isImage` yet and has to be
         // named here as well — the same footnote the voice branch below carries, for the same reason.
-        } else if msg.isImage || msg.isVideo || msg.isGif || msg.isPendingImage {
+        } else if msg.isImage || msg.isVideo || msg.isGif || msg.isPendingImage
+                    || msg.pendingMediaKind == "video" {
             body = .media(mediaBody(msg, ctx: ctx))
         } else if msg.isAlbum {
             body = .album(albumBody(msg, ctx: ctx))

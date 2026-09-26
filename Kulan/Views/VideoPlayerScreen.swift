@@ -390,6 +390,14 @@ struct VideoPlayerScreen: View {
 
     private func load() async {
         if let local = VideoCache.url(for: message.id) { await MainActor.run { startPlayer(local) }; return }
+        // ⛔ MY OWN VIDEO PLAYS FROM THE FILE I SENT — owner, 2026-09-26: tapping a video sat on the
+        // spinner. The clip I just sent is on this phone at `localMediaURL` (Share already used it,
+        // line ~170), but loading skipped it and went to the network: a long wait for a file that
+        // was right here, and nothing at all while the upload had not produced a URL yet.
+        if let path = message.localMediaURL, FileManager.default.fileExists(atPath: path) {
+            await MainActor.run { startPlayer(URL(fileURLWithPath: path)) }
+            return
+        }
         // Known-gone (mailman: delivered 1:1 videos are deleted server-side; a 404 is PERMANENT).
         // Terminal state — show unavailable instantly, never re-fetch (the unrecoverable-attachment state).
         if DeadMedia.contains(message.id) { await MainActor.run { unavailable = true }; return }
