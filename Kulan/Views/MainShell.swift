@@ -3838,7 +3838,9 @@ struct ChatRow: View, Equatable {
         // wrong beside it. The up-right arrow already says it went out.
         case "📞 Missed call":         return mine ? ("phone.arrow.up.right.fill", "Voice call")
                                                   : ("phone.arrow.down.left.fill", "Missed voice call")
-        case "📞 Call":                return ("phone.fill", "Call")
+        // "Voice call", not "Call" — owner, 2026-09-26: the answered row names its kind, as the
+        // video one always has.
+        case "📞 Call":                return ("phone.fill", "Voice call")
         // Legacy markers from before declines were removed from the log (2026-08-12): old
         // conversations may still hold the string, but it must not SAY declined to anyone.
         case "📞 Declined call":       return mine ? ("phone.arrow.up.right.fill", "Voice call")
