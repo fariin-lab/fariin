@@ -261,7 +261,15 @@ final class Crypto {
         // ciphertext), so a second account on the same phone could take a cache hit for a message its
         // own keys cannot open. Emptying it with the identity closes both.
         previewCache.removeAllObjects()
-        UserDefaults.standard.removeObject(forKey: Self.pubKeysDefaultsKey)   // cache of others' PUBLIC keys
+        // ⛔ THE OTHERS' PUBLIC KEYS STAY ON DISK — owner, 2026-09-26, second report after the
+        // sign-in fix: "after I log in again the chat list shows … and the text appears after
+        // seconds". That wait was this line: every peer's key had to be fetched from the server
+        // again before a single preview could decrypt, and the list only redraws once those
+        // fetches land. They are PUBLIC keys, the same fact for whoever is signed in, so nothing
+        // about them belongs to the account that left; a rotated key is still caught by
+        // `refreshKeyAfterFailure`. The reference apps keep their local store across a sign-out for
+        // the same reason: the list must read on its first frame. (`pubCache` in memory is cleared
+        // above and refilled from this dictionary by `warmIfNeeded`.)
     }
 
     /// Account DELETION: the account is gone for good, so its private key should go too

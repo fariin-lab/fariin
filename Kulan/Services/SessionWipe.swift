@@ -132,10 +132,12 @@ enum SessionWipe {
         VerificationIndex.clear()               // and who is verified — the next account starts blank
         SafetyKeyLog.wipe()                     // whose key we have seen: per account, never inherited
         ProfilePhotoHistory.wipe()              // past profile photos: never shown to the next account
-        // The launch cache. `wipeAll`, not the per-uid door: by the time a sign-out reaches here the
-        // uid may already be gone, and a chat list left behind would be handed to whoever signs in
-        // next — on their FIRST FRAME, before any listener could correct it.
-        ConversationsDiskCache.shared.wipeAll()
+        // The launch cache. A plain Sign Out keeps the leaving account's OWN copy: the list is loaded
+        // per uid, so nobody else can be handed it, and `claimKeptMedia` wipes it before a different
+        // account's first frame. Signing back in then draws the list at once, the way the reference
+        // apps draw from their local store, instead of a skeleton and then "…" (owner, 2026-09-26).
+        // Deletion and revocation pass nil and take every copy, as before.
+        ConversationsDiskCache.shared.wipeAll(keeping: keptUid)
         Crypto.shared.wipeIdentity()            // fresh keypair for the next account
     }
 
@@ -159,6 +161,7 @@ enum SessionWipe {
             UserDefaults.standard.removeObject(forKey: keptMediaKey)
         } else {
             wipeReceivedMedia()
+            ConversationsDiskCache.shared.wipeAll()   // and the chat list the Sign Out kept
         }
     }
 

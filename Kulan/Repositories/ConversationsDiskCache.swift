@@ -132,15 +132,18 @@ final class ConversationsDiskCache {
         io.async { try? FileManager.default.removeItem(at: url) }
     }
 
-    /// Every file this class has ever written, for a sign-out that no longer knows the uid.
-    func wipeAll() {
+    /// Every file this class has ever written — except, when `keeping` names an account, that
+    /// account's own copy (a plain Sign Out, 2026-09-26: the list is back on the first frame when
+    /// the same person signs in again; `SessionWipe.claimKeptMedia` wipes it if anyone else does).
+    func wipeAll(keeping uid: String? = nil) {
+        let keep = uid.flatMap { fileURL(uid: $0) }?.lastPathComponent
         io.async {
             guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                          in: .userDomainMask,
                                                          appropriateFor: nil, create: false),
                   let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
             else { return }
-            for n in names where n.hasPrefix("chatlist-v") {
+            for n in names where n.hasPrefix("chatlist-v") && n != keep {
                 try? FileManager.default.removeItem(at: dir.appendingPathComponent(n))
             }
         }
