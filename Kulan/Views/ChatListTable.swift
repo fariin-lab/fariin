@@ -407,12 +407,6 @@ struct ChatListTable: UIViewControllerRepresentable {
     var onReachEnd: () -> Void = {}
     /// 2026-09-24 feature-audit: older chats are on their way; the end of the list shows a spinner.
     var loadingMore: Bool = false
-    /// ⛔ THE SEARCH FIELD IS PART OF THE LIST — 2026-09-25, owner: make it work like the reference
-    /// app, "100%". Tapping the field at the top of the list opens the search page over it.
-    var onSearchTap: () -> Void = {}
-    /// The search page is open over the list (see `ChatListTableController.setSearchActive`).
-    var searchActive: Bool = false
-
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
         vc.host = context.coordinator
@@ -428,7 +422,11 @@ struct ChatListTable: UIViewControllerRepresentable {
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
         vc.setLoadingMore(loadingMore)   // 2026-09-24 feature-audit
         vc.setSelecting(selecting)
-        vc.setSearchActive(searchActive)
+        // The search bar's cancel button is re-checked on every render as well as every layout
+        // pass: SwiftUI re-installs its search controller freely (cancelling a search is enough),
+        // and a guarded comparison costs nothing. See `reassertNavChrome`.
+        vc.reassertNavChrome()
+        vc.setSearching(context.environment.isSearching)   // the footer hold while search opens/closes
         vc.apply(state: .make(pinned: pinned.map(\.id),
                               unpinned: unpinned.map(\.id),
                               people: people.map(\.id)),
@@ -642,12 +640,6 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // See `ChatListSelfSizingTable` — the footer is the reference app's own cure for the
         // search-field jump, and it only works from inside the table.
         let t = ChatListSelfSizingTable(frame: .zero, style: .grouped)
-        // The search field, as the list's first thing (see `ChatListSearchHeader`). A header, not a
-        // row: it stays out of the row diff and the pin transaction, and the self-sizing footer
-        // already subtracts `tableHeaderView`'s height.
-        let header = ChatListSearchHeader(frame: CGRect(x: 0, y: 0, width: 390, height: ChatListSearchHeader.height))
-        header.onTap = { [weak self] in self?.host?.parent.onSearchTap() }
-        t.tableHeaderView = header
         t.separatorStyle = .none
         t.backgroundColor = .clear
         // ⚠️ THESE TWO NOW SPEAK ONLY FOR THE STRANGER ROWS. A chat row's height is answered
@@ -707,46 +699,25 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         (tableView as? ChatListSelfSizingTable)?.showsLoadingRow = on
     }
 
-    /// ⛔ THE LIST DOES NOT MOVE WHILE SEARCH IS OPEN — owner, 2026-09-25, "exactly like the
-    /// reference app". Theirs puts the search page over the list and never touches the list's
-    /// offset or inset. Ours hides the top bar while searching (the field takes the bar's row), and
-    /// a hidden bar shrinks the table's automatic top inset, which would shift every row under the
-    /// page and back again on ✕. So the inset is frozen at its current value for the whole search
-    /// and handed back to UIKit only once the bar is back and the numbers match again.
-    private var insetsFrozen = false
-    private var unfreezeWork: DispatchWorkItem?
-    private var savedInsets: (content: UIEdgeInsets, indicator: UIEdgeInsets)?
+    /// ⛔ SEARCH OPENING AND CLOSING IS A TRANSITION TOO — owner, 2026-09-25: "I tap search, then
+    /// Cancel, and the chat list jumps down." Focusing the field hides the title and shrinks the
+    /// bar; Cancel grows it back, animated. That moves `adjustedContentInset` every frame exactly
+    /// as a pop does, and the footer was resizing (and so moving `contentSize`, and so clamping the
+    /// offset) through all of it. Held for the whole search and for the bar's settle after Cancel,
+    /// then replayed once. Not an offset correction: see the note above `ChatListCell`.
+    private var searchHold = false {
+        didSet { if searchHold != oldValue { holdFooterIfNeeded() } }
+    }
+    private var searchReleaseWork: DispatchWorkItem?
 
-    func setSearchActive(_ on: Bool) {
-        guard on != insetsFrozen else { return }
-        insetsFrozen = on
-        unfreezeWork?.cancel()
-        let t = tableView
-        if on {
-            // A second open before the first close finished keeps the ORIGINAL numbers.
-            if savedInsets == nil { savedInsets = (t.contentInset, t.verticalScrollIndicatorInsets) }
-            guard t.contentInsetAdjustmentBehavior != .never else { return }
-            let adj = t.adjustedContentInset
-            let off = t.contentOffset
-            t.contentInsetAdjustmentBehavior = .never
-            t.contentInset = adj
-            t.verticalScrollIndicatorInsets = adj
-            t.contentOffset = off
-        } else {
-            // After the bar's return animation, so the automatic inset it gives back is the same
-            // one frozen here. The offset is put back by hand in case UIKit nudged it.
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, !self.insetsFrozen, let saved = self.savedInsets else { return }
-                let off = t.contentOffset
-                t.contentInsetAdjustmentBehavior = .automatic
-                t.contentInset = saved.content
-                t.verticalScrollIndicatorInsets = saved.indicator
-                t.contentOffset = off
-                self.savedInsets = nil
-            }
-            unfreezeWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
-        }
+    func setSearching(_ on: Bool) {
+        searchReleaseWork?.cancel()
+        if on { searchHold = true; return }
+        guard searchHold else { return }
+        // The bar animates back after Cancel; let it land before the footer measures again.
+        let w = DispatchWorkItem { [weak self] in self?.searchHold = false }
+        searchReleaseWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
     }
 
     /// ⛔ THE MODE IS TRACKED HERE, NOT READ BACK OFF THE TABLE — audit, 2026-09-11. `isEditing` is
@@ -862,13 +833,40 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // for no gain. `didMove(toParent:)` has always done the real registration.
         if tableView.window == nil { registerAsContentScrollView() }
         isInTransition = true
+        // ⛔ THE SEARCH FIELD COMES BACK WITH THE LIST — owner, 2026-09-25: "open a chat, tap Back,
+        // and the search bar has disappeared", the list sitting at its top with the field folded.
+        // Stories keeps its field on Back because SwiftUI's own list tells UIKit it is at the top;
+        // this hosted table has to say so itself. UIKit has no "expand the search" call. The
+        // standard way is to switch hide-on-scroll off for the arrival and back on once it has
+        // landed (`viewDidAppear`), which draws the field expanded and keeps hide-on-scroll for
+        // every scroll after. Only at the top: a list you scrolled down keeps its folded field.
+        if tableView.contentOffset.y <= -tableView.adjustedContentInset.top + 1,
+           let item = searchHostItem() {
+            item.hidesSearchBarWhenScrolling = false
+            searchRevealPending = true
+        }
     }
-    // The search field is part of the list since 2026-09-25, so it is exactly where it was when a
-    // chat was opened; the viewWillAppear re-expansion of the old navigation-bar field is gone.
+
+    /// Set while `viewWillAppear` has pinned the search field open for the arrival.
+    private var searchRevealPending = false
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         isInTransition = false
+        // A cancelled swipe-back arrives here without `viewDidAppear`; never leave the field pinned.
+        if searchRevealPending {
+            searchRevealPending = false
+            searchHostItem()?.hidesSearchBarWhenScrolling = true
+        }
+    }
+
+    /// The cancel-button invariant (`reassertNavChrome`) is re-checked on every layout pass. A
+    /// layout pass follows every change to the search controller's state, and a nil
+    /// `searchHostItem()` while SwiftUI is mid-reinstall is retried a few milliseconds later by
+    /// construction rather than by a scheduled retry.
+    override func viewWillLayoutSubviews() {
+        super.viewWillLayoutSubviews()
+        reassertNavChrome()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -876,6 +874,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The arrival has settled: let the footer resize again and replay whatever the transition
         // held back, in one pass rather than one per frame.
         isInTransition = false
+        if searchRevealPending {
+            searchRevealPending = false
+            searchHostItem()?.hidesSearchBarWhenScrolling = true
+        }
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
@@ -889,8 +891,6 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// on one with a tall one, and it re-reads whenever that changes.
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        // While search holds the insets still (`setSearchActive`), this waits; the saved ones come back.
-        guard !insetsFrozen else { return }
         let clearance = Self.bottomClearance + view.safeAreaInsets.bottom
         guard abs(tableView.contentInset.bottom - clearance) > 0.5 else { return }
         tableView.contentInset.bottom = clearance
@@ -901,16 +901,38 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// added to it and why.
     static let bottomClearance: CGFloat = 28
 
-    // ⛔ NO NAVIGATION-BAR SEARCH ON THIS PAGE — 2026-09-25, owner: "make the search bar work like
-    // the reference app, 100%", after the field vanished on Back and the list jumped on ✕ through
-    // four rounds of fixes. The reference app's field is its own view at the top of the list, not a
-    // UISearchController: the navigation bar never changes height, so the list never moves, and the
-    // field is plain content, so it is where it was when you come back. `ChatListSearchHeader` below
-    // is that field; the search page opens over the list. `searchHostItem`, `reassertNavChrome`
-    // (the cancel-button invariant and its ✕ glyph) and the hide-on-scroll re-expansion all lived to
-    // manage SwiftUI's `.searchable` controller and went with it. Later the same day the bar was made
-    // to slide away while searching (the reference app does that too); `setSearchActive` holds the
-    // list's insets still across it, so the "list never moves" rule above still holds.
+    // ⛔ APPLE'S SEARCH FIELD IS BACK IN THE NAVIGATION BAR — owner, 2026-09-26: "make it exactly
+    // like the Stories search". For one day (2026-09-25) the field was the list's own placeholder,
+    // the reference app's design, because the bar's field had folded on Back and moved the list on
+    // Cancel. He then saw that a field inside the list cannot fold away on scroll the way Stories'
+    // does, and asked for the native one. `.searchable` at its defaults, as Stories and Calls have
+    // it; the two helpers below and the reveal in `viewWillAppear` are what a hosted table needs
+    // that a SwiftUI list gets for free. No pin (`hidesSearchBarWhenScrolling` stays default), no
+    // appearance object, no offset correction.
+
+    /// The item `.searchable` installed its controller on, wherever SwiftUI put it.
+    private func searchHostItem() -> UINavigationItem? {
+        var page: UIViewController? = self
+        while let p = page, p.navigationItem.searchController == nil, !(p is UINavigationController) {
+            page = p.parent
+        }
+        guard let item = page?.navigationItem, item.searchController != nil else { return nil }
+        return item
+    }
+
+    /// ⛔ ONE JOB: THE SEARCH BAR'S CANCEL BUTTON IS SHOWN EXACTLY WHILE THE CONTROLLER IS ACTIVE —
+    /// his report, 2026-09-16: tap the search field, tap Cancel, come back, and the button is still
+    /// sitting beside an idle "Search" placeholder. A leftover view, not a leftover search: the bar
+    /// was at rest with Edit and the title drawn. `.searchable` owns that button (SwiftUI installs
+    /// the controller; `automaticallyShowsCancelButton` is UIKit's), and the one thing this app owns
+    /// is the navigation item it was installed on. Stated as the invariant rather than as a repair
+    /// for one path, and guarded, so it writes nothing on the passes where the two already agree.
+    /// The bar's background, hairline and glass are the system's; nothing else is touched.
+    func reassertNavChrome() {
+        guard let item = searchHostItem(), let bar = item.searchController?.searchBar else { return }
+        let shouldShow = item.searchController?.isActive ?? false
+        if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
+    }
 
     // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and
     // `configureNavBar` (one default-background appearance with the shadow cleared, written to
@@ -1731,7 +1753,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     }
 
     private func holdFooterIfNeeded() {
-        (tableView as? ChatListSelfSizingTable)?.suspendFooterUpdates = isInTransition
+        (tableView as? ChatListSelfSizingTable)?.suspendFooterUpdates = isInTransition || searchHold
     }
 
     /// Scrolling has genuinely stopped: put the newest state on screen.
@@ -2198,79 +2220,4 @@ final class ChatListSectionHeader: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-
-/// ⛔ THE CHAT LIST'S SEARCH FIELD, AS THE REFERENCE APP DRAWS IT — owner, 2026-09-25, "make it
-/// like the reference app, 100%". Their field is a placeholder at the top of the list, not a
-/// system search controller in the navigation bar; tapping it opens the search page and the list
-/// underneath never moves. This is that placeholder: the system field's look (magnifier, "Search",
-/// grey capsule), one tap target, nothing to type into. The real field is on the search page
-/// (`ChatSearchOverlay`), in the same place, with the keyboard up.
-///
-/// It is the table's `tableHeaderView`, so it scrolls away with the rows and is exactly where it
-/// was when you come back from a chat; no inset changes, so no jump.
-final class ChatListSearchHeader: UIView {
-    /// ⛔ THE CALLS PAGE'S FIELD, DRAWN FLAT — owner, 2026-09-26, the two pages side by side in
-    /// dark mode: "the call list search bar looks native for Apple, make it like that".
-    ///
-    /// ⚠️ THE 09-25 ANSWER WAS THE RIGHT CONTROL IN THE WRONG PLACE. Calls' field is a
-    /// `UISearchBar` INSIDE A NAVIGATION BAR, and iOS 26 draws that one as a flat filled capsule. The
-    /// same control standing on its own, as it did here, is drawn as a glass pill with a rim and a
-    /// shadow, which is exactly the difference in his screenshots. There is no public switch for
-    /// that, so this draws the navigation bar's version: Apple's `tertiarySystemFill` capsule, the
-    /// magnifier in the label colour, "Search" in the placeholder colour at 17. Measured off his
-    /// Calls screenshot: 20pt from each edge, 44 tall, the glyph 14 in and the words 10 after it.
-    /// It is only a picture; the tap target opens the search page.
-    static let height: CGFloat = 60
-    var onTap: () -> Void = {}
-
-    private let field: UIView = {
-        let v = UIView()
-        v.backgroundColor = .tertiarySystemFill
-        v.layer.cornerCurve = .continuous
-        v.isUserInteractionEnabled = false
-        return v
-    }()
-    private let glass: UIImageView = {
-        let v = UIImageView(image: UIImage(systemName: "magnifyingglass",
-                                           withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)))
-        v.tintColor = .label
-        v.contentMode = .center
-        return v
-    }()
-    private let prompt: UILabel = {
-        let l = UILabel()
-        l.text = "Search"
-        l.font = .systemFont(ofSize: 17)
-        l.textColor = .placeholderText
-        return l
-    }()
-    private let hit = UIControl()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        hit.addTarget(self, action: #selector(tapped), for: .touchUpInside)
-        hit.accessibilityLabel = "Search"
-        hit.accessibilityTraits = [.button, .searchField]
-        hit.isAccessibilityElement = true
-        field.addSubview(glass)
-        field.addSubview(prompt)
-        addSubview(field)
-        addSubview(hit)
-    }
-    required init?(coder: NSCoder) { fatalError("ChatListSearchHeader is never built from a nib") }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let inset: CGFloat = 20, h: CGFloat = 44
-        field.frame = CGRect(x: inset, y: (bounds.height - h) / 2, width: bounds.width - inset * 2, height: h)
-        field.layer.cornerRadius = h / 2
-        glass.frame = CGRect(x: 14, y: 0, width: 22, height: h)
-        let x = glass.frame.maxX + 10
-        prompt.frame = CGRect(x: x, y: 0, width: max(0, field.bounds.width - x - 14), height: h)
-        hit.frame = field.frame
-    }
-
-    @objc private func tapped() { onTap() }
 }

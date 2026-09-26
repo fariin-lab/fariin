@@ -46,19 +46,12 @@ struct ChatSearchOverlay: View {
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
 
-    /// Whether search is open. Passed in since 2026-09-25: the field is the chat list's own now
-    /// (the reference app's design), not `.searchable`, so there is no `\.isSearching` to read.
-    var isSearching: Bool
-    var dismissSearch: () -> Void
-    /// The text itself, typed into this page's own field (see `searchBar`).
-    @Binding var text: String
-    @State private var fieldFocused = false
+    @Environment(\.isSearching) private var isSearching
 
     /// ⚠️ SPELLED OUT, NOT SYNTHESISED. A single PRIVATE stored property — the environment read
     /// above — makes Swift's memberwise initialiser private too, and the call site in another file
     /// then cannot see it. That has cost this app a CI round before; it is in the build notes.
     init(query: String, me: String, dark: Bool, searching: Bool,
-         isSearching: Bool, dismissSearch: @escaping () -> Void, text: Binding<String>,
          chats: @escaping () -> [Conversation],
          people: @escaping () -> [UserProfile],
          personRow: @escaping (UserProfile) -> AnyView,
@@ -68,9 +61,6 @@ struct ChatSearchOverlay: View {
         self.me = me
         self.dark = dark
         self.searching = searching
-        self.isSearching = isSearching
-        self.dismissSearch = dismissSearch
-        self._text = text
         self.chats = chats
         self.people = people
         self.personRow = personRow
@@ -78,114 +68,12 @@ struct ChatSearchOverlay: View {
         self.onOpenPerson = onOpenPerson
     }
 
-    /// The reference app's own curve for opening and closing search: 0.5s on a fixed bezier
-    /// (0.38, 0.70, 0.125, 1.0), which it calls "spring". Read from source 2026-09-25.
-    static let motion = Animation.timingCurve(0.38, 0.70, 0.125, 1.0, duration: 0.5)
-
-    /// Reset when search closes, so the next open raises the keyboard again.
-    @State private var focusedThisSearch = false
-
     var body: some View {
-        // A ZStack that is always there, so the close can be watched even while the page is gone.
-        ZStack { page }
-            .onChange(of: isSearching) { _, open in if !open { focusedThisSearch = false } }
-    }
-
-    @ViewBuilder private var page: some View {
         if isSearching {
-            // ⛔ THE REAL FIELD LIVES ON THIS PAGE — 2026-09-25, the reference app's design: the list
-            // shows a placeholder (`ChatListSearchHeader`); tapping it hides the top bar, and this
-            // page rises from the placeholder's place into the bar's row with the keyboard up. ✕
-            // runs it backwards. The list under it is never moved (`ChatListTable.searchActive`).
-            VStack(spacing: 0) {
-                searchBar
-                ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
-                               dismissSearch: dismissSearch,
-                               chats: chats, people: people, personRow: personRow,
-                               // The field lets go of the keyboard before the chat opens.
-                               onOpenChat: { fieldFocused = false; onOpenChat($0) },
-                               onOpenPerson: { fieldFocused = false; onOpenPerson($0) })
-            }
-            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
-            // Rises from where the list's field sits (about one bar-height lower) while fading in.
-            .transition(.offset(y: 56).combined(with: .opacity))
-            // Keyboard up on the TAP only. Bug hunt 2026-09-25: `onAppear` fires again when you come
-            // Back from a chat opened from search, and the keyboard jumped up over the results. The
-            // reference app returns to the results with the keyboard down.
-            .onAppear {
-                if !focusedThisSearch { fieldFocused = true; focusedThisSearch = true }
-            }
+            ChatSearchPage(query: query, me: me, dark: dark, searching: searching,
+                           chats: chats, people: people, personRow: personRow,
+                           onOpenChat: onOpenChat, onOpenPerson: onOpenPerson)
         }
-    }
-
-    /// The field is Apple's `UISearchBar`, the same control as the list's resting field and the Calls
-    /// page's (owner, 2026-09-25 night: "make it look like the search bar in the call list"), with a
-    /// round 44pt glass ✕ beside it (owner, 2026-09-25: an icon, not "Cancel").
-    private var searchBar: some View {
-        HStack(spacing: 0) {
-            SystemSearchBar(text: $text, focused: $fieldFocused)
-                .fixedSize(horizontal: false, vertical: true)
-            Button {
-                // The keyboard goes first, then the page (the reference app's order).
-                fieldFocused = false
-                dismissSearch()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: Circle())
-            .accessibilityLabel("Cancel")
-        }
-        // The bar insets its own field by 8pt, so 8 here lands the field 16pt from the edge.
-        .padding(.leading, 8).padding(.trailing, 16)
-        .padding(.top, 2).padding(.bottom, 4)
-    }
-}
-
-/// Apple's search bar, typed into, for SwiftUI. Minimal style: just the system field, no bar
-/// background. Focus is a plain Bool so the page can raise and drop the keyboard.
-struct SystemSearchBar: UIViewRepresentable {
-    @Binding var text: String
-    @Binding var focused: Bool
-
-    func makeUIView(context: Context) -> UISearchBar {
-        let b = UISearchBar()
-        b.searchBarStyle = .minimal
-        b.placeholder = "Search"
-        b.autocapitalizationType = .none
-        b.autocorrectionType = .no
-        b.returnKeyType = .search
-        b.delegate = context.coordinator
-        b.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        b.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return b
-    }
-
-    func updateUIView(_ b: UISearchBar, context: Context) {
-        context.coordinator.parent = self
-        if b.text != text { b.text = text }
-        // Deferred a turn: first-responder changes inside an update pass are ignored while the
-        // view is still being inserted.
-        if focused, !b.isFirstResponder {
-            DispatchQueue.main.async { b.becomeFirstResponder() }
-        } else if !focused, b.isFirstResponder {
-            DispatchQueue.main.async { b.resignFirstResponder() }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    final class Coordinator: NSObject, UISearchBarDelegate {
-        var parent: SystemSearchBar
-        init(_ p: SystemSearchBar) { parent = p }
-        func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) { parent.text = searchText }
-        func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) { if !parent.focused { parent.focused = true } }
-        func searchBarTextDidEndEditing(_ searchBar: UISearchBar) { if parent.focused { parent.focused = false } }
-        func searchBarSearchButtonClicked(_ searchBar: UISearchBar) { searchBar.resignFirstResponder() }
     }
 }
 
@@ -373,12 +261,11 @@ struct ChatSearchPage: View {
     var onOpenChat: (Conversation) -> Void
     var onOpenPerson: (UserProfile) -> Void
 
-    var dismissSearch: () -> Void
+    @Environment(\.dismissSearch) private var dismissSearch
     private var repo = ConversationsRepository.shared
     private var recents = RecentSearches.shared
 
     init(query: String, me: String, dark: Bool, searching: Bool,
-         dismissSearch: @escaping () -> Void,
          chats: @escaping () -> [Conversation],
          people: @escaping () -> [UserProfile],
          personRow: @escaping (UserProfile) -> AnyView,
@@ -388,7 +275,6 @@ struct ChatSearchPage: View {
         self.me = me
         self.dark = dark
         self.searching = searching
-        self.dismissSearch = dismissSearch
         self.chats = chats
         self.people = people
         self.personRow = personRow

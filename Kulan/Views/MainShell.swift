@@ -1047,13 +1047,11 @@ struct ChatsView: View {
     /// An arrival is not a rearrangement. Nothing should animate until the list is a list.
     @State private var listSettled = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
-    /// The page's own search box (2026-08-30). Matches the Calls page: it filters the list in
-    /// place rather than pushing a separate results screen, so the row you tap is the row you
-    /// were already looking at.
+    /// The page's own search box (2026-08-30): Apple's field in the top bar, exactly as Stories and
+    /// Calls have it — owner, 2026-09-26, "make it exactly like the Stories search". For one day
+    /// (2026-09-25) it was the list's own placeholder, the reference app's design; he asked for the
+    /// native one back because a field inside the list cannot fold away on scroll.
     @State private var chatSearch = ""
-    /// The search page is open (2026-09-25: our own field, not `.searchable`; see
-    /// `ChatListSearchHeader`).
-    @State private var chatSearchActive = false
     /// ⛔ THE CHAT LIST'S SEARCH REACHES PAST THE CHAT LIST — owner, 2026-09-02: "the search inside
     /// the chat list must work like global; when the user wants to search: chats, users, new users".
     ///
@@ -1547,8 +1545,7 @@ struct ChatsView: View {
     /// unchanged when the row stopped being a Button.
     private func openPerson(_ u: UserProfile) {
         let cid = ChatService.convId(me, u.id)
-        // Kept while the search page is open, so Back returns to the same results (see `onOpenChat`).
-        if !chatSearchActive { chatSearch = "" }
+        chatSearch = ""
         path.append(ChatTarget(id: cid, name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl))
         Task { try? await ChatService.openConversation(other: u) }
     }
@@ -1571,22 +1568,15 @@ struct ChatsView: View {
                 dark: dark,
                 // 2026-09-24 feature-audit: older chats still arriving is not "no results" yet either.
                 searching: searchingUsers || repo.loadingWholeList,
-                isSearching: chatSearchActive,
-                dismissSearch: {
-                    withAnimation(ChatSearchOverlay.motion) { chatSearchActive = false }
-                    chatSearch = ""
-                },
-                text: $chatSearch,
                 chats: { visible },
                 people: { newPeople },
                 personRow: { AnyView(newPersonRow($0)) },
                 onOpenChat: { conv in
                     path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
                                            photo: conv.displayPhoto(me)))
-                    // ⛔ THE QUERY IS KEPT — 2026-09-25, the reference app: open a chat from search,
-                    // tap Back, and the search page is still there with the same text and results.
-                    // The page stays open over the list until ✕, so the filtered list under it is
-                    // never seen; ✕ clears the text (`dismissSearch`).
+                    // The page dismisses its search on open (`ChatSearchPage.select`), and the text
+                    // goes with it, so Back lands on the plain list, as on Stories.
+                    chatSearch = ""
                 },
                 onOpenPerson: { openPerson($0) })
         )
@@ -2329,14 +2319,7 @@ struct ChatsView: View {
             },
             // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
             // asked for by scrolling and for a search or filter fetching the whole list.
-            loadingMore: repo.loadingOlder || repo.loadingWholeList,
-            // 2026-09-25: the in-list search field opens the search page, on the reference app's
-            // curve: the bar slides away and the field rises into its row (`ChatSearchOverlay.motion`).
-            onSearchTap: {
-                guard !selecting else { return }
-                withAnimation(ChatSearchOverlay.motion) { chatSearchActive = true }
-            },
-            searchActive: chatSearchActive
+            loadingMore: repo.loadingOlder || repo.loadingWholeList
         )
     }
 
@@ -2668,20 +2651,21 @@ struct ChatsView: View {
             // the whole conversation list on every read (see `visible`'s own note); handed as values
             // they would be computed on every pass of this body whether anyone is searching or not.
             // The page calls them only when it actually has results to draw.
-            // ⛔ NO `.searchable` SINCE 2026-09-25 — owner, "make it like the reference app, 100%",
-            // after the field vanished on Back and the list jumped on ✕ through four rounds of
-            // fixes. Both came from the system search field living in the navigation bar: SwiftUI
-            // re-installs it on every re-render (so a fix on it is lost on the next pop), and it
-            // changes the bar's height as it opens and closes (so the list under it moves). The field
-            // is now the list's own first thing (`ChatListSearchHeader`, tap = `chatSearchActive`),
-            // and the page above carries the real field and the ✕. The bar never changes.
             .overlay { chatSearchOverlay }
-            // ⛔ THE BAR GOES AWAY WHILE SEARCHING — 2026-09-25, the reference app, read from source:
-            // tapping the field slides the whole header (title, Edit, menu, compose) up and out,
-            // and the field rises into the row the bar had. ✕ brings it back. The list under the
-            // page is held still by `ChatListTable.searchActive`, so the bar's height change never
-            // moves a row. A chat opened from search shows its own bar as usual.
-            .toolbar(chatSearchActive ? .hidden : .automatic, for: .navigationBar)
+            // ⛔ APPLE'S FIELD, IN THE TOP BAR, THE SAME CALL STORIES AND CALLS MAKE — owner,
+            // 2026-09-26, with a screenshot of the in-list field: "not native, it does not hide when
+            // I scroll like the Stories search; make it exactly like that". Defaults only: the field
+            // folds into the bar on scroll and comes back at the top, and the system draws the glass
+            // and the Cancel button. The 2026-09-25 in-list placeholder, the slide-away bar, the ✕
+            // and the frozen insets are gone with it.
+            //
+            // ⚠️ THE TWO REPORTS THAT DROVE THE 09-25 MOVE ARE BOTH ABOUT THIS LIST BEING A HOSTED
+            // `UITableView` (Stories and Calls are SwiftUI lists, which SwiftUI compensates itself):
+            // the field folded on Back, and the list moved on Cancel. `ChatListTableController`
+            // carries the two answers that existed for them — the reveal on arrival and the footer
+            // hold while search opens and closes — and nothing else. If either comes back, the
+            // history is in the memory notes; do not add an offset correction (see `ChatListCell`).
+            .searchable(text: $chatSearch, prompt: "Search")
             // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
             // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
             // the current one — which is the classic search-race and shows as the wrong person.
