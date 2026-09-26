@@ -242,6 +242,31 @@ enum AvatarPalette {
             glyph.draw(at: CGPoint(x: (size - glyph.size.width) / 2, y: (size - glyph.size.height) / 2))
         }
     }
+
+    /// ⛔ THE WHOLE DISC AS ONE FLAT PICTURE — owner, 2026-09-26, the lines reported a third time,
+    /// now ringed on a CHAT-LIST row. That row draws `AvatarView`, whose fallback was three layers
+    /// the renderer composites separately: a see-through grey, a LIVE symbol image over it, and a
+    /// circle clip. The canvas above took the live symbol out of the UIKit avatars only; this takes
+    /// every layer out of the SwiftUI one. The fill and the glyph are drawn once into a single
+    /// bitmap, so there is no edge inside the circle left for anything to draw. Resolved for the
+    /// appearance it is drawn in (a bitmap cannot follow dark mode by itself) and cached per size
+    /// and appearance, so a list of rows pays once.
+    static func placeholderDisc(size: CGFloat, dark: Bool) -> UIImage? {
+        guard size > 0, let glyph = placeholderImage(size: size) else { return nil }
+        let key = "\(size)|\(dark)" as NSString
+        if let hit = discCache.object(forKey: key) { return hit }
+        let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+        let fill = placeholderFillUI.resolvedColor(with: traits)
+        let box = CGSize(width: size, height: size)
+        let disc = UIGraphicsImageRenderer(size: box).image { ctx in
+            fill.setFill()
+            ctx.cgContext.fillEllipse(in: CGRect(origin: .zero, size: box))
+            glyph.draw(at: CGPoint(x: (size - glyph.size.width) / 2, y: (size - glyph.size.height) / 2))
+        }
+        discCache.setObject(disc, forKey: key)
+        return disc
+    }
+    private static let discCache = NSCache<NSString, UIImage>()
 }
 
 extension View {
@@ -508,6 +533,8 @@ struct AvatarView: View {
     var onPhotoResolved: ((Bool) -> Void)?
 
     @State private var image: UIImage?
+    /// The flat placeholder is a bitmap, so it is drawn for the appearance it is shown in.
+    @Environment(\.colorScheme) private var scheme
 
     init(name: String, photoUrl: String? = nil, size: CGFloat = 48,
          onPhotoResolved: ((Bool) -> Void)? = nil) {
@@ -572,13 +599,16 @@ struct AvatarView: View {
 
     /// ⛔ ONE SILHOUETTE, NOT A COLOURED LETTER — owner, 2026-09-16. See `AvatarPalette.placeholderFill`
     /// for the ruling and for why the gradients are kept rather than deleted.
+    /// One flat picture, not a fill with a live symbol over it — see `AvatarPalette.placeholderDisc`
+    /// (2026-09-26, the two grey lines beside the silhouette on chat-list rows).
     private var fallback: some View {
-        AvatarPalette.placeholderFill
-            .overlay(
-                Image(systemName: AvatarPalette.placeholderSymbol)
-                    .font(.system(size: size * AvatarPalette.placeholderGlyphScale, weight: .medium))
-                    .foregroundStyle(.white)
-            )
+        Group {
+            if let disc = AvatarPalette.placeholderDisc(size: size, dark: scheme == .dark) {
+                Image(uiImage: disc).resizable().scaledToFill()
+            } else {
+                AvatarPalette.placeholderFill
+            }
+        }
     }
 }
 
