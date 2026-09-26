@@ -1695,10 +1695,12 @@ struct ContactInfoView: View {
                             : AnyShapeStyle(LinearGradient(colors: [Color.pink, Color.orange, Color.yellow],
                                                            startPoint: .topLeading, endPoint: .bottomTrailing)),
                             lineWidth: 3)
-                    .frame(width: 100, height: 100)
+                    .frame(width: 132, height: 132)   // the photo below plus the same 6pt gap
                     .opacity(publicStory != nil && !chromeHiddenForPhoto ? 1 : 0)
                     .animation(.easeOut(duration: 0.2), value: publicStory != nil)
-                AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88,
+                // ⛔ 120, NOT 88 — owner, 2026-09-26, the no-photo circle ringed: "the circle looks
+                // small". The ring above and the flight radius below move with it.
+                AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 120,
                            onPhotoResolved: { heroHasPhoto = $0 })
                     // The viewer IS this avatar while open — hide the original so the morph reads
                     // as one circle leaving and returning, not a copy floating over it.
@@ -1715,8 +1717,8 @@ struct ContactInfoView: View {
             // rounded rectangle, which is exactly what the chat-row ring did before the morph
             // learned the difference.
             //
-            // 88 is `AvatarView(size: 88)` below. One number, stated once.
-            .modifier(MediaRectReporter(id: "profile-story", scope: .storyRow, cornerRadius: 44))
+            // 120 is `AvatarView(size: 120)` above. One number, stated once.
+            .modifier(MediaRectReporter(id: "profile-story", scope: .storyRow, cornerRadius: 60))
             .onTapGesture {
                 // What the eye sees, not what the url says — no picture means nothing to open.
                 let hasPhoto = heroHasPhoto
