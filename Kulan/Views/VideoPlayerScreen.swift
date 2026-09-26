@@ -9,9 +9,13 @@ import Photos   // 2026-09-24 decision D16: Save to Photos
 // our storage never holds delivered videos. Groups skip the delete (other members still
 // need it) — the 30-day storage sweep collects those.
 //
-// The player itself is a custom media-viewer style (not AVKit): a plain AVPlayer layer with a MINIMAL,
-// fading chrome — a bottom scrubber + time labels + play/pause, tap the video to toggle the chrome, no
-// native transport bar / PiP / AirPlay clutter.
+// The player itself is a custom media-viewer style (not AVKit): a plain AVPlayer layer with the
+// reference app's chrome (2026-09-26, its source read with his screenshot beside it): a glass title
+// capsule between two round glass buttons at the top; at the bottom a 44pt glass capsule holding
+// the elapsed time, a knobless track and the remaining time, and under it three 44pt round glass
+// buttons, share / play-pause / forward. A tap on the video shows or hides all of it; nothing hides
+// on a timer. A 92pt round play button sits mid-screen only while the clip is paused with the
+// chrome away, so there is always a way back to playing.
 struct VideoPlayerScreen: View {
     let message: Message
     let cid: String
@@ -49,7 +53,6 @@ struct VideoPlayerScreen: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var interruptObserver: NSObjectProtocol?
-    @State private var hideWork: DispatchWorkItem?
     @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
     @State private var closeToken = 0              // bump → the button close flies home like the drag
     // Pinch-zoom + pan (video hosted in the same zoomable view as photos).
@@ -57,18 +60,8 @@ struct VideoPlayerScreen: View {
     @GestureState private var pinch: CGFloat = 1
     @State private var pan: CGSize = .zero
     @GestureState private var panDrag: CGSize = .zero
-    // Scrubbing (see `scrubChanged`).
-    @State private var scrubLastX: CGFloat?
-    @State private var scrubRate: Double = 1
-    @State private var scrubPreview: UIImage?
-    @State private var scrubPreviewX: CGFloat = 0
-    @State private var frameGrabber: AVAssetImageGenerator?
-    // Hold for speed (see `holdForSpeed`).
-    @State private var holdStart: CGPoint?
-    @State private var fastForward = false
-    @State private var fastRate: Float = 2
-    @State private var fastWork: DispatchWorkItem?
-    @State private var heldAt: Date?
+    /// Scrubbing pauses the clip and puts it back afterwards if it was playing (theirs).
+    @State private var wasPlayingBeforeScrub = false
 
     private var zoomed: Bool { max(1, zoom * pinch) > 1.01 }
 
@@ -81,12 +74,13 @@ struct VideoPlayerScreen: View {
             playerContent
                 .opacity(dismissing ? 0 : 1)
         }
+        // The bottom panel measures from the screen's bottom EDGE, as theirs does on every phone;
+        // the top bar keeps the top safe area.
+        .ignoresSafeArea(edges: .bottom)
         .overlay(alignment: .top) { if showChrome { topBar } }
-        .overlay(alignment: .bottom) { if showChrome, player != nil { scrubberBar } }
-        .overlay(alignment: .top) { if fastForward { speedPill } }
-        // Both bars and the middle controls together, 0.3s ease-in-out — theirs.
+        .overlay(alignment: .bottom) { if showChrome, player != nil { bottomPanel } }
+        // Both bars together, 0.3s ease-in-out — theirs.
         .animation(.easeInOut(duration: 0.3), value: showChrome)
-        .animation(.easeInOut(duration: 0.2), value: fastForward)
         .animation(.easeInOut(duration: 0.2), value: isPlaying)
         // Zoomed-in pan (the dismiss drag is now the shared pan below, images + videos identical).
         .simultaneousGesture(
@@ -208,16 +202,17 @@ struct VideoPlayerScreen: View {
 
     // The playing surface + its overlays, split out of `body` so the drag-close can hide EXACTLY this
     // (the copy's pixels) while background and chrome ride the root-alpha scrub.
-    // ⛔ THE REFERENCE APP'S VIDEO VIEWER, READ FROM ITS SOURCE — owner, 2026-09-26: "completely
-    // redesign video controls, exactly like theirs, logic and physics". What that means here:
-    //   · a TAP shows or hides the controls (it no longer plays/pauses); both bars go together, 0.3s
-    //   · play/pause is a 92pt glass button in the MIDDLE of the video, with 64pt ±15s buttons 30pt
-    //     either side on clips of 30s or more
-    //   · the scrubber is an 8pt bar with no knob and a 44pt touch area; the seek lands on RELEASE,
-    //     a frame preview follows the finger, and dragging away from the bar slows it (½, ¼, 1/100)
-    //   · double-tap the left or right 30% jumps 15s, silently
-    //   · hold the right 40% for 0.3s to play at 2×; slide sideways to go 1×–4×
-    //   · controls hide after 4s of playback; clips of 30s or less loop, longer ones stop at the end
+    // ⛔ THE REFERENCE APP'S VIDEO VIEWER, ITS SOURCE READ AGAINST HIS SCREENSHOT — owner,
+    // 2026-09-26: "the video controls still do not look like theirs; make it exactly this UI".
+    // Yesterday's port took its behaviour from the OTHER messenger he compares against (precision
+    // scrubbing with a frame preview, hold for 2×, double-tap skips, loops, a 4s auto-hide); all of
+    // that is gone. What is here now, from their source:
+    //   · a TAP shows or hides the chrome; both bars go together, 0.3s; no timer hides them
+    //   · the bottom panel: a 44pt glass capsule with "00:00", a knobless track and "-00:07", then
+    //     24pt below it three 44pt round glass buttons: share, play/pause, forward
+    //   · scrubbing seeks live under the finger, pauses the clip and resumes it on release
+    //   · the clip stops on its last frame at the end; nothing loops
+    //   · a 92pt round play button mid-screen while paused with the chrome away
     @ViewBuilder private var playerContent: some View {
         if let player {
             PlayerLayerView(player: player)
@@ -230,19 +225,11 @@ struct VideoPlayerScreen: View {
                         .updating($pinch) { v, s, _ in s = v }
                         .onEnded { v in zoom = min(4, max(1, zoom * v)); if zoom <= 1 { pan = .zero } }
                 )
-                .onTapGesture(count: 2, coordinateSpace: .global) { loc in
-                    let w = UIScreen.main.bounds.width
-                    if loc.x < w * 0.3 { skip(-15) } else if loc.x > w * 0.7 { skip(15) }
-                }
-                .onTapGesture {
-                    // A hold for 2× ends with the finger lifting, which is also a tap.
-                    if let t = heldAt, Date().timeIntervalSince(t) < 0.3 { return }
-                    toggleChrome()
-                }
-                .simultaneousGesture(holdForSpeed)
-            // Shown with the chrome, and always while paused so there is a way back to playing.
-            if (showChrome || !isPlaying) && !zoomed {
-                centerControls.transition(.opacity)
+                .onTapGesture { toggleChrome() }
+            // His screenshot: chrome up and the clip paused, and nothing mid-screen — the row's own
+            // play button is the control. The big one covers the state with no chrome to press.
+            if !isPlaying && !showChrome && !zoomed {
+                centerPlayButton.transition(.opacity)
             }
         } else if unavailable {
             VStack(spacing: 10) {
@@ -293,37 +280,19 @@ struct VideoPlayerScreen: View {
         withTransaction(t) { dismiss() }
     }
 
-    // MARK: - Middle controls
+    // MARK: - The mid-screen play button
 
-    private var centerControls: some View {
-        HStack(spacing: 30) {
-            if duration >= 30 { seekButton(-15) }
-            Button { togglePlay(); showChromeBriefly() } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 38, weight: .regular))
-                    .foregroundStyle(.white)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 92, height: 92)
-                    .liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isPlaying ? "Pause" : "Play")
-            if duration >= 30 { seekButton(15) }
-        }
-    }
-
-    private func seekButton(_ seconds: Double) -> some View {
-        Button { skip(seconds); showChromeBriefly() } label: {
-            Image(systemName: seconds < 0 ? "gobackward.15" : "goforward.15")
-                .font(.system(size: 26, weight: .regular))
+    private var centerPlayButton: some View {
+        Button { togglePlay() } label: {
+            Image(systemName: "play.fill")
+                .font(.system(size: 38, weight: .regular))
                 .foregroundStyle(.white)
-                .frame(width: 64, height: 64)
+                .frame(width: 92, height: 92)
                 .liquidGlass(Circle(), interactive: true)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(seconds < 0 ? "Back 15 seconds" : "Forward 15 seconds")
+        .accessibilityLabel("Play")
     }
 
     // MARK: - Header: back · name and date · menu
@@ -345,25 +314,22 @@ struct VideoPlayerScreen: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Close")
             Spacer(minLength: 8)
-            // Theirs: a round pill 44 tall, at least 150 wide, 14 in from each side; the name at 17
-            // semibold over the date at 12, half white.
+            // Theirs: a glass capsule at least 44 tall, 24 in from each side and 4 above and below;
+            // the name in subheadline semibold over the date in caption, both in the label colour,
+            // the date in the short date and time style ("9/26/26, 7:28 PM").
             VStack(spacing: 2) {
-                Text(senderName).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                Text(senderName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                 Text(message.createdAt.formatted(date: .numeric, time: .shortened))
-                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                    .font(.caption).foregroundStyle(.primary)
             }
             .lineLimit(1)
-            .padding(.horizontal, 14)
-            .frame(minWidth: 150, minHeight: 44)
-            .liquidGlass(Capsule(), interactive: false)
+            .padding(.horizontal, 24).padding(.vertical, 4)
+            .frame(minHeight: 44)
+            .liquidGlass(Capsule(), interactive: true)
             Spacer(minLength: 8)
-            // 2026-09-24 decision D16: the photo viewer's actions, in its header-menu idiom.
+            // Theirs: Save and Delete live in the menu; Share and Forward are the bottom row's buttons.
             Menu {
-                Button { share() } label: { Label("Share", systemImage: "square.and.arrow.up") }
                 Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
-                if message.sendState == nil, !message.deleted, !message.viewOnce {
-                    Button { forwarding = message } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
@@ -376,176 +342,123 @@ struct VideoPlayerScreen: View {
         .transition(.opacity)
     }
 
-    // MARK: - Scrubber
+    // MARK: - The bottom panel: scrubber capsule, then share · play/pause · forward
 
-    private var scrubberBar: some View {
-        VStack(spacing: 0) {
+    /// Theirs: the capsule 44 tall with its labels 16 in; 24 between it and the button row; the row
+    /// a fixed distance from the screen's bottom edge (the container ignores the bottom safe area).
+    private var bottomPanel: some View {
+        VStack(spacing: 24) {
+            scrubberCapsule
             HStack {
-                Text(fmt(current))
+                panelButton("square.and.arrow.up", label: "Share", enabled: localVideoURL != nil) { share() }
                 Spacer()
-                Text(fmt(duration))
+                Button { togglePlay() } label: {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.primary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isPlaying ? "Pause" : "Play")
+                Spacer()
+                panelButton("arrowshape.turn.up.right", label: "Forward",
+                            enabled: localVideoURL != nil && message.sendState == nil
+                                     && !message.deleted && !message.viewOnce) {
+                    forwarding = message
+                }
             }
-            .font(.system(size: 13, weight: .medium).monospacedDigit())
-            .foregroundStyle(.white)
+            .padding(.horizontal, 4)   // the buttons' centres 46 from each edge in his screenshot
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 24)
+        .transition(.opacity)
+    }
+
+    /// One of the row's round glass buttons: a 24pt-class icon in a 44pt circle, greyed while the
+    /// clip is not on this phone yet (theirs disable share and forward until it is).
+    private func panelButton(_ symbol: String, label: String, enabled: Bool,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
+        .accessibilityLabel(label)
+    }
+
+    /// Elapsed on the left, the remaining time on the right behind a minus, 13pt monospaced digits;
+    /// between them a track with no knob, filled in the label colour over the quaternary one.
+    private var scrubberCapsule: some View {
+        HStack(spacing: 12) {
+            Text(clock(current))
             GeometryReader { g in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.42))
-                    Capsule().fill(.white)
+                    Capsule().fill(.quaternary)
+                    Capsule().fill(.primary)
                         .frame(width: max(0, min(1, progress)) * g.size.width)
                 }
-                .frame(height: 8)
+                .frame(height: 7)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())   // the whole 44pt row takes the finger, not the 8pt bar
+                .contentShape(Rectangle())   // the capsule's whole height takes the finger
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in scrubChanged(v, width: g.size.width) }
                         .onEnded { _ in scrubEnded() }
                 )
             }
-            .frame(height: 44)
+            Text("-" + clock(max(0, duration - current)))
         }
-        // 26 = their 8pt row inset + 18 on a phone with a home indicator.
-        .padding(.horizontal, 26)
-        .padding(.bottom, 4)
-        .background(alignment: .bottom) {
-            LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
-                .frame(height: 140)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .topLeading) { scrubPreviewView }
-        .transition(.opacity)
+        .font(.system(size: 13).monospacedDigit())
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .liquidGlass(Capsule(), interactive: true)
     }
 
-    /// The frame under the finger, 6pt above the bar: 160 × 90, or 90 × 160 for a portrait clip,
-    /// following the finger and kept 10pt inside the screen, with the time under it.
-    @ViewBuilder private var scrubPreviewView: some View {
-        if scrubbing, let img = scrubPreview {
-            let portrait = (message.height ?? 0) > (message.width ?? 0)
-            let size = portrait ? CGSize(width: 90, height: 160) : CGSize(width: 160, height: 90)
-            let sw = UIScreen.main.bounds.width
-            let x = min(max(26 + scrubPreviewX - size.width / 2, 10), sw - size.width - 10)
-            Image(uiImage: img).resizable().aspectRatio(contentMode: .fit)
-                .frame(width: size.width, height: size.height)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(alignment: .bottom) {
-                    Text(fmt(current)).font(.system(size: 13)).foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.8), radius: 2)
-                        .padding(.bottom, 5)
-                }
-                .offset(x: x, y: -(size.height + 6))
-                .allowsHitTesting(false)
-        }
-    }
-
-    /// The seek follows the finger's MOVEMENT, not its position, so touching the bar never jumps —
-    /// and moving away from the bar slows it: 50, 100 and 150pt give ½, ¼ and 1/100 speed, with a
-    /// tick at each step. Nothing seeks until the finger lifts.
+    /// Theirs: the finger's position IS the time (a slider), the seek lands on every move, and the
+    /// clip is paused for the drag and put back on release if it was playing.
     private func scrubChanged(_ v: DragGesture.Value, width: CGFloat) {
         if !scrubbing {
             scrubbing = true
-            scrubLastX = v.startLocation.x
-            scrubRate = 1
-            cancelAutoHide()
+            wasPlayingBeforeScrub = isPlaying
+            player?.pause()
         }
-        let away = abs(v.translation.height)
-        let rate: Double = away >= 150 ? 0.01 : away >= 100 ? 0.25 : away >= 50 ? 0.5 : 1
-        if rate != scrubRate {
-            scrubRate = rate
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-        let dx = v.location.x - (scrubLastX ?? v.location.x)
-        scrubLastX = v.location.x
-        progress = max(0, min(1, progress + Double(dx / max(1, width)) * rate))
+        progress = max(0, min(1, Double(v.location.x / max(1, width))))
         current = progress * duration
-        scrubPreviewX = max(0, min(width, v.location.x))
-        requestPreview(at: current)
+        guard let player, duration > 0 else { return }
+        player.seek(to: CMTime(seconds: current, preferredTimescale: 600))
     }
 
     private func scrubEnded() {
         seek(to: progress)
         scrubbing = false
-        scrubLastX = nil
-        scrubPreview = nil
-        if isPlaying { scheduleAutoHide() }
+        if wasPlayingBeforeScrub { player?.play(); isPlaying = true }
+        wasPlayingBeforeScrub = false
     }
 
-    private func requestPreview(at t: Double) {
-        guard let g = frameGrabber else { return }
-        g.cancelAllCGImageGeneration()
-        g.generateCGImageAsynchronously(for: CMTime(seconds: t, preferredTimescale: 600)) { cg, _, _ in
-            guard let cg else { return }
-            let img = UIImage(cgImage: cg)
-            DispatchQueue.main.async { scrubPreview = img }
-        }
-    }
-
-    // MARK: - Hold for speed
-
-    /// Hold the right 40% for 0.3s: 2×. Slide sideways while holding: 1× to 4× across ±100pt.
-    /// Lifting puts the rate back. Only while playing — setting a rate would start a paused clip.
-    private var holdForSpeed: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .global)
-            .onChanged { v in
-                if holdStart == nil {
-                    holdStart = v.startLocation
-                    guard isPlaying, v.startLocation.x > UIScreen.main.bounds.width * 0.6 else { return }
-                    let w = DispatchWorkItem {
-                        guard isPlaying else { return }
-                        fastForward = true
-                        fastRate = 2
-                        player?.rate = 2
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    }
-                    fastWork = w
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: w)
-                } else if !fastForward, hypot(v.translation.width, v.translation.height) > 10 {
-                    fastWork?.cancel()   // a swipe or a drag-to-close, not a hold
-                }
-                if fastForward {
-                    let r = Float(min(4, max(1, 2 + v.translation.width / 100 * 2)))
-                    fastRate = r
-                    player?.rate = r
-                }
-            }
-            .onEnded { _ in
-                fastWork?.cancel(); fastWork = nil
-                holdStart = nil
-                if fastForward {
-                    fastForward = false
-                    heldAt = Date()
-                    if isPlaying { player?.rate = 1 }
-                }
-            }
-    }
-
-    private var speedPill: some View {
-        HStack(spacing: 4) {
-            Text(String(format: "%.1f×", fastRate)).font(.system(size: 15, weight: .semibold).monospacedDigit())
-            Image(systemName: "forward.fill").font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14).frame(height: 32)
-        .liquidGlass(Capsule(), interactive: false)
-        .padding(.top, 60)
-        .allowsHitTesting(false)
-        .transition(.opacity)
-    }
-
-    private func fmt(_ s: Double) -> String {
-        guard s.isFinite, s >= 0 else { return "0:00" }
-        let t = Int(s); return String(format: "%d:%02d", t / 60, t % 60)
+    /// "00:00" — the minutes padded too, as their formatter pads every unit.
+    private func clock(_ s: Double) -> String {
+        guard s.isFinite, s >= 0 else { return "00:00" }
+        let t = Int(s.rounded(.down)); return String(format: "%02d:%02d", t / 60, t % 60)
     }
 
     // MARK: - Playback control
 
     private func togglePlay() {
         guard let player else { return }
-        if isPlaying { player.pause(); isPlaying = false; showChrome = true; cancelAutoHide() }
+        if isPlaying { player.pause(); isPlaying = false }
         else {
             if current >= duration - 0.05 { player.seek(to: .zero); current = 0; progress = 0 }   // replay from end
-            player.play(); isPlaying = true; scheduleAutoHide()
+            player.play(); isPlaying = true
         }
     }
 
@@ -555,30 +468,8 @@ struct VideoPlayerScreen: View {
                     toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    private func toggleChrome() {
-        showChrome.toggle()
-        if showChrome && isPlaying { scheduleAutoHide() } else { cancelAutoHide() }
-    }
-    // Ensure the controls are visible right after a tap, then auto-hide again if playing.
-    private func showChromeBriefly() {
-        showChrome = true
-        if isPlaying { scheduleAutoHide() } else { cancelAutoHide() }
-    }
-    // Jump ±N seconds, clamped to the clip. Silent, as theirs is: the time label says where you are.
-    private func skip(_ seconds: Double) {
-        guard let player, duration > 0 else { return }
-        let t = max(0, min(duration, current + seconds))
-        player.seek(to: CMTime(seconds: t, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        current = t
-        progress = duration > 0 ? t / duration : 0
-    }
-    private func scheduleAutoHide() {
-        cancelAutoHide()
-        let w = DispatchWorkItem { if isPlaying && !scrubbing { showChrome = false } }
-        hideWork = w
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: w)   // theirs: 4.0s
-    }
-    private func cancelAutoHide() { hideWork?.cancel(); hideWork = nil }
+    /// Theirs: the tap is the only thing that shows or hides the chrome; no timer does.
+    private func toggleChrome() { showChrome.toggle() }
 
     // MARK: - Load (mailman: local → download+decrypt+cache → clear server)
 
@@ -641,13 +532,6 @@ struct VideoPlayerScreen: View {
         try? AVAudioSession.sharedInstance().setActive(true)
         let p = AVPlayer(url: url)
         player = p
-        // The scrub preview's frames. Small and loose on purpose: it has to keep up with a finger.
-        let grabber = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-        grabber.appliesPreferredTrackTransform = true
-        grabber.maximumSize = CGSize(width: 320, height: 320)
-        grabber.requestedTimeToleranceBefore = CMTime(seconds: 0.25, preferredTimescale: 600)
-        grabber.requestedTimeToleranceAfter = CMTime(seconds: 0.25, preferredTimescale: 600)
-        frameGrabber = grabber
         duration = message.duration ?? 0
         // Smooth scrubber (a high-frequency observer); don't fight the user while scrubbing.
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { time in
@@ -658,14 +542,8 @@ struct VideoPlayerScreen: View {
         }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
                                                              object: p.currentItem, queue: .main) { _ in
-            // Theirs: a clip of 30s or less loops; a longer one stops on its last frame and brings
-            // the controls back.
-            let length = p.currentItem?.duration.seconds ?? 0
-            if length.isFinite, length > 0, length <= 30 {
-                p.seek(to: .zero); p.play()
-            } else {
-                isPlaying = false; showChrome = true; cancelAutoHide()
-            }
+            // Theirs: the clip stops at its end, on its last frame; nothing loops.
+            isPlaying = false
         }
         // A call or another app's audio pauses AVPlayer by itself, but the screen kept showing it as
         // playing with the chrome hidden and no play button (2026-09-24 audit). Show it paused.
@@ -673,14 +551,12 @@ struct VideoPlayerScreen: View {
                                                                    object: nil, queue: .main) { note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            isPlaying = false; showChrome = true; cancelAutoHide()
+            isPlaying = false; showChrome = true
         }
         p.play(); isPlaying = true
-        scheduleAutoHide()
     }
 
     private func cleanup() {
-        cancelAutoHide()
         if let o = timeObserver { player?.removeTimeObserver(o) }
         if let e = endObserver { NotificationCenter.default.removeObserver(e) }
         if let i = interruptObserver { NotificationCenter.default.removeObserver(i) }
