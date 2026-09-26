@@ -370,14 +370,27 @@ enum BubbleTicks {
         }
     }
 
+    /// ⛔ DRAWN, NOT TWO SF CHECKS — owner, 2026-09-26, with the reference app's bubble: "double
+    /// mark redesign, make exactly like this". Two thin round-capped checks, the second starting
+    /// halfway along the first, so its short stroke lands on the first one's long stroke. The two
+    /// semibold symbols side by side read heavy and cramped next to the time.
     private static func doubleCheck(_ cfg: UIImage.SymbolConfiguration) -> UIImage? {
         if let hit = doubleCheckCache[9] { return hit }
-        guard let one = UIImage(systemName: "checkmark", withConfiguration: cfg) else { return nil }
-        let overlap: CGFloat = 2.5
-        let size = CGSize(width: one.size.width * 2 - overlap, height: one.size.height)
+        let checkW: CGFloat = 10.5, checkH: CGFloat = 7.5, step: CGFloat = 5, line: CGFloat = 1.2
+        let pad = line / 2
+        let size = CGSize(width: checkW + step + line, height: checkH + line)
         let img = UIGraphicsImageRenderer(size: size).image { _ in
-            one.draw(in: CGRect(origin: .zero, size: one.size))
-            one.draw(in: CGRect(origin: CGPoint(x: one.size.width - overlap, y: 0), size: one.size))
+            let p = UIBezierPath()
+            for dx in [0, step] {
+                p.move(to: CGPoint(x: pad + dx, y: pad + checkH * 0.52))
+                p.addLine(to: CGPoint(x: pad + dx + checkW * 0.34, y: pad + checkH))
+                p.addLine(to: CGPoint(x: pad + dx + checkW, y: pad))
+            }
+            p.lineWidth = line
+            p.lineCapStyle = .round
+            p.lineJoinStyle = .round
+            UIColor.black.setStroke()
+            p.stroke()
         }.withRenderingMode(.alwaysTemplate)
         doubleCheckCache[9] = img
         return img

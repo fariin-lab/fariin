@@ -3833,18 +3833,21 @@ struct ChatRow: View, Equatable {
         // string reaches both phones — one conversation document, two readers — so the direction is
         // read from `lastSender` and applied here. The Calls tab has always drawn it this way; the
         // list is the surface that could not, and his own outgoing call sat in it in red.
-        case "📞 Missed call":         return mine ? ("phone.arrow.up.right", "Outgoing call")
-                                                  : ("phone.down.fill", "Missed call")
+        // ⛔ AN UNANSWERED CALL I PLACED SAYS "Voice call" / "Video call", FILLED ICON — owner,
+        // 2026-09-26, with the reference app's row: "Outgoing call" and the outline phone read
+        // wrong beside it. The up-right arrow already says it went out.
+        case "📞 Missed call":         return mine ? ("phone.arrow.up.right.fill", "Voice call")
+                                                  : ("phone.arrow.down.left.fill", "Missed voice call")
         case "📞 Call":                return ("phone.fill", "Call")
         // Legacy markers from before declines were removed from the log (2026-08-12): old
         // conversations may still hold the string, but it must not SAY declined to anyone.
-        case "📞 Declined call":       return mine ? ("phone.arrow.up.right", "Outgoing call")
-                                                  : ("phone.down.fill", "Missed call")
-        case "📹 Missed video call":   return mine ? ("arrow.up.right.video.fill", "Outgoing video call")
-                                                  : ("video.slash.fill", "Missed video call")
+        case "📞 Declined call":       return mine ? ("phone.arrow.up.right.fill", "Voice call")
+                                                  : ("phone.arrow.down.left.fill", "Missed voice call")
+        case "📹 Missed video call":   return mine ? ("arrow.up.right.video.fill", "Video call")
+                                                  : ("arrow.down.left.video.fill", "Missed video call")
         case "📹 Video call":          return ("video.fill", "Video call")
-        case "📹 Declined video call": return mine ? ("arrow.up.right.video.fill", "Outgoing video call")
-                                                  : ("video.slash.fill", "Missed video call")
+        case "📹 Declined video call": return mine ? ("arrow.up.right.video.fill", "Video call")
+                                                  : ("arrow.down.left.video.fill", "Missed video call")
         default: return nil
         }
     }
@@ -4025,16 +4028,15 @@ struct ChatRow: View, Equatable {
             // `lastSender` so the list had no direction to read. It carries the caller's uid now
             // (see `recordCall`), so the excuse is gone and so is the bug behind it: he placed a
             // call nobody answered and his own list called it missed.
+            //
+            // ⛔ ONLY THE ICON IS RED NOW — owner, 2026-09-26, with the reference app's row beside
+            // ours: a red incoming-arrow phone (or camera) and the words in the normal grey,
+            // regular weight, saying which kind of call it was. The red words and the semibold
+            // above are reversed by that.
             let missed = badge.1.hasPrefix("Missed")
             // Unheard voice note = accent mic (like an unread badge, but for your ears).
             previewRow(badge.0, lastSenderPrefix + badge.1,
-                       iconTint: missed ? .red : (voiceUnplayed ? Theme.accent(dark) : nil),
-                       textTint: missed ? .red : nil,
-                       // Semibold on a missed call, regular on everything else. Two weights in the
-                       // preview line is the convention every big messenger follows: the states you
-                       // have to act on carry weight, the rest stay quiet. One weight for all of them
-                       // is what made this line read thin under a 16pt bold name.
-                       weight: missed ? .semibold : .regular)
+                       iconTint: missed ? .red : (voiceUnplayed ? Theme.accent(dark) : nil))
         } else if decodedLast.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
         } else if decodedLast.hasPrefix(Message.contactMarker) {

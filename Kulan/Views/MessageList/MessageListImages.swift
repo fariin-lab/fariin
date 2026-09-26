@@ -269,7 +269,7 @@ final class RowAvatarView: UIView {
         // comparing the two would re-render on every layout pass of every cell in the chat.
         if glyphSize != bounds.height {
             glyphSize = bounds.height
-            glyph.image = AvatarPalette.placeholderImage(size: bounds.height)
+            glyph.image = AvatarPalette.placeholderCanvas(size: bounds.height)
         }
         imageView.frame = bounds
     }

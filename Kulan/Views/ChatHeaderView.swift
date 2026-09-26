@@ -328,7 +328,7 @@ final class HeaderAvatarView: UIView {
 
         backgroundColor = AvatarPalette.placeholderFillUI
         glyph.contentMode = .center
-        glyph.image = AvatarPalette.placeholderImage(size: size)
+        glyph.image = AvatarPalette.placeholderCanvas(size: size)
         addSubview(glyph)
 
         imageView.contentMode = .scaleAspectFill

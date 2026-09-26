@@ -1510,7 +1510,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             p.onToggleRead(c); done(true)
         }
         read.image = ChatListIcon.symbol(c.hasUnreadMark(p.me) ? "envelope.open.fill" : "envelope.badge.fill")
-        read.backgroundColor = .systemBlue
+        read.backgroundColor = .systemGray
 
         let pinned = c.isPinned(p.me)
         let pin = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, done in
@@ -1529,7 +1529,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // orange, and black on black in the dark.
         pin.image = pinned ? ChatListIcon.symbol("pin.slash.fill")
                            : ChatListIcon.asset("ic_pin_menu")
-        pin.backgroundColor = .systemOrange
+        pin.backgroundColor = .systemGray
 
         return UISwipeActionsConfiguration(actions: [read, pin])
     }
@@ -1584,7 +1584,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             }
         }
         mute.image = ChatListIcon.symbol(muted ? "bell.fill" : "bell.slash.fill")
-        mute.backgroundColor = .systemIndigo
+        mute.backgroundColor = .systemGray
 
         let cfg = UISwipeActionsConfiguration(actions: [archive, del, mute])
         // ⛔ NO FULL-SWIPE DELETE. Theirs leaves `performsFirstActionWithFullSwipe` at its default,

@@ -227,6 +227,21 @@ enum AvatarPalette {
                                                            weight: .medium))
             .withTintColor(.white, renderingMode: .alwaysOriginal)
     }
+
+    /// ⛔ THE SILHOUETTE FLATTENED ONTO A CANVAS THE SIZE OF THE CIRCLE — owner, 2026-09-26, with
+    /// the chat header ringed: two grey lines stood either side of the person. They sat on the
+    /// glyph's own narrow image edges; a live symbol image with transparent edges inside the iOS 26
+    /// bar gets the bar's treatment at those edges. Drawn once into a plain bitmap as wide as the
+    /// avatar, there is no symbol left to treat and no edge inside the circle. Set it on a view
+    /// framed to the avatar's bounds. `placeholderImage` stays for the PiP, which places the glyph
+    /// by its own size.
+    static func placeholderCanvas(size: CGFloat) -> UIImage? {
+        guard size > 0, let glyph = placeholderImage(size: size) else { return nil }
+        let box = CGSize(width: size, height: size)
+        return UIGraphicsImageRenderer(size: box).image { _ in
+            glyph.draw(at: CGPoint(x: (size - glyph.size.width) / 2, y: (size - glyph.size.height) / 2))
+        }
+    }
 }
 
 extension View {
