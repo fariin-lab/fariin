@@ -428,7 +428,10 @@ struct AuthMethodView: View {
 
                 // Space always kept, spinner faded in (owner, 2026-09-25): inserting it on Google's
                 // tap grew this centred block and slid every card up, then back down when it went.
-                ProgressView().padding(.top, 16).opacity(busy ? 1 : 0)
+                // ⛔ AND THE SPACE IS THE GAP ITSELF NOW — owner, 2026-09-26: "fix the space between
+                // Email and Sign up". A 16pt pad, the spinner's own row and 36 more made ~72pt of
+                // black. The spinner is drawn inside the 24pt gap above "Sign up" (see there), so
+                // it still appears without moving anything.
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(.red)
                         .multilineTextAlignment(.center).padding(.top, 12)
@@ -447,7 +450,10 @@ struct AuthMethodView: View {
                     .font(.subheadline)
                 }
                 .buttonStyle(.plain)
-                .padding(.top, accountsFace ? 24 : 36)
+                .padding(.top, 24)
+                .overlay(alignment: .top) {
+                    ProgressView().controlSize(.small).opacity(busy ? 1 : 0).allowsHitTesting(false)
+                }
 
                 Spacer()
                 Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
