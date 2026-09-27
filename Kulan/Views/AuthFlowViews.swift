@@ -24,9 +24,25 @@ struct WelcomeView: View {
     /// The automatic passkey offer runs once per time this screen is built, not on every return
     /// from a pushed door page.
     @State private var passkeyOffered = false
+    /// ⛔ ACCOUNT CARDS FIRST — owner, 2026-09-27: "Log In" then the card was one tap too many.
+    /// When this phone remembers an account, the signed-out flow opens straight on its card (the
+    /// Log In page's accounts face); a phone that remembers none gets the logo page below.
+    @State private var hasSaved = !LastAccount.all().isEmpty
 
     var body: some View {
         NavigationStack {
+            Group {
+                if hasSaved {
+                    AuthMethodView(mode: .login, onAuthed: onAuthed)
+                } else {
+                    logoPage
+                }
+            }
+            .task { await offerPasskey() }
+        }
+    }
+
+    private var logoPage: some View {
             ZStack {
                 AuthPalette.page.ignoresSafeArea()
                 VStack(spacing: 0) {
@@ -96,8 +112,6 @@ struct WelcomeView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .task { await offerPasskey() }
-        }
     }
 
     /// THE FASTEST DOOR, OFFERED WITHOUT ASKING. If this phone holds a Fariin passkey, the system
@@ -307,8 +321,9 @@ struct AuthMethodView: View {
     @State private var mode: Mode
     var onAuthed: () -> Void
 
-    init(mode: Mode, onAuthed: @escaping () -> Void) {
+    init(mode: Mode, showDoors: Bool = false, onAuthed: @escaping () -> Void) {
         _mode = State(initialValue: mode)
+        _showDoors = State(initialValue: showDoors)
         self.onAuthed = onAuthed
     }
 
@@ -347,11 +362,15 @@ struct AuthMethodView: View {
             VStack(spacing: 0) {
                 Spacer()
                 if accountsFace {
+                    // ⛔ OWNER, 2026-09-27: the app's name on top like the doors page, no "or" under
+                    // the cards; "Sign up" below is enough.
+                    Text("Fariin")
+                        .font(.system(size: 22, weight: .semibold)).foregroundStyle(.primary)
+                        .padding(.bottom, 28)
                     VStack(spacing: 16) {
                         ForEach(saved) { savedAccountRow($0) }
                         addAnotherAccountRow
                     }
-                    orDivider.padding(.top, 36)
                 } else {
                 Text("Fariin")
                     .font(.system(size: 22, weight: .semibold)).foregroundStyle(.primary)
@@ -412,11 +431,17 @@ struct AuthMethodView: View {
                 }
 
                 Spacer()
+                // Sign up only (owner, 2026-09-27): making an account is the moment consent matters,
+                // and the agreement screen already covered this install. On Log In it was clutter.
                 Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
                     .font(.footnote).foregroundStyle(.secondary)
                     .tint(.primary)
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 8)
+                    // Faded, not removed, so flipping modes does not slide the centred block.
+                    .opacity(mode == .create ? 1 : 0)
+                    .allowsHitTesting(mode == .create)
+                    .accessibilityHidden(mode != .create)
             }
             .padding(.horizontal, 24)
         }
@@ -497,12 +522,12 @@ struct AuthMethodView: View {
         }
     }
 
-    /// "Add another account", with the ways in drawn small on the right (Google, Apple, email), as in
-    /// his design. Opens the usual doors on this same page.
+    /// "Add another account" pushes the usual doors as their own page, so Back returns to the cards
+    /// (this page can be the root of the signed-out flow, where an in-place flip had no way back).
+    /// Plain words on one line (owner, 2026-09-27): the three small door badges wrapped the text.
     private var addAnotherAccountRow: some View {
-        Button {
-            error = nil
-            withAnimation(.easeInOut(duration: 0.2)) { showDoors = true }
+        NavigationLink {
+            AuthMethodView(mode: .login, showDoors: true, onAuthed: onAuthed)
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: "plus")
@@ -510,12 +535,8 @@ struct AuthMethodView: View {
                     .frame(width: 48)
                 Text("Add another account")
                     .font(.body.weight(.medium))
+                    .lineLimit(1)
                 Spacer(minLength: 8)
-                HStack(spacing: -6) {
-                    doorBadge { GoogleGIcon(size: 15) }
-                    doorBadge { Image(systemName: "apple.logo").font(.system(size: 14)) }
-                    doorBadge { Image(systemName: "envelope").font(.system(size: 13)) }
-                }
             }
             .foregroundStyle(.primary)
             .padding(.horizontal, 16).frame(height: 72)
@@ -525,13 +546,6 @@ struct AuthMethodView: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
-    }
-
-    private func doorBadge<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        content()
-            .frame(width: 30, height: 30)
-            .background(AuthPalette.raised, in: Circle())
-            .overlay(Circle().strokeBorder(AuthPalette.page, lineWidth: 2))
     }
 
     /// ⛔ ONE TAP, NO QUESTIONS — owner, 2026-09-25. The account's device key first
