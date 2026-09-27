@@ -58,7 +58,10 @@ enum MessageRequests {
         // somebody's name, said nothing, and they were shown "wants to send you a message" with no
         // message under it. `lastSender` answers both directions, so `startedBy` is left doing the
         // one job it is reliable for: marking this as a conversation from the request era at all.
-        guard !c.lastSender.isEmpty else { return .firstMessage }
+        // An empty `lastSender` is also what a fresh unfriend leaves behind (see `unfriend`), and
+        // only the person who must knock again is in `.firstMessage`: the one who removed the
+        // friend is waiting on them, the same as after sending their one message.
+        guard !c.lastSender.isEmpty else { return c.startedBy == myUid ? .firstMessage : .awaitingReply }
         return c.lastSender == myUid ? .awaitingReply : .incoming
     }
 

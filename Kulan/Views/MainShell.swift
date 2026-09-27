@@ -1035,17 +1035,6 @@ struct ChatsView: View {
     @ObservedObject private var groupCall = GroupCallService.shared   // ObservableObject, so it needs the wrapper
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
-    /// FALSE UNTIL THE LIST HAS FINISHED ARRIVING, and it gates the reorder animation.
-    ///
-    /// The rows animate when a chat bumps to the top, which is right. On a cold launch it was also
-    /// animating the list COMING INTO EXISTENCE: the cached chats land, the first server snapshot
-    /// reorders them, and the official channel arrives separately from its own store, so `visible`
-    /// changed three times in about a second and every row sprang toward a new position on each
-    /// change. Mid-flight that draws rows on top of one another — the owner caught Fariin sitting
-    /// across x test, half faded, on first open.
-    ///
-    /// An arrival is not a rearrangement. Nothing should animate until the list is a list.
-    @State private var listSettled = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
     /// The page's own search box (2026-08-30): Apple's field in the top bar, exactly as Stories and
     /// Calls have it — owner, 2026-09-26, "make it exactly like the Stories search". For one day
@@ -1242,7 +1231,7 @@ struct ChatsView: View {
                       && (Flags.groupsEnabled || !$0.isGroup)   // the clause the badge has; see above
                       && $0.hasUnreadMark(me) }   // clears a manual mark too — that is what "read all" means
             .map(\.id)
-        Task { for id in ids { await ChatService.resetUnread(id); await ChatService.markRead(id) } }
+        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.resetUnread(id); await ChatService.markRead(id) } } } }
     }
 
     // One chat-list row: full-row Button (a NavigationLink would draw the disclosure chevron;
@@ -1254,227 +1243,6 @@ struct ChatsView: View {
     /// Route those taps here so the whole row toggles, like Mail and the reference app.
     private func toggleSelection(_ id: String) { toggleTick(id, in: $selection) }
 
-    @ViewBuilder private func chatListRow(_ conv: Conversation) -> some View {
-        // A real NavigationLink, not a Button with a hand-rolled press style.
-        //
-        // THE STUCK GREY ROW: ChatRowPressStyle painted the highlight from the ButtonStyle's `isPressed`.
-        // That flag strands whenever the button's identity changes mid-press - and this list RE-SORTS on
-        // updatedAt, so a message arriving while a finger rests on a row does exactly that. The row then
-        // stayed grey with nothing to clear it, which is the "selected grey without selecting" report.
-        // The system's own row highlight cannot get stuck this way, and it is also what makes the swipe
-        // actions behave properly, since UIKit owns the whole cell interaction instead of splitting it
-        // between a Button and the swipe platter.
-        // ONE structure for both modes (owner's report: entering Select cross-faded TWO copies of
-        // every row — the old if-selecting/else swap changed the row's structural identity, so
-        // SwiftUI faded the plain-label copy in over the Button copy instead of sliding one row).
-        // The Button stays permanently; Select mode just disables it and lays a tap-catcher on top,
-        // so the native edit-mode indent slides the single row smoothly.
-        //
-        // A Button that pushes onto the same path, NOT a NavigationLink — because a
-        // NavigationLink row draws the disclosure chevron and there is no API to turn it off
-        // (user: "remove the arrow in chat list"). The link ALSO set the List's selection, and
-        // SwiftUI never cleared it on the way back; fixed in the two onChange handlers on the List.
-        // ⚠️ AND IT LEAVES THE ROW WITH NO PRESS HIGHLIGHT, WHICH IS NOW THE DECISION. A plain-styled
-        // Button in a List row does NOT let the cell's own pressed state paint through it: the Button
-        // takes the touch, so the cell never learns a press happened. That was called a bug on
-        // 2026-08-13 and a custom grey was built for it; on 2026-08-19 he asked for the grey out and
-        // this back the way it was. The note where `RowPressFill` used to live in Theme.swift says
-        // what the grey cost — read it before anybody builds it a fourth time.
-        //
-        // A row used to stay lit while its chat was open (the reference app's `selectRow`, build 441). It is
-        // deleted. On a phone that highlight is only ever VISIBLE during the back swipe, because
-        // that is the one moment the list is on screen with a chat still on the stack — and it was
-        // being cleared by `path.count` reaching zero, which happens when the pop FINISHES. So the
-        // grey sat there at full strength for the whole gesture. the reference app solves that by deselecting
-        // inside the navigation transition's own animation, which SwiftUI gives no way to reach; the
-        // owner chose the simpler end of that trade deliberately: no state, no grey, nothing to fade.
-        Button {
-            path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
-                                   photo: conv.displayPhoto(me)))
-        } label: {
-            chatListRowLabel(conv)
-        }
-        // ⚠️ `.plain`, AND THE TOUCH GREY IS GONE ON HIS WORD (2026-08-19: "remove the highlight
-        // grey we added when you tap a chat list row, back the way it was before"). It was asked for
-        // on 2026-08-13, took three attempts to make visible, and each attempt cost something else:
-        // driving the row from a gesture rather than a Button took the tap away entirely in 612, then
-        // made a ringed avatar open the story AND the chat at once, and the app-wide touch-delay
-        // change that went with it broke the story viewer's corners. None of that exists without the
-        // grey. See the deleted `RowPressFill` in Theme.swift if it is ever asked for again — and
-        // read what it cost before rebuilding it.
-        .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
-        // Edit mode: the push is off, and the tap-catcher overlay below owns the tap.
-        //
-        // `.disabled(selecting)` was the wrong tool and `.opacity(1)` did not rescue it. Disabled
-        // does two things — it stops the interaction AND it dims — and only the first was ever
-        // wanted. The dimming is applied by the button style INSIDE, from the environment, so an
-        // opacity of 1 on the outside means "change nothing further"; it cannot undo a fade that has
-        // already been drawn. That is why Select Chats still greyed every avatar, name and preview
-        // after the last attempt at this.
-        //
-        // allowsHitTesting stops the interaction and nothing else. The row keeps its own colours,
-        // and the overlay above still receives the tap because the Button simply declines it.
-        .allowsHitTesting(!selecting)
-        .overlay {
-            if selecting {
-                // Whole row toggles, like Mail and the reference app (taps on a Button's content were
-                // otherwise swallowed and only the checkbox worked).
-                Color.clear.contentShape(Rectangle())
-                    .onTapGesture { toggleSelection(conv.id) }
-            }
-        }
-        .tag(conv.id)
-        .listRowInsets(EdgeInsets())
-        // ⛔ NO GREY UNDER A ROW — owner, 2026-09-02: "why is the chat list Chats card using grey,
-        // remove that". It is the grouped list style's own doing and it arrived with the switch to
-        // `.grouped` for the pin animation: a grouped list paints each row on
-        // `secondarySystemGroupedBackground`, which is the raised card look those lists are for.
-        //
-        // ⚠️ `scrollContentBackground(.hidden)` DOES NOT REACH IT. That hides the LIST's background;
-        // the row's is a separate surface the style gives every cell, and only `listRowBackground`
-        // clears it. The headings already had this, which is why they looked right and the rows did
-        // not — the grey stopped exactly where the headers began, in his screenshot.
-        .listRowBackground(Color.clear)
-        // ⛔ NO SEPARATOR AT ALL — owner, 2026-09-02: "also remove lines", settling a comparison
-        // that had gone the other way.
-        //
-        // ⚠️ **THE HAIRLINE ADDED ON 2026-08-29 WAS BUILT ON A WRONG PREMISE, AND THE COMMIT
-        // MESSAGE SAID SO OUT LOUD: "as theirs does".** It does not. Their chat list sets
-        // `tableView.separatorStyle = .none` (`CLVTableDataSource.swift:119`) and draws no rule
-        // between rows anywhere — verified in their source on 2026-09-02, not inferred from a
-        // screenshot, because the screenshot that started this was ALSO misread as ours when it was
-        // theirs. A colour is still assigned on the line after that one in their file, which is
-        // dead code and is probably what an earlier reading latched onto.
-        //
-        // The 84pt leading guide and the 16pt trailing guide went with it. Both were correct
-        // arithmetic for a rule that should not be drawn.
-        .listRowSeparator(.hidden)
-        // NO explicit row background: forcing systemBackground made the swiped row paint a
-        // white slab OVER its own content (blank row on swipe, user report). The native
-        // swipe platter (grey) is correct and keeps the row content visible.
-        .moveDisabled(true)   // reordering removed — pinned chats stay fixed
-        // Full-swipe enabled like the leading (Pin) edge. The FIRST action is what a full
-        // swipe triggers, so Archive leads; Mute/Delete are still revealed for a tap.
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button {
-                Task { await ChatService.setArchived(conv.id, true) }
-            } label: {
-                // The SOLID archive drawing, which is the one he sent for the swipe specifically.
-                // MenuIcon, not a frame-modified Image: swipe actions drop view modifiers the same
-                // way menus do, so the frame(22) never applied (see MenuIcon).
-                Label { Text("Archive") } icon: { MenuIcon("ic_archive_fill") }
-            }
-            .tint(.gray)
-            // Apple's symbols go through MenuIcon too now: it trims each icon to its ink, so a
-            // symbol's built-in air no longer makes it read smaller than our drawings beside it.
-            Button { pendingMute = conv } label: {
-                Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash.fill") }
-            }
-            .tint(.indigo)
-            Button(role: .destructive) {
-                pendingDelete = conv
-            } label: { Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") } }
-            .tint(.red)
-        }
-        .swipeActions(edge: .leading) {
-            Button {
-                Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
-            } label: {
-                Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
-                    // No size of its own. One number for menus and swipes alike, so a report about
-                    // one place cannot leave the other behind — see MenuIcon.standard.
-                    conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash"))
-                                      : AnyView(MenuIcon(system: "pin"))
-                }
-            }
-            .tint(.orange)
-        }
-    }
-
-    // The row CONTENT with the context menu attached to it (not the Button — a Button in a
-    // List swallows the long-press) + the conversation peek as the menu preview.
-    private func chatListRowLabel(_ conv: Conversation) -> some View {
-        ChatRow(conv: conv, me: me, dark: dark,
-                onCall: conv.id == liveCallCid,
-                storySeen: storySeen(conv),
-                onStoryTap: {   // open this person's story in the same viewer the stories row uses
-                    // The ring has its own tap gesture, which would beat the row's selection toggle.
-                    if selecting { toggleSelection(conv.id); return }
-                    // On the app's own presentation, and it lands back into the ring as a CIRCLE —
-                    // see `openStoryFromRing`.
-                    if let g = storiesRepo.others.first(where: { $0.authorUid == conv.otherUid(me) }) {
-                        openStoryFromRing(conv, g)
-                    }
-                },
-                draft: Drafts.shared.text(conv.id),
-                voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
-                voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
-            .equatable()   // skip rebuild when this conversation is unchanged
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // NO BACKGROUND OF OUR OWN. A fill painted here used to mark the open chat; it is gone
-            // (see the Button above). Do not bring one back on this modifier, or on the List's
-            // selection binding, or on `.listRowBackground`: the binding stranded a permanent grey
-            // row twice, and listRowBackground painted a slab over the row's own content while it
-            // was swiped. The cell's pressed state is the only highlight this row has, and it is
-            // drawn by UIKit underneath everything here.
-            .contentShape(Rectangle())   // whole row tappable (incl. empty space)
-            .contextMenu {
-                chatMenu(conv)
-            } preview: {
-                ChatPeekPreview(cid: conv.id, me: me)
-            }
-    }
-
-    // ARCHIVE, VISIBLE FROM THE CHAT LIST (owner 2026-08-13: "make our archive visible ... now it
-    // needs finding other ways"). It only lived in the filter menu, which is a place you have to
-    // already know about. The reference app puts it where he pointed: one compact row at the top of
-    // the chats, only there when the drawer holds something, scrolling away with the list.
-    private var archivedChats: [Conversation] {
-        // Same filter the archive page itself uses — including the official channel, which can be
-        // archived like any other chat, so the count cannot disagree with what opens.
-        (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
-            .filter { $0.isArchived(me) && !$0.isCleared(me) }
-            .filter { Flags.groupsEnabled || !$0.isGroup }
-    }
-    // Hidden people's stories live in the archive too, so the way in has to exist for them even
-    // with no archived chat at all — otherwise unhiding somebody becomes unreachable.
-    private var hasArchivedStories: Bool {
-        storiesRepo.others.contains { StoryPrefs.isHidden($0.authorUid) }
-    }
-    // The number goes accent instead of grey when something in there is unread: same digit, and the
-    // colour is the only thing saying there is news behind the door.
-    private var archivedUnread: Bool {
-        archivedChats.contains { !$0.isBlockedByMe(me) && $0.hasUnreadMark(me) }
-    }
-    // Not while selecting (the row carries no tag, so it can never be part of a selection), and not
-    // under a filter — Unread and Groups are questions about the chats on THIS page.
-    private var showsArchivedRow: Bool {
-        // ⚠️ `selecting` IS NOT IN HERE ANY MORE (his reference, 2026-08-14): in select mode the row
-        // STAYS, greyed and unselectable, instead of vanishing. A row that disappears the moment you
-        // tap Edit reads as something you broke; theirs dims it, which says "not this one" without
-        // moving anything. It carries no tag and takes `selectionDisabled`, so it never grows a
-        // checkbox and can never end up in a selection.
-        //
-        // ⛔ ALWAYS ON, AND THE PULL-TO-REVEAL GATE THAT WAS HERE IS GONE (his order, 2026-08-21
-        // evening, with the row circled: "make it how it was before, now hide and show remove").
-        // That reverses his own order from the same morning to copy the reference app's hide/show,
-        // and both were deliberate, so the later one stands. See the note in `onScrollGeometryChange`
-        // for what the gate cost and why it went.
-        //
-        // One thing it quietly gives back: an unread archived chat is reachable again without
-        // knowing to pull the list down for it. That trade was recorded when the gate went in and is
-        // worth naming now that it is paid off.
-        chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
-    }
-    // ⛔ DELETED HERE: `archivedEntryRow`, and `archivedRowHeight` with it — owner,
-    // 2026-09-02: "remove it completely from the chat list". `showsArchivedRow` stays because
-    // the empty-state copy below still asks whether there is an archive to mention.
-    //
-    // Recorded rather than quietly dropped: this row carried a lot of settled argument — its
-    // 56pt column and 12pt gap matched the chat rows, it stayed DIMMED rather than vanishing in
-    // select mode (his 2026-08-14 reference), and it lost its separator on his word. None of that
-    // is worth rediscovering, and none of it applies to a menu entry.
-
     /// THE SEARCH BOX'S TEST, A METHOD AND NOT AN INLINE CLOSURE. `visible` is one long chained
     /// expression and it is already at this file's type-checker budget — adding four lines
     /// inside the chain tipped it over ("unable to type-check this expression in reasonable
@@ -1484,8 +1252,8 @@ struct ChatsView: View {
     /// Name only. The previews are ciphertext until a row decrypts them, so matching on those
     /// would search whatever subset happened to be decrypted and silently miss the rest.
     private func searchMatches(_ c: Conversation) -> Bool {
-        let q = chatSearch.trimmingCharacters(in: .whitespaces).lowercased()
-        return q.isEmpty || c.displayName(me).lowercased().contains(q)
+        let q = ChatSearch.normalize(chatSearch)
+        return q.isEmpty || ChatSearch.normalize(c.displayName(me)).contains(q)
     }
 
     /// The query, once. Read from four places in a body that re-runs on every typing dot.
@@ -1598,16 +1366,6 @@ struct ChatsView: View {
         guard chatSearch.trimmingCharacters(in: .whitespaces) == q else { return }
         userHits = found
         searchingUsers = false
-    }
-
-    /// WHICH CHATS ARE PINNED, as one comparable value — the trigger for the list's pin animation.
-    ///
-    /// ⚠️ OFF THE REPOSITORY, NOT OFF `visible`. `visible` filters and sorts every conversation and
-    /// this is read on each body pass, which the note below is about; this is a filter and a map
-    /// over the raw list and nothing else. It also has to IGNORE the sort, because a message
-    /// arriving reorders `visible` without changing what is pinned, and that must not animate.
-    private var pinnedKey: String {
-        repo.conversations.filter { $0.isPinned(me) }.map(\.id).sorted().joined(separator: ",")
     }
 
     /// The two halves of `visible`, for the "Pinned" / "Chats" sections.
@@ -1893,44 +1651,14 @@ struct ChatsView: View {
         }
     }
 
-    // Persist a pinned-chat reorder via fractional indexing.
-    private func reorderPinned(from source: IndexSet, to destination: Int) {
-        let rows = visible
-        guard let from = source.first, rows.indices.contains(from) else { return }
-        let moved = rows[from]
-        guard moved.isPinned(me) else { return }
-
-        let pinnedCount = rows.prefix { $0.isPinned(me) }.count
-        guard pinnedCount > 1 else { return }
-
-        // Clamp into the pinned block so a pin can't be dropped among unpinned chats.
-        let dest = min(max(destination, 0), pinnedCount)
-        var pinned = Array(rows[0..<pinnedCount])
-        pinned.move(fromOffsets: IndexSet(integer: from), toOffset: dest)
-        guard let pos = pinned.firstIndex(where: { $0.id == moved.id }) else { return }
-
-        let above = pos > 0 ? pinned[pos - 1].pinRank(me) : nil          // higher in list = bigger rank
-        let below = pos < pinned.count - 1 ? pinned[pos + 1].pinRank(me) : nil
-        let step = 1_000_000.0
-        let newRank: Double
-        switch (above, below) {
-        case let (a?, b?): newRank = (a + b) / 2
-        case let (a?, nil): newRank = a - step
-        case let (nil, b?): newRank = b + step
-        case (nil, nil): return
-        }
-        Task { await ChatService.setPinOrder(moved.id, newRank) }
-    }
-
     private func exitSelect() { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } }
-    private func selectAll() { selection = Set(visible.map { $0.id }) }
 
     // System action list for a chat row's context menu (HIG order + SF Symbols).
     /// The long-press menu, as `UIMenuElement`s for the table's `UIContextMenuConfiguration`.
     ///
-    /// ⚠️ A STRAIGHT TRANSCRIPTION OF `chatMenu` BELOW, WHICH IS NOW DEAD AND KEPT ONLY AS THE
-    /// REFERENCE FOR THIS ONE. Every rule in its comments still applies and none of them was
-    /// re-derived here: `hasUnreadMark` rather than `unread(me) > 0` because a self-marked chat
+    /// ⚠️ A STRAIGHT TRANSCRIPTION OF THE OLD SwiftUI CONTEXT MENU (removed, audit L21: it had no
+    /// caller left once the row moved to `UIContextMenuConfiguration`). Every rule below still
+    /// applies and none of it was re-derived here: `hasUnreadMark` rather than `unread(me) > 0` because a self-marked chat
     /// stores −1 and would otherwise be offered "Unread" forever with no way back; the official
     /// channel's mute is a plain on/off rather than a timer because a "Mute for 1 hour" that never
     /// un-mutes is a label that lies; blocked chats are offered neither.
@@ -2026,88 +1754,6 @@ struct ChatsView: View {
         return out
     }
 
-    @ViewBuilder private func chatMenu(_ conv: Conversation) -> some View {
-        // Blocked-aware like the row badge (audit: the menu offered "Read" — which would leak read
-        // receipts to the blocked person — for a chat whose row displays zero unread).
-        // `hasUnreadMark`, NOT `unread(me) > 0`. A chat you marked unread yourself stores -1 as a
-        // sentinel, and `unread()` clamps with max(0,…) so the list can never print "-1" — which
-        // means the manual mark reads as ZERO here. The menu therefore offered "Unread" on a chat
-        // that was already unread, and there was no way to undo it: mark it unread, and the only
-        // thing on offer forever after is marking it unread again. That is what he circled.
-        //
-        // The archived menu below already asks the right question. This one was missed when the
-        // sentinel went in.
-        if !conv.isBlockedByMe(me) && conv.hasUnreadMark(me) {
-            Button {
-                // Full parity with opening the chat: reset MY counter, send read receipts,
-                // and drop its delivered notifications + fix the app badge.
-                Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
-                NotificationCleaner.clear(cid: conv.id)
-            } label: {
-                Label { Text("Read") } icon: { MenuIcon(system: "envelope.open", ink: .label) }
-            }
-        } else {
-            Button { Task { await ChatService.markUnread(conv.id) } } label: {
-                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread", ink: .label) }
-            }
-        }
-        // The official channel's mute is a plain on/off, not a timer. A "Mute for 1 hour" that
-        // silently never un-mutes would be a label that lies — and un-muting on a timer is the exact
-        // behaviour the channel promises never to have.
-        if OfficialChannel.isOfficial(conv.id) {
-            let quiet = conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
-            Button { Task { await ChatService.setMuted(conv.id, !quiet) } } label: {
-                Label { Text(quiet ? "Unmute" : "Mute") } icon: { MenuIcon(system: quiet ? "bell" : "bell.slash", ink: .label) }
-            }
-        } else {
-        // Native submenu (clean popover) instead of a custom mute sheet.
-        Menu {
-            if conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000) {
-                Button("Unmute") { Task { await ChatService.setMute(conv.id, until: 0) } }
-            }
-            Button("Mute for 1 hour") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(1)) } }
-            Button("Mute for 8 hours") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(8)) } }
-            Button("Mute for 1 week") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(168)) } }
-            Button("Mute Always") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) } }
-        } label: { Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash", ink: .label) } }
-        }
-        Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
-            Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
-                    conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash", ink: .label))
-                                      : AnyView(MenuIcon(system: "pin", ink: .label))
-                }
-        }
-        Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
-            Label { Text("Archive") } icon: { MenuIcon("ic_archive", ink: .label) }
-        }
-        Button(role: .destructive) { pendingDelete = conv } label: {
-            Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
-        }
-    }
-    /// 2026-09-24 audit: Select mode had no way to mute several chats at once. The same durations
-    /// as the single-chat mute sheet, applied to each selected chat through the same `setMute`, with
-    /// Unmute offered when any of them is muted now.
-    private var bulkMuteMenu: some View {
-        let anyMuted = repo.conversations.contains {
-            selection.contains($0.id) && $0.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
-        }
-        return Menu {
-            if anyMuted { Button("Unmute") { muteSelected(until: 0) } }
-            Button("Mute for 1 hour") { muteSelected(until: ChatService.muteUntil(1)) }
-            Button("Mute for 8 hours") { muteSelected(until: ChatService.muteUntil(8)) }
-            Button("Mute for 1 week") { muteSelected(until: ChatService.muteUntil(168)) }
-            Button("Mute Always") { muteSelected(until: ChatService.muteUntil(nil)) }
-        } label: {
-            Image("ic_menu_mute").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 22, height: 22)
-        }
-        .tint(.primary).disabled(selection.isEmpty)
-    }
-    private func muteSelected(until: Double) {
-        let ids = selection
-        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setMute(id, until: until) } } } }
-        exitSelect()
-    }
     // Batch ops run the per-chat writes CONCURRENTLY (was sequential = N round-trips in series).
     private func archiveSelected() {
         let ids = selection
@@ -3783,11 +3429,23 @@ struct ChatRow: View, Equatable {
         }
         return Crypto.shared.decryptCached(conv.lastMessageCipher, cid: conv.id)   // memoized: no re-decrypt per render
     }
+    /// Group-only per-member hide check for every OTHER preview surface, the same test
+    /// `decodedLast` above already runs for the group text preview (2026-09-26 block rebuild). A
+    /// member I have blocked stays hidden everywhere in the row, not just decrypted text: their
+    /// photo/video thumbnail, media/call badge, sender-name prefix, reaction and typing/recording
+    /// name all route through this before showing anything of theirs. 1:1 chats are unaffected;
+    /// `leaksBlocked`/`isBlockedByMe` already cover those (audit L1/L2/L6/L7).
+    private func lastEventHiddenByBlock(author: String, atMillis: Double) -> Bool {
+        conv.isGroup && BlockList.snapshot.hides(author: author, atMillis: atMillis)
+    }
     // Stored plaintext markers → an SF Symbol + clean label (native look, no emoji).
     /// `mine` = I placed the call this marker describes (`lastSender` is the caller's uid on a call
     /// record). It only ever changes the UNANSWERED cases: a call I placed that nobody picked up is
     /// an outgoing call, not a missed one, and the red belongs to the person who tried to reach me.
     private func previewBadge(_ s: String, mine: Bool = false) -> (String, String)? {
+        // A blocked group member's voice note/file/GIF/call/deleted-message marker is hidden the
+        // same as their text (audit L2) — checked first, before any marker below can match.
+        if lastEventHiddenByBlock(author: conv.lastSender, atMillis: conv.updatedAtMillis) { return nil }
         // Newer voice markers carry the length ("🎤 Voice message · 0:53") — prefix match
         // keeps old plain markers working and surfaces the duration when present.
         if s.hasPrefix("🎤 Voice message") {
@@ -3873,8 +3531,13 @@ struct ChatRow: View, Equatable {
                 }
             }
             .foregroundStyle(iconTint ?? Color.secondary)
+            // The icon carries the row's VoiceOver label (audit L22): a custom "ic_" asset has no
+            // built-in one at all, and it reads the same words as the text beside it either way.
+            // The text is hidden from accessibility so the row speaks it once, not twice.
+            .accessibilityLabel(text)
             Text(text).font(.subheadline.weight(weight))
                 .foregroundStyle(textTint ?? .secondary).lineLimit(1)
+                .accessibilityHidden(true)
         }
     }
     /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
@@ -3885,7 +3548,10 @@ struct ChatRow: View, Equatable {
         // reacting to Bob on MY row, exactly the noise this comment forbids (audit).
         guard conv.freshReaction(me), conv.lastReactionBy != me,
               conv.lastReactionToAuthor == me,
-              let enc = conv.lastReactionEnc else { return nil }
+              let enc = conv.lastReactionEnc,
+              // A blocked group member's reaction is hidden the same as their text (audit L6).
+              !lastEventHiddenByBlock(author: conv.lastReactionBy, atMillis: conv.lastReactionAtMillis)
+        else { return nil }
         let emoji = conv.isGroup
             ? Crypto.shared.decryptGroupCached(enc, cid: conv.id, authorId: conv.lastReactionBy)
             : Crypto.shared.decryptCached(enc, cid: conv.id)
@@ -3894,7 +3560,10 @@ struct ChatRow: View, Equatable {
 
     // "Reacted 🙏" preview when the newest event in the chat is a reaction.
     private var reactionPreview: String? {
-        guard conv.freshReaction(me), let enc = conv.lastReactionEnc else { return nil }
+        guard conv.freshReaction(me), let enc = conv.lastReactionEnc,
+              // A blocked group member's reaction is hidden the same as their text (audit L6).
+              !lastEventHiddenByBlock(author: conv.lastReactionBy, atMillis: conv.lastReactionAtMillis)
+        else { return nil }
         let emoji = conv.isGroup
             ? Crypto.shared.decryptGroupCached(enc, cid: conv.id, authorId: conv.lastReactionBy)   // sealed by the reactor
             : Crypto.shared.decryptCached(enc, cid: conv.id)
@@ -3921,7 +3590,10 @@ struct ChatRow: View, Equatable {
     // Live "recording…" for the list — the voice-note flavour of typingLabel, same synced field.
     private var recordingLabel: String? {
         guard !conv.isBlockedByMe(me) else { return nil }
-        let recs = conv.others(me).filter { conv.recording[$0] == true }
+        let now = Date().timeIntervalSince1970 * 1000
+        // A blocked group member's own "recording…" is hidden the same as their text (audit L7):
+        // filtered by uid, not by the 1:1-only check above, which is always false for groups.
+        let recs = conv.others(me).filter { conv.recording[$0] == true && !lastEventHiddenByBlock(author: $0, atMillis: now) }
         guard !recs.isEmpty else { return nil }
         if !conv.isGroup { return "recording…" }
         let n = conv.names[recs[0]] ?? "Someone"
@@ -3931,7 +3603,9 @@ struct ChatRow: View, Equatable {
     // Live "typing…" for the list — the conv doc already syncs the typing map, so this is free.
     private var typingLabel: String? {
         guard !conv.isBlockedByMe(me) else { return nil }
-        let typers = conv.others(me).filter { conv.typing[$0] == true }
+        let now = Date().timeIntervalSince1970 * 1000
+        // Same block filter as recordingLabel above (audit L7).
+        let typers = conv.others(me).filter { conv.typing[$0] == true && !lastEventHiddenByBlock(author: $0, atMillis: now) }
         guard !typers.isEmpty else { return nil }
         if !conv.isGroup { return "typing…" }
         let names = typers.map { u in
@@ -3956,6 +3630,10 @@ struct ChatRow: View, Equatable {
 
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
+        // A blocked member's name is hidden along with their message (audit L2) — otherwise a
+        // hidden plain-text message (an "enc" cipher, so the badge branch below never runs) still
+        // named its sender in front of the now-empty preview.
+        guard !lastEventHiddenByBlock(author: conv.lastSender, atMillis: conv.updatedAtMillis) else { return "" }
         let c = conv.lastMessageCipher
         // ⚠️ THE TEST IS "DOES THE ROW RECOGNISE THIS", not a second hand-kept list of prefixes.
         //
@@ -3980,6 +3658,8 @@ struct ChatRow: View, Equatable {
     // and not a frozen blocked-chat row). 📹 call markers are unaffected.
     private var isPhotoPreview: Bool {
         !conv.leaksBlocked(me)
+            // A blocked group member's photo/video thumbnail is hidden the same as their text (audit L1).
+            && !lastEventHiddenByBlock(author: conv.lastSender, atMillis: conv.updatedAtMillis)
             && (conv.lastMessageCipher.hasPrefix("📷") || conv.lastMessageCipher.hasPrefix("🎥") || conv.lastMessageCipher.hasPrefix("🎬"))
             && (conv.lastImageUrl?.isEmpty == false)
     }
@@ -4061,8 +3741,13 @@ struct ChatRow: View, Equatable {
                        // looks tiny, use the Apple icon". It is Apple's `mic.fill` already; at the
                        // shared 13pt its narrow shape reads as a speck beside the words.
                        iconSize: badge.0 == "mic.fill" ? 15 : 13)
-        } else if decodedLast.isEmpty {
+        } else if conv.lastMessageCipher.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
+        } else if decodedLast.isEmpty {
+            // A hidden-by-block last message (audit L17): there IS a message, just not one this
+            // row may show, so it gets an empty preview line, not "Say hello" — that text belongs
+            // to a brand-new empty chat, not to this.
+            EmptyView()
         } else if decodedLast.hasPrefix(Message.contactMarker) {
             // Shared-contact card → native icon + "Contact", never the raw marker text.
             previewRow("person.crop.circle.fill", lastSenderPrefix + "Contact")
@@ -4121,6 +3806,9 @@ struct ChatRow: View, Equatable {
         // row does.
         .font(.caption.weight(.bold))
         .foregroundStyle(read ? Color(hex: 0x0A84FF) : Color.secondary)
+        // VoiceOver label for the tick glyph (audit L22): the drawn mark carries no text of its
+        // own, so without this it is a silent stop in the row.
+        .accessibilityLabel(read ? "Read" : (delivered ? "Delivered" : "Sent"))
     }
 
     private var timeStr: String {
@@ -4132,6 +3820,11 @@ struct ChatRow: View, Equatable {
         if cal.isDateInYesterday(d) { return "Yesterday" }
         if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 7 {
             return d.formatted(.dateTime.weekday(.abbreviated))
+        }
+        // A date from an earlier year needs the year on it too (audit L16), or "Jan 5" from last
+        // year reads as this year's Jan 5.
+        if cal.component(.year, from: d) != cal.component(.year, from: Date()) {
+            return d.formatted(.dateTime.month(.abbreviated).day().year())
         }
         return d.formatted(.dateTime.month(.abbreviated).day())
     }
@@ -4323,7 +4016,7 @@ struct ChatRow: View, Equatable {
                             .transition(.scale.combined(with: .opacity))
                     }
                     if unread > 0 {
-                        Text("\(min(unread, 99))")
+                        Text(unread > 99 ? "99+" : "\(unread)")
                             // ⛔ `.footnote` — 13pt, theirs (`unreadCounterLabelConfig` takes
                             // `dynamicTypeFootnoteClamped`). Ours was `.caption2`, which is 11.
                             // Their pill's height is `ceil(footnote.lineHeight * 1.25)`, about 20 at
@@ -4393,6 +4086,9 @@ struct ChatRow: View, Equatable {
         .padding(.horizontal, 16)   // 16pt gutter moved inside the cell (row insets are now
                                     // zero) so the reorder drag preview matches the cell width
                                     // and stays locked to the vertical axis (no horizontal drift)
+        // One VoiceOver stop for the whole row, not several (audit L22): name, ticks and preview
+        // words read as a single swipe instead of forcing one per subview.
+        .accessibilityElement(children: .combine)
     }
 }
 

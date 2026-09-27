@@ -32,8 +32,31 @@ enum ChatSearch {
     }
 
     /// A message's searchable tokens (compute ONCE per message when the corpus is built, not per keystroke).
+    /// Each word is indexed whole AND split into its letter/digit runs, the same way `queryTerms` splits
+    /// the query, so a word like "abc123" is indexed as "abc123", "abc" and "123" — matching a query for
+    /// any of the three, including a digits-only query that isn't at the start of the word.
     static func tokens(_ text: String) -> [String] {
-        normalize(text).split(separator: " ").map(String.init)
+        var out: [String] = []
+        for word in normalize(text).split(separator: " ") {
+            let whole = String(word)
+            out.append(whole)
+            var runs: [String] = []
+            var current = ""
+            var currentIsDigit: Bool?
+            for ch in whole {
+                let isDigit = ch.isNumber
+                if currentIsDigit == isDigit {
+                    current.append(ch)
+                } else {
+                    if !current.isEmpty { runs.append(current) }
+                    current = String(ch)
+                    currentIsDigit = isDigit
+                }
+            }
+            if !current.isEmpty { runs.append(current) }
+            if runs.count > 1 { out.append(contentsOf: runs) }
+        }
+        return out
     }
 
     /// Query terms (the standard query builder): words with digits split out + a digits-only term, deduped.

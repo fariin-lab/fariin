@@ -264,6 +264,9 @@ struct ChatSearchPage: View {
     @Environment(\.dismissSearch) private var dismissSearch
     private var repo = ConversationsRepository.shared
     private var recents = RecentSearches.shared
+    /// A recent person's profile fetch failed (offline, or the account is gone) and there was no
+    /// existing chat with them to fall back to, so tapping the row did nothing to open on.
+    @State private var recentPersonOpenFailed = false
 
     init(query: String, me: String, dark: Bool, searching: Bool,
          chats: @escaping () -> [Conversation],
@@ -306,6 +309,11 @@ struct ChatSearchPage: View {
             }
         }
         .onAppear { recents.start() }
+        .alert("Couldn't open", isPresented: $recentPersonOpenFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check your connection and try again.")
+        }
     }
 
     // MARK: Sections
@@ -329,8 +337,13 @@ struct ChatSearchPage: View {
         // A conversation lookup for the whole list, once, rather than a scan per entry.
         var byId: [String: Conversation] = [:]
         // A pending request is not a chat (owner, 2026-09-11) — the same filter the chat list
-        // applies, so a request remembered here from before it was hidden cannot resurface.
-        for c in repo.conversations where MessageRequests.stance(c) != .incoming { byId[c.id] = c }
+        // applies, so a request remembered here from before it was hidden cannot resurface. A
+        // cleared or archived chat is filtered the same way `MainShell.visible` filters it, so
+        // one you cleared or archived cannot resurface with its name and last message either.
+        for c in repo.conversations
+            where MessageRequests.stance(c, myUid: me) != .incoming && !c.isCleared(me) && !c.isArchived(me) {
+            byId[c.id] = c
+        }
 
         for e in recents.entries {
             switch e.kind {
@@ -438,11 +451,24 @@ struct ChatSearchPage: View {
             // same `get` on `users/{uid}` the app makes everywhere; it is NOT a directory query,
             // and it must never become one (see `ChatService.searchUsers`).
             Task {
-                guard let u = await ProfileStore.shared.fetch(e.key) else { return }
+                if let u = await ProfileStore.shared.fetch(e.key) {
+                    await MainActor.run {
+                        recents.record(person: u, me: me)
+                        onOpenPerson(u)
+                        dismissSearch()
+                    }
+                    return
+                }
+                // The profile fetch failed. Tapping did nothing before this — fall back to the
+                // chat itself if one already exists between us, and only say so when it does not.
                 await MainActor.run {
-                    recents.record(person: u, me: me)
-                    onOpenPerson(u)
-                    dismissSearch()
+                    let cid = ChatService.convId(me, e.key)
+                    if let c = repo.conversations.first(where: { $0.id == cid }) {
+                        onOpenChat(c)
+                        dismissSearch()
+                    } else {
+                        recentPersonOpenFailed = true
+                    }
                 }
             }
         }

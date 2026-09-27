@@ -39,9 +39,11 @@ final class ConversationsDiskCache {
     /// and is stronger than the default Firestore's own cache uses.
     private let protection = FileProtectionType.completeUntilFirstUserAuthentication
 
-    /// Hash of the last blob actually written, so an unchanged list is not written again. Read and
-    /// written only on `io`, which is serial.
-    private var lastWritten: Int?
+    /// The last blob actually written, so an unchanged list is not written again. Read and written
+    /// only on `io`, which is serial. The bytes themselves, not a hash of them: a hash collision
+    /// would skip a real write, and comparing `Int` hashValues (which are not even guaranteed
+    /// stable across runs) is not the "comparing the encoded bytes" this exists to be.
+    private var lastWritten: Data?
     private let io = DispatchQueue(label: "fariin.chatlist.cache", qos: .utility)
 
     // MARK: - Where
@@ -114,9 +116,8 @@ final class ConversationsDiskCache {
             //
             // `ThreadMessageCache` already guards its own write exactly this way; this one never
             // did. Comparing the encoded bytes is the honest test: it is the thing being written.
-            let stamp = blob.hashValue
-            guard stamp != self.lastWritten else { return }
-            self.lastWritten = stamp
+            guard blob != self.lastWritten else { return }
+            self.lastWritten = blob
             // Atomic: a launch reading this file while it is being replaced must see the whole old
             // one or the whole new one, never half of either.
             try? blob.write(to: url, options: [.atomic])

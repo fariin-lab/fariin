@@ -232,7 +232,11 @@ final class ConversationsRepository {
                 // Keep the launch cache current. The RAW documents go in, so the cache is rebuilt by
                 // the same initializer the live path uses and cannot drift from it as fields are
                 // added. Written off the main thread; see ConversationsDiskCache.
-                ConversationsDiskCache.shared.store(docs, uid: uid)
+                // L10: merged with any pinned chat below this window, via `writeDiskCache` — storing
+                // just this window left a below-window pin out of the cache that answers the first
+                // frame, so it only showed up a moment later once the live listener caught up.
+                self.lastRawDocs = docs
+                self.writeDiskCache(uid: uid)
                 // "Automatically Archive new chats from unknown users" (Settings > Chats). Here
                 // rather than inside publish() because publish coalesces and can skip a snapshot
                 // outright — this must see every one, since the request it has to catch may arrive
@@ -477,6 +481,11 @@ final class ConversationsRepository {
     // unpinned, left or deleted and is forgotten.
     @ObservationIgnored private var pinnedExtraListeners: [String: ListenerRegistration] = [:]
     @ObservationIgnored private var pinnedExtraDocs: [String: Conversation] = [:]
+    /// The same extras, as the RAW document `ConversationsDiskCache.store` needs (see `writeDiskCache`).
+    @ObservationIgnored private var pinnedExtraRaw: [String: (id: String, data: [String: Any])] = [:]
+    /// The current window's raw documents, kept so a pinned extra that arrives later can still be
+    /// merged into a disk-cache write without needing the window's snapshot again.
+    @ObservationIgnored private var lastRawDocs: [(id: String, data: [String: Any])] = []
 
     private func pinnedIdsKey(_ uid: String) -> String { "pinnedChatIds-\(uid)" }
 
@@ -493,6 +502,7 @@ final class ConversationsRepository {
         for id in Array(pinnedExtraListeners.keys) where fromServer && !outside.contains(id) {
             pinnedExtraListeners.removeValue(forKey: id)?.remove()
             pinnedExtraDocs[id] = nil
+            pinnedExtraRaw[id] = nil
         }
         for id in outside where pinnedExtraListeners[id] == nil {
             pinnedExtraListeners[id] = db.collection("conversations").document(id)
@@ -510,6 +520,10 @@ final class ConversationsRepository {
                     // brings it back to the top of the window, where its pin is remembered again.
                     guard c.isPinned(uid), !c.isCleared(uid) else { self.forgetPinnedExtra(id, uid: uid); return }
                     self.pinnedExtraDocs[id] = c
+                    self.pinnedExtraRaw[id] = (id: snap.documentID, data: data)
+                    // L10: the disk cache must hold this too, or the very cache that exists to answer
+                    // the first frame instantly is again missing this pin on the next cold launch.
+                    self.writeDiskCache(uid: uid)
                     self.blockListChanged()   // re-publish the window with this chat merged in
                 }
         }
@@ -518,9 +532,13 @@ final class ConversationsRepository {
     private func forgetPinnedExtra(_ id: String, uid: String) {
         pinnedExtraListeners.removeValue(forKey: id)?.remove()
         let had = pinnedExtraDocs.removeValue(forKey: id) != nil
+        pinnedExtraRaw.removeValue(forKey: id)
         let kept = (UserDefaults.standard.stringArray(forKey: pinnedIdsKey(uid)) ?? []).filter { $0 != id }
         UserDefaults.standard.set(kept, forKey: pinnedIdsKey(uid))
-        if had { blockListChanged() }
+        if had {
+            writeDiskCache(uid: uid)
+            blockListChanged()
+        }
     }
 
     /// The window plus any pinned chat that sits below it (never twice: the window wins).
@@ -528,6 +546,16 @@ final class ConversationsRepository {
         guard !pinnedExtraDocs.isEmpty else { return window }
         let inWindow = Set(window.map(\.id))
         return window + pinnedExtraDocs.values.filter { !inWindow.contains($0.id) }
+    }
+
+    /// L10: the same merge `withPinnedExtras` makes for the live list, but as the raw Firestore
+    /// documents `ConversationsDiskCache.store` needs. Storing only the window's `docs` left a
+    /// pinned chat below it out of the very cache that exists to answer the first frame instantly —
+    /// it only reappeared a moment later, once the live listener re-merged it in memory.
+    private func writeDiskCache(uid: String) {
+        let inWindow = Set(lastRawDocs.map { $0.id })
+        let merged = lastRawDocs + pinnedExtraRaw.values.filter { !inWindow.contains($0.id) }
+        ConversationsDiskCache.shared.store(merged, uid: uid)
     }
 
     func stop() {
@@ -556,6 +584,8 @@ final class ConversationsRepository {
         pinnedExtraListeners.values.forEach { $0.remove() }
         pinnedExtraListeners = [:]
         pinnedExtraDocs = [:]
+        pinnedExtraRaw = [:]
+        lastRawDocs = []
         listenerUid = nil
         windowLimit = Self.pageSize
         hasOlder = false

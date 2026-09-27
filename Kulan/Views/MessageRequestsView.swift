@@ -47,6 +47,11 @@ struct MessageRequestsView: View {
     /// The question, not the answer — the alert reads it and the destructive button acts on it. Same
     /// shape as the chat list's own `pendingDelete`.
     @State private var pendingDecline: Conversation?
+    /// A refused Accept or Delete (offline, or the server said no). `try?` used to swallow this
+    /// silently, so the row looked answered when nothing had happened; the request itself is left
+    /// untouched either way, since nothing here removes it until the data actually changes.
+    @State private var acceptFailed = false
+    @State private var declineFailed = false
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
@@ -103,7 +108,12 @@ struct MessageRequestsView: View {
                isPresented: Binding(get: { pendingDecline != nil },
                                     set: { if !$0 { pendingDecline = nil } })) {
             Button("Delete", role: .destructive) {
-                if let c = pendingDecline { Task { try? await MessageRequests.decline(c.id) } }
+                if let c = pendingDecline {
+                    Task {
+                        do { try await MessageRequests.decline(c.id) }
+                        catch { await MainActor.run { declineFailed = true } }
+                    }
+                }
                 pendingDecline = nil
             }
             Button("Cancel", role: .cancel) { pendingDecline = nil }
@@ -113,6 +123,16 @@ struct MessageRequestsView: View {
             // done something they had not.
             // ...and the cooldown (owner's spec §10), so the sentence says what actually happens.
             Text("The conversation is deleted and they can’t send you another request for \(MessageRequests.declineCooldownDays) days. This does not block them.")
+        }
+        .alert("Couldn't accept", isPresented: $acceptFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check your connection and try again.")
+        }
+        .alert("Couldn't delete", isPresented: $declineFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check your connection and try again.")
         }
     }
 
@@ -137,7 +157,12 @@ struct MessageRequestsView: View {
         // Accept outermost, so it is both the first button and the one a full swipe fires: saying yes
         // is what this page is for. Delete is the deliberate one, behind a confirmation.
         .swipeActions(edge: .trailing) {
-            Button { Task { try? await MessageRequests.accept(conv.id) } } label: {
+            Button {
+                Task {
+                    do { try await MessageRequests.accept(conv.id) }
+                    catch { await MainActor.run { acceptFailed = true } }
+                }
+            } label: {
                 Label("Accept", systemImage: "checkmark")
             }
             .tint(.green)
@@ -154,7 +179,12 @@ struct MessageRequestsView: View {
         // nothing to clear it. Giving the row a menu takes the gesture and takes the highlight with
         // it — the archive's own note, learned there the hard way.
         .contextMenu {
-            Button { Task { try? await MessageRequests.accept(conv.id) } } label: {
+            Button {
+                Task {
+                    do { try await MessageRequests.accept(conv.id) }
+                    catch { await MainActor.run { acceptFailed = true } }
+                }
+            } label: {
                 Label { Text("Accept") } icon: { MenuIcon(system: "checkmark", ink: .label) }
             }
             Button(role: .destructive) { pendingDecline = conv } label: {

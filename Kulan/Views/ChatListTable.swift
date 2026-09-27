@@ -613,6 +613,9 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// see `refreshVisibleContent`. Pruned to the live id set on every apply so it cannot grow with
     /// every chat that has ever been on screen.
     private var configured: [String: ChatRowContent] = [:]
+    /// Same idea, for the search's "other people" rows. See `refreshVisibleContent`. Pruned the
+    /// same way as `configured`, against the live people ids.
+    private var configuredPeople: [String: UserProfile] = [:]
     /// The theme the visible cells were built in. Not part of a row's content, and it changes all of
     /// them at once.
     private var configuredDark: Bool?
@@ -790,10 +793,43 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // reference clears their own `conversationCellHeightCache` on a reset for exactly this
         // reason. Cleared BEFORE the reload, or the reload re-reads the stale number it just asked
         // us to forget.
+        //
+        // ⚠️ THE RELOAD ITSELF WAITS ON THE SAME GATES EVERY OTHER TABLE CHANGE DOES, audit
+        // 2026-09-27. This used to call `reloadData()` straight through, even mid-flight of a row
+        // transaction, a drag, a transition, or with the context menu up. Cutting a row animation
+        // off before its completion block runs left `isAnimatingRows` stuck true, which freezes
+        // every later update, the same failure `apply` already guards against. `reloadForTextSizeChange`
+        // defers the same way and is replayed wherever this file already replays what one of those
+        // gates held back.
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (vc: ChatListTableController, _) in
             vc.chatRowHeight = nil
-            vc.tableView.reloadData()
+            vc.reloadForTextSizeChange()
         }
+    }
+
+    /// A text-size change wants `reloadData()`. Same four gates `apply` waits on, because a reload
+    /// straight through here can land mid-flight of a row transaction, under a finger, mid-transition
+    /// or under an open context menu, and none of those wants the whole table pulled out from under
+    /// it. Owed once when a gate is up, replayed in `flushDeferredState` and in the row transaction's
+    /// completion block, the two places this file already replays what a gate held back.
+    private func reloadForTextSizeChange() {
+        guard isAnimatingRows || tableView.isDragging || tableView.isDecelerating
+                || isInTransition || menuIsUp else {
+            tableView.reloadData()
+            return
+        }
+        textSizeReloadWasDeferred = true
+    }
+
+    /// Replays `reloadForTextSizeChange` once none of its four gates still holds. Safe to call
+    /// unconditionally: it is a no-op unless a reload is actually owed.
+    private func flushTextSizeReloadIfNeeded() {
+        guard textSizeReloadWasDeferred,
+              !isAnimatingRows, !tableView.isDragging, !tableView.isDecelerating,
+              !isInTransition, !menuIsUp
+        else { return }
+        textSizeReloadWasDeferred = false
+        tableView.reloadData()
     }
 
     // ⛔ THE BARS WATCH THIS TABLE — owner, 2026-09-11, with the Calls page held beside this one:
@@ -1048,10 +1084,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // back — and on the replay those rows looked uncached, which makes `contentChangedOldPaths`
         // skip them outright and makes the refresh rebuild hosting configurations that did not need
         // it, resetting each row's own `@State` (the typing self-expire, the relative-time tick).
-        if configured.count > new.pinned.count + new.unpinned.count {
-            let live = Set(new.pinned + new.unpinned)
-            configured = configured.filter { live.contains($0.key) }
-        }
+        //
+        // ⚠️ BY SET DIFFERENCE, NOT BY COUNT, audit 2026-09-27. One chat leaving and a different
+        // one arriving in the same pass leaves the total count unchanged, so the old entry never
+        // met a prune that only fired when the cache had grown past the live count.
+        let live = Set(new.pinned + new.unpinned)
+        configured = configured.filter { live.contains($0.key) }
+        let livePeople = Set(new.people)
+        configuredPeople = configuredPeople.filter { livePeople.contains($0.key) }
 
         let changes = ChatListRowChanges.between(old, new)
         // A heading appears or disappears when the pinned section fills or empties. It is not a row
@@ -1210,12 +1250,15 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             // Here is the right moment for it — the rows have landed, nothing is in flight, and
             // `refreshVisibleContent` compares each visible row against its cached content, so rows
             // that did not change cost a comparison and no redraw.
-            self.refreshWasDeferred = false
             self.refreshVisibleContent()
             if let owed = self.ticksWereDeferred {
                 self.ticksWereDeferred = nil
                 self.syncTicks(selected: owed)
             }
+            // A text-size change asked for its reload while the rows were flying is owed the same
+            // way. This is the one gate whose clearing is not itself a scroll or transition event,
+            // so nothing else would otherwise call `flushTextSizeReloadIfNeeded` for it.
+            self.flushTextSizeReloadIfNeeded()
             // 2026-09-24 audit: a snapshot that arrived mid-flight (see the guard in `apply`) is
             // replayed now the rows have landed. On the next turn of the run loop, not in here, so
             // it can never meet `isApplying` still set and be dropped.
@@ -1229,19 +1272,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             UIView.animate(withDuration: 0) { work() }
         }
         CATransaction.commit()
-
-        // ⛔ AND NOTHING TOUCHES A LIVE CELL AFTERWARDS IF ANYTHING MOVED. When the diff was purely
-        // a content change the in-place update is theirs and is the cheap path; when the diff moved
-        // rows, the reload above has already done the work inside the transaction and reaching into
-        // the cells now would be the second pass all over again.
-        if changes.isEmpty { refreshVisibleContent() }
     }
 
     /// True from the moment a row transaction opens until its animation has actually finished.
     /// Everything that would reach into a live cell asks this first.
     private var isAnimatingRows = false
-    /// Something wanted the in-place content update while rows were moving. It is owed once.
-    private var refreshWasDeferred = false
+    /// A text-size change that arrived while a gate was up, owed until every gate clears. See
+    /// `reloadForTextSizeChange`.
+    private var textSizeReloadWasDeferred = false
     /// The selection a `syncTicks` wanted to apply mid-flight, owed until the flight ends.
     private var ticksWereDeferred: Set<String>?
     /// 2026-09-24 audit: the Select-mode switch asked for mid-flight, owed until the flight ends.
@@ -1259,6 +1297,17 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         var out: [IndexPath] = []
         // 2026-09-24 audit: looked up once, not scanned per id. See `pathIndex`.
         let oldAt = old.pathIndex(), newAt = new.pathIndex()
+        // 2026-09-27 audit: `host.conversation(id)` scans pinned then unpinned per call, and this
+        // loop called it once per id on every incoming message, squaring the cost of a big account
+        // on the main thread. Built once here instead, same priority (pinned wins) as
+        // `conversation(_:)` gives a duplicate.
+        var byId: [String: Conversation] = [:]
+        for conv in host.parent.pinned where byId[conv.id] == nil { byId[conv.id] = conv }
+        for conv in host.parent.unpinned where byId[conv.id] == nil { byId[conv.id] = conv }
+        // A theme flip is not part of `ChatRowContent` (see `refreshVisibleContent`), so a row whose
+        // content is otherwise unchanged needs its own check here or it keeps the old colours until
+        // the transaction's completion block runs the theme check on its own.
+        let themeChanged = configuredDark != host.parent.dark
         for s in ChatListSection.allCases where s != .people {
             for id in new.ids(in: s) {
                 // ⚠️ `configured[id]` IS NIL FOR EVERY ROW THAT HAS NEVER BEEN DEQUEUED, and
@@ -1271,8 +1320,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                 guard let from = oldAt[id], let to = newAt[id],
                       from == to,
                       let known = configured[id],
-                      let conv = host.conversation(id) else { continue }
-                if known != host.content(for: conv) { out.append(from) }
+                      let conv = byId[id] else { continue }
+                if themeChanged || known != host.content(for: conv) { out.append(from) }
             }
         }
         return out
@@ -1305,6 +1354,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // it refuses to `reconfigureRows` across a section whose cell type may have changed.
         if s == .people {
             guard let u = host.person(id) else { return cell }
+            configuredPeople[id] = u
             c.contentConfiguration = UIHostingConfiguration { p.personRow(u) }.margins(.all, 0)
             // He set `selectionDisabled(true)` on this row in SwiftUI: a stranger is not something
             // you can tick and then archive.
@@ -1373,7 +1423,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     func refreshVisibleContent() {
         // The fence — see `apply`. A refresh asked for mid-flight is owed, not dropped: the content
         // that prompted it is real, it just may not be painted onto a row that is still moving.
-        guard !isAnimatingRows else { refreshWasDeferred = true; return }
+        guard !isAnimatingRows else { return }
         guard let host else { return }
         let p = host.parent
         // A theme flip changes every row and is not part of any row's content value.
@@ -1381,11 +1431,20 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         configuredDark = p.dark
 
         for ip in tableView.indexPathsForVisibleRows ?? [] {
-            guard let s = ChatListSection(rawValue: ip.section), s != .people,
+            guard let s = ChatListSection(rawValue: ip.section),
                   let id = state.ids(in: s)[safe: ip.row],
-                  let conv = host.conversation(id),
                   let cell = tableView.cellForRow(at: ip) as? ChatListCell
             else { continue }
+            // 2026-09-27 audit: a stranger's row was skipped here outright, so a name or photo that
+            // finished loading while the row was on screen stayed stale until it scrolled away and
+            // back. Tracked the same way a chat row is, by what the cell was last handed.
+            if s == .people {
+                guard let u = host.person(id), configuredPeople[id] != u else { continue }
+                configuredPeople[id] = u
+                cell.contentConfiguration = UIHostingConfiguration { p.personRow(u) }.margins(.all, 0)
+                continue
+            }
+            guard let conv = host.conversation(id) else { continue }
             let fresh = host.content(for: conv)
             guard themeChanged || configured[id] != fresh else { continue }
             configureChatCell(cell, id: id, content: fresh)
@@ -1806,6 +1865,10 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// to land, not for a scroll to stop. That change happened in front of him, so it keeps the
     /// animation it arrived with; the "never animate" rule below is for the scroll catch-up only.
     private func flushDeferredState(afterFlight: Bool = false) {
+        // Called on every gate this file tracks clearing (drag, decelerate, transition, menu), so
+        // it is also the right place to pay off a text-size reload one of those gates deferred. See
+        // `reloadForTextSizeChange`.
+        flushTextSizeReloadIfNeeded()
         guard let (pending, wantsAnimation) = deferredState else { return }
         deferredState = nil
         if afterFlight {
