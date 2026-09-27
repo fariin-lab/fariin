@@ -455,6 +455,63 @@ final class BubbleFillView: UIView {
     private let blurMask = CAShapeLayer()
     private var current: BubbleFill?
 
+    // ⛔ A GRADIENT BELONGS TO THE SCREEN, NOT TO THE BUBBLE — owner, 2026-09-27, two screenshots on
+    // the same wallpaper: ours drew the whole orange-to-red run inside every bubble; the reference
+    // app's bubbles are orange near the top of the screen and dark red near the bottom, each almost
+    // one colour. Its `CVColorOrGradientView` spans the gradient over the conversation controller's
+    // view (`referenceView`) and gives each bubble its slice, redone on every scroll
+    // (`updateScrollingContent`). Same here: the start and end points are that math, verbatim,
+    // against the message list's own view, re-cut per scroll tick by `repositionGradients`.
+    private static let liveGradients = NSHashTable<BubbleFillView>.weakObjects()
+    private var gradientAngle: Double = 180
+
+    /// Called per scroll tick by the message list, beside `WallpaperBlurSliceView.repositionAll`.
+    static func repositionGradients() {
+        for v in liveGradients.allObjects { v.positionGradient() }
+    }
+
+    /// The view the whole gradient spans: the message list's own view, which fills the screen and
+    /// slides with the chat, as theirs is the conversation controller's view. Off the list (a preview,
+    /// a sheet), the window.
+    private var gradientReference: UIView? {
+        var v = superview
+        while let s = v, !(s is UICollectionView) { v = s.superview }
+        return v?.superview ?? window
+    }
+
+    private func positionGradient() {
+        guard !gradient.isHidden, bounds.width > 0, bounds.height > 0, window != nil,
+              let ref = gradientReference, ref.window === window else { return }
+        // Their numbers: 180° spec is 0 rad with the first colour north; the control points sit on
+        // the edge of the unit square along that direction, then map from the reference frame's
+        // units into this view's.
+        let a = (gradientAngle - 180) / 180 * Double.pi
+        let v = CGPoint(x: sin(a), y: -cos(a))
+        let scale = 0.5 / max(abs(v.x), abs(v.y))
+        let start = CGPoint(x: 0.5 + v.x * scale, y: 0.5 + v.y * scale)
+        let end = CGPoint(x: 0.5 - v.x * scale, y: 0.5 - v.y * scale)
+        let r = convert(ref.bounds, from: ref)
+        func local(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: (r.minX + p.x * r.width - bounds.minX) / bounds.width,
+                    y: (r.minY + p.y * r.height - bounds.minY) / bounds.height)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.startPoint = local(start)
+        gradient.endPoint = local(end)
+        CATransaction.commit()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        positionGradient()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        positionGradient()
+    }
+
     private(set) var path = UIBezierPath()
 
     override init(frame: CGRect) {
@@ -494,6 +551,7 @@ final class BubbleFillView: UIView {
         gradient.isHidden = true
         sliceView?.isHidden = true
         blurView?.isHidden = true
+        Self.liveGradients.remove(self)
 
         switch fill {
         case .solid(let hex):
@@ -502,6 +560,9 @@ final class BubbleFillView: UIView {
             shape.fillColor = UIColor.clear.cgColor
             gradient.colors = hexes.map { BubblePalette.hex(UInt32(truncatingIfNeeded: $0)).cgColor }
             gradient.isHidden = false
+            gradientAngle = ChatColorSpec.angleDegrees(forStops: hexes)
+            Self.liveGradients.add(self)
+            positionGradient()
         case .received:
             shape.fillColor = BubblePalette.receivedFill.cgColor
         case .background:

@@ -4648,6 +4648,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // read-tracking below deliberately ignore: a programmatic scroll and a capture freeze both
         // still move the bubbles across the picture.
         WallpaperBlurSliceView.repositionAll()
+        BubbleFillView.repositionGradients()   // a gradient chat colour is cut from the screen, like the slices
         guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
         // A finger dragging the keyboard down moves the guide, and the bar with it, on this event.
         followKeyboardUnderFinger()

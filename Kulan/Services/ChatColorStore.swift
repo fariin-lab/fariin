@@ -18,6 +18,20 @@ struct ChatColorSpec: Equatable, Identifiable {
     // A representative swatch colour (for the picker circle / button tint).
     var swatch: Color { solid }
 
+    /// The direction a gradient runs, in the reference app's spec degrees: 180 puts the first colour
+    /// at the top, 168 tilts it 12° one way, 192 the other. Its nine gradients carry these numbers in
+    /// `PaletteChatColor+Constants`; ours stored none, so all nine drew at 180. Keyed by the exact
+    /// stops (see `ChatColors.presets`); anything else, a gradient made by hand, runs at 180.
+    static func angleDegrees(forStops stops: [UInt]) -> Double {
+        switch stops {
+        case [0xE57C00, 0x5E0000]: return 168                    // Ember
+        case [0xF65560, 0x442CED],                                // Infrared
+             [0xEC13DD, 0x1B36C6],                                // Fluorescent
+             [0xDB7133, 0x911231]: return 192                    // Tangerine
+        default: return 180
+        }
+    }
+
     var stored: String { (isGradient ? "g:" : "s:") + colors.map { String(format: "%06X", $0) }.joined(separator: ",") }
 
     init(colors: [UInt]) { self.colors = colors }
