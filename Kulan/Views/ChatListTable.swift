@@ -2123,7 +2123,18 @@ private final class ChatListCell: UITableViewCell {
         // the one every stock list uses. The history of this method (09-05 remnant, 09-11 plate and
         // press fill, 09-26 card) is in git; the remnant it once fixed cannot come back, because
         // this still re-resolves on every state change.
-        backgroundConfiguration = UIBackgroundConfiguration.listPlainCell().updated(for: state)
+        var bg = UIBackgroundConfiguration.listPlainCell().updated(for: state)
+        // ⛔ TICKED ROWS JOIN INTO ONE BLOCK — owner, 2026-09-27, select mode with six rows ticked: "no
+        // lines" between them. The row heights are whole points, so neighbouring rows meet exactly;
+        // the thin dark line was the selected background stopping short of its row. In select mode a
+        // ticked row's fill goes edge to edge with square corners, so a run of ticked rows reads as
+        // one grey block. Only that state: the press and swipe looks above stay Apple's untouched.
+        if state.isEditing && state.isSelected {
+            bg.backgroundInsets = .zero
+            bg.edgesAddingLayoutMarginsToBackgroundInsets = []
+            bg.cornerRadius = 0
+        }
+        backgroundConfiguration = bg
     }
 }
 
