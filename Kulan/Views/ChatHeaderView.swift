@@ -267,7 +267,19 @@ struct ChatHeaderModel: Equatable {
     static func verifiedMark() -> UIImage? {
         let config = UIImage.SymbolConfiguration(paletteColors: [.white, UIColor(Color(hex: 0x3DA1FD))])
             .applying(UIImage.SymbolConfiguration(pointSize: 14, weight: .regular))
-        return UIImage(systemName: "checkmark.seal.fill", withConfiguration: config)?
+        return flat(UIImage(systemName: "checkmark.seal.fill", withConfiguration: config))
+    }
+
+    /// ⛔ A PLAIN BITMAP, NOT A SYMBOL — owner, 2026-09-27: "the verify badge in the chat header
+    /// looks black, make it always blue". A symbol image inside the iOS 26 bar is re-rendered by
+    /// the bar as a one-colour glyph (black in light mode, white in dark), palette or not. Drawn
+    /// once into a bitmap there is no symbol left for the bar to treat, so it stays blue.
+    private static func flat(_ symbol: UIImage?) -> UIImage? {
+        guard let symbol else { return nil }
+        let fmt = UIGraphicsImageRendererFormat.preferred()
+        fmt.opaque = false
+        return UIGraphicsImageRenderer(size: symbol.size, format: fmt)
+            .image { _ in symbol.draw(at: .zero) }
             .withRenderingMode(.alwaysOriginal)
     }
 
@@ -275,8 +287,7 @@ struct ChatHeaderModel: Equatable {
     static func officialTick() -> UIImage? {
         let config = UIImage.SymbolConfiguration(paletteColors: [.white, UIColor(Color(hex: 0x0A84FF))])
             .applying(UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        return UIImage(systemName: "checkmark.seal.fill", withConfiguration: config)?
-            .withRenderingMode(.alwaysOriginal)
+        return flat(UIImage(systemName: "checkmark.seal.fill", withConfiguration: config))
     }
 
     /// The timer, as the old SwiftUI header drew it: 13pt semibold. A TEMPLATE, tinted by the image
@@ -308,7 +319,6 @@ final class HeaderAvatarView: UIView {
     // ⛔ ONE SILHOUETTE, NOT A COLOURED LETTER — owner, 2026-09-16, "make one type". The gradient
     // layer and the initial label are gone; the fill and the glyph both come from `AvatarPalette`,
     // which is the only place that decides how a faceless account looks.
-    private let glyph = UIImageView()
     private var loadedFor: String?
     private var loadTask: Task<Void, Never>?
     /// The last URL that failed and when, so a retry waits a few seconds instead of firing on
@@ -323,24 +333,36 @@ final class HeaderAvatarView: UIView {
             widthAnchor.constraint(equalToConstant: size),
             heightAnchor.constraint(equalToConstant: size),
         ])
-        layer.cornerRadius = size / 2
-        layer.masksToBounds = true
-
-        backgroundColor = AvatarPalette.placeholderFillUI
-        glyph.contentMode = .center
-        glyph.image = AvatarPalette.placeholderCanvas(size: size)
-        addSubview(glyph)
+        // ⛔ NO FILL, NO CLIP, NO GLYPH VIEW — owner, 2026-09-27, the two grey lines beside the
+        // silhouette a FOURTH time, "only on the message list page", i.e. only inside this bar.
+        // Flattening the glyph (09-26) left three composited things: a translucent fill, a corner
+        // clip and an image view, and the iOS 26 bar treats the edges of what it composites. The
+        // no-photo state is now ONE pre-drawn disc (fill + silhouette, the same picture
+        // `AvatarView` draws) set as this view's own layer contents. The photo keeps its own round
+        // image view, which never shows the placeholder.
+        backgroundColor = .clear
+        layer.contentsGravity = .resizeAspectFill
+        applyPlaceholder()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (v: HeaderAvatarView, _) in
+            v.applyPlaceholder()
+        }
 
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
+        imageView.layer.cornerRadius = size / 2
         addSubview(imageView)
+    }
+
+    private func applyPlaceholder() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        layer.contents = AvatarPalette.placeholderDisc(size: size, dark: dark)?.cgImage
+        layer.contentsScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        glyph.frame = bounds
         imageView.frame = bounds
     }
 

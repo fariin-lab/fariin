@@ -380,20 +380,32 @@ enum BubbleTicks {
     /// mark redesign, make exactly like this". Two thin round-capped checks, the second starting
     /// halfway along the first, so its short stroke lands on the first one's long stroke. The two
     /// semibold symbols side by side read heavy and cramped next to the time.
+    ///
+    /// ⛔ HIS OWN SVGs — owner, 2026-09-27, "use the SVG I sent you": `checkmark-svgrepo-com.svg`
+    /// (`M6.5 17l6 6 13-13`) and `checkmark-double-svgrepo-com.svg` (`M4 17l5 5 12-12M16 20l2
+    /// 2 12-12`), both on a 32-unit box with a 2-unit round stroke. The points below are those
+    /// paths verbatim, cropped to their own bounds and scaled so the double mark is 8pt tall, the
+    /// height the old drawn ticks had, so the footer's measured width barely moves.
     private static func drawnChecks(_ count: Int) -> UIImage? {
         let key = CGFloat(count)
         if let hit = doubleCheckCache[key] { return hit }
-        // The reference app's check: 11 × 9 at the default text size, the second 6pt to the right.
-        let checkW: CGFloat = 11, checkH: CGFloat = 8, step: CGFloat = 6, line: CGFloat = 1.2
-        let pad = line / 2
-        let offsets: [CGFloat] = count == 1 ? [0] : [0, step]
-        let size = CGSize(width: checkW + (offsets.last ?? 0) + line, height: checkH + line)
+        let strokes: [[CGPoint]] = count == 1
+            ? [[CGPoint(x: 6.5, y: 17), CGPoint(x: 12.5, y: 23), CGPoint(x: 25.5, y: 10)]]
+            : [[CGPoint(x: 4, y: 17), CGPoint(x: 9, y: 22), CGPoint(x: 21, y: 10)],
+               [CGPoint(x: 16, y: 20), CGPoint(x: 18, y: 22), CGPoint(x: 30, y: 10)]]
+        let all = strokes.flatMap { $0 }
+        let minX = all.map(\.x).min()!, maxX = all.map(\.x).max()!
+        let minY = all.map(\.y).min()!, maxY = all.map(\.y).max()!
+        let scale: CGFloat = 8 / 12                      // the double mark's 12 units → 8pt
+        let line = 2 * scale, pad = line / 2
+        let size = CGSize(width: (maxX - minX) * scale + line, height: (maxY - minY) * scale + line)
         let img = UIGraphicsImageRenderer(size: size).image { _ in
             let p = UIBezierPath()
-            for dx in offsets {
-                p.move(to: CGPoint(x: pad + dx, y: pad + checkH * 0.52))
-                p.addLine(to: CGPoint(x: pad + dx + checkW * 0.34, y: pad + checkH))
-                p.addLine(to: CGPoint(x: pad + dx + checkW, y: pad))
+            for s in strokes {
+                for (i, pt) in s.enumerated() {
+                    let q = CGPoint(x: pad + (pt.x - minX) * scale, y: pad + (pt.y - minY) * scale)
+                    if i == 0 { p.move(to: q) } else { p.addLine(to: q) }
+                }
             }
             p.lineWidth = line
             p.lineCapStyle = .round
