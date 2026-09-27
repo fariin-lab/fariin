@@ -234,31 +234,10 @@ enum ChatWallpapers {
     /// rest. Adding a theme is still adding one row here — no asset, no app-size cost, no review.
     /// Graphite deliberately breaks the loudness half and not the flatness half: someone who wants
     /// a quiet chat should have one, and it is the only palette here whose corners are neutral.
+    /// ⛔ THE NINE GRADIENTS FIRST, THE SIX PATTERNED ONES AFTER — owner, 2026-09-27: "my new
+    /// wallpapers make it first, the old ones make back". Order only; every id is unchanged, so a
+    /// chat that already uses one keeps it.
     static let all: [WallpaperGradient] = [
-        .init(id: "sunset", name: "Sunset",
-              lightCorners: [0xFFD9C2, 0xFFE7B0, 0xFFC6D4, 0xEBC9F0],
-              darkCorners:  [0x3C2119, 0x372A12, 0x361A28, 0x2C1C33],
-              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D),
-        .init(id: "ocean", name: "Ocean",
-              lightCorners: [0xBEE3FF, 0xC6F1EA, 0xD3DCFF, 0xAFDDF6],
-              darkCorners:  [0x12314F, 0x113638, 0x1A2A55, 0x0F2D46],
-              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0),
-        .init(id: "dusk", name: "Dusk",
-              lightCorners: [0xE2CCFA, 0xF6CDEA, 0xCED4FA, 0xEBD2FF],
-              darkCorners:  [0x2C1F4E, 0x3E1F44, 0x22224E, 0x341C4A],
-              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0),
-        .init(id: "forest", name: "Forest",
-              lightCorners: [0xCFEFCB, 0xE7F4C2, 0xC4EEDD, 0xDCF2CE],
-              darkCorners:  [0x143A25, 0x1E3C1B, 0x113A33, 0x1A3A1F],
-              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A),
-        .init(id: "mono", name: "Graphite",
-              lightCorners: [0xEFEFF2, 0xE6E6EB, 0xF2F1F5, 0xE9E8EE],
-              darkCorners:  [0x18181B, 0x131316, 0x1C1C20, 0x141417],
-              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C),
-        .init(id: "rose", name: "Rose",
-              lightCorners: [0xFFD2DB, 0xFFE2CE, 0xF9CBE7, 0xFFD8E9],
-              darkCorners:  [0x3E1E2B, 0x40261E, 0x351A33, 0x3A1F3C],
-              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
         // ⛔ THE REFERENCE APP'S NINE GRADIENTS — owner, 2026-09-27, with its Set Wallpaper page:
         // "take the nine multi-colour wallpapers and put them in my presets". Read from its source
         // (`Wallpaper+Constants.swift`): each is two colours, a light and a dark pair, on an angle.
@@ -301,6 +280,30 @@ enum ChatWallpapers {
               lightCorners: [0xFFE0BD, 0xFFE5C2, 0xFCAC92, 0xFCB197],
               darkCorners:  [0xE5B983, 0xEAC28A, 0xBB6144, 0xC06A4B],
               tint: Color(hex: 0xFEC9AA), bubbleHex: 0xFEC9AA, pattern: false),
+        .init(id: "sunset", name: "Sunset",
+              lightCorners: [0xFFD9C2, 0xFFE7B0, 0xFFC6D4, 0xEBC9F0],
+              darkCorners:  [0x3C2119, 0x372A12, 0x361A28, 0x2C1C33],
+              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D),
+        .init(id: "ocean", name: "Ocean",
+              lightCorners: [0xBEE3FF, 0xC6F1EA, 0xD3DCFF, 0xAFDDF6],
+              darkCorners:  [0x12314F, 0x113638, 0x1A2A55, 0x0F2D46],
+              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0),
+        .init(id: "dusk", name: "Dusk",
+              lightCorners: [0xE2CCFA, 0xF6CDEA, 0xCED4FA, 0xEBD2FF],
+              darkCorners:  [0x2C1F4E, 0x3E1F44, 0x22224E, 0x341C4A],
+              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0),
+        .init(id: "forest", name: "Forest",
+              lightCorners: [0xCFEFCB, 0xE7F4C2, 0xC4EEDD, 0xDCF2CE],
+              darkCorners:  [0x143A25, 0x1E3C1B, 0x113A33, 0x1A3A1F],
+              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A),
+        .init(id: "mono", name: "Graphite",
+              lightCorners: [0xEFEFF2, 0xE6E6EB, 0xF2F1F5, 0xE9E8EE],
+              darkCorners:  [0x18181B, 0x131316, 0x1C1C20, 0x141417],
+              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C),
+        .init(id: "rose", name: "Rose",
+              lightCorners: [0xFFD2DB, 0xFFE2CE, 0xF9CBE7, 0xFFD8E9],
+              darkCorners:  [0x3E1E2B, 0x40261E, 0x351A33, 0x3A1F3C],
+              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
     ]
 
     /// A theme = the paired wallpaper + bubble colour, applied together by a Chat Theme card.
