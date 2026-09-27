@@ -1104,7 +1104,9 @@ struct AppearanceSettingsView: View {
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         .padding(10)
-                        .frame(width: 92, height: 118)
+                        // 150 tall (was 118) — owner, 2026-09-27: "these wallpaper preview cards look
+                        // small in height". A phone-shaped card reads as a wallpaper, not a swatch.
+                        .frame(width: 92, height: 150)
                         .background(GradientWallpaperView(g: g, dark: dark))
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(
