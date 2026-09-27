@@ -1013,7 +1013,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHideNote(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
-        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
+        // 2026-09-27, the composer left high after a screenshot — see `keyboardDidHideNote`.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHideNote(_:)),
+                                               name: UIResponder.keyboardDidHideNotification, object: nil)        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
         // before the snapshot is replaced, the second catches a restore that lands after it.
         NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground),
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
@@ -3102,6 +3104,40 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the usual reason: the guide is measured and the band is remembered. Both are raise-only here —
     /// nothing in this method can push the bar DOWN, so a keyboard that genuinely went away while we
     /// were gone is left to the real notification rather than guessed at from stale state.
+    /// ⛔ A KEYBOARD THAT HAS FINISHED HIDING IS GONE — owner, 2026-09-27, again: keys up, take a
+    /// screenshot, and the composer stays 60-80pt too high over an empty band. The capture moves the
+    /// list programmatically, which reads as an interactive dismiss: a zero-duration frame change
+    /// writes a half-way height into the guide, and the real hide either never comes or comes while
+    /// the app is briefly inactive and is refused by `rideKeyboard`. After that nothing lowers it:
+    /// the floor stands down while the keys "are up", the system feeder only raises, and the return
+    /// sync keys off the field, which is still first responder.
+    ///
+    /// `didHide` is posted only once the keys are really off screen, so unlike the will-hide it is safe
+    /// to believe in any app state. It puts the bar back at rest, the way an ordinary dismissal ends.
+    @objc private func keyboardDidHideNote(_ note: Notification) {
+        guard isViewLoaded, view.window != nil, !isDisappearing, keyboardIsUp || dockedBand > 0 else { return }
+        // ⚠️ ONLY WHILE THE APP IS ACTIVE. Switching apps also hides the keys, and iOS puts them straight
+        // back on return with no show notification (see `rideKeyboard`); lowering here would re-open
+        // that bug. An inactive hide is `syncKeyboardOnReturn`'s: at didBecomeActive it lowers when the
+        // field no longer has focus, which is the case when the keys really went away.
+        guard UIApplication.shared.applicationState == .active else { return }
+        settleKeyboardAtRest()
+    }
+
+    // ⚠️ NOT ALSO A SCREENSHOT CHECK AGAINST `view.keyboardLayoutGuide`. That guide does not track
+    // the keys on iOS 27 inside this hosted controller (see the observers in `viewDidLoad`), so it
+    // would report "no keyboard" with the keys up and drop the bar under them. The did-hide above
+    // is the keyboard's own word and is the only lowering signal trusted here.
+
+    private func settleKeyboardAtRest() {
+        dockedBand = 0
+        keyboardBlockUntil = .distantPast
+        setKeyboardGuideHeight(restSafeBottom)
+        positionBottomBar()
+        view.layoutIfNeeded()
+        updateInsets()
+    }
+
     @objc private func appWillEnterForeground() { syncKeyboardOnReturn(mayLower: false) }
     @objc private func appDidBecomeActive() { syncKeyboardOnReturn(mayLower: true) }
 
