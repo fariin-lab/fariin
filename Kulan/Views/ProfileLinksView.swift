@@ -282,10 +282,18 @@ private struct LinkChipGlass: ViewModifier {
     let tint: Color?
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 27.0, *) {
-            content.liquidGlass(Capsule(), interactive: true)
+        if let tint {
+            // ⛔ NO SHADOW ON A COLOURED PROFILE — owner, 2026-09-27, the pills ringed over a
+            // coloured profile: "the link badge has a shadow, remove it, make it like the buttons".
+            // A small TINTED glass capsule draws its own drop shadow on iOS 26 (the 70pt circles
+            // below hide theirs at that size), and glass has no switch for it. So with a profile
+            // colour the pill is that same colour, flat, with the circles' thin light rim: what the
+            // circles look like, without the shadow. No colour: plain glass, unchanged.
+            content
+                .background(Capsule().fill(tint))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
         } else {
-            content.liquidGlass(Capsule(), interactive: true, tint: tint)
+            content.liquidGlass(Capsule(), interactive: true)
         }
     }
 }

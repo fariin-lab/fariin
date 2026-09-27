@@ -34,22 +34,21 @@ struct ChatKeyIntroSheet: View {
     var body: some View {
         ScrollView {
                 VStack(spacing: 0) {
-                    hero
+                    // ⛔ THE REFERENCE SHEET'S SHAPE — owner, 2026-09-27: "this sheet looks like AI
+                    // slop; make it smooth and clear like the other app's", with its Disable Sharing
+                    // sheet beside it. What that sheet is: one big emoji, a bold title with nothing
+                    // under it, three rows each a thin blue outline icon beside a semibold line and
+                    // a grey sentence, one blue button. The glowing disc, the eight rays, the
+                    // paragraph and the tinted icon tiles are gone.
+                    Text("🔑")
+                        .font(.system(size: 96))
+                        .padding(.top, 36)
                     Text("What is a Chat Key?")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.system(size: 28, weight: .bold))
                         .multilineTextAlignment(.center)
-                        .padding(.top, 20)
-                    Text("A Chat Key is a private code that lets people message and call you "
-                         + "directly, without your phone number and whatever your usual privacy "
-                         + "settings say.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
-                        .padding(.horizontal, 4)
+                        .padding(.top, 22)
 
-                    VStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 26) {
                         // ⛔ THIS LINE IS NOT THE ONE HE WROTE, AND THE CHANGE IS DELIBERATE. His
                         // mock-up says "Your Chat Key is end-to-end encrypted", and that is not what
                         // this feature does: the key is hashed with scrypt and only the hash is
@@ -58,19 +57,19 @@ struct ChatKeyIntroSheet: View {
                         // something specific in this app, it is printed on the chat screen itself,
                         // and using it for something else would make the real claim worth less.
                         // What is written here is true and is the same reassurance.
-                        point("lock.fill", "Private and secure",
+                        point("lock", "Private and secure",
                               "Your key is never stored as you typed it. We keep a scrambled copy "
                               + "that cannot be turned back into your key.")
-                        point("person.2.fill", "Direct communication",
+                        point("person.2", "Direct communication",
                               "People with your Chat Key can message and call you straight away, "
                               + "whatever your Messages and Calls settings say.")
-                        point("checkmark.shield.fill", "You are in control",
+                        point("checkmark.shield", "You are in control",
                               "Share it only with people you want to hear from, and change or "
                               + "remove it whenever you like.")
                     }
-                    .padding(.top, 26)
+                    .padding(.top, 34)
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 32)
                 .padding(.bottom, 16)
         }
         // ⛔ "GOT IT" IS EDGE-ATTACHED, NOT THE LAST ROW OF A STACK — owner, 2026-09-16, quoting the
@@ -110,12 +109,13 @@ struct ChatKeyIntroSheet: View {
         .overlay(alignment: .topLeading) {
             // His mock-up's ✕, in the corner it is drawn in. The drag indicator stays off for the
             // reason the Glow sheet records: two ways to say "close" in the same corner of the eye.
+            // The reference's ✕: a 44pt glass circle, the same close every other sheet here has.
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 32, height: 32)
-                    .background(Color.primary.opacity(0.10), in: Circle())
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -134,55 +134,21 @@ struct ChatKeyIntroSheet: View {
         .presentationDragIndicator(.hidden)
     }
 
-    /// The illustration. His fuller mock-up draws a phone ringed by four faces on dashed lines;
-    /// this is the simpler of his two — the key on a lit disc — because that one is artwork and this
-    /// one is geometry. If he wants the four faces it needs a real drawing, not more SwiftUI.
-    private var hero: some View {
-        ZStack {
-            Circle()
-                .fill(RadialGradient(colors: [accent.opacity(0.22), accent.opacity(0)],
-                                     center: .center, startRadius: 20, endRadius: 92))
-                .frame(width: 184, height: 184)
-            Circle()
-                .fill(accent.opacity(0.14))
-                .frame(width: 116, height: 116)
-            Circle()
-                .fill(accent)
-                .frame(width: 84, height: 84)
-            Image(systemName: "key.fill")
-                .font(.system(size: 36, weight: .semibold))
-                .foregroundStyle(.white)
-                // The mock-up's key lies along the diagonal rather than upright.
-                .rotationEffect(.degrees(-45))
-            // The little rays his first mock-up draws either side of the disc.
-            ForEach(0..<8, id: \.self) { i in
-                Capsule()
-                    .fill(accent.opacity(0.55))
-                    .frame(width: 12, height: 3)
-                    .offset(x: 74)
-                    .rotationEffect(.degrees(Double(i) * 45 + 22.5))
-            }
-        }
-        .frame(height: 200)
-        .padding(.top, 28)
-    }
-
+    /// One row, the reference's: a thin outline glyph in the app's blue, no tile behind it, and
+    /// the title over its sentence.
     private func point(_ icon: String, _ title: String, _ body: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(accent.opacity(0.14))
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(accent)
-            }
-            .frame(width: 38, height: 38)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .top, spacing: 18) {
+            Image(systemName: icon)
+                .font(.system(size: 24, weight: .regular))
+                .foregroundStyle(accent)
+                .frame(width: 30)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(body)
-                    .font(.subheadline)
+                    .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

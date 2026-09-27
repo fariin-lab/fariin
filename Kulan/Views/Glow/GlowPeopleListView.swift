@@ -56,8 +56,10 @@ struct GlowPeopleListView: View {
             // ⛔ THE SEARCH FIELD'S SIZE — owner, 2026-09-26: "Glowers and Glowing bar, make it
             // exactly the size of the search bar". Measured off his screenshot of this page: the
             // bottom search field stands 29pt in from each edge and is 46pt tall.
+            // ⛔ 20 IN, THE BACK BUTTON'S OWN EDGE — owner, 2026-09-27: "the side spaces look big,
+            // use the space the back button uses". Was 29, the bottom search field's inset.
             tabs
-                .padding(.horizontal, 29)
+                .padding(.horizontal, 20)
                 .padding(.top, 8)
                 .padding(.bottom, 10)
             list
@@ -106,7 +108,8 @@ struct GlowPeopleListView: View {
             // evening, with a screenshot of the two together: the control draws its capsule inset
             // inside the frame it is given, so a 46pt frame stood 43pt tall against the field's 46
             // (measured off that screenshot). At 50 the drawn capsule matches the field.
-            .frame(height: 50)
+            // ⛔ BACK TO 46 — owner, 2026-09-27, the bar ringed at 50: "looks big height".
+            .frame(height: 46)
     }
 
     // ⛔ SEARCH IS BACK, AT THE BOTTOM — owner, 2026-09-25 evening: "also bottom add search bar".
@@ -433,7 +436,7 @@ private struct NativeSegments: UIViewRepresentable {
     /// Whatever the page offers, taken whole: the width of the row and the height of `tabs`' frame.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width,
-               height: proposal.height ?? 50)
+               height: proposal.height ?? 46)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
