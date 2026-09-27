@@ -2474,7 +2474,7 @@ struct ThreadView: View {
                     let key = MediaOpenRects.key(.chat, m.id)
                     MediaOpen.flyOrPresent(
                         imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
-                        present: { MediaPresentGate.present { viewerVideo = m } })
+                        present: { OpenTrace.start("video"); MediaPresentGate.present { viewerVideo = m } })   // TEMPORARY trace
                 },
                 // 2026-09-24 feature-audit: the bubble's double-tap asks the same `canReact` as the bar.
                 onReact: { emoji in
@@ -3305,7 +3305,7 @@ struct ThreadView: View {
                 if m.isVideo {
                     MediaOpen.flyOrPresent(
                         imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
-                        present: { MediaPresentGate.present { viewerVideo = m } })
+                        present: { OpenTrace.start("video"); MediaPresentGate.present { viewerVideo = m } })   // TEMPORARY trace
                 } else {
                     // Scoped key (.chat): All Media and the profile strip register the SAME ids.
                     MediaOpen.flyOrPresent(
@@ -3353,7 +3353,7 @@ struct ThreadView: View {
                     MediaOpen.flyOrPresent(
                         imageUrl: vmsg.thumbUrl, rectKey: MediaOpenRects.key(.chat, startId),
                         clip: MediaOpenRects.clipRect,
-                        present: { MediaPresentGate.present { viewerVideo = vmsg } })
+                        present: { OpenTrace.start("video"); MediaPresentGate.present { viewerVideo = vmsg } })   // TEMPORARY trace
                     return
                 }
                 let gallery: [Message] = m.album.enumerated().filter { !$0.element.isVideo }

@@ -5263,14 +5263,25 @@ enum OpenTrace {
     private static var t0: CFAbsoluteTime = 0
     private static var lines: [String] = []
     private static var once = Set<String>()
-    private static var opens = 0
+    private static var opens: [String: Int] = [:]
+    private static var title = ""
 
-    static func start() {
-        guard opens < 3 else { return }
-        opens += 1
+    /// `what` is "chat" or "video"; each gets its first three opens since launch.
+    static func start(_ what: String = "chat") {
+        let n = (opens[what] ?? 0) + 1
+        guard n <= 3 else { return }
+        opens[what] = n
         t0 = CFAbsoluteTimeGetCurrent()
-        lines = ["tap (open \(opens) since launch)"]
+        title = what.uppercased()
+        lines = ["tap (\(what) open \(n) since launch)"]
         once = []
+    }
+
+    static var isActive: Bool { t0 > 0 }
+
+    @MainActor static func finishInKeyWindow(_ last: String) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        finish(in: scenes.flatMap(\.windows).first(where: \.isKeyWindow), last)
     }
 
     static func mark(_ what: String) {
@@ -5298,16 +5309,16 @@ enum OpenTrace {
         return r
     }
 
-    @MainActor static func finish(in window: UIWindow?) {
+    @MainActor static func finish(in window: UIWindow?, _ last: String = "fully open") {
         guard t0 > 0, let window else { return }
-        mark("fully open")
+        mark(last)
         t0 = 0
         let label = UILabel()
         label.numberOfLines = 0
         label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         label.textColor = .white
         label.backgroundColor = UIColor.black.withAlphaComponent(0.8)
-        label.text = "OPEN TIMING (ms from tap)\n" + lines.joined(separator: "\n")
+        label.text = "\(title) OPEN TIMING (ms from tap)\n" + lines.joined(separator: "\n")
         let width = window.bounds.width - 24
         let size = label.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         label.frame = CGRect(x: 12, y: window.safeAreaInsets.top + 60, width: width, height: size.height + 8)

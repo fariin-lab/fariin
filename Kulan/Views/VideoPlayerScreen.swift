@@ -53,6 +53,7 @@ struct VideoPlayerScreen: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var interruptObserver: NSObjectProtocol?
+    @State private var readyObservation: NSKeyValueObservation?   // TEMPORARY, see OpenTrace
     @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
     @State private var closeToken = 0              // bump → the button close flies home like the drag
     // Pinch-zoom + pan (video hosted in the same zoomable view as photos).
@@ -474,7 +475,12 @@ struct VideoPlayerScreen: View {
     // MARK: - Load (mailman: local → download+decrypt+cache → clear server)
 
     private func load() async {
-        if let local = VideoCache.url(for: message.id) { await MainActor.run { startPlayer(local) }; return }
+        OpenTrace.mark("viewer starts loading")   // TEMPORARY, see OpenTrace
+        if let local = VideoCache.url(for: message.id) {
+            OpenTrace.mark("found on this phone")   // TEMPORARY
+            await MainActor.run { startPlayer(local) }; return
+        }
+        OpenTrace.mark("NOT on this phone (sent-file: \(message.localMediaURL.map { FileManager.default.fileExists(atPath: $0) } ?? false))")   // TEMPORARY
         // ⛔ MY OWN VIDEO PLAYS FROM THE FILE I SENT — owner, 2026-09-26: tapping a video sat on the
         // spinner. The clip I just sent is on this phone at `localMediaURL` (Share already used it,
         // line ~170), but loading skipped it and went to the network: a long wait for a file that
@@ -508,6 +514,7 @@ struct VideoPlayerScreen: View {
             }
         }.value
         if Task.isCancelled { return }
+        OpenTrace.mark("download finished (ok=\(ok))")   // TEMPORARY, see OpenTrace
         if let local = VideoCache.url(for: message.id) {
             await MainActor.run { startPlayer(local) }
             return
@@ -528,10 +535,20 @@ struct VideoPlayerScreen: View {
         // The broadcast that used to prevent this was removed on the reasoning that there is only one
         // player now. There are three: this, the gallery and the story player.
         VoiceNotePlayer.shared.pause()
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        OpenTrace.time("audio setup") {   // TEMPORARY timing, see OpenTrace
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
         let p = AVPlayer(url: url)
         player = p
+        OpenTrace.mark("player created")   // TEMPORARY
+        if OpenTrace.isActive {   // TEMPORARY: the moment the first frame can be drawn
+            readyObservation = p.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
+                guard item.status != .unknown else { return }
+                let ok = item.status == .readyToPlay
+                Task { @MainActor in OpenTrace.finishInKeyWindow(ok ? "video ready to show" : "video failed") }
+            }
+        }
         duration = message.duration ?? 0
         // Smooth scrubber (a high-frequency observer); don't fight the user while scrubbing.
         timeObserver = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { time in
