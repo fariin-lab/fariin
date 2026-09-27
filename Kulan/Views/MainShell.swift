@@ -4089,9 +4089,17 @@ struct ChatRow: View, Equatable {
     @ViewBuilder private var ticksView: some View {
         let read = conv.lastReadByOther(me)
         let delivered = read || conv.lastDeliveredToOther(me)
-        HStack(spacing: -3) {
-            Image(systemName: "checkmark")
-            if delivered { Image(systemName: "checkmark") }
+        // ⛔ HIS SVGs HERE TOO — owner, 2026-09-27: "double tick in the chat list, use my custom
+        // SVG I sent before". The same drawn marks the bubbles use (`BubbleTicks`), scaled up to
+        // sit beside the list's 15pt time.
+        Group {
+            if let mark = BubbleTicks.image(delivered ? .read : .sent) {
+                Image(uiImage: mark)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 11)
+            }
         }
         // ⛔ `.caption` (12pt), UP FROM A FIXED 10 — owner, 2026-09-02, off build 725: "the one
         // tick or 2 tick now looks small". The 10 was tuned against a 12pt timestamp; the match
@@ -4421,6 +4429,10 @@ private struct ChatPeekPreview: View {
         return CGSize(width: screen.width, height: screen.height * 0.62)
     }
     private var size: CGSize { Self.platterSize }
+    private var peekChatColor: ChatColorSpec? {
+        _ = ChatColorStore.shared.version
+        return ChatColorStore.shared.color(for: cid)
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -4462,8 +4474,14 @@ private struct ChatPeekPreview: View {
                             // The platter draws the real wallpaper above, so its bubbles have to
                             // resolve their surface against it exactly as the chat does — otherwise
                             // the peek shows flat grey bubbles on a picture the chat itself blurs.
+                            // ⛔ THE CHAT'S OWN BUBBLE COLOUR — owner, 2026-09-27: "I change the bubble
+                            // colour, then long-press the chat in the list and still see the old
+                            // bubble". This call never passed it, so the peek always drew the default
+                            // blue. Read through `.version`, the chat's own live-update rule, so a
+                            // change made a moment ago is what the next peek draws.
                             MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid,
-                                          onWallpaper: WallpaperStore.shared.hasWallpaper(for: cid))
+                                          onWallpaper: WallpaperStore.shared.hasWallpaper(for: cid),
+                                          chatColor: peekChatColor)
                                 .allowsHitTesting(false)   // the platter is not interactive
                         }
                     }

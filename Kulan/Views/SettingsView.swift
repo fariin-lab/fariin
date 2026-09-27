@@ -1247,23 +1247,8 @@ struct PrivacySettingsView: View {
                             // including people who send message requests"; Nobody is nobody NEW.
                             // People in your chats can always call; a block always wins.
                             footerText: "My Chats: people you already chat with, including anyone who used your Chat Key.")
-                // ⛔ STORIES, AND IT IS A DOOR RATHER THAN A PICKER — owner, 2026-09-16: "add Stories
-                // like next call, when user click is going stories page".
-                //
-                // ⚠️ IT CANNOT BE AN `audienceRow`. Every other row here stores one `Audience` case
-                // under a `priv.*` key; the story audience is a `StoryAudience` in
-                // `StoryAudienceStore` — it can be Everyone, Glowers, My Friends or a NAMED custom
-                // list, it owns per-person hide lists, and its editors are the four screens that
-                // became `StoryPeoplePicker`. So the row reports `selected.title` and opens the
-                // Stories page that already owns all of it, rather than forking a second source of
-                // truth for the same setting.
-                NavigationLink { StorySettingsView() } label: {
-                    HStack {
-                        Text("Stories")
-                        Spacer()
-                        Text(storyAudiences.selected.title).foregroundStyle(.secondary)
-                    }
-                }
+                // ⛔ NO STORIES ROW — owner, 2026-09-27, the row ringed: "remove the Stories card
+                // from Privacy". It was added here 2026-09-16; Settings › Stories is still the door.
             }
 
             Section {
