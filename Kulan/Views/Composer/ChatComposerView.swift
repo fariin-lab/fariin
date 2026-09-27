@@ -150,7 +150,10 @@ final class ChatComposerView: UIView {
     private let textView = ComposerTextView()
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
     private let micButton = UIView()
-    private let micGlyph = UIImageView(image: UIImage(named: "ic_mic")?.withRenderingMode(.alwaysTemplate))
+    /// ⛔ THE REFERENCE APP'S OWN MIC AND PLUS — owner, 2026-09-27, both ringed: "use their recording
+    /// icon and + icon". Their `mic` and `plus` vectors (`ic_composer_mic`, `ic_composer_plus`), drawn
+    /// at their own 24pt, as their composer draws them. The recording disc keeps `ic_mic`.
+    private let micGlyph = UIImageView(image: UIImage(named: "ic_composer_mic")?.withRenderingMode(.alwaysTemplate))
     /// ⛔ THE MIC IS ITS OWN BUTTON, NOT SOMETHING INSIDE THE FIELD — owner, 2026-09-11: "make the
     /// voice recording button a separate standalone button, not part of the text input field. Make
     /// it work and look like the + button — as an independent button next to the input field."
@@ -553,7 +556,8 @@ final class ChatComposerView: UIView {
         let accent = UIColor(Theme.accent(s.dark))
         let onAccent = UIColor(Theme.onAccent(s.dark))
 
-        plusButton.configuration?.image = UIImage(systemName: s.attachBusy ? "ellipsis" : "plus")
+        plusButton.configuration?.image = s.attachBusy ? UIImage(systemName: "ellipsis")
+                                                       : UIImage(named: "ic_composer_plus")
         sendButton.configuration?.image = UIImage(systemName: s.editing && !s.recordLocked ? "checkmark" : "arrow.up")
         // ⛔ THE CHAT'S OWN COLOUR, NOT A FIXED BLUE — both sends (text and voice) resolve the same
         // tint, so a chat colour cannot reach one and miss the other.
@@ -943,7 +947,7 @@ final class ChatComposerView: UIView {
         micGlass.bounds = buttonBounds
         micGlass.center = CGPoint(x: W - M.button / 2, y: buttonMidY)
         // Inside the capsule now, so its slot is the capsule's own bounds.
-        micGlyph.frame = CGRect(x: (M.button - 22) / 2, y: (M.button - 24) / 2, width: 22, height: 24)
+        micGlyph.frame = CGRect(x: (M.button - 24) / 2, y: (M.button - 24) / 2, width: 24, height: 24)
         // The invisible gesture view over the same slot, in the container's space.
         micButton.frame = CGRect(x: W - M.button, y: rowY, width: M.button, height: M.button)
         // The GIF is the pill's last slot now that the mic has left it.
