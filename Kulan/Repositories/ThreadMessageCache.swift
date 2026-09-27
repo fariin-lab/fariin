@@ -185,6 +185,13 @@ final class ThreadMessageCache {
         // the app on the sign-out screen, or iOS reclaiming it — left the folder behind. Nothing
         // re-runs the wipe and nothing reconciles it at launch, so it simply stayed. One
         // `removeItem` on a directory is not worth the window it was leaving open.
+        //
+        // X1: a `persist` queued a moment before this call may already be writing on `io`, off this
+        // thread, and the bump above cannot reach into work already in flight there. `io` is serial,
+        // so an empty block sent to it only runs once everything already queued there has finished.
+        // Waiting on that here, before the delete, guarantees any write still in flight has landed
+        // first, so the delete below always runs last and the account's messages cannot survive it.
+        io.sync {}
         try? FileManager.default.removeItem(at: Self.directory)
     }
 
@@ -261,7 +268,16 @@ final class ThreadMessageCache {
         let stamp = "\(slice.count)|\(slice.last?.id ?? "")|\(slice.last?.text.count ?? 0)"
         guard lastPersisted[cid] != stamp else { return }
         lastPersisted[cid] = stamp
-        io.async {
+        // X1: capture the generation now, on the caller's thread, the same way `prewarm` and
+        // `loadAsync` do, so this write can tell a sign-out that happened after it was queued from
+        // one that happened before.
+        let gen = generation
+        io.async { [weak self] in
+            // `removeAll` bumps `generation` before it wipes the folder and then waits on this same
+            // queue before it deletes (see `removeAll`). So even if this read of `generation` lands a
+            // moment too early and lets a stale write through, the wipe right after it removes what
+            // was written. This check only saves the wasted work in the common case.
+            guard let self, self.generation == gen else { return }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .secondsSince1970
             guard let data = try? encoder.encode(slice) else { return }

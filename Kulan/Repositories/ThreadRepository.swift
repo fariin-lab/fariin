@@ -111,6 +111,10 @@ final class ThreadRepository {
     /// Separate from `userListener` because presence lives in its own subcollection now, so the
     /// server can enforce the Last Seen audience rather than the reading client. See PresenceService.
     private var presenceListener: ListenerRegistration?
+    /// The key-preload Task `start()` kicks off. Stored and cancelled by `stop()` (audit C6):
+    /// leaving and quickly reopening the same chat used to leave the old run alive with a strong
+    /// `self`, and it could land after the new screen's cache was fresh and overwrite it.
+    private var keyPreloadTask: Task<Void, Never>?
     let cid: String
 
     /// 60, which is the reference messenger's own page size for exactly this job. 40 was a smaller
@@ -325,14 +329,28 @@ final class ThreadRepository {
                 return ta == tb ? a.rowId < b.rowId : ta < tb
             }
             var runningMax = Date.distantPast
+            // Same account, two phones, two clocks (audit C15): `clientTs` is the tap time each
+            // device stamped locally, so `tapOrdered` above can disagree with the server's real
+            // order between them. The clamp below exists for a message with NO server stamp yet
+            // (rule 3); once both this message and the one before it in tap order have a real
+            // server stamp, that stamp alone is the truth and must not be pushed later just to
+            // stay monotonic with a skewed clock's tap order.
+            var runningMaxHasServerTime = false
             for m in tapOrdered {
-                if let k = stickyOrderKey[m.rowId] { runningMax = max(runningMax, k); continue }
+                if let k = stickyOrderKey[m.rowId] {
+                    runningMax = max(runningMax, k)
+                    runningMaxHasServerTime = m.hasServerTime
+                    continue
+                }
                 let raw = m.hasServerTime
                     ? m.createdAt
                     : (m.clientTs ?? m.createdAt).addingTimeInterval(offset)
-                let k = max(raw, runningMax.addingTimeInterval(0.001))
+                let k = (m.hasServerTime && runningMaxHasServerTime)
+                    ? raw
+                    : max(raw, runningMax.addingTimeInterval(0.001))
                 stickyOrderKey[m.rowId] = k
                 runningMax = k
+                runningMaxHasServerTime = m.hasServerTime
             }
         }
     }
@@ -674,6 +692,7 @@ final class ThreadRepository {
                     self.retryStartSoon()
                     return
                 }
+                self.listenerRetries = 0   // a live snapshot landed: the next error starts backoff over
                 // Don't blank an open thread on an empty offline snapshot.
                 if snap.metadata.isFromCache && snap.documents.isEmpty && !self.messages.isEmpty { return }
                 // Pass whether this is a cache/local snapshot — deletes are only trusted from the SERVER
@@ -684,8 +703,13 @@ final class ThreadRepository {
         // Load keys in the BACKGROUND (in parallel). Warming the recipient's key here also
         // means the first send is instant instead of blocking on the fetch. Once the key
         // arrives, re-decrypt the current window (existing chats may briefly show "…").
-        Task {
+        // [weak self] + stored + cancelled by `stop()` (audit C6): this used to hold `self` strongly
+        // and outlive the screen that started it, so leaving and quickly reopening the same chat let
+        // the OLD run's re-decrypt land after the new screen had already rebuilt from a fresh cache.
+        keyPreloadTask?.cancel()
+        keyPreloadTask = Task { [weak self] in
             try? await Crypto.shared.ensureReady()
+            guard !Task.isCancelled else { return }
             // Preload EVERY member's public key (groups), not just a cid-derived "other" —
             // group messages can only be decrypted with their author's key, so all members'
             // keys must be cached or their messages render as "…".
@@ -694,7 +718,8 @@ final class ThreadRepository {
                 for m in members where m != uid { g.addTask { _ = await Crypto.shared.preloadKey(m) } }
             }
             await MainActor.run {
-                guard !self.lastDocs.isEmpty else { return }   // new chat: nothing to re-decrypt
+                // Bail if this run was cancelled (chat left) or already gone before landing its write.
+                guard let self, !Task.isCancelled, !self.lastDocs.isEmpty else { return }
                 // Force a re-decrypt of the window (keys just arrived) WITHOUT clearing byId: emptying it
                 // blanked the whole list until the off-main decrypt finished AND dropped any paged-older
                 // history. Clearing only the sig cache makes applyLiveSnapshot re-decrypt the window while
@@ -789,12 +814,16 @@ final class ThreadRepository {
         return m
     }
 
-    // Re-attach the whole listener set after a listener error (bounded — never an error loop).
+    // Re-attach the whole listener set after a listener error. Audit C14: this used to give up
+    // after 3 tries and leave the chat silently frozen (no new messages, reactions or receipts)
+    // until it was left and reopened. Retrying forever with backoff instead — 2s, 4s, 8s… capped
+    // at 60s — means a listener that keeps failing settles into a slow, harmless poll rather than
+    // stopping, and `listenerRetries` resets to 0 the moment a live snapshot actually lands.
     private var listenerRetries = 0
     private func retryStartSoon() {
-        guard listenerRetries < 3 else { return }
         listenerRetries += 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        let delay = min(pow(2.0, Double(listenerRetries)), 60)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.start()
         }
     }
@@ -1136,9 +1165,13 @@ final class ThreadRepository {
             .order(by: "createdAt", descending: true)
         // After a window trim the doc-snapshot cursor points BELOW the dropped range, so cursor by the
         // oldest KEPT message's value instead — dropped history pages back in seamlessly.
+        // `messages` is sorted for DISPLAY (`sortedOneTimeline`'s sticky keys), which the C15 clamp
+        // above can put in a different order than the server's real `createdAt` (audit C30) — take
+        // the smallest raw `createdAt` actually held, not `messages.first`, so the cursor can't sit
+        // above history that display order happens to show later.
         let query: Query
-        if windowTrimmed, let oldest = messages.first {
-            query = base.start(after: [Timestamp(date: oldest.createdAt)])
+        if windowTrimmed, let oldest = messages.map(\.createdAt).min() {
+            query = base.start(after: [Timestamp(date: oldest)])
         } else if let cursor = oldestDoc {
             query = base.start(afterDocument: cursor)
         } else { completion(); return }
@@ -1191,6 +1224,9 @@ final class ThreadRepository {
         defer { jumpPagingInFlight = false }
         var pages = 0
         while !items.contains(where: { $0.id == messageId }) && canLoadOlder && pages < maxPages {
+            // Audit C29: leaving the quote jump cancels the caller's Task, but this loop kept paging
+            // an old screen's copy regardless. Stop as soon as that happens instead of paging on.
+            guard !Task.isCancelled else { break }
             await withCheckedContinuation { cont in loadOlder { cont.resume() } }
             pages += 1
         }
@@ -1207,10 +1243,11 @@ final class ThreadRepository {
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil
+        keyPreloadTask?.cancel(); keyPreloadTask = nil
         expiryTimer?.invalidate(); expiryTimer = nil
         burnTimer?.invalidate(); burnTimer = nil
         typingExpiry?.invalidate(); typingExpiry = nil
     }
 
-    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); presenceListener?.remove(); expiryTimer?.invalidate(); burnTimer?.invalidate(); typingExpiry?.invalidate() }
+    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); presenceListener?.remove(); keyPreloadTask?.cancel(); expiryTimer?.invalidate(); burnTimer?.invalidate(); typingExpiry?.invalidate() }
 }
