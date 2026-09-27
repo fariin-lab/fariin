@@ -130,7 +130,26 @@ struct WallpaperGradient: Identifiable, Equatable {
     var paired: ChatColorSpec? = nil
 
     /// The bubble colour Auto uses on this wallpaper.
-    var autoColor: ChatColorSpec { paired ?? ChatColorSpec(colors: [bubbleHex]) }
+    ///
+    /// ⛔ ALWAYS ONE FLAT COLOUR — owner, 2026-09-27, a Blaze chat on Auto: "auto chat colour always
+    /// uses multiple colours; use just one flat colour". The reference's pairings for its nine are
+    /// gradients (Ember, Sea, …), and a gradient chat colour is drawn across the whole screen, so every
+    /// bubble came out a different shade. Auto takes the pairing's middle, one solid colour of the same
+    /// family (Ember → a deep orange, Sea → a mid blue), readable under white text. A gradient chosen
+    /// by hand from the palette is still a gradient; only Auto is flattened.
+    var autoColor: ChatColorSpec {
+        guard let p = paired else { return ChatColorSpec(colors: [bubbleHex]) }
+        return ChatColorSpec(colors: [Self.middle(p.colors)])
+    }
+
+    /// The even mix of a pairing's colours, per channel.
+    private static func middle(_ hexes: [UInt]) -> UInt {
+        guard !hexes.isEmpty else { return 0 }
+        var r: UInt = 0, g: UInt = 0, b: UInt = 0
+        for h in hexes { r += (h >> 16) & 0xFF; g += (h >> 8) & 0xFF; b += h & 0xFF }
+        let n = UInt(hexes.count)
+        return ((r / n) << 16) | ((g / n) << 8) | (b / n)
+    }
 
     /// The nine colours a 3×3 mesh needs, from the four we store: corners as given, edges as the
     /// blend of the two corners they sit between, centre as the blend of all four. Nine hand-picked
