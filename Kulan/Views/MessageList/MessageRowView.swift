@@ -149,9 +149,14 @@ final class ReactionChipView: UIView {
     /// stroke at all; ours drew a `.label` outline, which on a wallpapered chat (forced dark, so
     /// `.label` is white) is the bright hoop around the pill in his screenshot. Selected is now the
     /// heavier of the two fills on each side, which is their rule and one less thing on screen.
-    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?) {
+    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?,
+                   freeform: Bool = false) {
         label.attributedText = attr
-        if onMyBubble {
+        if freeform {
+            // Under a picture, on the wallpaper: the time capsule's own dark glass, so it reads on
+            // any background; heavier when it is mine, as on a bubble.
+            backgroundColor = UIColor.black.withAlphaComponent(mine ? 0.5 : 0.35)
+        } else if onMyBubble {
             backgroundColor = UIColor.white.withAlphaComponent(mine ? 0.45 : 0.22)
         } else {
             backgroundColor = BubblePalette.accent.withAlphaComponent(mine ? 0.18 : 0.08)
@@ -1198,7 +1203,8 @@ final class MessageRowView: UIView {
             v.frame = b.reactions[i].offsetBy(dx: -b.bubble.minX, dy: -b.bubble.minY)
             v.configure(b.reactionAttrs[i], mine: b.reactionMine[i],
                         onMyBubble: b.reactionsOnMyBubble,
-                        face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil)
+                        face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil,
+                        freeform: b.reactionsFreeform)
         }
     }
 

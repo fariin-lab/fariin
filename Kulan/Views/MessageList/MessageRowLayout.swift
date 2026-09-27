@@ -233,6 +233,9 @@ struct BubblePlan {
     ///
     /// ⚠️ DEFAULTED so the three plans built without decorations keep their memberwise inits.
     var reactionsOnMyBubble: Bool = false
+    /// The pills sit OUTSIDE the bubble, under a picture, on the wallpaper (2026-09-27). They take a
+    /// dark see-through fill like the time capsule, since there is no bubble colour under them.
+    var reactionsFreeform: Bool = false
     /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
     var failBadge: CGRect?
 }
@@ -780,7 +783,7 @@ enum MessageRowLayout {
                         .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
                         .foregroundColor: chip.mine ? BubblePalette.accent : UIColor.secondaryLabel]))
                 }
-                return (s, chip.mine, inside ? chip.face : nil)
+                return (s, chip.mine, chip.face)   // the face on pictures too (owner, 2026-09-27)
             }
             if extra > 0 {
                 chips.append((NSAttributedString(string: "+\(extra)", attributes: [
@@ -907,18 +910,25 @@ enum MessageRowLayout {
                 // path that draws reactions off a bubble passes `type: .freeform`, which picks a
                 // static fill chosen to read on a wallpaper rather than either side's palette. The
                 // white-at-alpha treatment would be nearly invisible out here.
-                var cx = b.isMe ? (bubbleRect.maxX - 10 - total) : (bubbleRect.minX + 10)
-                let cy = bubbleRect.maxY + BubbleMetrics.reactionOverhang - height
+                // ⛔ UNDER THE PICTURE, NOT ON ITS CORNER — owner, 2026-09-27, a GIF with the heart
+                // ringed: "looks different, overlaps the timestamp, wrong place". The pill hung 13pt
+                // off the bottom corner, so it sat 17pt up INTO the picture, exactly where the time
+                // capsule is; it had no face; and it wore the text-bubble fill, which on a wallpaper is
+                // nearly invisible. Now it is the same pill as on text (emoji and face), in a row 4pt
+                // under the picture, flush with the picture's own edge, and the time stays on the image.
+                let gap: CGFloat = 4
+                var cx = b.isMe ? (bubbleRect.maxX - total) : bubbleRect.minX
+                let cy = bubbleRect.maxY + gap
+                plan.reactionsFreeform = true
                 for (i, w) in widths.enumerated() {
                     plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
                     plan.reactionAttrs.append(chips[i].0)
                     plan.reactionMine.append(chips[i].1)
-                    plan.reactionFaces.append(nil)
+                    plan.reactionFaces.append(chips[i].2)
                     cx += w + BubbleMetrics.reactionChipGap
                 }
-                // Reserve the overhang so the badge cannot collide with the next bubble. Reserve less
-                // than it hangs and they touch; reserve more and there is a gap nothing draws into.
-                y += BubbleMetrics.reactionOverhang
+                // The row ends under the pills.
+                y = max(y, cy + height)
             }
         }
 
