@@ -808,13 +808,13 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     }
 
     /// A text-size change wants `reloadData()`. Same four gates `apply` waits on, because a reload
-    /// straight through here can land mid-flight of a row transaction, under a finger, mid-transition
-    /// or under an open context menu, and none of those wants the whole table pulled out from under
-    /// it. Owed once when a gate is up, replayed in `flushDeferredState` and in the row transaction's
-    /// completion block, the two places this file already replays what a gate held back.
+    /// straight through here can land mid-flight of a row transaction, under a finger or
+    /// mid-transition, and none of those wants the whole table pulled out from under it. Owed once
+    /// when a gate is up, replayed in `flushDeferredState` and in the row transaction's completion
+    /// block, the two places this file already replays what a gate held back.
     private func reloadForTextSizeChange() {
         guard isAnimatingRows || tableView.isDragging || tableView.isDecelerating
-                || isInTransition || menuIsUp else {
+                || isInTransition else {
             tableView.reloadData()
             return
         }
@@ -826,7 +826,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     private func flushTextSizeReloadIfNeeded() {
         guard textSizeReloadWasDeferred,
               !isAnimatingRows, !tableView.isDragging, !tableView.isDecelerating,
-              !isInTransition, !menuIsUp
+              !isInTransition
         else { return }
         textSizeReloadWasDeferred = false
         tableView.reloadData()

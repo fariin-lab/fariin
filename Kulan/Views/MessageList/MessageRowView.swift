@@ -1301,7 +1301,7 @@ final class MessageRowView: UIView {
         // bottom, the list has moved this whole row by `grow`, so the date pill, divider and sender
         // name above the box jumped at once while the box was still easing from its old top. They
         // ride the same curve from where they were.
-        if Self.growsFromBottom, abs(grow) > 0.5 {
+        if growsFromBottom, abs(grow) > 0.5 {
             for v in subviews where v !== bubbleBox && !v.isHidden && v.frame.maxY <= nb.bubble.minY + 1 {
                 add(v.layer, "transform.translation.y", grow)
             }
