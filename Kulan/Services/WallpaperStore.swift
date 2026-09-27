@@ -131,24 +131,15 @@ struct WallpaperGradient: Identifiable, Equatable {
 
     /// The bubble colour Auto uses on this wallpaper.
     ///
-    /// ⛔ ALWAYS ONE FLAT COLOUR — owner, 2026-09-27, a Blaze chat on Auto: "auto chat colour always
-    /// uses multiple colours; use just one flat colour". The reference's pairings for its nine are
-    /// gradients (Ember, Sea, …), and a gradient chat colour is drawn across the whole screen, so every
-    /// bubble came out a different shade. Auto takes the pairing's middle, one solid colour of the same
-    /// family (Ember → a deep orange, Sea → a mid blue), readable under white text. A gradient chosen
-    /// by hand from the palette is still a gradient; only Auto is flattened.
+    /// ⛔ THE REFERENCE'S PAIRING EXACTLY, NEVER A COLOUR OF OUR OWN — owner, 2026-09-27: "for the 9
+    /// wallpapers, use the exact chat colour the reference app uses with each; do not create new
+    /// colours or change the pairings", and asked, he chose the exact gradient. Its `defaultChatColor`
+    /// maps each of its nine gradient wallpapers to a two-stop gradient chat colour (Ember, Midnight,
+    /// Infrared, Lagoon, Fluorescent, Basil, Sublime, Sea, Tangerine), and `paired` holds those stops
+    /// as its source gives them. An earlier build blended each pair into one flat middle colour on his
+    /// "use just one flat colour"; that middle was a colour the reference does not have, so it is gone.
     var autoColor: ChatColorSpec {
-        guard let p = paired else { return ChatColorSpec(colors: [bubbleHex]) }
-        return ChatColorSpec(colors: [Self.middle(p.colors)])
-    }
-
-    /// The even mix of a pairing's colours, per channel.
-    private static func middle(_ hexes: [UInt]) -> UInt {
-        guard !hexes.isEmpty else { return 0 }
-        var r: UInt = 0, g: UInt = 0, b: UInt = 0
-        for h in hexes { r += (h >> 16) & 0xFF; g += (h >> 8) & 0xFF; b += h & 0xFF }
-        let n = UInt(hexes.count)
-        return ((r / n) << 16) | ((g / n) << 8) | (b / n)
+        paired ?? ChatColorSpec(colors: [bubbleHex])
     }
 
     /// The nine colours a 3×3 mesh needs, from the four we store: corners as given, edges as the
