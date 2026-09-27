@@ -66,6 +66,7 @@ struct ChatNavigationItem: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIView {
+        OpenTrace.markOnce("header: created")   // TEMPORARY, see OpenTrace
         let marker = NavItemMarkerView()
         marker.isUserInteractionEnabled = false
         marker.isHidden = true

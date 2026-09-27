@@ -198,12 +198,15 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.coordinator = context.coordinator
         context.coordinator.controller = vc
         vc.loadViewIfNeeded()   // force viewDidLoad now so collectionView + dataSource exist before apply
+        OpenTrace.markOnce("message list: set up")   // TEMPORARY, see OpenTrace
         return vc
     }
 
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        let traceStart = CFAbsoluteTimeGetCurrent()   // TEMPORARY, see OpenTrace
+        defer { OpenTrace.took("message list update", since: traceStart) }
         // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
         // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
         // following the system again rather than being pinned the other way.
@@ -3722,6 +3725,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        OpenTrace.markOnce("push prepared (list will appear)")   // TEMPORARY, see OpenTrace
         // Registered once, not on every appearance (the `ChatListTable` rule): re-registering makes
         // the bar re-decide standard vs scroll-edge while it is already animating a pop, a flicker
         // for no gain. `didMove(toParent:)` does the real registration; this catches a parent chain
@@ -5278,6 +5282,7 @@ enum OpenTrace {
         title = what.uppercased()
         lines = ["tap (\(what) open \(n) since launch)"]
         once = []
+        FrameGapWatch.shared.start()
         let now = ProcessInfo.processInfo.systemUptime
         if launchAt > 0 { lines.append(String(format: "  %.1fs after launch", now - launchAt)) }
         if lastTouchAt > 0, now - lastTouchAt < 10 {
@@ -5362,6 +5367,15 @@ enum OpenTrace {
     @MainActor static func finish(in window: UIWindow?, _ last: String = "fully open") {
         guard t0 > 0, let window else { return }
         mark(last)
+        // Every stretch the screen went without a new frame, from the tap to here: a smooth slide
+        // draws every 8-16ms, so anything longer is the animation standing still.
+        let gaps = FrameGapWatch.shared.stop()
+            .sorted { $0.ms > $1.ms }.prefix(4)
+            .sorted { $0.at < $1.at }
+        if !gaps.isEmpty {
+            lines.append("app too busy to draw a frame:")
+            for g in gaps { lines.append(String(format: "%5.0f  for %.0fms", (g.at - t0) * 1000, g.ms)) }
+        }
         t0 = 0
         let label = UILabel()
         label.numberOfLines = 0
@@ -5377,6 +5391,38 @@ enum OpenTrace {
         label.isUserInteractionEnabled = false
         window.addSubview(label)
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { label.removeFromSuperview() }
+    }
+}
+
+/// TEMPORARY, see OpenTrace: a display link from the tap to the chat being open, writing down every
+/// gap between two frames longer than 25ms. Times are CFAbsoluteTime so they line up with the marks.
+final class FrameGapWatch: NSObject {
+    static let shared = FrameGapWatch()
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var gaps: [(at: CFAbsoluteTime, ms: Double)] = []
+
+    func start() {
+        link?.invalidate()
+        gaps = []
+        last = 0
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    func stop() -> [(at: CFAbsoluteTime, ms: Double)] {
+        link?.invalidate()
+        link = nil
+        return gaps
+    }
+
+    @objc private func tick(_ l: CADisplayLink) {
+        defer { last = l.timestamp }
+        guard last > 0 else { return }
+        let ms = (l.timestamp - last) * 1000
+        // The gap ENDED now; it began `ms` ago.
+        if ms > 25 { gaps.append((CFAbsoluteTimeGetCurrent() - ms / 1000, ms)) }
     }
 }
 
