@@ -187,7 +187,7 @@ struct ChatSearchView: View {
                     ChatListSkeleton()   // skeleton rows instead of a spinner while indexing
                 } else if !loadingCorpus && nothingFound {
                     VStack(spacing: 0) {
-                        ContentUnavailableView.search(text: trimmed)
+                        NoSearchResults(query: trimmed)
                         if showCapNote { capNote.padding(.bottom, 24) }   // decision D6
                     }
                 }
@@ -591,7 +591,7 @@ struct ContactsSearchView: View {
                         EmptyStateView(title: "Call a contact", icon: "phone",
                                        text: "Search anyone you've chatted with to start a call.")
                     } else {
-                        ContentUnavailableView.search(text: trimmed)
+                        NoSearchResults(query: trimmed)
                     }
                 }
             }
@@ -695,7 +695,7 @@ struct SettingsSearchView: View {
             }
             .listStyle(.insetGrouped)
             .overlay {
-                if results.isEmpty { ContentUnavailableView.search(text: trimmed) }
+                if results.isEmpty { NoSearchResults(query: trimmed) }
             }
             .navigationTitle("Search Settings")
             .navigationBarTitleDisplayMode(.inline)

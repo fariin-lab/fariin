@@ -2518,7 +2518,7 @@ struct ChatsView: View {
                                         .allowsHitTesting(false)
                                         .task(id: repo.conversations.count) { repo.loadOlder() }
                                 } else if !chatSearch.trimmingCharacters(in: .whitespaces).isEmpty {
-                                    ContentUnavailableView.search(text: chatSearch)
+                                    NoSearchResults(query: chatSearch)
                                         .allowsHitTesting(false)
                                 } else if repo.loadFailed {
                                     // 2026-09-24 audit: the listener failed and nothing was cached.

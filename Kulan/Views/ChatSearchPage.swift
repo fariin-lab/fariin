@@ -456,13 +456,29 @@ struct ChatSearchPage: View {
             // never resolves is what his screenshot is complaining about in another form.
             EmptyStateView(title: "Search", icon: "magnifyingglass",
                            text: "Find your chats and groups, or a person by their username.")
-        } else if repo.loadingWholeList {
-            // 2026-09-24 feature-audit: not "no results" while older chats are still arriving.
-            ProgressView()
-        } else if !searching {
-            // ⚠️ NOT WHILE THE USERNAME LOOKUP IS STILL OUT. "No results" drawn over a person who
-            // arrives 200ms later is the same bug the chat list's own overlay guards against.
-            ContentUnavailableView.search(text: query)
+        } else if repo.loadingWholeList || searching {
+            // ⛔ LOOKING IS SHOWN AS LOOKING — owner, 2026-09-27, with the message search's skeleton:
+            // "add a loading screen like this while I search a username". It was a bare spinner
+            // for older chats and NOTHING at all while the username lookup was out.
+            ChatListSkeleton()
+                .frame(maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
+        } else {
+            NoSearchResults(query: query)
+        }
+    }
+}
+
+/// ⛔ HIS WORDS, EVERY SEARCH — owner, 2026-09-27, with the screenshot: "No Results / There were no
+/// results for "…". / Try a new search." One view, so the chat search and the message search
+/// cannot say it two ways.
+struct NoSearchResults: View {
+    let query: String
+    var body: some View {
+        ContentUnavailableView {
+            Text("No Results")
+        } description: {
+            Text("There were no results for \"\(query)\".\nTry a new search.")
         }
     }
 }
