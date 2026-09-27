@@ -396,8 +396,11 @@ enum BubbleTicks {
         let all = strokes.flatMap { $0 }
         let minX = all.map(\.x).min()!, maxX = all.map(\.x).max()!
         let minY = all.map(\.y).min()!, maxY = all.map(\.y).max()!
-        let scale: CGFloat = 8 / 12                      // the double mark's 12 units → 8pt
-        let line = 2 * scale, pad = line / 2
+        // ⛔ SMALLER — owner, 2026-09-27, both ringed, "the tick in the chat list and in the chat
+        // still looks big". It was 8pt tall and the double mark ~19pt wide, heavier than the 11pt
+        // time beside it. Now 6.5pt tall (~15pt wide doubled) on a 1.2pt stroke.
+        let scale: CGFloat = 6.5 / 12                    // the double mark's 12 units → 6.5pt
+        let line: CGFloat = 1.2, pad = line / 2
         let size = CGSize(width: (maxX - minX) * scale + line, height: (maxY - minY) * scale + line)
         let img = UIGraphicsImageRenderer(size: size).image { _ in
             let p = UIBezierPath()

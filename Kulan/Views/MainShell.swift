@@ -4106,11 +4106,10 @@ struct ChatRow: View, Equatable {
         // sit beside the list's 15pt time.
         Group {
             if let mark = BubbleTicks.image(delivered ? .read : .sent) {
+                // At its own drawn size, not stretched to 11pt — owner, 2026-09-27, "still looks
+                // big". A stretched bitmap also thickened and blurred the stroke.
                 Image(uiImage: mark)
                     .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(height: 11)
             }
         }
         // ⛔ `.caption` (12pt), UP FROM A FIXED 10 — owner, 2026-09-02, off build 725: "the one
