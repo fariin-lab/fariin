@@ -1990,14 +1990,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // nothing is lost by keeping the guarantee that costs nothing.
         let anchors = continuityAnchors(relativeToTop: true)
         var heightChanged = false
+        var grown: CGFloat = 0
         if width > 0 {
             for id in target {
                 let h = measure(id, width: width)
                 if let old = heights[id], abs(old - h) <= 2 { continue }
+                grown += h - (heights[id] ?? h)
                 heights[id] = h
                 heightChanged = true
             }
         }
+        // ⛔ A READER AT THE NEWEST MESSAGE KEEPS THE BOTTOM STILL IN THE SAME PASS — owner,
+        // 2026-09-27: "when I react to a message the chat jumps down, then goes back to its real
+        // position; the jumping happens too fast". The top anchor below let the reaction row's extra
+        // height push every later bubble down for a frame, and `restoreReaderPosition` in the
+        // completion then pulled the list back up: two moves where the reference app makes none.
+        // At rest with the reader at the newest, every changed row is above the bottom edge, so the
+        // offset simply takes the whole growth inside the same layout pass and nothing on screen
+        // below the reacted bubble moves. A moving list keeps the top anchor, for the reason above.
+        let pinBottom = !listIsMoving && (lastKnownDistanceFromBottom ?? 0) <= Self.atNewestTolerance
         var snapshot = dataSource.snapshot()
         // Filter against the SNAPSHOT, not against `currentIds`. Both reconfigureItems and reloadItems
         // abort the app on an identifier the snapshot does not hold, and `currentIds` is our own array â€”
@@ -2013,7 +2024,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if heightChanged {
             layout.generation += 1
             let afterY = frameMinY(for: currentIds)
-            if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
+            if pinBottom {
+                // Never past the new bound nor above the top: a chat shorter than the screen has no
+                // offset to take.
+                let newBound = max(minContentOffsetY, safeContentHeight + grown
+                                   + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
+                delta = newBound - collectionView.contentOffset.y
+            } else if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
                 delta = landed.delta
                 landedAnchor = landed.anchor
             }
