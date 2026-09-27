@@ -1702,6 +1702,7 @@ struct ThreadView: View {
         // full reload. This body-level read makes the tick flip to ✓✓ the moment the other person reads.
         let _ = repo.otherLastReadMillis
         let _ = repo.otherDeliveredMillis   // 2026-09-25: two grey ticks arrive live too
+        let _ = OpenTrace.markOnce("chat screen: first draw starts")   // TEMPORARY, see OpenTrace
         threadContent
         // ⛔ THE SECOND OF THE THREE DARK-MODE LEVERS — see the long note on `dark`.
         //
@@ -2749,6 +2750,8 @@ struct ThreadView: View {
         let storiesRepo = StoriesRepository.shared
         let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
+            let traceStart = CFAbsoluteTimeGetCurrent()   // TEMPORARY, see OpenTrace
+            defer { OpenTrace.took("row signatures", since: traceStart) }
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
             for (i, m) in repo.items.enumerated() {
@@ -2922,6 +2925,7 @@ struct ThreadView: View {
             "\(editPendingIds.count):\(editPendingIds.hashValue)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
+        let traceStart = CFAbsoluteTimeGetCurrent()   // TEMPORARY, see OpenTrace
 
         let ctx = MessageRowContext(
             me: me, cid: cid, isGroup: isGroup, dark: dark,
@@ -2952,6 +2956,7 @@ struct ThreadView: View {
                 topSpacing: topGap(at: idx)) else { continue }
             out[m.rowId] = model
         }
+        OpenTrace.took("build \(out.count) row models", since: traceStart)   // TEMPORARY
         uikitModelCache.key = key
         uikitModelCache.models = out
         uikitModelCache.version &+= 1

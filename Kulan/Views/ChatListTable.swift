@@ -1958,6 +1958,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             return
         }
         guard let c = conversation(at: indexPath) else { return }
+        OpenTrace.start()   // TEMPORARY, see OpenTrace
         host?.parent.onOpen(c)
     }
 

@@ -237,6 +237,7 @@ final class ThreadRepository {
 
     init(cid: String) {
         self.cid = cid
+        OpenTrace.markOnce("chat data: start")   // TEMPORARY, see OpenTrace
         // Restore anything still unsent from a previous visit to this chat, BEFORE the cached window is
         // seeded, so a pending message is on screen from the very first frame with its sending/failed
         // state intact and its retry affordance available.
@@ -255,9 +256,12 @@ final class ThreadRepository {
         // the load lands. A miss now does the same; the reveal veil already holds the list hidden
         // until it has something to show, and the live listener still reconciles after.
         if let cached = ThreadMessageCache.shared.memoryMessages(for: cid), !cached.isEmpty {
+            OpenTrace.markOnce("messages from memory: \(cached.count)")   // TEMPORARY
             seed(cached)
         } else {
+            OpenTrace.markOnce("messages not in memory, reading disk")   // TEMPORARY
             ThreadMessageCache.shared.loadAsync(cid) { [weak self] cold in
+                OpenTrace.markOnce("disk read done: \(cold?.count ?? 0)")   // TEMPORARY
                 // The live snapshot got here first: it is the truth, the file is only a head start.
                 guard let self, let cold, !self.didInitialLoad, self.messages.isEmpty else { return }
                 self.seed(cold)
@@ -809,6 +813,7 @@ final class ThreadRepository {
     // reconcile deletes within the window's time range, keep paged-older messages.
     private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool) {
         lastDocs = docs   // remember the window so we can re-decrypt once the key arrives
+        OpenTrace.markOnce("first live snapshot: \(docs.count) docs, fromCache=\(fromCache)")   // TEMPORARY
         snapshotSeq += 1
         let seq = snapshotSeq
         // Decrypt OFF the main thread. Opening a chat that already has cached history fires

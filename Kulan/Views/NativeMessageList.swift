@@ -800,6 +800,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        OpenTrace.markOnce("message list: created")   // TEMPORARY, see OpenTrace
         layout = MessageLayout()
         // ⛔ THE HEIGHT IS RESOLVED THROUGH THE DATA SOURCE, NEVER THROUGH `currentIds` — owner,
         // 2026-08-25, reporting rows that jump and draw on top of each other while scrolling.
@@ -2620,7 +2621,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
         let rowCount = currentIds.count
         let seeded = renderedHeights.count
-        measureMissing(currentIds, width: collectionView.bounds.width)
+        // TEMPORARY, see OpenTrace: how many rows are measured, and how many through the SwiftUI sizer.
+        let swiftUIRows = currentIds.filter { rowModels[$0] == nil && heights[$0] == nil }.count
+        OpenTrace.time("measure \(rowCount) rows (\(swiftUIRows) SwiftUI)") {
+            measureMissing(currentIds, width: collectionView.bounds.width)
+        }
         layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
@@ -2644,6 +2649,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         landedTopInset = collectionView.adjustedContentInset.top
         awaitingInitialRepin = initialScrollId != nil && initialScrollOffset != nil
         reveal()
+        OpenTrace.markOnce("messages shown")   // TEMPORARY, see OpenTrace
     }
 
     /// ⛔ THE NAV BAR'S INSET ARRIVES AFTER THE LANDING, AND THE LANDING IS WRONG BY EXACTLY IT.
@@ -3754,6 +3760,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// frame yet. Only on the way in, so a pop never makes the bar re-decide mid-animation.
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
+        OpenTrace.markOnce("slide-in starts")   // TEMPORARY, see OpenTrace
         attachHeaderEdgeEffectForTransition()
         if isMovingToParent || !didRegisterOnAppearing {
             didRegisterOnAppearing = true
@@ -3824,6 +3831,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         detachHeaderEdgeEffectForTransition()   // the bar's own link has the list now
+        OpenTrace.finish(in: view.window)       // TEMPORARY, see OpenTrace
         isDisappearing = false
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
@@ -5243,6 +5251,69 @@ enum RxTrace {
     static func log(_ what: String) {
         guard let s = start, Date().timeIntervalSince(s) <= 2 else { return }
         NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what)
+    }
+}
+
+/// ⛔ TEMPORARY, REMOVE WITH `RxTrace` — owner, 2026-09-27, reported several times: the first chat
+/// opened after a launch takes seconds, the same chat opened again is instant. Every earlier fix to
+/// this was a guess. This times each step of the first three opens after launch, from the tap to the
+/// chat being fully on screen, and shows the numbers over the chat for eight seconds so he can
+/// photograph them. Steps under 5ms are left out.
+enum OpenTrace {
+    private static var t0: CFAbsoluteTime = 0
+    private static var lines: [String] = []
+    private static var once = Set<String>()
+    private static var opens = 0
+
+    static func start() {
+        guard opens < 3 else { return }
+        opens += 1
+        t0 = CFAbsoluteTimeGetCurrent()
+        lines = ["tap (open \(opens) since launch)"]
+        once = []
+    }
+
+    static func mark(_ what: String) {
+        guard t0 > 0 else { return }
+        lines.append(String(format: "%5.0f  %@", (CFAbsoluteTimeGetCurrent() - t0) * 1000, what))
+    }
+
+    static func markOnce(_ what: String) {
+        guard t0 > 0, once.insert(what).inserted else { return }
+        mark(what)
+    }
+
+    static func took(_ what: String, since start: CFAbsoluteTime) {
+        guard t0 > 0 else { return }
+        let d = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        guard d >= 5 else { return }
+        lines.append(String(format: "%5.0f  %@: %.0fms", (start - t0) * 1000, what, d))
+    }
+
+    static func time<T>(_ what: String, _ body: () -> T) -> T {
+        guard t0 > 0 else { return body() }
+        let s = CFAbsoluteTimeGetCurrent()
+        let r = body()
+        took(what, since: s)
+        return r
+    }
+
+    @MainActor static func finish(in window: UIWindow?) {
+        guard t0 > 0, let window else { return }
+        mark("fully open")
+        t0 = 0
+        let label = UILabel()
+        label.numberOfLines = 0
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        label.textColor = .white
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.8)
+        label.text = "OPEN TIMING (ms from tap)\n" + lines.joined(separator: "\n")
+        let width = window.bounds.width - 24
+        let size = label.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        label.frame = CGRect(x: 12, y: window.safeAreaInsets.top + 60, width: width, height: size.height + 8)
+        label.isUserInteractionEnabled = false
+        window.addSubview(label)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { label.removeFromSuperview() }
     }
 }
 
