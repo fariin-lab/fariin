@@ -106,6 +106,9 @@ struct WallpaperGradient: Identifiable, Equatable {
     let darkCorners: [UInt]
     let tint: Color        // vivid representative colour → the "Apply Wallpaper" button tint
     let bubbleHex: UInt    // the bubble colour this wallpaper is PAIRED with (a "theme" = both)
+    /// The doodle sheet over the colour. The nine gradients taken from the reference app are plain,
+    /// as they are there; the six of our own keep the pattern.
+    var pattern: Bool = true
 
     /// The nine colours a 3×3 mesh needs, from the four we store: corners as given, edges as the
     /// blend of the two corners they sit between, centre as the blend of all four. Nine hand-picked
@@ -158,7 +161,7 @@ struct GradientWallpaperView: View {
 
     var body: some View {
         ground
-            .overlay { ink }
+            .overlay { if g.pattern { ink } }
             .blur(radius: blur)
     }
 
@@ -256,6 +259,48 @@ enum ChatWallpapers {
               lightCorners: [0xFFD2DB, 0xFFE2CE, 0xF9CBE7, 0xFFD8E9],
               darkCorners:  [0x3E1E2B, 0x40261E, 0x351A33, 0x3A1F3C],
               tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
+        // ⛔ THE REFERENCE APP'S NINE GRADIENTS — owner, 2026-09-27, with its Set Wallpaper page:
+        // "take the nine multi-colour wallpapers and put them in my presets". Read from its source
+        // (`Wallpaper+Constants.swift`): each is two colours, a light and a dark pair, on an angle.
+        // Converted to our four corners by projecting each corner of a portrait screen onto that
+        // angle, so the mesh draws the same ramp. Their names, except "Sunset", which we already
+        // have (ours keeps it; theirs is "Blaze"). No doodles, as there.
+        .init(id: "g-blaze", name: "Blaze",
+              lightCorners: [0xF3DC47, 0xF2CD46, 0xE54F41, 0xE44040],
+              darkCorners:  [0xE6CA0F, 0xDEB80F, 0x9F2311, 0x971111],
+              tint: Color(hex: 0xEC8E44), bubbleHex: 0xEC8E44, pattern: false),
+        .init(id: "g-noir", name: "Noir",
+              lightCorners: [0x434356, 0x434356, 0xA5A5B6, 0xA5A5B6],
+              darkCorners:  [0x121217, 0x121217, 0x535365, 0x535365],
+              tint: Color(hex: 0x747486), bubbleHex: 0x747486, pattern: false),
+        .init(id: "g-heatmap", name: "Heatmap",
+              lightCorners: [0xE4384B, 0xF53844, 0x42378F, 0x533788],
+              darkCorners:  [0xAA2131, 0xB6202A, 0x362D76, 0x422C6F],
+              tint: Color(hex: 0x9C386A), bubbleHex: 0x9C386A, pattern: false),
+        .init(id: "g-aqua", name: "Aqua",
+              lightCorners: [0x0093E9, 0x0093E9, 0x80D0C7, 0x80D0C7],
+              darkCorners:  [0x006199, 0x006199, 0x3FAB9F, 0x3FAB9F],
+              tint: Color(hex: 0x40B2D8), bubbleHex: 0x40B2D8, pattern: false),
+        .init(id: "g-iridescent", name: "Iridescent",
+              lightCorners: [0xDC7DE6, 0xED82E6, 0x3753E6, 0x4858E6],
+              darkCorners:  [0xA010A2, 0xAF0EA4, 0x142790, 0x232592],
+              tint: Color(hex: 0x926AE6), bubbleHex: 0x926AE6, pattern: false),
+        .init(id: "g-monstera", name: "Monstera",
+              lightCorners: [0x65CDAC, 0x65CDAC, 0x0A995A, 0x0A995A],
+              darkCorners:  [0x236C54, 0x236C54, 0x065632, 0x065632],
+              tint: Color(hex: 0x38B383), bubbleHex: 0x38B383, pattern: false),
+        .init(id: "g-bliss", name: "Bliss",
+              lightCorners: [0xD8E1FA, 0xD8E1FA, 0xD6A4B5, 0xD6A4B5],
+              darkCorners:  [0x8AA1E0, 0x8AA1E0, 0xB65D7B, 0xB65D7B],
+              tint: Color(hex: 0xD7C2D8), bubbleHex: 0xD7C2D8, pattern: false),
+        .init(id: "g-sky", name: "Sky",
+              lightCorners: [0xD8EBFD, 0xD8EBFD, 0x9DCCFB, 0x9DCCFB],
+              darkCorners:  [0xA0C4E9, 0xA0C4E9, 0x478ACD, 0x478ACD],
+              tint: Color(hex: 0xBBDCFC), bubbleHex: 0xBBDCFC, pattern: false),
+        .init(id: "g-peach", name: "Peach",
+              lightCorners: [0xFFE0BD, 0xFFE5C2, 0xFCAC92, 0xFCB197],
+              darkCorners:  [0xE5B983, 0xEAC28A, 0xBB6144, 0xC06A4B],
+              tint: Color(hex: 0xFEC9AA), bubbleHex: 0xFEC9AA, pattern: false),
     ]
 
     /// A theme = the paired wallpaper + bubble colour, applied together by a Chat Theme card.
