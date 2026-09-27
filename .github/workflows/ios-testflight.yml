@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PHOTO AND GIF REACTIONS AND TIME.
+            FREEZE FIX, COLOURS, REACTIONS, HEADER BLUR, AND A TIMING BOX.
+
+            FREEZE: opening a chat could freeze the app until iOS closed it. Fixed.
+
+            BUBBLE COLOUR: after changing the wallpaper, bubbles just off screen no longer keep the old colour.
+
+            AUTO COLOUR: on the 9 gradient wallpapers, Auto uses the exact matching colour of the reference app (a gradient).
+
+            REACTIONS: the one-frame jump when you react is gone. After restarting the app, reactions on older messages no longer go missing for a moment.
+
+            HEADER: the blur under the chat header is there while the chat slides open.
+
+            TIMING BOX (temporary): the first 3 chats and the first 3 videos you open after launching show a black box with numbers for 8 seconds. Please screenshot it: force-close the app, open it, tap a chat; then open a video, close it and open it again.
+
+            EARLIER IN THIS ROUND: PHOTO AND GIF REACTIONS AND TIME.
 
             REACTIONS ON PICTURES: a smaller reaction sits on the picture's bottom-left edge, so it is clear which picture it belongs to.
 
