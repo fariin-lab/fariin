@@ -2448,11 +2448,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private func beginSelectionAnimationWindow() {
         selectionAnimationState = .animating
+        // ⛔ ONLY THE LATEST WINDOW MAY CLOSE ITSELF (2026-09-27, circles left after X). Leaving
+        // selection is two flips 0.2s apart; the first flip's 0.35s timer used to fire after the second
+        // flip had set `.willAnimate` and was waiting behind another gate, and put it back to `.idle`,
+        // so the second flip was flushed as a plain signature diff that can miss cells.
+        selectionWindowSeq &+= 1
+        let seq = selectionWindowSeq
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.selectionAnimationState = .idle
-            self?.settleFlush()
+            guard let self, seq == self.selectionWindowSeq, self.selectionAnimationState == .animating else {
+                self?.settleFlush()
+                return
+            }
+            self.selectionAnimationState = .idle
+            self.settleFlush()
         }
     }
+    private var selectionWindowSeq = 0
 
     private func performScrollTarget(_ target: String) {
         // Sentinel: the scroll-to-latest button and an own send while scrolled up route here.

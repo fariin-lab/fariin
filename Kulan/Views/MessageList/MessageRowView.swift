@@ -745,7 +745,21 @@ final class MessageRowView: UIView {
             a.toValue = travel
             a.fillMode = .forwards
             a.isRemovedOnCompletion = false
+            // ⛔ THE CIRCLE TAKES ITSELF AWAY WHEN IT HAS SLID OUT — owner, 2026-09-27, a screenshot of
+            // six empty circles left after X. The forwards fill was the only thing hiding it until the
+            // second pass rebuilt the row, and Core Animation drops such a fill whenever the layer
+            // leaves its window (a pre-rendered cell, the app going to the background): the circle
+            // then came back at its real place on any cell the second pass had not reached. Now the
+            // slide's own completion removes it, unless the row has gone back into selection.
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { [weak self, weak box] in
+                guard let self, let box, self.checkbox === box, self.model?.selecting != true else { return }
+                box.layer.removeAllAnimations()
+                box.removeFromSuperview()
+                self.checkbox = nil
+            }
             box.layer.add(a, forKey: "remove")
+            CATransaction.commit()
         }
     }
 
