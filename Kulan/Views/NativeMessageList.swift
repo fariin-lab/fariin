@@ -2067,6 +2067,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if heightChanged {
             RxTrace.begin("refreshVisible grown=\(grown) pinBottom=\(pinBottom) delta=\(delta) y=\(collectionView.contentOffset.y) insetTop=\(collectionView.contentInset.top) moving=\(listIsMoving)")
         }
+        let expectedY = collectionView.contentOffset.y + delta
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             if heightChanged { RxTrace.log("refreshVisible applied y=\(self.collectionView.contentOffset.y)") }
@@ -2081,6 +2082,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // layout pass, which a collection view re-laying out its cells does not trigger. The
             // reference app keeps the bottom edge still when the last message changes size.
             if heightChanged { self.restoreReaderPosition() }
+        }
+        // ⛔ THE LIST TAKES ITS NEW PLACE IN THIS TURN, NOT A FRAME LATER — owner, 2026-09-27, a
+        // screenshot taken mid-reaction: the last message pushed down behind the composer, "the chat
+        // jumps down and comes back a second later". The shift was handed to UIKit as the layout's
+        // `targetContentOffset` adjustment, and a reconfigure-only snapshot does not always consult
+        // it. So the rows grew downward on screen, and the completion's `restoreReaderPosition` put
+        // them back afterwards: two moves. Here the offset is checked right after the apply and, if
+        // UIKit did not take the shift, written before the screen draws; the pending adjustment is
+        // cleared so a late batch cannot add it a second time.
+        if heightChanged && delta != 0 {
+            collectionView.layoutIfNeeded()
+            let target = clampOffset(expectedY)
+            layout.pendingContentOffsetAdjustment = 0
+            if abs(collectionView.contentOffset.y - target) > 0.5 {
+                RxTrace.log("refreshVisible CORRECT \(collectionView.contentOffset.y) -> \(target)")
+                UIView.performWithoutAnimation {
+                    collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                }
+                lastStableOffset = target
+            }
         }
     }
 

@@ -1337,10 +1337,16 @@ final class MessageRowView: UIView {
         for v in bubbleBox.subviews where !v.isHidden {
             if let f = old.frames[ObjectIdentifier(v)], v !== fill, v !== rim, v !== highlight { move(v, from: f) }
         }
+        // How far the bubble box starts from where it ends (its top-left, in row coordinates). A new
+        // pill is a subview of the box, so it would ride that slide and start `grow` too low: owner,
+        // 2026-09-27, a new heart drawn over the message below. It is held at its final place instead.
+        let boxDX = oldRect.minX - nb.bubble.minX, boxDY = oldRect.minY - nb.bubble.minY
         for (k, v) in zip(chipKeys, reactionViews) where !v.isHidden && !k.isEmpty {
             if old.arriving.contains(k) {
                 add(v.layer, "transform.scale", 0.01)
                 add(v.layer, "opacity", 0, duration: 0.2, timing: CAMediaTimingFunction(name: .easeInEaseOut))
+                if abs(boxDY) > 0.5 { add(v.layer, "transform.translation.y", -boxDY) }
+                if abs(boxDX) > 0.5 { add(v.layer, "transform.translation.x", -boxDX) }
             } else if let f = old.chipFrames[k] {
                 move(v, from: f)
             }
