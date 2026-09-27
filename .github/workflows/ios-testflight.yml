@@ -74,16 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            INSTANT PIN, SMALLER TICKS, SMOOTHER REACTIONS, CLEANER PREVIEW.
+            AUTO CHAT COLOR, WALLPAPER FIXES, REACTION PILL.
 
-            PIN: pinning or unpinning a chat from the long-press menu happens straight away.
+            AUTO COLOR: the first circle in Chat Color is now Auto. On Auto, your bubbles take the matching color of the wallpaper; a color you pick yourself is never changed by a wallpaper. Reset in the chat wallpaper sheet can reset the chat color or the wallpaper; Settings > Chat Color has Reset All Chat Colors.
 
-            TICKS: the sent and read ticks are smaller and thinner, in chats and in the chat list.
+            WALLPAPER: a chat with its own wallpaper keeps it when you change the wallpaper in Settings. In the chat wallpaper sheet, the color row no longer jumps over the wallpapers.
 
-            REACTIONS: the date label above a message now moves together with the bubble when you react or remove a reaction.
+            REACTIONS: even spacing around the heart and the avatar in a reaction pill.
 
-            PREVIEW: the long-press chat preview no longer shows the message bar or the down arrow.
-
-            PLEASE TEST: pin and unpin a chat from the long-press menu; react under a date label; look at the ticks.
+            PLEASE TEST: set a chat to Auto and try different wallpapers; give one chat its own wallpaper, then change the one in Settings; react to a message.
 
         run: fastlane beta
