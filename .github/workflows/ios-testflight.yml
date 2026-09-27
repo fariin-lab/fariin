@@ -74,12 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            SIGNED-OUT PAGES, SIMPLER.
+            PROFILE PHOTOS, REAL CHAT PREVIEW, BLOCKING, SEARCH, SIGN-IN.
 
-            SIGN IN: if this phone remembers your account, the first page shows its card; one tap and you are in. Add another account opens Apple / Google / Email, Back returns to the card.
+            PHOTOS: people whose photo never showed now show it; hiding and showing your photo again comes back for everyone.
 
-            CLEANER: no "Log in using Passkey" link (the passkey sheet still comes up by itself), one-line subtitle, no small icons on Add another account, terms line only on Sign up.
+            CHATS: long-press a chat to see the real chat, tap it to open. Swiping a row uses Apple's own grey. Ticks are the new double mark. Search shows loading rows and "No Results".
 
-            PLEASE TEST: sign out, tap your card; sign out, Add another account then Back; hold the card and Remove from This Phone.
+            BLOCKING: a blocked chat offers Clear Chat and Unblock; Report is hidden while blocked.
+
+            ALSO: videos you already downloaded open at once; the header badge is always blue; the Chat Key sheet is simpler; sign-in shows your saved account first.
+
+            PLEASE TEST: open a profile that had no photo; long-press a chat then tap it; unblock someone; search a made-up username.
 
         run: fastlane beta
