@@ -74,9 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FASTER FIRST CHAT, WALLPAPERS, REACTION SPACING.
+            FASTER FIRST CHAT, WALLPAPERS, CHAT COLOURS, REACTION SPACING.
 
             SPEED: the first chat you open after launching opens straight away.
+
+            CHAT COLOURS: a new set of 22 bubble colours and gradients; gradients run top to bottom.
 
             WALLPAPERS: nine new gradients (Blaze, Noir, Heatmap, Aqua, Iridescent, Monstera, Bliss, Sky, Peach). In the preview, swipe sideways to see the others; the close button is glass.
 
