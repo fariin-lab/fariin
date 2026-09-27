@@ -1315,6 +1315,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// ⛔ A CHANGED ROW JUST OFF SCREEN IS STILL A LIVE CELL — owner, 2026-09-27, a screenshot after
+    /// picking a wallpaper on Auto: the new bubble colour on the rows at the bottom, the OLD colour on
+    /// the row just above them.
+    ///
+    /// With prefetching on, UIKit builds cells before they scroll in and keeps cells that just scrolled
+    /// out, and neither kind is in `indexPathsForVisibleItems`. Every path here reconfigured the
+    /// visible rows only, so a prefetched cell kept the content it was built with and was shown as-is
+    /// when the reader scrolled to it. reconfigureItems is the call made for this: it re-runs the
+    /// registration on a prefetched cell, and does nothing for a row that has no cell. Heights are
+    /// `remeasureOffscreenChanged`'s job and are already settled by the time this runs.
+    private func reconfigureOffscreenChanged(_ changed: [String], visible: Set<String>) {
+        let offscreen = changed.filter { !visible.contains($0) }
+        guard !offscreen.isEmpty else { return }
+        var snapshot = dataSource.snapshot()
+        // Against the snapshot, never `currentIds`: reconfigureItems aborts on an id it does not hold.
+        let present = Set(snapshot.itemIdentifiers)
+        let split = splitByRouteFlip(offscreen.filter(present.contains))
+        guard !split.reconfigure.isEmpty || !split.reload.isEmpty else { return }
+        if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
+        queueReload(split.reload, into: &snapshot)
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
     private func frameMinY(for ids: [String]) -> [String: CGFloat] {
         var out = [String: CGFloat](minimumCapacity: ids.count)
         var y: CGFloat = 0
@@ -1900,6 +1923,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let allChanged = currentIds.filter { rowSignatures[$0] != lastRowSigs[$0] }   // content changes
         lastRowSigs = rowSignatures
         remeasureOffscreenChanged(allChanged, visible: visibleSet)              // heights are not about cells
+        reconfigureOffscreenChanged(allChanged, visible: visibleSet)            // ready-made cells off screen
         let changed = allChanged.filter { visibleSet.contains($0) }
         let heightIds = pendingSettleHeights                                    // late height reports
         pendingSettleHeights.removeAll()
@@ -2223,6 +2247,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // The unread divider arrives on exactly this path: the chat opens at the newest message
             // and `anchorUnread` then marks a row well above the reader.
             remeasureOffscreenChanged(allChanged, visible: visible)
+            reconfigureOffscreenChanged(allChanged, visible: visible)
             let changed = allChanged.filter { visible.contains($0) }
             guard !changed.isEmpty else { return }
             refreshVisible(changed)
@@ -2263,9 +2288,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // flip that arrived in the same turn as a delete fell down here and was left to the
         // signature diff. That is exactly what a bulk delete does: it removes the rows and calls
         // `exitSelection()` in the same turn. Any row the diff missed kept its circle.
+        // Off-screen rows that existed before are included too: see `reconfigureOffscreenChanged`.
+        // A row with no cell makes reconfigureItems a no-op, so this costs nothing for them.
         let contentChanged = selectionAnimationState == .willAnimate
             ? ids.filter { liveSet.contains($0) }
-            : sigChanged.filter { liveSet.contains($0) }
+            : sigChanged.filter { liveSet.contains($0) || oldSet.contains($0) }
         lastRowSigs = rowSignatures
 
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids â€” a
