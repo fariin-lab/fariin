@@ -3558,6 +3558,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         registerAsContentScrollView()
     }
 
+    /// ⛔ AND ONCE MORE WHERE THE CHAIN IS SURE TO BE WHOLE — owner, 2026-09-27: "the header blur
+    /// comes late; it arrives only after the chat has fully opened". `didMove(toParent:)` can run
+    /// before SwiftUI has put its hosting page under the navigation controller, so the walk above
+    /// stops short and registers on a page the bar never asks; `viewWillAppear` then skipped it
+    /// because the view already had a window. `viewIsAppearing` is UIKit's own moment for this:
+    /// the view is in the hierarchy with its final parents, and the push animation has not drawn a
+    /// frame yet. Only on the way in, so a pop never makes the bar re-decide mid-animation.
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        if isMovingToParent || !didRegisterOnAppearing {
+            didRegisterOnAppearing = true
+            registerAsContentScrollView()
+        }
+    }
+    private var didRegisterOnAppearing = false
+
     private func registerAsContentScrollView() {
         guard isViewLoaded, let list = collectionView else { return }
         setContentScrollView(list, for: .top)

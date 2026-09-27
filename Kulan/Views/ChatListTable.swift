@@ -833,31 +833,29 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // for no gain. `didMove(toParent:)` has always done the real registration.
         if tableView.window == nil { registerAsContentScrollView() }
         isInTransition = true
-        // ⛔ THE SEARCH FIELD COMES BACK WITH THE LIST — owner, 2026-09-25: "open a chat, tap Back,
-        // and the search bar has disappeared", the list sitting at its top with the field folded.
-        // Stories keeps its field on Back because SwiftUI's own list tells UIKit it is at the top;
-        // this hosted table has to say so itself. UIKit has no "expand the search" call. The
-        // standard way is to switch hide-on-scroll off for the arrival and back on once it has
-        // landed (`viewDidAppear`), which draws the field expanded and keeps hide-on-scroll for
-        // every scroll after. Only at the top: a list you scrolled down keeps its folded field.
-        if tableView.contentOffset.y <= -tableView.adjustedContentInset.top + 1,
-           let item = searchHostItem() {
-            item.hidesSearchBarWhenScrolling = false
-            searchRevealPending = true
-        }
     }
 
-    /// Set while `viewWillAppear` has pinned the search field open for the arrival.
-    private var searchRevealPending = false
+    /// ⛔ REGISTERED WHERE THE PARENT CHAIN IS WHOLE — owner, 2026-09-27: after Back, the search
+    /// field showed its word with no grey capsule until the swipe finished. That was the
+    /// 2026-09-25 reveal trick (hide-on-scroll switched off for the arrival and on again after it),
+    /// which makes the bar rebuild the field mid-transition. Stories never needs it: its list is
+    /// known to the bar before the first frame. `viewIsAppearing` gives this table the same — the
+    /// view is in the hierarchy under its final parents and no transition frame has drawn — so the
+    /// bar sees the list at its top and keeps the field open by itself. The trick is gone.
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        // Only when the bar's page does not already know this table: re-registering the same view
+        // during a pop is the flicker the 2026-09-11 audit note above warns about.
+        var page: UIViewController = self
+        while let up = page.parent, !(up is UINavigationController), !(up is UITabBarController) {
+            page = up
+        }
+        if page.contentScrollView(for: .top) !== tableView { registerAsContentScrollView() }
+    }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         isInTransition = false
-        // A cancelled swipe-back arrives here without `viewDidAppear`; never leave the field pinned.
-        if searchRevealPending {
-            searchRevealPending = false
-            searchHostItem()?.hidesSearchBarWhenScrolling = true
-        }
     }
 
     /// The cancel-button invariant (`reassertNavChrome`) is re-checked on every layout pass. A
@@ -874,10 +872,6 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The arrival has settled: let the footer resize again and replay whatever the transition
         // held back, in one pass rather than one per frame.
         isInTransition = false
-        if searchRevealPending {
-            searchRevealPending = false
-            searchHostItem()?.hidesSearchBarWhenScrolling = true
-        }
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
