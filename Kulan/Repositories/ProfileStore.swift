@@ -172,6 +172,7 @@ final class ProfileStore {
             return Self.indexed(UserProfile(id: uid, data: data))
         } catch {
             print("profile fetch failed:", error)
+            await MainActor.run { RefusalTrace.note(error, "profile read") }   // TEMPORARY
             return nil
         }
     }

@@ -189,6 +189,7 @@ final class ConversationsRepository {
                 guard let self, let snap else {
                     if let error {
                         print("conversations listen error:", error)
+                        Task { @MainActor in RefusalTrace.note(error, "chat list") }   // TEMPORARY
                         // 2026-09-24 audit: see `loadFailed`. `hasLoaded` too, because we HAVE heard
                         // back, and it is what takes the skeleton down so the error can show.
                         self?.loadFailed = true

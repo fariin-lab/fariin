@@ -2490,7 +2490,10 @@ enum ChatService {
         do {
             // Preview only once the reaction itself landed (2026-09-24 audit): reacting to a message
             // deleted meanwhile failed here, and the chat list still said "Reacted 🙏" about nothing.
-            guard (try? await ref.updateData(["reactions.\(uid)": enc])) != nil else { return false }
+            do { try await ref.updateData(["reactions.\(uid)": enc]) } catch {
+                await MainActor.run { RefusalTrace.note(error, "reaction") }   // TEMPORARY
+                return false
+            }
             // Surface it in the chat list ("Reacted 🙏") — a separate best-effort write, so the
             // reaction itself still lands even if this one is rejected. Deliberately does NOT
             // bump updatedAt: a reaction shouldn't reorder chats or re-arm unread; the list
