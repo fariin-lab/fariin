@@ -74,18 +74,20 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FASTER FIRST CHAT, WALLPAPERS, CHAT COLOURS, REACTION SPACING.
+            BLOCKED CHATS, PIN, REACTIONS, FIRST CHAT SPEED, PROFILE PHOTOS.
 
-            SPEED: the first chat you open after launching opens straight away.
+            BLOCKED CHAT: Clear Chat and Unblock are two separate buttons; Clear Chat is red. On the profile, Unblock is red and asks first.
 
-            CHAT COLOURS: a new set of 22 bubble colours and gradients; gradients run top to bottom.
+            PIN: pinning from the long-press menu no longer leaves an empty Pinned area. The long-press preview no longer shows the pinned bar.
 
-            WALLPAPERS: nine new gradients (Blaze, Noir, Heatmap, Aqua, Iridescent, Monstera, Bliss, Sky, Peach). In the preview, swipe sideways to see the others; the close button is glass.
+            REACTIONS: reacting to a message no longer makes the chat jump.
 
-            REACTIONS: the pills under a message line up with the text and sit closer to it.
+            SPEED: nothing else loads in the background while the first chat after launch is opening.
 
-            ALSO: your own photo in Settings opens smoothly every time; Pin and Unpin icons match.
+            PROFILE PHOTOS: a chat that was answered in an older version is now treated as accepted, so "My Chats" photos show both ways.
 
-            PLEASE TEST: launch the app and open a chat; open Set Wallpaper and swipe the preview; react to a message.
+            ALSO: the Chat Key sheet fits its text; profile links are hidden for now; the new wallpapers come first.
+
+            PLEASE TEST: block and unblock someone; pin a chat from the long-press menu; react to the last message; launch and open a chat.
 
         run: fastlane beta
