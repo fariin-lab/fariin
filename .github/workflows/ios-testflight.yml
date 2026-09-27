@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PHOTO REACTIONS, ALL MEDIA SPEED, RESET MENU, SELECTION.
+            SELECTION, ARCHIVE AND FAILED MESSAGES.
+
+            SELECTION: the delete button works even when a call is selected; no empty circles stay behind after you cancel.
+
+            ARCHIVE: an archived chat fades out instead of sliding under the Pinned heading.
+
+            FAILED MESSAGE: tapping the red (!) opens Resend / Delete right next to it.
+
+            PLEASE TEST: select messages including a call and delete them; select and cancel; archive a pinned chat; tap a failed message's (!).
+
+            EARLIER IN THIS ROUND: PHOTO REACTIONS, ALL MEDIA SPEED, RESET MENU, SELECTION.
 
             PHOTO REACTIONS: a reaction on a photo or GIF sits under the picture with the person's face, and no longer covers the time.
 
