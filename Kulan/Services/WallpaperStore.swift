@@ -49,7 +49,7 @@ enum ChatWallpaper: Equatable {
     var pairedColor: ChatColorSpec? {
         switch self {
         case .gradient(let id): return ChatWallpapers.themeColor(id)
-        case .preset(let id):   return WallpaperPreset(id: id).theme.map { ChatColorSpec(colors: [$0.bubbleHex]) }
+        case .preset(let id):   return WallpaperPreset(id: id).theme?.autoColor
         case .none, .photo, .color: return nil
         }
     }
@@ -119,6 +119,18 @@ struct WallpaperGradient: Identifiable, Equatable {
     /// The doodle sheet over the colour. The nine gradients taken from the reference app are plain,
     /// as they are there; the six of our own keep the pattern.
     var pattern: Bool = true
+    /// ⛔ THE REFERENCE APP'S PAIRING, WHERE IT HAS ONE — owner, 2026-09-27: "use their Auto colour
+    /// logic, including the matching colour for each wallpaper". Its `Wallpaper.defaultChatColor`
+    /// pairs each of its nine gradients with one of its gradient palette colours (Sunset/Blaze →
+    /// Ember, Noir → Midnight, Heatmap → Infrared, Aqua → Lagoon, Iridescent → Fluorescent,
+    /// Monstera → Basil, Bliss → Sublime, Sky → Sea, Peach → Tangerine), the same values as in
+    /// `ChatColors.presets`. Those nine carry it here; our own six have no counterpart there and keep
+    /// `bubbleHex`. `bubbleHex` on the nine was their average tint, pale enough on Sky, Bliss and
+    /// Peach that white text on it was hard to read.
+    var paired: ChatColorSpec? = nil
+
+    /// The bubble colour Auto uses on this wallpaper.
+    var autoColor: ChatColorSpec { paired ?? ChatColorSpec(colors: [bubbleHex]) }
 
     /// The nine colours a 3×3 mesh needs, from the four we store: corners as given, edges as the
     /// blend of the two corners they sit between, centre as the blend of all four. Nine hand-picked
@@ -257,39 +269,48 @@ enum ChatWallpapers {
         .init(id: "g-blaze", name: "Blaze",
               lightCorners: [0xF3DC47, 0xF2CD46, 0xE54F41, 0xE44040],
               darkCorners:  [0xE6CA0F, 0xDEB80F, 0x9F2311, 0x971111],
-              tint: Color(hex: 0xEC8E44), bubbleHex: 0xEC8E44, pattern: false),
+              tint: Color(hex: 0xEC8E44), bubbleHex: 0xEC8E44, pattern: false,
+              paired: .init(colors: [0xE57C00, 0x5E0000])),   // Ember
         .init(id: "g-noir", name: "Noir",
               lightCorners: [0x434356, 0x434356, 0xA5A5B6, 0xA5A5B6],
               darkCorners:  [0x121217, 0x121217, 0x535365, 0x535365],
-              tint: Color(hex: 0x747486), bubbleHex: 0x747486, pattern: false),
+              tint: Color(hex: 0x747486), bubbleHex: 0x747486, pattern: false,
+              paired: .init(colors: [0x2C2C3A, 0x787891])),   // Midnight
         .init(id: "g-heatmap", name: "Heatmap",
               lightCorners: [0xE4384B, 0xF53844, 0x42378F, 0x533788],
               darkCorners:  [0xAA2131, 0xB6202A, 0x362D76, 0x422C6F],
-              tint: Color(hex: 0x9C386A), bubbleHex: 0x9C386A, pattern: false),
+              tint: Color(hex: 0x9C386A), bubbleHex: 0x9C386A, pattern: false,
+              paired: .init(colors: [0xF65560, 0x442CED])),   // Infrared
         .init(id: "g-aqua", name: "Aqua",
               lightCorners: [0x0093E9, 0x0093E9, 0x80D0C7, 0x80D0C7],
               darkCorners:  [0x006199, 0x006199, 0x3FAB9F, 0x3FAB9F],
-              tint: Color(hex: 0x40B2D8), bubbleHex: 0x40B2D8, pattern: false),
+              tint: Color(hex: 0x40B2D8), bubbleHex: 0x40B2D8, pattern: false,
+              paired: .init(colors: [0x004066, 0x32867D])),   // Lagoon
         .init(id: "g-iridescent", name: "Iridescent",
               lightCorners: [0xDC7DE6, 0xED82E6, 0x3753E6, 0x4858E6],
               darkCorners:  [0xA010A2, 0xAF0EA4, 0x142790, 0x232592],
-              tint: Color(hex: 0x926AE6), bubbleHex: 0x926AE6, pattern: false),
+              tint: Color(hex: 0x926AE6), bubbleHex: 0x926AE6, pattern: false,
+              paired: .init(colors: [0xEC13DD, 0x1B36C6])),   // Fluorescent
         .init(id: "g-monstera", name: "Monstera",
               lightCorners: [0x65CDAC, 0x65CDAC, 0x0A995A, 0x0A995A],
               darkCorners:  [0x236C54, 0x236C54, 0x065632, 0x065632],
-              tint: Color(hex: 0x38B383), bubbleHex: 0x38B383, pattern: false),
+              tint: Color(hex: 0x38B383), bubbleHex: 0x38B383, pattern: false,
+              paired: .init(colors: [0x2F9373, 0x077343])),   // Basil
         .init(id: "g-bliss", name: "Bliss",
               lightCorners: [0xD8E1FA, 0xD8E1FA, 0xD6A4B5, 0xD6A4B5],
               darkCorners:  [0x8AA1E0, 0x8AA1E0, 0xB65D7B, 0xB65D7B],
-              tint: Color(hex: 0xD7C2D8), bubbleHex: 0xD7C2D8, pattern: false),
+              tint: Color(hex: 0xD7C2D8), bubbleHex: 0xD7C2D8, pattern: false,
+              paired: .init(colors: [0x6281D5, 0x974460])),   // Sublime
         .init(id: "g-sky", name: "Sky",
               lightCorners: [0xD8EBFD, 0xD8EBFD, 0x9DCCFB, 0x9DCCFB],
               darkCorners:  [0xA0C4E9, 0xA0C4E9, 0x478ACD, 0x478ACD],
-              tint: Color(hex: 0xBBDCFC), bubbleHex: 0xBBDCFC, pattern: false),
+              tint: Color(hex: 0xBBDCFC), bubbleHex: 0xBBDCFC, pattern: false,
+              paired: .init(colors: [0x498FD4, 0x2C66A0])),   // Sea
         .init(id: "g-peach", name: "Peach",
               lightCorners: [0xFFE0BD, 0xFFE5C2, 0xFCAC92, 0xFCB197],
               darkCorners:  [0xE5B983, 0xEAC28A, 0xBB6144, 0xC06A4B],
-              tint: Color(hex: 0xFEC9AA), bubbleHex: 0xFEC9AA, pattern: false),
+              tint: Color(hex: 0xFEC9AA), bubbleHex: 0xFEC9AA, pattern: false,
+              paired: .init(colors: [0xDB7133, 0x911231])),   // Tangerine
         .init(id: "sunset", name: "Sunset",
               lightCorners: [0xFFD9C2, 0xFFE7B0, 0xFFC6D4, 0xEBC9F0],
               darkCorners:  [0x3C2119, 0x372A12, 0x361A28, 0x2C1C33],
@@ -317,9 +338,7 @@ enum ChatWallpapers {
     ]
 
     /// A theme = the paired wallpaper + bubble colour, applied together by a Chat Theme card.
-    static func themeColor(_ id: String) -> ChatColorSpec? {
-        gradient(id).map { ChatColorSpec(colors: [$0.bubbleHex]) }
-    }
+    static func themeColor(_ id: String) -> ChatColorSpec? { gradient(id)?.autoColor }
     static func gradient(_ id: String) -> WallpaperGradient? { all.first { $0.id == id } }
 }
 
