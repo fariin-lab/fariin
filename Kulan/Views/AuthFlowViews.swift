@@ -24,8 +24,6 @@ struct WelcomeView: View {
     /// The automatic passkey offer runs once per time this screen is built, not on every return
     /// from a pushed door page.
     @State private var passkeyOffered = false
-    @State private var passkeyBusy = false
-    @State private var passkeyError: String?
 
     var body: some View {
         NavigationStack {
@@ -48,30 +46,10 @@ struct WelcomeView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.top, 8)
-                    // ⛔ THE PASSKEY DOOR, ASKED FOR — owner, 2026-09-25. The automatic offer below
-                    // only appears when this phone already holds a Fariin passkey; this link opens the
-                    // system passkey sheet on request, including a passkey on another device.
-                    Button { Task { await passkeyLogin() } } label: {
-                        HStack(spacing: 6) {
-                            if passkeyBusy { ProgressView().controlSize(.small) }
-                            Text("Log in using Passkey")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        // ⛔ BLUE, AND CLOSER — owner, 2026-09-26: "passkey link make it blue, and the
-                        // space between it and the text above smaller". A link reads as a link in the
-                        // system blue. The 44pt row put ~12pt of air above the words on top of the 10pt
-                        // padding; 34 and 4 keep a comfortable tap and bring it to the text.
-                        .foregroundStyle(Color.blue)
-                        .frame(minHeight: 34)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(passkeyBusy)
-                    .padding(.top, 4)
-                    if let passkeyError {
-                        Text(passkeyError).font(.footnote).foregroundStyle(.red)
-                            .multilineTextAlignment(.center).padding(.horizontal, 24)
-                    }
+                    // ⛔ NO "Log in using Passkey" LINK — owner, 2026-09-27. The system passkey sheet
+                    // already comes up by itself when this phone holds one (`offerPasskey`), which is
+                    // the only case the link served in practice. The 09-25/09-26 link requests were
+                    // not the owner's; do not re-add it.
                     Spacer()
                     Spacer()
                     VStack(spacing: 12) {
@@ -120,28 +98,6 @@ struct WelcomeView: View {
             .toolbar(.hidden, for: .navigationBar)
             .task { await offerPasskey() }
         }
-    }
-
-    /// The link's passkey sign-in: the full system sheet (not `immediateOnly`). A cancel says nothing.
-    private func passkeyLogin() async {
-        guard !passkeyBusy else { return }
-        guard NetworkState.shared.isOnline else {
-            passkeyError = "No internet connection. Check your connection and try again."
-            return
-        }
-        passkeyBusy = true; passkeyError = nil
-        defer { passkeyBusy = false }
-        do {
-            try await Passkeys.signIn(immediateOnly: false)
-        } catch {
-            if !AuthService.isCancellation(error) {
-                passkeyError = "Couldn't sign in with a passkey. Try again or use another way to log in."
-            }
-            return
-        }
-        await AuthService.shared.bootstrap()
-        AuthService.shared.reportLogin()
-        onAuthed()
     }
 
     /// THE FASTEST DOOR, OFFERED WITHOUT ASKING. If this phone holds a Fariin passkey, the system
