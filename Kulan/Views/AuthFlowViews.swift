@@ -41,7 +41,7 @@ struct WelcomeView: View {
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.primary)
                         .padding(.top, 22)
-                    Text("Private chats, calls and stories.\nMade for Somalis everywhere.")
+                    Text("Private chats, calls and stories.")
                         .font(.system(size: 15))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
