@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            SELECTION, ARCHIVE AND FAILED MESSAGES.
+            REACTIONS, HEADER BLUR, AUTO COLOR, WALLPAPER SHEET.
+
+            REACTIONS: reacting no longer drops the chat down and brings it back; a new reaction appears in place, not over the message below.
+
+            HEADER: opening a chat, the blur under the header is there while the page slides in.
+
+            AUTO COLOR: Auto is always one flat color that matches the wallpaper.
+
+            WALLPAPER SHEET: the selection ring moves to the wallpaper you tap straight away.
+
+            PLEASE TEST: react to the last message and to a photo; open a few chats and watch the header; try Auto on different wallpapers.
+
+            EARLIER IN THIS ROUND: SELECTION, ARCHIVE AND FAILED MESSAGES.
 
             SELECTION: the delete button works even when a call is selected; no empty circles stay behind after you cancel.
 
