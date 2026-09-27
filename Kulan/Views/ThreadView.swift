@@ -1115,9 +1115,17 @@ struct ThreadView: View {
         // whether content sits under it. A chat short enough that nothing reaches the bar stays
         // clear; the reference behaves the same.
         .navigationBarTitleDisplayMode(.inline)
-        // ⛔ NO `.toolbar` AND NO `.navigationBarBackButtonHidden` HERE ANY MORE — owner,
-        // 2026-08-25. Both are set on the navigationItem from UIKit by `ChatNavigationItem`, the way
-        // the reference app sets them; see `navigationBar` for what goes where.
+        // ⛔ NO `.toolbar` HERE — owner, 2026-08-25. The bar items are set on the navigationItem from
+        // UIKit by `ChatNavigationItem`, the way the reference app sets them; see `navigationBar`.
+        //
+        // ⛔ BUT THE BACK BUTTON IS ALSO HIDDEN FROM HERE IN SELECTION MODE — owner, 2026-09-27, the
+        // chevron ringed beside Delete All: "every time I tap to select, the back button appears for
+        // a second, then disappears". SwiftUI writes the navigationItem on each of its updates and
+        // puts `hidesBackButton` back to false; the bridge notices and hides it again, but only on
+        // the NEXT pass (its re-assert is deferred on purpose, see that file). Every tap in selection
+        // mode is a SwiftUI update, so every tap flashed the chevron. With SwiftUI asking for the
+        // same thing, its own write already hides it and there is nothing left to flash.
+        .navigationBarBackButtonHidden(selecting)
         // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
         // lingers over the chat list.
         .onDisappear {
