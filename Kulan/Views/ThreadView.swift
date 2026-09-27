@@ -3428,6 +3428,14 @@ struct ThreadView: View {
                 // call resend directly.
                 if let m = repo.items.first(where: { $0.rowId == id }) { failedActionTarget = m }
             },
+            // The same question, presented by the list from the red badge itself (2026-09-27);
+            // `onTapRetry` above stays as the fallback. The message line is the dialog's own.
+            failedActions: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return nil }
+                let why: String? = SendQueue.isRefused(clientId: m.clientId ?? "") ? refusedReason
+                    : (!NetworkState.shared.isOnline ? "No internet connection. Check your connection and try again." : nil)
+                return FailedMessageActions(message: why, resend: { resend(m) }, delete: { deleteForMe(m) })
+            },
             onCancelUpload: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { cancelMediaSend(m) }
             },

@@ -86,6 +86,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
+    var failedActions: (String) -> FailedMessageActions? = { _ in nil }
     var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
@@ -258,6 +260,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
+        vc.failedActions = failedActions
         vc.onCancelUpload = onCancelUpload
         vc.onToggleSelect = onToggleSelect
         vc.onTapSender = onTapSender
@@ -665,6 +668,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
+    var failedActions: (String) -> FailedMessageActions? = { _ in nil }
     var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
@@ -4970,7 +4975,20 @@ extension MessageListController: MessageRowCellDelegate {
 
     func rowCellDidTapRetry(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
-        onTapRetry(id)
+        // ⛔ THE QUESTION POINTS AT THE BADGE YOU TAPPED — owner, 2026-09-27, the "Message not sent"
+        // box pointing at the header. It was a SwiftUI confirmationDialog attached to the whole chat,
+        // and iOS 26 draws that as a popover anchored to the view it hangs from: the screen's top.
+        // Presented here instead, with the red (!) as its source, as the system's own menus anchor.
+        guard let a = failedActions(id), let badge = cell.failBadgeRect else { onTapRetry(id); return }
+        let sheet = UIAlertController(title: "Message not sent", message: a.message, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Resend", style: .default) { _ in a.resend() })
+        sheet.addAction(UIAlertAction(title: "Delete", style: .destructive) { _ in a.delete() })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = cell.contentView
+            pop.sourceRect = badge
+        }
+        present(sheet, animated: true)
     }
 
     func rowCellDidTapCancelUpload(_ cell: MessageRowCell) {
@@ -5133,4 +5151,11 @@ enum RxTrace {
         guard let s = start, Date().timeIntervalSince(s) <= 2 else { return }
         NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what)
     }
+}
+
+/// What the failed-send question offers for one message (see `rowCellDidTapRetry`).
+struct FailedMessageActions {
+    var message: String?
+    var resend: () -> Void
+    var delete: () -> Void
 }

@@ -54,6 +54,13 @@ final class MessageRowCell: UICollectionViewCell {
     /// uses it to move the rest of the conversation along with the bubble.
     func takeReactionGrowth() -> CGFloat { rowView.takeReactionGrowth() }
 
+    /// The red (!) badge of a failed send, in the cell's content-view coordinates (the row view sits
+    /// at its origin), for the Resend / Delete menu to point at.
+    var failBadgeRect: CGRect? {
+        guard let p = rowView.plan, case .bubble(let b) = p.body else { return nil }
+        return b.failBadge
+    }
+
     /// The rect the long-press menu should lift, in window coordinates. Wider than the bubble when
     /// reactions hang off its corner: lifting the bubble alone slices the badge in half.
     var liftFrameInWindow: CGRect {
