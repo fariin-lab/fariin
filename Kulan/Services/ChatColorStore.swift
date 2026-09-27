@@ -156,12 +156,19 @@ enum ChatColors {
         version &+= 1
     }
 
-    /// "Apply For All Chats": default bubble colour + clear per-chat picks (nil = app default).
-    func applyToAllChats(_ spec: ChatColorSpec?) {
+    /// "Apply For All Chats": the default bubble colour (nil = app default). Same rule as
+    /// `WallpaperStore.applyToAllChats` (owner, 2026-09-27): a chat's own colour beats the default,
+    /// because the chat wallpaper sheet saves a colour with the wallpaper, and a Settings theme
+    /// replacing only the colour would leave that chat half its own and half the default.
+    func applyToAllChats(_ spec: ChatColorSpec?, alsoFor cid: String? = nil, clearingChatPicks: Bool = false) {
         let d = UserDefaults.standard
-        for k in d.dictionaryRepresentation().keys
-            where k.hasPrefix("chatColor.") && k != "chatColor.customLibrary.v1" && k != Self.defaultKey {
-            d.removeObject(forKey: k)
+        if clearingChatPicks {
+            for k in d.dictionaryRepresentation().keys
+                where k.hasPrefix("chatColor.") && k != "chatColor.customLibrary.v1" && k != Self.defaultKey {
+                d.removeObject(forKey: k)
+            }
+        } else if let cid {
+            d.removeObject(forKey: Self.key(cid))
         }
         cache = [:]
         if let spec { d.set(spec.stored, forKey: Self.defaultKey) } else { d.removeObject(forKey: Self.defaultKey) }

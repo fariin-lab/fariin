@@ -357,9 +357,10 @@ struct WallpaperPickerSheet: View {
     private func resetToDefault() {
         committed = true                       // persist the reset (don't let onDisappear revert it)
         if globalOnly {
-            // Global reset: plain app look everywhere (default cleared + all per-chat picks).
-            store.applyToAllChats(.none)
-            colorStore.applyToAllChats(nil)
+            // Global reset: plain app look everywhere (default cleared + all per-chat picks). The one
+            // path that still clears chats' own picks — an explicit "reset all", as the reference has.
+            store.applyToAllChats(.none, clearingChatPicks: true)
+            colorStore.applyToAllChats(nil, clearingChatPicks: true)
         } else {
             // Per-chat reset: this chat goes back to the PLAIN default look. Clearing the override
             // instead made Reset do nothing whenever an "Apply For All Chats" wallpaper was set —
@@ -374,8 +375,10 @@ struct WallpaperPickerSheet: View {
 
     private func applyForAllChats() {
         committed = true
-        store.applyToAllChats(selected)
-        colorStore.applyToAllChats(selectedColor)
+        // Every chat without its own pick follows this; the chat it was pressed in joins them. Other
+        // chats' own picks are kept (owner, 2026-09-27: a chat's own wallpaper beats the default).
+        store.applyToAllChats(selected, alsoFor: cid)
+        colorStore.applyToAllChats(selectedColor, alsoFor: cid)
         dismiss()
     }
 
