@@ -1232,6 +1232,7 @@ final class MessageRowView: UIView {
 
     private struct ReactionBefore {
         var bubble: CGRect
+        var rowHeight: CGFloat
         var fillPath: UIBezierPath
         var rimPath: CGPath?
         var frames: [ObjectIdentifier: CGRect]      // bubble-box children, by view
@@ -1260,7 +1261,8 @@ final class MessageRowView: UIView {
                 leaving.append((snap, v.frame))
             }
         }
-        return ReactionBefore(bubble: ob.bubble, fillPath: fill.path, rimPath: rim.shape.path,
+        return ReactionBefore(bubble: ob.bubble, rowHeight: plan?.height ?? 0,
+                              fillPath: fill.path, rimPath: rim.shape.path,
                               frames: frames, chipFrames: chipFrames, leaving: leaving,
                               arriving: Set(newKeys).subtracting(oldKeys))
     }
@@ -1280,9 +1282,15 @@ final class MessageRowView: UIView {
             add(v.layer, "bounds.size", NSValue(cgSize: f.size))
             add(v.layer, "position", NSValue(cgPoint: CGPoint(x: f.midX, y: f.midY)))
         }
-        let grow = nb.bubble.height - old.bubble.height
-        // Where the old bubble sat in THIS pass's coordinates. The list moved the row by the growth
-        // when it kept the bottom still, so the old box's top is that much lower here.
+        // ⛔ THE ROW'S GROWTH, NOT THE BUBBLE'S — owner, 2026-09-27, a photo reacted to: "the other
+        // messages flash for a second". The list moves its neighbours by how much the whole ROW changed.
+        // On a text message that equals the bubble's change; on a photo or GIF the pill hangs below
+        // the picture, the row grows by the overhang and the bubble box by nothing at all, so this
+        // used to report zero and the neighbours the list had already moved got no animation back —
+        // they snapped. The row's height is the number the list actually moved everything by.
+        let grow = (plan?.height ?? old.rowHeight) - old.rowHeight
+        // Where the old bubble sat in THIS pass's coordinates. The list moved the row by the row's
+        // growth when it kept the bottom still, so everything in it is that much lower here.
         let oldRect = Self.growsFromBottom ? old.bubble.offsetBy(dx: 0, dy: grow) : old.bubble
         if oldRect != nb.bubble {
             add(bubbleBox.layer, "bounds.size", NSValue(cgSize: oldRect.size))

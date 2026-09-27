@@ -96,6 +96,31 @@ enum ChatColors {
     private init() {
         let stored = UserDefaults.standard.stringArray(forKey: "chatColor.customLibrary.v1") ?? []
         customColors = stored.compactMap { ChatColorSpec(stored: $0) }
+        Self.migrateThemeCopiesToAuto()
+    }
+
+    /// ⛔ ONE-TIME: COLOURS THE APP WROTE, NOT THE PERSON, GO BACK TO AUTO — owner, 2026-09-27, "auto
+    /// chat colour works in Settings but not in the chat's sheet". Before Auto existed, the chat sheet
+    /// opened on the chat's RESOLVED colour and Apply saved it as that chat's own, and a Settings theme
+    /// card saved its colour as the Settings colour. Both wrote a theme's `bubbleHex` as a fixed pick,
+    /// and a fixed pick beats Auto, so those chats never followed a wallpaper again.
+    ///
+    /// ⚠️ SAFE TO TELL APART: a theme's `bubbleHex` as a single solid colour is not in the colour
+    /// picker (`ChatColors.presets` is the reference palette), so nobody could have chosen one by hand;
+    /// only the app ever stored it. Custom colours are left alone even if they happen to match.
+    private static func migrateThemeCopiesToAuto() {
+        let d = UserDefaults.standard
+        let flag = "chatColor.migratedThemeCopies.v1"
+        guard !d.bool(forKey: flag) else { return }
+        let themeCopies = Set(ChatWallpapers.all.map { ChatColorSpec(colors: [$0.bubbleHex]).stored })
+            .subtracting(ChatColors.presets.map(\.stored))
+        let custom = Set(d.stringArray(forKey: "chatColor.customLibrary.v1") ?? [])
+        for (k, v) in d.dictionaryRepresentation()
+            where k.hasPrefix("chatColor.") && k != "chatColor.customLibrary.v1" && k != flag {
+            guard let s = v as? String, themeCopies.contains(s), !custom.contains(s) else { continue }
+            d.removeObject(forKey: k)
+        }
+        d.set(true, forKey: flag)
     }
 
     func addCustom(_ spec: ChatColorSpec) {

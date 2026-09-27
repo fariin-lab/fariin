@@ -2027,9 +2027,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             layout.generation += 1
             let afterY = frameMinY(for: currentIds)
             if pinBottom {
-                // Never past the new bound nor above the top: a chat shorter than the screen has no
-                // offset to take.
-                let newBound = max(minContentOffsetY, safeContentHeight + grown
+                // ⛔ A SHORT CHAT HANGS FROM THE COMPOSER BY ITS TOP INSET — owner, 2026-09-27, a chat
+                // of four messages: react and remove, and a gap the reaction's height opened under the
+                // last bubble. The inset (`bottomAlignShortfall`) is written only by `updateInsets`,
+                // which a row changing height never reaches, so the thread kept the old inset while it
+                // shrank. It is recomputed here for the new height, in the same pass, so the bottom of
+                // the thread stays against the composer — the same "bottom still" as a long chat.
+                let newContent = safeContentHeight + grown
+                let room = collectionView.bounds.height
+                    - (collectionView.safeAreaInsets.top + topOverlayHeight) - bottomClearance
+                let newTop = topOverlayHeight + (room > 0 ? max(0, room - newContent) : 0)
+                if abs(collectionView.contentInset.top - newTop) > 0.5 {
+                    collectionView.contentInset.top = newTop
+                    // Not a nav-bar inset arriving: the one-time landing repin must not read it as one.
+                    if landedTopInset != nil { landedTopInset = collectionView.adjustedContentInset.top }
+                }
+                // Never past the new bound nor above the top.
+                let newBound = max(minContentOffsetY, newContent
                                    + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
                 delta = newBound - collectionView.contentOffset.y
             } else if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
