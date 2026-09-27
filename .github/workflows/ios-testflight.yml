@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            REACTIONS, HEADER BLUR, AUTO COLOR, WALLPAPER SHEET.
+            PHOTO AND GIF REACTIONS AND TIME.
+
+            REACTIONS ON PICTURES: a smaller reaction sits on the picture's bottom-left edge, so it is clear which picture it belongs to.
+
+            TIME ON PICTURES: the time and tick are centred in their dark capsule, and the tick is fully white.
+
+            PLEASE TEST: react to several photos and GIFs in a row; look at the time on a photo you sent.
+
+            EARLIER IN THIS ROUND: REACTIONS, HEADER BLUR, AUTO COLOR, WALLPAPER SHEET.
 
             REACTIONS: reacting no longer drops the chat down and brings it back; a new reaction appears in place, not over the message below.
 
