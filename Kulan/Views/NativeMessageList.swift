@@ -3601,6 +3601,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if page !== self { page.setContentScrollView(list, for: .top) }
     }
 
+    /// ⛔ AND KEPT, EVERY LAYOUT, UNTIL THE CHAT HAS APPEARED — owner, 2026-09-27, the header blur
+    /// still arriving after the open on a build that registers in `viewIsAppearing`. Registering once
+    /// is not enough if the page's answer is replaced afterwards: SwiftUI's hosting page manages its
+    /// own content scroll view and can write it again during its first update passes, which are inside
+    /// the push. The bar then has nothing of ours to watch until something later makes it re-decide.
+    /// So each layout pass of the arrival asks the page what it currently answers and puts ours back
+    /// if it is not the list. A getter and a compare per pass, and nothing at all once appeared.
+    private func keepContentScrollViewRegistered() {
+        guard !isViewCompletelyAppeared, didRegisterOnAppearing, let list = collectionView else { return }
+        var page: UIViewController = self
+        while let up = page.parent, !(up is UINavigationController), !(up is UITabBarController) {
+            page = up
+        }
+        if page.contentScrollView(for: .top) !== list || contentScrollView(for: .top) !== list {
+            registerAsContentScrollView()
+            navigationController?.navigationBar.setNeedsLayout()
+        }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         isDisappearing = false
@@ -3732,6 +3751,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
+        keepContentScrollViewRegistered()   // 2026-09-27: the header blur, see that method
         // Keep the registration's width pin fresh: cells configured during this pass read hostWidth.
         if collectionView.bounds.width > 0 { hostWidth = collectionView.bounds.width }
         // Width change (rotation / split view): every measured height is width-dependent â€” drop and
