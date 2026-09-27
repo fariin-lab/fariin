@@ -318,6 +318,12 @@ struct GlowProfileView: View {
         // Keyed on the relationship, so the faces appear the moment the listeners deliver rather
         // than only if they happened to be there on the first frame. See `faceKey`.
         .task(id: faceKey) { await loadFaces() }
+        // audit P2: `heroCircle` is a gesture flag, not a fact about the photo — a saved Remove
+        // Photo (own profile, Edit sheet dismiss) does not clear it on its own, so the letter hero
+        // kept the circle geometry the photo left it in and the header laid itself out wrong.
+        .onChange(of: hasHeroPhoto) { _, stillHasPhoto in
+            if !stillHasPhoto { heroCircle = false }
+        }
     }
 
     // MARK: - Header
@@ -439,7 +445,10 @@ struct GlowProfileView: View {
                     .font(.title.bold())
                     .foregroundStyle(.primary)
                 if OfficialChannel.isOfficial(uid) { VerifiedTick(size: 20) }
-                else { VerifiedMark(uid: uid, size: 20) }
+                // audit P5: `explains` was left at its default of false, so the tick did nothing
+                // when tapped. This is a profile — the one place `VerifiedMark`'s own note says
+                // `explains: true` belongs.
+                else { VerifiedMark(uid: uid, size: 20, explains: true) }
             }
             .multilineTextAlignment(.center)
 
@@ -1025,12 +1034,21 @@ struct PostedStoryTile: View {
         Button { onTap?() } label: { tile }
             .buttonStyle(.plain)
             .disabled(onTap == nil)
+            // audit P4: an icon-only control (a thumbnail with no caption), so VoiceOver had
+            // nothing to read. The eye-count label the tile draws for sighted users is spoken here.
+            .accessibilityLabel(accessibilityDescription)
             // ⚠️ ON THE BUTTON, OUTSIDE THE CLIP, so the rectangle filed is the tile as it is laid
             // out rather than the picture inside its rounded mask. The corner travels with it, so
             // the flight interpolates from this tile's own shape instead of a hardcoded guess —
             // the trap `MediaOpenRects.cornerRadius` is written up against.
             .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow,
                                         cornerRadius: PostedTile.corner))
+    }
+
+    private var accessibilityDescription: String {
+        let kind = story.isVideo ? "Video story" : "Photo story"
+        guard let v = story.views else { return kind }
+        return "\(kind), \(GlowCount.short(v)) views"
     }
 
     /// ⛔ NO FIXED WIDTH ANY MORE — his concept, 2026-09-09. The tile was 104 by 150 because it

@@ -148,6 +148,8 @@ struct ContactInfoView: View {
     @State private var showDeleteChat = false
     /// The server refused an unblock (the row has flipped back).
     @State private var unblockFailed = false
+    /// The server refused a block, from any of the three block doors (the row has flipped back).
+    @State private var blockFailed = false
     @State private var confirmUnblock = false
     /// CHAT PIN + REMOVE FRIEND — owner's spec, 2026-09-11. The prompt is his fourth screenshot
     /// ("doesn't follow you. If you know their X Number you can message them now", Not Now / Use);
@@ -779,6 +781,12 @@ struct ContactInfoView: View {
         } message: {
             Text("The server did not accept it. Try again in a moment.")
         }
+        // audit P1: the three Block doors flipped the screen and never checked the result.
+        .alert("Couldn't block", isPresented: $blockFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check your connection and try again.")
+        }
         .alert("Couldn't update", isPresented: $glowWriteFailed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -1239,7 +1247,11 @@ struct ContactInfoView: View {
                             // server answers, so offline the page kept offering Block after Block
                             // was pressed. Same for the three Block doors below.
                             blocked = true
-                            Task { await ChatService.setBlocked(cid, true) }
+                            Task {
+                                if !(await ChatService.setBlocked(cid, true)) {
+                                    await MainActor.run { blocked = false; blockFailed = true }
+                                }
+                            }
                         },
                         // The same pair the Report confirm already offers, from the other side. The
                         // two doors were not symmetrical: reporting could also block, but blocking
@@ -1249,8 +1261,11 @@ struct ContactInfoView: View {
                         .destructive("Block and Report") {
                             blocked = true
                             Task {
-                                await ChatService.setBlocked(cid, true)
+                                let ok = await ChatService.setBlocked(cid, true)
                                 await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
+                                if !ok {
+                                    await MainActor.run { blocked = false; blockFailed = true }
+                                }
                             }
                         },
                        ])
@@ -1269,7 +1284,9 @@ struct ContactInfoView: View {
                             blocked = true
                             Task {
                                 await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                                await ChatService.setBlocked(cid, true)
+                                if !(await ChatService.setBlocked(cid, true)) {
+                                    await MainActor.run { blocked = false; blockFailed = true }
+                                }
                             }
                         },
                        ])
@@ -1331,8 +1348,11 @@ struct ContactInfoView: View {
                         // takes the tap. The note is pre-trimmed to the longest prefix that still
                         // leaves room for the tail, so the label always lands ON the second line
                         // instead of being pushed off by the system's own truncation.
-                        Text(Self.noteCollapsedPrefix(note, width: noteWidth) + "… ")
-                            + Text("More").foregroundStyle(Color.accentColor).fontWeight(.semibold)
+                        (Text(Self.noteCollapsedPrefix(note, width: noteWidth) + "… ")
+                            + Text("More").foregroundStyle(Color.accentColor).fontWeight(.semibold))
+                            // audit P4: this tap target had no VoiceOver label or button trait.
+                            .accessibilityLabel("Show more")
+                            .accessibilityAddTraits(.isButton)
                     } else {
                         Text(note)
                     }
@@ -1363,6 +1383,7 @@ struct ContactInfoView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Show less")
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
@@ -1566,11 +1587,20 @@ struct ContactInfoView: View {
     private var iAmContact: Bool { PrivacyPrefs.isContact(otherUid) }
     /// The photo's own "My Chats" test, the one `storage.rules` makes — see `mayViewPhotoOf`.
     private var mayViewPhoto: Bool { PrivacyPrefs.mayViewPhotoOf(otherUid) }
+    /// audit P6: `targetPrivacy` starts empty and only fills in once `load()` answers; a missing
+    /// key reads as "everyone" (`PrivacyPrefs.allows`'s own default), so the live check below was
+    /// wide open for that whole gap. Before `load()` finishes this defers to `headerFacts` instead
+    /// — it already applied the audience it knew about at open time (see its own note) — so the
+    /// normal profile still paints on the first frame with no flicker, and one the cache never
+    /// gated does not flash open behind a privacy map that has not spoken yet.
+    private var photoAllowedNow: Bool {
+        loaded ? PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) : headerFacts.hasPhoto
+    }
     /// The circle's picture. `headerFacts` already applied the audience it knew about at open time;
     /// the live check stays as well, so a privacy map that lands DURING the visit still hides the
     /// picture. It can no longer move the layout — the image goes, the shape of the page does not.
     private var gatedPhotoUrl: String? {
-        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) ? headerFacts.photoUrl : nil
+        photoAllowedNow ? headerFacts.photoUrl : nil
     }
     /// What the HEADER draws: their tall crop when there is one, otherwise the avatar. Behind the
     /// same privacy gate as the avatar — a poster is the same photograph, so hiding one and showing
@@ -1580,7 +1610,7 @@ struct ContactInfoView: View {
     /// of JPEG, behind the same privacy gate as the picture it stands in for, because a cover of a
     /// photo I may not see is still that photo.
     private var headerThumb: UIImage? {
-        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) else { return nil }
+        guard photoAllowedNow else { return nil }   // audit P6: same gate as `gatedPhotoUrl`
         if let b64 = headerFacts.thumb, !b64.isEmpty,
            let data = Data(base64Encoded: b64), let ui = UIImage(data: data) { return ui }
         // ⚠️ AND THE ROUND AVATAR WHEN THE RECORD HAS NO THUMB — same photograph, already decoded.
@@ -1595,7 +1625,7 @@ struct ContactInfoView: View {
     }
 
     private var gatedPosterUrl: String? {
-        PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: mayViewPhoto) ? headerFacts.posterUrl : nil
+        photoAllowedNow ? headerFacts.posterUrl : nil   // audit P6: same gate as `gatedPhotoUrl`
     }
     /// ⛔ TIDIED ON THE WAY OUT, BECAUSE THE STORED STRING CANNOT BE REACHED (owner 2026-08-22: "old
     /// users still using bio spaces, can you clear that bio").
@@ -1621,6 +1651,9 @@ struct ContactInfoView: View {
     }
 
     private var gatedAbout: String {
+        // No `loaded` gate here on purpose: `load()` writes `about` and `targetPrivacy` in the same
+        // step (cached peer first, then the fetch), so a bio is never on screen without the privacy
+        // map it came with. Gating on `loaded` would blank the bio on the first frame and shift the page.
         guard PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) else { return "" }
         return Limits.oneParagraph(about, max: Limits.bioChars)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1917,7 +1950,9 @@ struct ContactInfoView: View {
             // call buttons already carry: an action offered to somebody you have blocked is a button
             // that can only disappoint.
             if source != .chat, !isSelf, !blocked {
-                Button { tapMessage() } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader) }.tint(.primary)
+                Button { tapMessage() } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader) }
+                    .tint(.primary)
+                    .accessibilityLabel("Message")
             }
             // THE CALL BUTTONS STAY ON THE PROFILE even when the person refuses calls (owner
             // 2026-08-04: "why you are hiding call voice and call video button… plz show that
@@ -1948,13 +1983,19 @@ struct ContactInfoView: View {
             if !isSelf {
                 Menu { muteMenuItems } label: {
                     PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off", onPhoto: hasPhotoHeader)
-                }.tint(.primary)
+                }
+                .tint(.primary)
+                .accessibilityLabel(muted ? "Unmute" : "Mute")
             }
             if source == .chat && !isSelf {
-                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: hasPhotoHeader) }.tint(.primary)
+                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: hasPhotoHeader) }
+                    .tint(.primary)
+                    .accessibilityLabel("Search")
             }
             if !isSelf {
-                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: hasPhotoHeader) }.tint(.primary)
+                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: hasPhotoHeader) }
+                    .tint(.primary)
+                    .accessibilityLabel("More")
             }
         }
     }
@@ -1991,6 +2032,7 @@ struct ContactInfoView: View {
             PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)
         }
         .tint(.primary)
+        .accessibilityLabel("Call")
         // ⚠️ THE ZOOM SOURCE STAYS ON VIDEO, because a source is registered per call KIND and there
         // is one circle here for two kinds. Video keeps the id this button has always carried, so
         // the video call still grows out of the circle under his thumb. A voice call from the menu
@@ -2036,6 +2078,7 @@ struct ContactInfoView: View {
                 PosterActionIcon(icon: GlowStyle.iconFill, onPhoto: hasPhotoHeader)
             }
             .tint(.primary)
+            .accessibilityLabel("Remove Glowing")
         } else {
             // ⛔ THE EXPLAINER STANDS BETWEEN THE TAP AND THE GIVE — owner, 2026-09-02: "when the
             // user clicks Glow on a profile, show a sheet explaining what Glow is… only when they
@@ -2047,6 +2090,7 @@ struct ContactInfoView: View {
                 PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader)
             }
             .tint(.primary)
+            .accessibilityLabel("Glow Story")
         }
     }
 
@@ -2312,6 +2356,11 @@ struct ContactInfoView: View {
             mediaHint = fresh.count   // authoritative: a chat whose media was deleted stops reserving
         } else if !media.isEmpty {
             mediaHint = media.count   // offline, but we know what we have
+        } else {
+            // audit P3: the fetch failed and there is nothing local either — the remembered
+            // count from SharedMediaPresence was a guess, not an answer, and holding onto it
+            // draws grey placeholders that will never fill in.
+            mediaHint = 0
         }
         loaded = true
     }
