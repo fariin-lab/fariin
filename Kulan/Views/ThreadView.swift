@@ -3951,7 +3951,12 @@ struct ThreadView: View {
     private var selectionCanBeDeleted: Bool {
         let picked = liveSelection
         guard !picked.isEmpty else { return false }
-        return picked.allSatisfy { !$0.isSystem && !$0.isCall }
+        // ⛔ A CALL ROW CAN BE DELETED — owner, 2026-09-27: "when I select messages the delete
+        // button at the bottom does nothing". A call can be selected (its own menu has Select), so
+        // one call in a selection of 76 disabled the trash for all of them, and the bar kept it red,
+        // so it looked live. A single call already has Delete, and `bulkDelete` already sends calls
+        // to delete-for-me (`canDeleteForEveryone` excludes them).
+        return picked.allSatisfy { !$0.isSystem }
     }
 
     /// The chat's own colour for a filled tick, matching what the row builder hands the UIKit rows.
@@ -7607,6 +7612,8 @@ private struct SelectionToolbar: UIViewRepresentable {
         context.coordinator.label.text = "\(count) selected"
         context.coordinator.label.sizeToFit()
         bar.items?.first?.isEnabled = deleteEnabled
+        // A forced red kept a disabled trash looking live (2026-09-27); let the bar dim it when off.
+        bar.items?.first?.tintColor = deleteEnabled ? .systemRed : nil
         bar.items?.last?.isEnabled = forwardEnabled
     }
 }
