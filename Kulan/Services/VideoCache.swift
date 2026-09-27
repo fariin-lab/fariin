@@ -24,7 +24,14 @@ enum VideoCache {
     /// The locally-stored decrypted video for this message, if this device has it.
     static func url(for messageId: String) -> URL? {
         let u = fileURL(messageId)
-        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+        if FileManager.default.fileExists(atPath: u.path) { return u }
+        // ⛔ A ONE-ITEM ALBUM'S CLIP — owner, 2026-09-27: a video he had already downloaded showed
+        // the spinner on every open. An album stores each clip as "<messageId>-<index>"; since
+        // 2026-09-26 a one-item album is READ as a plain video (`Message.init`) and asked for by
+        // the message id alone, so the copy on this phone was never found. Its first tile's key is
+        // the same clip.
+        let albumOne = fileURL("\(messageId)-0")
+        return FileManager.default.fileExists(atPath: albumOne.path) ? albumOne : nil
     }
 
     static func data(for messageId: String) -> Data? {
