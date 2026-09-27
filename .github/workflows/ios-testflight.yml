@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            AUTO CHAT COLOR, WALLPAPER FIXES, REACTION PILL.
+            REACTIONS WITHOUT JUMPS, AUTO COLOR IN EVERY CHAT.
+
+            REACTIONS: reacting to a photo or GIF no longer makes the other messages flash, and a short chat no longer leaves an empty gap after you remove a reaction.
+
+            AUTO COLOR: chats that had an old theme color saved are switched to Auto once, so they follow the wallpaper.
+
+            PLEASE TEST: react to a photo and remove it; react in a chat with only a few messages and remove it; change the wallpaper in a chat's sheet with Auto selected.
+
+            EARLIER IN THIS ROUND: AUTO CHAT COLOR, WALLPAPER FIXES, REACTION PILL.
 
             AUTO COLOR: the first circle in Chat Color is now Auto. On Auto, your bubbles take the matching color of the wallpaper; a color you pick yourself is never changed by a wallpaper. Reset in the chat wallpaper sheet can reset the chat color or the wallpaper; Settings > Chat Color has Reset All Chat Colors.
 
