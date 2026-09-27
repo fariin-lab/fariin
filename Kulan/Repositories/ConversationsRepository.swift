@@ -14,6 +14,8 @@ import FirebaseFirestore
 @Observable
 final class ConversationsRepository {
     static let shared = ConversationsRepository()
+    /// People whose profile was read this session to fill an empty photo mirror (see the snapshot).
+    @ObservationIgnored private var askedPhotoPeers = Set<String>()
     private init() {
         // 2026-09-26, owner: after sign-out and sign-in again the whole list said "…". The rows
         // re-decrypt when a PEER's key is fetched (`republishForKeys` below), but never when MY key
@@ -292,7 +294,29 @@ final class ConversationsRepository {
                         }
                         for await didFetch in group where didFetch { fetchedAny = true }
                     }
-                    guard fetchedAny else { return }
+                    // ⛔ AND THE PHOTOS THE MIRROR NEVER GOT — owner, 2026-09-27: some people have a
+                    // photo, hide nothing, and still draw as a silhouette. A chat's `photos` entry
+                    // is written only by that person's own phone; if it never did, this list had
+                    // nothing to draw. Their profile record is read once per session per person
+                    // (only where the mirror is empty and nothing is known yet), and
+                    // `Conversation.photoUrl(for:)` then prefers it.
+                    let peers: [String] = await MainActor.run {
+                        var out: [String] = []
+                        for c in convs where !c.isGroup {
+                            let o = c.otherUid(uid)
+                            guard !o.isEmpty, (c.photos[o] ?? "").isEmpty,
+                                  ProfilePhotoIndex.facts(o) == nil,
+                                  !self.askedPhotoPeers.contains(o) else { continue }
+                            self.askedPhotoPeers.insert(o)
+                            out.append(o)
+                        }
+                        return out
+                    }
+                    var learnedPhoto = false
+                    for o in peers.prefix(20) {
+                        if let p = await ProfileStore.shared.fetch(o), !(p.photoUrl ?? "").isEmpty { learnedPhoto = true }
+                    }
+                    guard fetchedAny || learnedPhoto else { return }
                     await MainActor.run { self.republishForKeys() }
                 }
             }

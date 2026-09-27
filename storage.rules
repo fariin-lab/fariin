@@ -190,8 +190,13 @@ service firebase.storage {
         // the setting says (the reference apps hide the photo from a blocked person).
         || (!firestore.exists(/databases/(default)/documents/users/$(owner)/blocked/$(request.auth.uid))
             && !firestore.exists(/databases/(default)/documents/users/$(owner)/photoHiddenFrom/$(request.auth.uid))
-            && photoAudienceAllows(owner,
-                 firestore.get(/databases/(default)/documents/users/$(owner)).data.get('privacy', {}).get('photo', 'everyone')));
+            // 2026-09-27: guarded by `exists`, like the two checks above. A bare `get(...).data` on
+            // a user document that cannot be read refuses every viewer but the owner, who never
+            // sees it (the first line lets them through) — "some people's photos never show".
+            // No document means no setting, and no setting is the default, everyone.
+            && (!firestore.exists(/databases/(default)/documents/users/$(owner))
+                || photoAudienceAllows(owner,
+                     firestore.get(/databases/(default)/documents/users/$(owner)).data.get('privacy', {}).get('photo', 'everyone'))));
     }
 
     function photoAudienceAllows(owner, audience) {

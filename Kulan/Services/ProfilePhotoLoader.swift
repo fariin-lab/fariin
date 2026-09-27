@@ -46,6 +46,11 @@ final class ProfilePhotoLoader {
                                                object: nil, queue: nil) { [weak self] _ in
             self?.memory.removeAllObjects()
         }
+        // Back in front: every photo that came back "refused" is asked again (2026-09-27).
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: nil) { _ in
+            ProfilePhotoIndex.forgetFailures()
+        }
     }
 
     /// FIRST FRAME. Avatar memory, then the file on disk, synchronously. Safe on the main thread: a
@@ -130,12 +135,22 @@ final class ProfilePhotoLoader {
 
     private static func download(_ s: String) async -> FetchResult {
         guard let url = URL(string: s) else { return .noPhoto }
+        var refusedOnce = false
         for delay in [0.0, 2.0, 6.0] {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             // A throw is the network (offline, timeout, a dropped connection): try again.
             guard let (data, response) = try? await MediaSession.shared.data(from: url) else { continue }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-            if status == 403 || status == 404 { return .noPhoto }
+            if status == 404 { return .noPhoto }
+            // ⛔ A 403 IS ASKED TWICE — owner, 2026-09-27, photos missing for some people. Right
+            // after launch or a resume the storage check can run before sign-in has attached a
+            // fresh token, and that refusal looks exactly like "hidden from you". One retry two
+            // seconds later tells the two apart; a second 403 is the real answer.
+            if status == 403 {
+                if refusedOnce { return .noPhoto }
+                refusedOnce = true
+                continue
+            }
             // Any other non-success (a 5xx, a throttled request) is the server, not an answer.
             guard (200..<300).contains(status) else { continue }
             // A 200 whose body is not an image is a broken response, not an answer: try again, and

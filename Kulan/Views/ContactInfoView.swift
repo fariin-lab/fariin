@@ -2242,6 +2242,17 @@ struct ContactInfoView: View {
         }
         if let p = await ProfileStore.shared.fetch(otherUid) {
             handle = p.handle; about = p.about; targetPrivacy = p.privacy; links = p.links
+            // ⛔ A PHOTO LEARNED AFTER THE PAGE OPENED IS SHOWN — owner, 2026-09-27, a person with a
+            // photo drawn as a silhouette for the whole visit. The layout is decided on the first
+            // frame (so it never jumps), from what this phone already knew; when that was nothing,
+            // the fetch a moment later found the photo and the page ignored it. Letter → photo is
+            // allowed now, once, and only when the profile really has one this viewer may see.
+            if !headerFacts.hasPhoto, let photo = p.photoUrl, !photo.isEmpty {
+                let next = ProfilePhotoIndex.header(uid: otherUid, fallbackPhoto: photo,
+                                                    fallbackPoster: p.posterUrl,
+                                                    iAmContact: PrivacyPrefs.mayViewPhotoOf(otherUid))
+                if next.hasPhoto { headerFacts = next }
+            }
         }
         // ⛔ AN EMPTY `cid` IS NOT A DOCUMENT, AND FIRESTORE ANSWERS THAT WITH AN OBJC EXCEPTION.
         //

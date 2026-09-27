@@ -119,7 +119,7 @@ enum ProfilePhotoIndex {
         guard let u = url, !u.isEmpty else { return false }
         if DiskImageCache.shared.isCached(u) { return true }
         lock.lock(); defer { lock.unlock() }
-        return !failedURLs.contains(u)
+        return !isFreshFailure(u)
     }
 
     /// What happened when something tried to draw this url. Called by every avatar in the app.
@@ -132,16 +132,38 @@ enum ProfilePhotoIndex {
     static func noteLoad(_ url: String?, ok: Bool) {
         guard let u = url, !u.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
-        if ok { failedURLs.remove(u) } else { failedURLs.insert(u) }
+        if ok { failedURLs[u] = nil } else { failedURLs[u] = Date() }
     }
 
-    private static var failedURLs = Set<String>()
+    /// ⛔ A REFUSAL IS AN ANSWER FOR A MINUTE, NOT FOR THE SESSION — owner, 2026-09-27: "some
+    /// users I can see their photo, some I cannot, even though they have one and hide nothing".
+    /// One refused load (a hide that has since been lifted, the rules checked before sign-in had
+    /// attached its token, the rules evaluated mid-deploy) was kept here with no expiry, and a phone
+    /// that stays suspended for days never relaunched to forget it: the silhouette became permanent.
+    /// A failure now counts for `failureTTL`, the next draw after that asks again, and coming back
+    /// to the foreground forgets them all (`forgetFailures`).
+    private static var failedURLs: [String: Date] = [:]
+    private static let failureTTL: TimeInterval = 60
+
+    /// Caller holds `lock`.
+    private static func isFreshFailure(_ u: String) -> Bool {
+        guard let at = failedURLs[u] else { return false }
+        if Date().timeIntervalSince(at) < failureTTL { return true }
+        failedURLs[u] = nil
+        return false
+    }
+
+    /// Back in front: every "no photo" is asked again (see `failedURLs`).
+    static func forgetFailures() {
+        lock.lock(); defer { lock.unlock() }
+        failedURLs.removeAll()
+    }
 
     /// This url answered "refused" or "nothing there" (never a network failure; see
     /// `ProfilePhotoLoader`, the only writer of a failure).
     static func knownMissing(_ url: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return failedURLs.contains(url)
+        return isFreshFailure(url)
     }
 
     static func facts(_ uid: String) -> Facts? {

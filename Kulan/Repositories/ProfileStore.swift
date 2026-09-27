@@ -791,10 +791,22 @@ final class ProfileStore {
     ///  2. the blurry cover is published or withdrawn to match (`PhotoPrivacy.publishesCover`);
     ///  3. the copies in every conversation are updated, as a photo change does.
     /// An account still on an old public download link is moved to a private name by this too.
+    /// ⛔ RETRIED, NOT BEST-EFFORT ONCE — owner, 2026-09-27: "when I hide my photo and show it
+    /// again, does it work". The new name is what makes every viewer ask the rules again instead of
+    /// trusting the refusal they got while it was hidden; this gave up silently on one failed read
+    /// or write, and the photo stayed "hidden" for them. Three tries, 2s and 6s apart. A photo that
+    /// is genuinely not there is an answer, not a failure, and ends it.
     func republishPhoto() async {
-        guard let uid = Auth.auth().currentUser?.uid,
-              let current = await fetch(uid),
-              let oldCircle = current.photoUrl, !oldCircle.isEmpty else { return }
+        for delay in [0.0, 2.0, 6.0] {
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            if await republishPhotoOnce() { return }
+        }
+    }
+
+    private func republishPhotoOnce() async -> Bool {
+        guard let uid = Auth.auth().currentUser?.uid else { return true }
+        guard let current = await fetch(uid) else { return false }
+        guard let oldCircle = current.photoUrl, !oldCircle.isEmpty else { return true }
         let v = Self.nowMs()
         let circle = ProfilePhotoURLProtocol.reference(path: "profiles/\(uid).jpg", version: v)
         let poster = (current.posterUrl ?? "").isEmpty
@@ -819,7 +831,7 @@ final class ProfileStore {
             try await db.collection("users").document(uid).setData(userFields, merge: true)
         } catch {
             print("[photoPrivacy] republish failed: \(error.localizedDescription)")
-            return
+            return false
         }
 
         var fields: [String: Any] = ["photos.\(uid)": circle]
@@ -839,6 +851,7 @@ final class ProfileStore {
             for d in groups { try? await d.reference.updateData(fields) }
         }
         if let refreshed = await fetch(uid), Auth.auth().currentUser?.uid == uid { me = refreshed }
+        return true
     }
 }
 

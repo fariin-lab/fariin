@@ -915,7 +915,28 @@ struct Conversation: Identifiable, Equatable, Hashable {
         if !isGroup, let custom = ContactNames.shared.name(for: other) { return custom }
         return names[other] ?? "User"
     }
-    func photoUrl(for me: String) -> String? { photos[otherUid(me)] }
+    /// ⛔ THE NEWER OF TWO COPIES — owner, 2026-09-27: "some users I can see their photo, some I
+    /// cannot, though they have one and hide nothing". `photos` is this chat's MIRROR of each
+    /// member's photo, and only the photo's OWNER keeps it right (`ProfileStore.healMyMirrors`, from
+    /// their own chat list, on a current build). Someone on an old build, or who rarely opens the
+    /// app, stayed blank or stale in every chat forever. Their own profile record, whenever this
+    /// phone has read it (`ProfilePhotoIndex`), is the authority: whichever of the two carries the
+    /// newer `?v=` stamp wins, and an empty mirror never hides a known photo.
+    func photoUrl(for me: String) -> String? {
+        let other = otherUid(me)
+        let mirror = photos[other].flatMap { $0.isEmpty ? nil : $0 }
+        let known = ProfilePhotoIndex.facts(other)?.photo
+        guard let known, !known.isEmpty else { return photos[other] }
+        guard let mirror else { return known }
+        return Self.photoStamp(known) > Self.photoStamp(mirror) ? known : mirror
+    }
+
+    /// The `v=` stamp a published photo url carries (milliseconds of the upload); 0 when absent.
+    static func photoStamp(_ url: String) -> Double {
+        guard let q = URLComponents(string: url)?.queryItems,
+              let v = q.first(where: { $0.name == "v" })?.value else { return 0 }
+        return Double(v) ?? 0
+    }
     /// nil when they have never set a poster — the profile then draws the classic circle, which is
     /// also what everyone who last set a photo before this existed will get until they set a new one.
     func posterUrl(for me: String) -> String? { posters[otherUid(me)] }
