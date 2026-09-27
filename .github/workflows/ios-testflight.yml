@@ -74,15 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            REACTIONS WITHOUT JUMPS, AUTO COLOR IN EVERY CHAT.
+            PHOTO REACTIONS, ALL MEDIA SPEED, RESET MENU, SELECTION.
 
-            REACTIONS: reacting to a photo or GIF no longer makes the other messages flash, and a short chat no longer leaves an empty gap after you remove a reaction.
+            PHOTO REACTIONS: a reaction on a photo or GIF sits under the picture with the person's face, and no longer covers the time.
 
-            AUTO COLOR: chats that had an old theme color saved are switched to Auto once, so they follow the wallpaper.
+            ALL MEDIA: swiping between Media, Files, Voice, Links and GIFs is smooth in chats with a lot of media.
 
-            PLEASE TEST: react to a photo and remove it; react in a chat with only a few messages and remove it; change the wallpaper in a chat's sheet with Auto selected.
+            RESET: Settings > Set Wallpaper and Chat Color have a new ... menu (top right) to reset the wallpaper or the chat color, for Settings or for every chat.
 
-            EARLIER IN THIS ROUND: AUTO CHAT COLOR, WALLPAPER FIXES, REACTION PILL.
+            SELECTION: selecting messages no longer flashes the back button.
+
+            PLEASE TEST: react to a photo; swipe through All Media in a busy chat; try the ... reset menu; select several messages.
 
             AUTO COLOR: the first circle in Chat Color is now Auto. On Auto, your bubbles take the matching color of the wallpaper; a color you pick yourself is never changed by a wallpaper. Reset in the chat wallpaper sheet can reset the chat color or the wallpaper; Settings > Chat Color has Reset All Chat Colors.
 
