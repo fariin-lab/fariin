@@ -1116,7 +1116,15 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             // the top of this function, before any of this — so UIKit re-measures both sections here
             // without being told to reload either of them.
             if headerChanged { self.syncHeaderTitles() }
-            if !changes.deletes.isEmpty { self.tableView.deleteRows(at: changes.deletes, with: rowAnimation) }
+            // ⛔ A CHAT THAT LEAVES THE LIST FADES WHERE IT IS — owner, 2026-09-27, a screenshot of
+            // "Pinned" drawn across a chat he had just archived. `.automatic` resolves to a slide UP
+            // for a section's first row in this grouped table, so the leaving row travelled into the
+            // space of the section header above it, and that header is clear and drawn over cells.
+            // A re-sort (delete + insert of the same chat) keeps `.automatic`; a real removal —
+            // archive, delete, hide — fades in place and never enters the header's space.
+            let deleteAnimation: UITableView.RowAnimation =
+                rowAnimation == .none ? .none : (changes.removesRows ? .fade : rowAnimation)
+            if !changes.deletes.isEmpty { self.tableView.deleteRows(at: changes.deletes, with: deleteAnimation) }
             if !changes.inserts.isEmpty { self.tableView.insertRows(at: changes.inserts, with: rowAnimation) }
             // ⚠️ NO ANIMATION CONSTANT ON A MOVE, because `moveRow` does not take one. Its timing is
             // the block's, which is the other half of why the pin flight and the rows closing behind
