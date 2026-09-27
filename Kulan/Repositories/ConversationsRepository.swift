@@ -253,6 +253,11 @@ final class ConversationsRepository {
                 // from the server (a cached snapshot proves nothing arrived), and never for a chat
                 // I blocked, so a blocked sender keeps seeing one tick.
                 if !snap.metadata.isFromCache { Task { @MainActor in DeliveryReceipts.mark(visible, me: uid) } }
+                // 2026-09-27: a request I answered the old way is written as accepted (see the note
+                // on `healAnsweredRequests`). Server data only, like the line above.
+                if !snap.metadata.isFromCache {
+                    Task { @MainActor in MessageRequests.healAnsweredRequests(visible, me: uid) }
+                }
 
                 // Warm recipient public keys so last-message previews can decrypt — CONCURRENTLY
                 // (was N sequential round-trips → slow cold start). preloadKey is cached, so the

@@ -1506,8 +1506,13 @@ service cloud.firestore {
             // every single open — so re-opening a chat you had sent a request into failed, silently,
             // and stopped refreshing the other person's name and face. Everything that is not on
             // this list still works: opening, blocking, muting, archiving, clearing.
+            // 2026-09-27: "the person who sent it" is the one who STARTED it. Keyed on `lastSender`
+            // alone, this also caught a recipient who had already replied (older builds let them
+            // type into a request), so their phone could never write the `accepted` their reply
+            // stood for, and the chat stayed a request forever (see `healAnsweredRequests`).
             && (
               !isRequestPending()
+              || request.auth.uid != resource.data.get('startedBy', '')
               || request.auth.uid != resource.data.get('lastSender', '')
               || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                    'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc',

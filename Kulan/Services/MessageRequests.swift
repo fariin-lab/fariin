@@ -75,6 +75,27 @@ enum MessageRequests {
         await UnknownChatArchiver.undoAutoArchive(cid)
     }
 
+    /// ⛔ A REPLY ALREADY SENT IS AN ACCEPTANCE, SO IT IS WRITTEN AS ONE — owner, 2026-09-27: "I
+    /// can't see @kream's profile picture, but he can see mine". The rules say it in words ("their
+    /// reply is itself the acceptance") and let the recipient answer, but nothing ever wrote
+    /// `accepted: true` for a chat answered that way (older builds let the recipient type straight
+    /// into a request). Such a chat stays a request for good, and every "My Chats" check refuses
+    /// the person who started it: their photo, bio, last seen and calls stay closed to them while
+    /// the other side sees everything, because the starter always counts.
+    ///
+    /// Healed on the recipient's phone, from the chat list: a request somebody else started, still
+    /// unaccepted, whose newest message is MINE. Today's app cannot produce that shape (the composer
+    /// is hidden until Accept), so it only ever matches a chat that was answered the old way.
+    /// Once per chat per session; a refused write simply tries again next launch.
+    @MainActor static func healAnsweredRequests(_ convs: [Conversation], me: String) {
+        for c in convs where c.convType != "group" && !c.startedBy.isEmpty && c.startedBy != me
+            && !c.accepted && c.lastSender == me && !healed.contains(c.id) {
+            healed.insert(c.id)
+            Task { try? await accept(c.id) }
+        }
+    }
+    @MainActor private static var healed = Set<String>()
+
     /// Delete: the conversation goes, and with it the request. Not a block — blocking is its own
     /// action and its own button, and quietly conflating the two would tell people they had done
     /// something they had not.

@@ -170,6 +170,14 @@ const cases = [
     [...userDoc(B), ...notAdmin(B)]],
   ['ATTACK  A accepts their own request',
     'DENY', 'DENY', A, convPath, 'update', { ...spent, accepted: true }, spent, [...userDoc(A), ...notAdmin(A)]],
+  // 2026-09-27: B replied the old way (typed into the request), so B is `lastSender` of a chat still
+  // marked unaccepted. B's phone writing the acceptance that reply stood for must go through.
+  ['OK      B, who already replied, marks the chat accepted',
+    'DENY', 'ALLOW', B, convPath, 'update',
+    { ...spent, lastSender: B, accepted: true }, { ...spent, lastSender: B }, [...userDoc(B), ...notAdmin(B)]],
+  ['ATTACK  A, still the last to speak, accepts with a second message\'s fields',
+    'DENY', 'DENY', A, convPath, 'update',
+    { ...spent, accepted: true, lastMessage: 'enc1:zzz' }, spent, [...userDoc(A), ...notAdmin(A)]],
 
   // ── 3b. a day's knocks (§25). The counter is the app's; a missing one fails open by design ──
   ['OK      the tenth knock of the day',
