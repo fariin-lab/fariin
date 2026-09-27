@@ -40,6 +40,13 @@ enum BubbleMetrics {
     static let reactionFaceLead: CGFloat = 10
     static let reactionFaceGap: CGFloat = 6
     static let reactionFaceTrail: CGFloat = 6
+    /// The smaller pill that sits on a picture's bottom-left edge (owner, 2026-09-27, "small").
+    static let reactionChipHeightSmall: CGFloat = 26
+    static let reactionFaceSmall: CGFloat = 20
+    static let reactionFaceLeadSmall: CGFloat = 8
+    static let reactionFaceGapSmall: CGFloat = 4
+    static let reactionFaceTrailSmall: CGFloat = 3
+    static let reactionEmojiFontSmall: CGFloat = 15
     /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
     /// [the reference] react badge then make it like it, size and color".
     ///

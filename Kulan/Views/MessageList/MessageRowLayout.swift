@@ -776,7 +776,8 @@ enum MessageRowLayout {
             let extra = b.reactions.count - shown.count
             var chips: [(NSAttributedString, Bool, ReactionFace?)] = shown.map { chip in
                 let s = NSMutableAttributedString(string: chip.emoji, attributes: [
-                    .font: UIFont.systemFont(ofSize: BubbleMetrics.reactionEmojiFont)])
+                    .font: UIFont.systemFont(ofSize: inside ? BubbleMetrics.reactionEmojiFont
+                                                            : BubbleMetrics.reactionEmojiFontSmall)])
                 // The count appears only where there is no single face to show — see `ReactionChip`.
                 if chip.count > 1 {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
@@ -794,15 +795,18 @@ enum MessageRowLayout {
             // ⛔ A FIXED HEIGHT, THEIR NUMBER — see `BubbleMetrics.reactionChipHeight`. It used to be
             // derived from whichever was taller, the text or the face, which made an emoji-only pill
             // and a pill with a count two different heights in the same row.
-            let height: CGFloat = BubbleMetrics.reactionChipHeight
+            let height: CGFloat = inside ? BubbleMetrics.reactionChipHeight : BubbleMetrics.reactionChipHeightSmall
             for (attr, _, face) in chips {
                 let s = BubbleText.size(attr, width: .greatestFiniteMagnitude)
                 // A face: lead, emoji, gap, face, trail (see `BubbleMetrics.reactionFaceLead`).
                 if face == nil {
-                    widths.append(s.width + BubbleMetrics.reactionChipInset * 2)
-                } else {
+                    widths.append(s.width + (inside ? BubbleMetrics.reactionChipInset : BubbleMetrics.reactionFaceLeadSmall) * 2)
+                } else if inside {
                     widths.append(BubbleMetrics.reactionFaceLead + s.width + BubbleMetrics.reactionFaceGap
                                   + BubbleMetrics.reactionFace + BubbleMetrics.reactionFaceTrail)
+                } else {
+                    widths.append(BubbleMetrics.reactionFaceLeadSmall + s.width + BubbleMetrics.reactionFaceGapSmall
+                                  + BubbleMetrics.reactionFaceSmall + BubbleMetrics.reactionFaceTrailSmall)
                 }
             }
             let total = widths.reduce(0, +)
@@ -910,15 +914,16 @@ enum MessageRowLayout {
                 // path that draws reactions off a bubble passes `type: .freeform`, which picks a
                 // static fill chosen to read on a wallpaper rather than either side's palette. The
                 // white-at-alpha treatment would be nearly invisible out here.
-                // ⛔ UNDER THE PICTURE, NOT ON ITS CORNER — owner, 2026-09-27, a GIF with the heart
-                // ringed: "looks different, overlaps the timestamp, wrong place". The pill hung 13pt
-                // off the bottom corner, so it sat 17pt up INTO the picture, exactly where the time
-                // capsule is; it had no face; and it wore the text-bubble fill, which on a wallpaper is
-                // nearly invisible. Now it is the same pill as on text (emoji and face), in a row 4pt
-                // under the picture, flush with the picture's own edge, and the time stays on the image.
-                let gap: CGFloat = 4
-                var cx = b.isMe ? (bubbleRect.maxX - total) : bubbleRect.minX
-                let cy = bubbleRect.maxY + gap
+                // ⛔ ON THE PICTURE'S BOTTOM-LEFT EDGE, SMALL — owner, 2026-09-27, two GIFs with their
+                // hearts ringed: "which image owns that reaction, no one can understand; make it left,
+                // small, overlapping the owner GIF". Earlier the same day it sat 4pt UNDER the picture,
+                // which put it in the gap between two pictures, belonging to neither (and before that
+                // it sat on the time). Now a smaller pill (26pt, 20pt face) straddles the picture's
+                // bottom edge on the LEFT, half on the picture and half below it: attached to the one it
+                // belongs to, and on the opposite side from the time capsule.
+                let inset: CGFloat = 8
+                var cx = bubbleRect.minX + inset
+                let cy = bubbleRect.maxY - height / 2
                 plan.reactionsFreeform = true
                 for (i, w) in widths.enumerated() {
                     plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))

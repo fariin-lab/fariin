@@ -118,6 +118,7 @@ final class ReactionChipView: UIView {
     /// the media path never does, and a view per chip that is never shown is a view per chip wasted.
     private var faceView: RowAvatarView?
     private var hasFace = false
+    private var isFreeform = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -152,6 +153,7 @@ final class ReactionChipView: UIView {
     func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?,
                    freeform: Bool = false) {
         label.attributedText = attr
+        isFreeform = freeform
         if freeform {
             // Under a picture, on the wallpaper: the time capsule's own dark glass, so it reads on
             // any background; heavier when it is mine, as on a bubble.
@@ -181,12 +183,15 @@ final class ReactionChipView: UIView {
         // The emoji keeps the left of the pill and the face sits at its trailing end, which is the
         // order in his screenshot. With no face the label owns the whole pill, as it always did.
         if hasFace, let faceView {
-            let d = BubbleMetrics.reactionFace
-            faceView.frame = CGRect(x: bounds.width - BubbleMetrics.reactionFaceTrail - d,
+            // The small pill on a picture's edge uses the small set (see `MessageRowLayout.decorations`).
+            let d = isFreeform ? BubbleMetrics.reactionFaceSmall : BubbleMetrics.reactionFace
+            let trail = isFreeform ? BubbleMetrics.reactionFaceTrailSmall : BubbleMetrics.reactionFaceTrail
+            let gap = isFreeform ? BubbleMetrics.reactionFaceGapSmall : BubbleMetrics.reactionFaceGap
+            let lead = isFreeform ? BubbleMetrics.reactionFaceLeadSmall : BubbleMetrics.reactionFaceLead
+            faceView.frame = CGRect(x: bounds.width - trail - d,
                                     y: (bounds.height - d) / 2, width: d, height: d)
-            let lead = BubbleMetrics.reactionFaceLead
             label.frame = CGRect(x: lead, y: 0,
-                                 width: max(0, faceView.frame.minX - BubbleMetrics.reactionFaceGap - lead),
+                                 width: max(0, faceView.frame.minX - gap - lead),
                                  height: bounds.height)
         } else {
             label.frame = bounds
@@ -1221,6 +1226,9 @@ final class MessageRowView: UIView {
                         onMyBubble: b.reactionsOnMyBubble,
                         face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil,
                         freeform: b.reactionsFreeform)
+            // Half of a picture's pill lies ON the picture, and the picture view can be created after
+            // the pill in a recycled cell, which would draw it over the pill's top half.
+            bubbleBox.bringSubviewToFront(v)
         }
     }
 
