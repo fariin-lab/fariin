@@ -300,8 +300,9 @@ import UIKit
         ]), let next = exp.outputImage { out = next }
 
         // Cropped back to the source's extent: the clamp made it infinite.
-        let context = CIContext(options: nil)
-        guard let result = context.createCGImage(out, from: input.extent) else { return nil }
+        // ONE context for the app (2026-09-27, the first chat open after launch): a `CIContext` is
+        // expensive to build and this made a fresh one on every chat open, on the main thread.
+        guard let result = wallpaperBlurContext.createCGImage(out, from: input.extent) else { return nil }
         return UIImage(cgImage: result, scale: 1, orientation: .up)
     }
 }
@@ -503,3 +504,6 @@ struct WallpaperAnchor: UIViewRepresentable {
         (v as? WallpaperAnchorView)?.cid = cid
     }
 }
+
+/// See `blurred`: built once, reused for every chat's wallpaper blur. Thread-safe per Core Image.
+private let wallpaperBlurContext = CIContext(options: nil)

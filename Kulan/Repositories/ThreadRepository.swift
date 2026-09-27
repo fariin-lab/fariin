@@ -246,12 +246,30 @@ final class ThreadRepository {
         // fading in a beat late while the E2EE decrypt runs off the main thread. The live listener
         // in start() then reconciles silently (same ids → no visible change). First-ever open this
         // session has no cache → normal async load + reveal.
-        if let cached = ThreadMessageCache.shared.messages(for: cid), !cached.isEmpty {
-            messages = cached
-            for m in cached { byId[m.id] = m }   // reuse them so start()'s snapshot only decrypts new/changed docs
-            didInitialLoad = true
-            refreshItems()
+        //
+        // ⛔ MEMORY ONLY HERE; THE DISK IS READ OFF THE MAIN THREAD — owner, 2026-09-27: "the first
+        // chat I open after launching the app opens late". This init runs inside the tap, and on a
+        // miss `messages(for:)` read and decoded the chat's file right here, on the main thread,
+        // before the push could start — the grey row he photographed. The reference app never loads
+        // messages before the push: it pushes, loads on a background queue, and shows the list when
+        // the load lands. A miss now does the same; the reveal veil already holds the list hidden
+        // until it has something to show, and the live listener still reconciles after.
+        if let cached = ThreadMessageCache.shared.memoryMessages(for: cid), !cached.isEmpty {
+            seed(cached)
+        } else {
+            ThreadMessageCache.shared.loadAsync(cid) { [weak self] cold in
+                // The live snapshot got here first: it is the truth, the file is only a head start.
+                guard let self, let cold, !self.didInitialLoad, self.messages.isEmpty else { return }
+                self.seed(cold)
+            }
         }
+    }
+
+    private func seed(_ cached: [Message]) {
+        messages = cached
+        for m in cached { byId[m.id] = m }   // reuse them so start()'s snapshot only decrypts new/changed docs
+        didInitialLoad = true
+        refreshItems()
     }
 
     // MARK: - One timeline for everybody

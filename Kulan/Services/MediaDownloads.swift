@@ -127,19 +127,32 @@ final class MediaDownloads {
 
     private init() {
         let fm = FileManager.default
-        workDir = fm.temporaryDirectory.appendingPathComponent("media-dl", isDirectory: true)
+        // ⛔ THE SWEEP RUNS OFF THE MAIN THREAD — owner, 2026-09-27, "the first chat after launch
+        // opens late". This object is first touched by the first media bubble of the first chat,
+        // on the main thread, and it deleted a folder tree and listed the resume folder right there.
+        // Each launch now works in a folder of its own (one mkdir), so the old ones can be swept in
+        // the background without any chance of deleting a download that is landing now.
+        let root = fm.temporaryDirectory.appendingPathComponent("media-dl", isDirectory: true)
+        let mine = UUID().uuidString
+        workDir = root.appendingPathComponent(mine, isDirectory: true)
         resumeDir = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("media-resume", isDirectory: true)
-        // Rule 7: nothing in the work folder survives a launch — anything there is a ciphertext
-        // whose decrypt never ran.
-        try? fm.removeItem(at: workDir)
         try? fm.createDirectory(at: workDir, withIntermediateDirectories: true)
-        try? fm.createDirectory(at: resumeDir, withIntermediateDirectories: true)
-        let cutoff = Date().addingTimeInterval(-3 * 24 * 3600)
-        if let old = try? fm.contentsOfDirectory(at: resumeDir, includingPropertiesForKeys: [.contentModificationDateKey]) {
-            for f in old where ((try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
-                                    .contentModificationDate ?? .distantPast) < cutoff {
-                try? fm.removeItem(at: f)
+        let resume = resumeDir
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            // Rule 7: nothing from an earlier launch survives — anything there is a ciphertext
+            // whose decrypt never ran.
+            if let olds = try? fm.contentsOfDirectory(atPath: root.path) {
+                for name in olds where name != mine { try? fm.removeItem(at: root.appendingPathComponent(name)) }
+            }
+            try? fm.createDirectory(at: resume, withIntermediateDirectories: true)
+            let cutoff = Date().addingTimeInterval(-3 * 24 * 3600)
+            if let old = try? fm.contentsOfDirectory(at: resume, includingPropertiesForKeys: [.contentModificationDateKey]) {
+                for f in old where ((try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
+                                        .contentModificationDate ?? .distantPast) < cutoff {
+                    try? fm.removeItem(at: f)
+                }
             }
         }
         delegate.owner = self

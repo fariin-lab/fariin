@@ -90,18 +90,44 @@ final class ThreadMessageCache {
         let wanted = cids.filter { byCid[$0] == nil }
         guard !wanted.isEmpty else { return }
         let gen = generation
-        io.async { [weak self] in
+        // ⛔ ITS OWN HIGH-PRIORITY QUEUE, ONE CHAT AT A TIME — owner, 2026-09-27, the first open
+        // after launch still slow. This ran on the `.utility` disk queue, behind every write the
+        // launch queues there, so on a fresh launch it had often not finished when the finger
+        // landed, and the tap did the read and decode itself on the main thread. And it handed all
+        // twelve over only at the end, so even the top chat waited for the twelfth. Now it is
+        // user-initiated work (a tap is about to want it) and each chat lands the moment it is
+        // decoded, top chat first. Reads only, so it cannot race the writer's files.
+        warm.async { [weak self] in
             guard let self else { return }
-            var loaded: [(String, [Message])] = []
             for cid in wanted {
-                if let cold = self.loadFromDisk(cid), !cold.isEmpty { loaded.append((cid, cold)) }
+                guard let cold = self.loadFromDisk(cid), !cold.isEmpty else { continue }
+                DispatchQueue.main.async {
+                    // ⚠️ A sign-out in between wiped this cache; these are the OLD account's
+                    // decrypted messages and must not come back into memory.
+                    guard self.generation == gen, self.byCid[cid] == nil else { return }
+                    self.byCid[cid] = cold
+                }
             }
-            guard !loaded.isEmpty else { return }
+        }
+    }
+    private let warm = DispatchQueue(label: "fariin.threadcache.warm", qos: .userInteractive)
+
+    /// Memory only — never touches the disk. What a chat being opened may ask on the main thread.
+    func memoryMessages(for cid: String) -> [Message]? { byCid[cid] }
+
+    /// The disk copy, read and decoded OFF the main thread, handed back on it (nil = none). The
+    /// reference app's rule for opening a chat: the push never waits for message loading; the list
+    /// stays hidden until what it shows has landed (`ThreadView`'s reveal veil does that here).
+    func loadAsync(_ cid: String, _ done: @escaping ([Message]?) -> Void) {
+        let gen = generation
+        warm.async { [weak self] in
+            let cold = self?.loadFromDisk(cid)
             DispatchQueue.main.async {
-                // ⚠️ A sign-out in between wiped this cache; these are the OLD account's decrypted
-                // messages and must not come back into memory.
-                guard self.generation == gen else { return }
-                for (cid, msgs) in loaded where self.byCid[cid] == nil { self.byCid[cid] = msgs }
+                guard let self, self.generation == gen else { done(nil); return }
+                if let warm = self.byCid[cid] { done(warm); return }   // the prewarm won the race
+                guard let cold, !cold.isEmpty else { done(nil); return }
+                self.byCid[cid] = cold
+                done(cold)
             }
         }
     }
