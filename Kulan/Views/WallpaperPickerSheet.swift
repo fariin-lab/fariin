@@ -23,6 +23,14 @@ struct WallpaperPickerSheet: View {
     @State private var committed = false          // Apply pressed → keep it; otherwise revert on close
     @State private var photoItem: PhotosPickerItem?
     @State private var showCustomColor = false    // "+" → Custom Color editor
+    /// ⛔ THE SECOND BUTTON WAITS FOR THE SHEET — owner, 2026-09-27: picking a wallpaper for the first
+    /// time, the Chat Color row jumped up over the wallpapers. The pending change grows the detent by
+    /// 44 AND the bar by 40 ("Apply For All Chats" under "Apply Wallpaper"), but the bar grows at once
+    /// while the sheet is still animating up, so for that moment the 40 came out of the rows above it.
+    /// "Apply Wallpaper" takes the Photos button's place at once (same 50pt, nothing moves); this row
+    /// arrives once the sheet has grown into the room for it. It leaves at once, which only gives the
+    /// rows more room while the sheet shrinks.
+    @State private var showAllChatsRow = false
     private var colorStore: ChatColorStore { .shared }
     // The wallpaper/colour in use when the sheet OPENED — must be @State: the live preview writes to the
     // observed store, which re-creates this struct, and a plain `let` re-captured the PREVIEWED value as
@@ -191,6 +199,13 @@ struct WallpaperPickerSheet: View {
         // material is the thing that no longer matches a clear sheet. They stay edge-attached and
         // above the home indicator; only the background they were carrying is gone.
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+        .onChange(of: hasPendingChange) { _, pending in
+            guard pending else { showAllChatsRow = false; return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard hasPendingChange else { return }
+                withAnimation(.easeOut(duration: 0.2)) { showAllChatsRow = true }
+            }
+        }
         // ⛔ THE HEIGHT CAME DOWN 48 — owner, 2026-09-02, ringing the dead band above Apply
         // Wallpaper. Moving both bars out of the VStack did not shrink the sheet with them: a fixed
         // detent is a number, it does not follow its content, so the space the two rows used to
@@ -449,7 +464,7 @@ struct WallpaperPickerSheet: View {
                             .liquidGlass(Capsule(), interactive: true, tint: applyTint)
                             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
                     }
-                    if !globalOnly {
+                    if !globalOnly && showAllChatsRow {
                         Button { applyForAllChats() } label: {
                             Text("Apply For All Chats").font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(.secondary)
@@ -457,6 +472,7 @@ struct WallpaperPickerSheet: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .transition(.opacity)
                     }
                 }
                 .transition(.opacity)
