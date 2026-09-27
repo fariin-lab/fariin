@@ -795,7 +795,9 @@ final class MessageRowView: UIView {
 
         bodyLabel.attributedText = b.bodyAttr
         bodyLabel.frame = b.text
-        metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor)
+        metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor,
+                                                   solidTicks: b.mediaPlan?.metaCapsule != nil
+                                                       || b.albumPlan?.metaCapsule != nil)
         // Theirs SPINS while a message is in flight (`isAnimated: true` on the sending indicator,
         // a full turn a second, repeating). A still clock reads as a stuck message.
         setSendingSpin(metaChrome(m).tick == .sending, over: b)
@@ -1685,6 +1687,7 @@ private extension BubbleText {
     /// `MessageRowView` from restating the colour and the isMe test.
     static func meta(b: BubblePlan, m: MessageRowModel) -> NSAttributedString {
         guard case .bubble(let row) = m.content else { return NSAttributedString() }
-        return meta(row.meta, isMe: row.isMe, color: b.metaColor)
+        return meta(row.meta, isMe: row.isMe, color: b.metaColor,
+                    solidTicks: b.mediaPlan?.metaCapsule != nil || b.albumPlan?.metaCapsule != nil)
     }
 }

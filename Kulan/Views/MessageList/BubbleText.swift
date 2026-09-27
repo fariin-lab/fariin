@@ -121,7 +121,10 @@ enum BubbleText {
     /// 2026-08-26, with a photograph of the empty gap the grace window leaves: "time icon is
     /// coming late". So the glyph appears immediately, and `VoiceBubbleView`-style live state is
     /// not needed for it because the state it draws is already in the model.
-    static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor) -> NSAttributedString {
+    /// `solidTicks`: on a picture's dark capsule every tick is drawn at full strength, like the time
+    /// beside it (owner, 2026-09-27: the faded "sent" tick read as a grey smudge there). The count
+    /// still tells sent from read.
+    static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor, solidTicks: Bool = false) -> NSAttributedString {
         let s = NSMutableAttributedString()
         if m.edited {
             s.append(NSAttributedString(string: "edited ", attributes: [
@@ -150,7 +153,7 @@ enum BubbleText {
         case .sending: ink = .clear
         case .failed: ink = .systemRed
         case .read: ink = color.withAlphaComponent(1)
-        default: ink = color.withAlphaComponent(0.55)
+        default: ink = color.withAlphaComponent(solidTicks ? 1 : 0.55)
         }
         a.image = img.withTintColor(ink, renderingMode: .alwaysOriginal)
         // ⛔ CENTRED ON THE CAP HEIGHT, AND IT MUST NOT MAKE THE LINE TALLER — his screenshot,

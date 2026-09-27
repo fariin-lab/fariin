@@ -1963,12 +1963,16 @@ enum MessageRowLayout {
         // open; taking the height from the font closes it.
         let lineH = ceil(BubbleMetrics.metaFont.lineHeight)
         let hPad: CGFloat = 7, vPad: CGFloat = 3
-        let capsule = CGRect(x: rect.maxX - 7 - (size.width + hPad * 2),
+        // ⛔ THE SAME SPACE ON BOTH SIDES — owner, 2026-09-27, a close-up of "8:11 PM ✓" on a GIF with
+        // more room after the tick than before the time. `lineSize` adds a point of slack to the
+        // width so a label never clips, and the capsule was built around it, but the label draws
+        // from its left edge: that point always landed on the right. The capsule is now built
+        // around the ink (`size.width - 1`), and the label keeps its slack inside the right pad.
+        let ink = max(0, size.width - 1)
+        let capsule = CGRect(x: rect.maxX - 7 - (ink + hPad * 2),
                              y: rect.maxY - 7 - (lineH + vPad * 2),
-                             width: size.width + hPad * 2, height: lineH + vPad * 2)
-        // Centred on the capsule rather than offset from its corner, so the two cannot drift apart
-        // if either padding is ever changed on its own.
-        let text = CGRect(x: capsule.midX - size.width / 2,
+                             width: ink + hPad * 2, height: lineH + vPad * 2)
+        let text = CGRect(x: capsule.minX + hPad,
                           y: capsule.midY - lineH / 2,
                           width: size.width, height: lineH)
         return (capsule, text)
