@@ -1860,13 +1860,15 @@ struct EditProfileView: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    NavigationLink {
-                        ProfileLinksView()
-                    } label: {
-                        HStack {
-                            Text("Links").foregroundStyle(.primary)
-                            Spacer()
-                            Text(linkCountLabel).foregroundStyle(.secondary)
+                    if Flags.profileLinksEnabled {
+                        NavigationLink {
+                            ProfileLinksView()
+                        } label: {
+                            HStack {
+                                Text("Links").foregroundStyle(.primary)
+                                Spacer()
+                                Text(linkCountLabel).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }

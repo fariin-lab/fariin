@@ -319,7 +319,8 @@ struct ProfileLinkChips: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        if !links.isEmpty {
+        // Every profile that shows links draws them through here, so the switch is in one place.
+        if Flags.profileLinksEnabled && !links.isEmpty {
             // Wraps rather than truncating: two long titles at a large text size do not fit one
             // line on a narrow phone, and a clipped pill reads as a bug.
             HStack(spacing: 8) {

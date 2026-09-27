@@ -71,6 +71,7 @@ struct ChatKeyIntroSheet: View {
                 }
                 .padding(.horizontal, 32)
                 .padding(.bottom, 16)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         // ⛔ "GOT IT" IS EDGE-ATTACHED, NOT THE LAST ROW OF A STACK — owner, 2026-09-16, quoting the
         // distinction back at me: content inside the safe area is app content; system chrome and
@@ -130,9 +131,20 @@ struct ChatKeyIntroSheet: View {
         // side. `.medium` is what he photographed: three points and a paragraph do not fit in half a
         // phone, so the sheet opened already clipped and the reassurance the screen exists to give was
         // the part cut off. It opens at the height his second shot shows, and still scrolls.
-        .presentationDetents([.large])
+        //
+        // ⛔ AS TALL AS ITS WORDS, NOT THE WHOLE PHONE — owner, 2026-09-27, with a band of empty dark
+        // ringed between the last point and Got it: "open like 70% or fix the empty space, like image
+        // 2" (the reference's Disable Sharing sheet, which ends right under its button). `.large`
+        // fixed the clipping above and left this gap on every tall phone. The sheet is now the
+        // measured content plus the button's band (52 + 12 + 8), so nothing is clipped and nothing is
+        // empty; with very large text the system caps it at full height and it scrolls as before.
+        .presentationDetents([.height(contentHeight + 72)])
         .presentationDragIndicator(.hidden)
     }
+
+    /// Measured from the content; the first value is a close estimate so the sheet does not open
+    /// at one height and move to another.
+    @State private var contentHeight: CGFloat = 540
 
     /// One row, the reference's: a thin outline glyph in the app's blue, no tile behind it, and
     /// the title over its sentence.

@@ -480,7 +480,9 @@ struct ThreadView: View {
     }
 
     @ViewBuilder private var topPinArea: some View {
-        if !searchActive {   // search owns the top area — the pin bar hides while searching
+        // ⛔ NOT IN THE LONG-PRESS PREVIEW — owner, 2026-09-27, with the pinned bar ringed across the
+        // top of the chat list's preview: "don't show pin bar". A preview is the messages only.
+        if !searchActive && !preview {   // search owns the top area — the pin bar hides while searching
             keyChangeNotice
             pinnedBar
                 // Measure the pin bar's height and feed it to the list so the floating date pill drops BELOW
@@ -6223,22 +6225,22 @@ struct ThreadView: View {
         // colour, not red; show 2 buttons, Clear Chat and Unblock". Clear Chat is the chat list's
         // own "delete for me" (`ChatService.deleteForMe`), asked first. A refused unblock says so
         // instead of leaving the button looking dead.
-        composerNotice(hugsContent: true) {
-            HStack(spacing: 28) {
-                Button("Clear Chat") { confirmClearBlocked = true }
-                Button("Unblock") {
-                    Task {
-                        if !(await ChatService.setBlocked(cid, false)) {
-                            await MainActor.run { unblockFailed = true }
-                        }
+        // ⛔ TWO PILLS, NOT ONE — owner, 2026-09-27: "Unblock and Clear Chat make it 2 buttons, now
+        // is one group", and "Clear Chat text colour red". Each is its own 48pt glass capsule, the
+        // same one the hugging notice draws, side by side and centred in the composer's slot.
+        HStack(spacing: 12) {
+            blockedPill("Clear Chat", color: .red) { confirmClearBlocked = true }
+            blockedPill("Unblock", color: .primary) {
+                Task {
+                    if !(await ChatService.setBlocked(cid, false)) {
+                        await MainActor.run { unblockFailed = true }
                     }
                 }
-                .accessibilityHint("Unblocks \(title)")
             }
-            .font(.body)
-            .tint(.primary)
-            .padding(.horizontal, 8)
+            .accessibilityHint("Unblocks \(title)")
         }
+        .frame(maxWidth: .infinity)
+        .systemBarChrome()
         .confirmationDialog("Clear this chat?", isPresented: $confirmClearBlocked, titleVisibility: .visible) {
             Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
             Button("Cancel", role: .cancel) {}
@@ -6253,6 +6255,19 @@ struct ThreadView: View {
     }
     @State private var confirmClearBlocked = false
     @State private var unblockFailed = false
+
+    private func blockedPill(_ label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.body)
+                .foregroundStyle(color)
+                .padding(.horizontal, 26)
+                .frame(height: 48)
+                .modifier(ComposerNoticeGlass(hugsContent: true))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
 
     // A group I'm no longer in (removed by an admin, or left on another device): the conv is
     // still cached but I'm not in `users`. Show a non-interactive bar instead of the composer.

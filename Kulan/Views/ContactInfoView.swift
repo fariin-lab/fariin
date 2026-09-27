@@ -148,6 +148,7 @@ struct ContactInfoView: View {
     @State private var showDeleteChat = false
     /// The server refused an unblock (the row has flipped back).
     @State private var unblockFailed = false
+    @State private var confirmUnblock = false
     /// CHAT PIN + REMOVE FRIEND — owner's spec, 2026-09-11. The prompt is his fourth screenshot
     /// ("doesn't follow you. If you know their X Number you can message them now", Not Now / Use);
     /// the sheet is his third; the remove confirm is §23.
@@ -485,19 +486,10 @@ struct ContactInfoView: View {
                 // `infoRow` routes anything without that prefix to SF Symbols.
                 infoRow("Delete Chat", "trash", tint: .red, chevron: false) { showDeleteChat = true }
                 rowDivider
-                // ⛔ THE BLOCK ICON, IN THE PAGE'S TEXT COLOUR — owner, 2026-09-27: "Unblock in the
-                // normal text colour, not red; block and unblock use the same icon, do not change it".
-                infoRow("Unblock \(shownName)", "ic_block", chevron: false) {
-                    // Flip first (audit, 2026-09-24): the write only returns once the server
-                    // answers, so offline the row sat unchanged and read as a dead button. A refusal
-                    // flips it back and says so, instead of leaving a row that lies.
-                    blocked = false
-                    Task {
-                        if !(await ChatService.setBlocked(cid, false)) {
-                            await MainActor.run { blocked = true; unblockFailed = true }
-                        }
-                    }
-                }
+                // ⛔ RED, AND ASKED FIRST — owner, 2026-09-27 (evening, reversing the morning's "text
+                // colour"): "Unblock and icon make it red in profile, also add confirmation". Same
+                // icon as Block. The question is the one Settings › Blocked Users already asks.
+                infoRow("Unblock \(shownName)", "ic_block", tint: .red, chevron: false) { confirmUnblock = true }
             } else {
                 // ⛔ HIS OWN GLYPHS — owner, 2026-08-23, who sent both vectors. `nosign` and
                 // `exclamationmark.triangle` were Apple's, and they are the two most conspicuous
@@ -769,6 +761,19 @@ struct ContactInfoView: View {
             Text("This person restricts who can call them.")
         }
         // 2026-09-24 fix-all #196: a refused glow write, same wording as the other "Couldn't update" alerts.
+        .alert("Unblock \(shownName)?", isPresented: $confirmUnblock) {
+            Button("Cancel", role: .cancel) {}
+            Button("Unblock", role: .destructive) {
+                // Flip first (audit, 2026-09-24): the write only returns once the server answers, so
+                // offline the row sat unchanged and read as a dead button. A refusal flips it back.
+                blocked = false
+                Task {
+                    if !(await ChatService.setBlocked(cid, false)) {
+                        await MainActor.run { blocked = true; unblockFailed = true }
+                    }
+                }
+            }
+        }
         .alert("Couldn't unblock", isPresented: $unblockFailed) {
             Button("OK", role: .cancel) {}
         } message: {

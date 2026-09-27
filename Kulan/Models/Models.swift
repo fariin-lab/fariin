@@ -18,6 +18,10 @@ enum Flags {
     /// because the database rules keep enforcing the claim for that account; hiding the prompt
     /// would lock it out of its own data.
     static let twoStepEnabled = false
+    /// Profile links (the capsules under the bio, and Edit Profile › Links). OFF (owner,
+    /// 2026-09-27: "link feature hide, don't delete, hide by flag"). Only what people SEE goes:
+    /// saved links stay on the profile and in `ProfileLinksView`, and come back when this flips.
+    static let profileLinksEnabled = false
     /// The Official Announcements admin screen in Settings. OFF (owner, 2026-09-25): the admin panel
     /// will live on a fariin.com subdomain instead of inside the app. Only the door closes; the
     /// channel everyone reads, the admin rules and the sending functions are untouched, so the web
