@@ -106,43 +106,68 @@ struct MediaGalleryView: View {
     /// the conversation removed the bubble and left the photograph sitting in All Media, which is
     /// the same hole view-once had before 2026-08-11. It is also what makes the split delete below
     /// possible at all.
-    private var expandedAll: [Message] {
-        all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !HiddenMessages.isHidden($0.id) }
+    // ⛔ EVERY LIST ON THIS SCREEN IS COMPUTED ONCE PER CHANGE, NOT ONCE PER RENDER — owner,
+    // 2026-09-27: "All Media still lags when I swipe, only when there are many images, files and
+    // voices". Each of these used to be a computed property, and the body re-ran on every render:
+    // the page flips `tab` at the midpoint of a swipe, and that one render re-expanded every
+    // album, re-checked the hidden list for every message, filtered the whole chat six ways
+    // (several of them more than once, via the counts and `currentItems`), and regrouped the
+    // grid by date, building four DateFormatters to do it. All of it scaled with the number of
+    // messages, in the frame under the finger. Now `rebuildDerived()` does it when `all` or the
+    // Show filter changes, and a render only reads arrays.
+    private struct Derived {
+        var expandedAll: [Message] = []
+        var allMediaItems: [Message] = []
+        var mediaItems: [Message] = []
+        var mediaSections: [(title: String, items: [Message])] = []
+        var gifItems: [Message] = []
+        var gifSections: [(title: String, items: [Message])] = []
+        var voiceItems: [Message] = []
+        var fileItems: [Message] = []
+        var linkItems: [Message] = []
+        var photoCount = 0
+        var videoCount = 0
     }
+    @State private var derived = Derived()
 
-    /// Everything the Media tab holds, BEFORE the Show filter narrows it. Split out because the
-    /// "..." menu has to know the difference: a tab with photos in it but the Videos filter on is
-    /// empty on screen and still needs its menu, since the way back to All Media is inside it.
-    private var allMediaItems: [Message] {
-        // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11 while adding the
-        // voice exclusion below): a view-once photo was never filtered from this grid, so the
-        // person it was burned for could simply reopen it from All Media.
-        expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }
-    }
-
-    private var mediaItems: [Message] {
-        allMediaItems.filter { m in
+    private func rebuildDerived() {
+        var d = Derived()
+        d.expandedAll = all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !HiddenMessages.isHidden($0.id) }
+        // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11): a view-once photo
+        // was never filtered from this grid, so the person it was burned for could reopen it here.
+        d.allMediaItems = d.expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }
+        d.mediaItems = d.allMediaItems.filter { m in
             switch mediaFilter {
             case .all:    return true
             case .photos: return m.isImage
             case .videos: return m.isVideo
             }
         }
-    }
-    private var gifItems: [Message]  { all.filter { $0.isGif } }
-    // One-time notes are excluded the way view-once photos never reach the photo grid: a gallery
-    // replay would be a second listen.
-    private var voiceItems: [Message] { all.filter { $0.isAudio && !$0.viewOnce } }
-    private var fileItems: [Message]  { all.filter { $0.isFile } }
-    private var linkItems: [Message] {
-        all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile && Self.firstURL(in: $0.text) != nil }
+        d.mediaSections = sections(d.mediaItems)
+        d.gifItems = all.filter { $0.isGif }
+        d.gifSections = sections(d.gifItems)
+        // One-time notes are excluded the way view-once photos never reach the photo grid.
+        d.voiceItems = all.filter { $0.isAudio && !$0.viewOnce }
+        d.fileItems = all.filter { $0.isFile }
+        d.linkItems = all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile
+                                   && Self.firstURL(in: $0.text) != nil }
+        // Counted off `mediaItems`, NOT the whole list: the Show filter can narrow the grid.
+        d.photoCount = d.mediaItems.filter { $0.isImage && !$0.isGif }.count
+        d.videoCount = d.mediaItems.filter { $0.isVideo }.count
+        derived = d
     }
 
-    // Counted off `mediaItems`, NOT the whole list. The "..." menu can narrow the grid to photos
-    // only or videos only, and these two ignored that — so the header went on announcing the full
-    // totals over a grid deliberately showing fewer, which reads as tiles missing.
-    private var photoCount: Int { mediaItems.filter { $0.isImage && !$0.isGif }.count }
-    private var videoCount: Int { mediaItems.filter { $0.isVideo }.count }
+    private var expandedAll: [Message] { derived.expandedAll }
+    /// Everything the Media tab holds, BEFORE the Show filter narrows it. The "..." menu has to know
+    /// the difference: a tab with photos but the Videos filter on still needs its menu.
+    private var allMediaItems: [Message] { derived.allMediaItems }
+    private var mediaItems: [Message] { derived.mediaItems }
+    private var gifItems: [Message] { derived.gifItems }
+    private var voiceItems: [Message] { derived.voiceItems }
+    private var fileItems: [Message] { derived.fileItems }
+    private var linkItems: [Message] { derived.linkItems }
+    private var photoCount: Int { derived.photoCount }
+    private var videoCount: Int { derived.videoCount }
 
     // The count line under "All Media" reflects the visible tab.
     private var subtitle: String {
@@ -215,6 +240,9 @@ struct MediaGalleryView: View {
         // and each scroll view carries a matching bottom content margin so the last row can still be
         // reached. Three glass controls over the photographs, and no line anywhere.
         .overlay(alignment: .bottom) { if selecting { selectionToolbar } }
+        // The derived lists follow their inputs, and nothing else (see `Derived`).
+        .onChange(of: all) { _, _ in rebuildDerived() }
+        .onChange(of: mediaFilter) { _, _ in rebuildDerived() }
         .task {
             // STABLE via a persistent-backed store, so reopen is instant: render the cached list
             // synchronously first â€” no full-screen spinner on reopen â€” then refresh in the background
@@ -377,11 +405,11 @@ struct MediaGalleryView: View {
 
     @ViewBuilder private func page(_ t: Tab) -> some View {
         switch t {
-        case .media: grid(mediaItems, emptyIcon: "photo.on.rectangle", emptyText: "No media")
+        case .media: grid(mediaItems, sections: derived.mediaSections, emptyIcon: "photo.on.rectangle", emptyText: "No media")
         case .files: filesList
         case .voice: voiceList
         case .links: linksList
-        case .gifs:  grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs")
+        case .gifs:  grid(gifItems, sections: derived.gifSections, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs")
         }
     }
 
@@ -509,7 +537,8 @@ struct MediaGalleryView: View {
 
     // MARK: - Media / GIF grid (time-grouped)
 
-    private func grid(_ items: [Message], emptyIcon: String, emptyText: String) -> some View {
+    private func grid(_ items: [Message], sections groups: [(title: String, items: [Message])],
+                      emptyIcon: String, emptyText: String) -> some View {
         ScrollView {
             if loaded && items.isEmpty { emptyState(emptyIcon, emptyText) }
             LazyVStack(alignment: .leading, spacing: 22) {
@@ -518,7 +547,7 @@ struct MediaGalleryView: View {
                 // message with a pending or unreadable `createdAt` puts a second "Today" further
                 // down the list, and SwiftUI's answer to a duplicate id is to drop one of them —
                 // silently, so it looks like photos are simply missing rather than like a bug.
-                ForEach(Array(sections(items).enumerated()), id: \.offset) { _, section in
+                ForEach(Array(groups.enumerated()), id: \.offset) { _, section in
                     Text(section.title)
                         .font(.title3.weight(.bold))
                         .padding(.horizontal, 14).padding(.top, 6)
@@ -539,11 +568,13 @@ struct MediaGalleryView: View {
 
     // Group items into date sections ("Today", "Yesterday", "This Month", "June", "June 2024"),
     // keeping the existing newest-first order.
+    private static let monthFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "LLLL"; return f }()
+    private static let monthYearFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "LLLL yyyy"; return f }()
+
     private func sections(_ items: [Message]) -> [(title: String, items: [Message])] {
         let cal = Calendar.current
         var groups: [(title: String, items: [Message])] = []
-        let monthFmt = DateFormatter(); monthFmt.dateFormat = "LLLL"
-        let monthYearFmt = DateFormatter(); monthYearFmt.dateFormat = "LLLL yyyy"
+        let monthFmt = Self.monthFmt, monthYearFmt = Self.monthYearFmt   // built once, not per call
         let now = Date()
         func bucket(_ d: Date) -> String {
             if cal.isDateInToday(d) { return "Today" }
