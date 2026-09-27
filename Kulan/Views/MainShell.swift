@@ -1384,7 +1384,7 @@ struct ChatsView: View {
                     // No size of its own. One number for menus and swipes alike, so a report about
                     // one place cannot leave the other behind — see MenuIcon.standard.
                     conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash"))
-                                      : AnyView(MenuIcon("ic_pin_menu"))
+                                      : AnyView(MenuIcon(system: "pin"))
                 }
             }
             .tint(.orange)
@@ -2011,7 +2011,7 @@ struct ChatsView: View {
 
         let pinned = conv.isPinned(me)
         out.append(UIAction(title: pinned ? "Unpin" : "Pin",
-                            image: pinned ? ChatListIcon.symbol("pin.slash") : ChatListIcon.asset("ic_pin_menu")) { _ in
+                            image: pinned ? ChatListIcon.symbol("pin.slash") : ChatListIcon.symbol("pin")) { _ in
             Task { await ChatService.setPinned(conv.id, !pinned) }
         })
         out.append(UIAction(title: "Archive", image: ChatListIcon.asset("ic_archive")) { _ in
@@ -2074,7 +2074,7 @@ struct ChatsView: View {
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
             Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
                     conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash", ink: .label))
-                                      : AnyView(MenuIcon("ic_pin_menu", ink: .label))
+                                      : AnyView(MenuIcon(system: "pin", ink: .label))
                 }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {

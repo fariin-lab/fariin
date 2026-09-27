@@ -1544,7 +1544,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // makes the platter tint it white — an asset left in its own colours is a black pin on
         // orange, and black on black in the dark.
         pin.image = pinned ? ChatListIcon.symbol("pin.slash.fill")
-                           : ChatListIcon.asset("ic_pin_menu")
+                           : ChatListIcon.symbol("pin.fill")
         pin.backgroundColor = .systemOrange
 
         return UISwipeActionsConfiguration(actions: [read, pin])
