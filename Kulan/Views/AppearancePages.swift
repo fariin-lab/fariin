@@ -191,7 +191,8 @@ struct ChatWallpaperPage: View {
         // now is opening full page plz make it sheet". See `WallpaperPreviewScreen` for the header
         // that came with it.
         .sheet(item: $previewing) { w in
-            WallpaperPreviewScreen(wallpaper: w)
+            // The built-in set pages among itself; a photo previews alone.
+            WallpaperPreviewScreen(wallpaper: w, siblings: ChatWallpapers.all.map { ChatWallpaper.gradient($0.id) })
         }
     }
 
@@ -281,7 +282,9 @@ struct WallpaperColorPage: View {
         .toolbar(.hidden, for: .tabBar)
         // A sheet here too, for the same 2026-09-23 report — the two pages present the identical
         // screen and it must not open two different ways.
-        .sheet(item: $previewing) { WallpaperPreviewScreen(wallpaper: $0) }
+        .sheet(item: $previewing) { w in
+            WallpaperPreviewScreen(wallpaper: w, siblings: WallpaperColors.all.map { ChatWallpaper.color($0) })
+        }
     }
 
     private func hexIsDark(_ hex: UInt) -> Bool {
@@ -293,7 +296,24 @@ struct WallpaperColorPage: View {
 // MARK: - Full-screen wallpaper preview (Blurred + Apply For All Chats)
 
 struct WallpaperPreviewScreen: View {
-    let wallpaper: ChatWallpaper
+    /// ⛔ SWIPE BETWEEN WALLPAPERS — owner, 2026-09-27, with the reference app's preview beside ours:
+    /// "add the feature: swipe wallpapers". Theirs opens on the tapped tile and pages sideways
+    /// through the rest of the set it came from, with "Swipe to preview more wallpapers." as the
+    /// first bubble, and the tick applies whichever one is showing. `siblings` is that set (empty
+    /// for a photo, which pinches and drags instead of paging).
+    let siblings: [ChatWallpaper]
+    @State private var index: Int
+    /// Opened on something outside the set (a photo just picked): that one, alone.
+    private var inSet: Bool { siblings.contains(first) }
+    private var wallpaper: ChatWallpaper { inSet && siblings.indices.contains(index) ? siblings[index] : first }
+    private let first: ChatWallpaper
+
+    init(wallpaper: ChatWallpaper, siblings: [ChatWallpaper] = []) {
+        self.first = wallpaper
+        self.siblings = siblings
+        _index = State(initialValue: siblings.firstIndex(of: wallpaper) ?? 0)
+    }
+    private var pages: Bool { inSet && siblings.count > 1 && !isPhoto }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @Environment(\.displayScale) private var displayScale
@@ -327,7 +347,19 @@ struct WallpaperPreviewScreen: View {
 
     var body: some View {
         ZStack {
-            background.ignoresSafeArea()
+            Group {
+                if pages {
+                    TabView(selection: $index) {
+                        ForEach(siblings.indices, id: \.self) { i in
+                            background(for: siblings[i]).ignoresSafeArea().tag(i)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                } else {
+                    background(for: wallpaper)
+                }
+            }
+            .ignoresSafeArea()
                 .background(
                     GeometryReader { proxy in
                         Color.clear
@@ -352,13 +384,17 @@ struct WallpaperPreviewScreen: View {
                         .font(.headline)
                         .foregroundStyle(.primary)
                     HStack {
+                        // ⛔ 44pt LIQUID GLASS — owner, 2026-09-27: "make the X Apple's native liquid
+                        // glass, 44 size". It was a 32pt material disc.
                         Button { dismiss() } label: {
-                            Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
+                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(.primary)
-                                .frame(width: 32, height: 32)
-                                .background(.regularMaterial, in: Circle())
+                                .frame(width: 44, height: 44)
+                                .liquidGlass(Circle(), interactive: true)
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Close")
                         Spacer()
                     }
                 }
@@ -369,7 +405,8 @@ struct WallpaperPreviewScreen: View {
 
                 // Mock bubbles riding low, like the reference.
                 VStack(spacing: 8) {
-                    HStack { mockBubble("This is how the wallpaper looks", mine: false); Spacer(minLength: 40) }
+                    HStack { mockBubble(pages ? "Swipe to preview more wallpapers." : "This is how the wallpaper looks",
+                                        mine: false); Spacer(minLength: 40) }
                     HStack { Spacer(minLength: 40); mockBubble("Nice, applying it", mine: true) }
                 }
                 .padding(.horizontal, 14)
@@ -416,7 +453,7 @@ struct WallpaperPreviewScreen: View {
         // well, which is a worse bug than the one it was fixing.
     }
 
-    @ViewBuilder private var background: some View {
+    @ViewBuilder private func background(for wallpaper: ChatWallpaper) -> some View {
         switch wallpaper {
         case .none:
             Theme.bg(dark)
