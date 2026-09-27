@@ -1292,6 +1292,16 @@ final class MessageRowView: UIView {
                 move(highlight, from: oldLocal); add(highlight.shape, "path", rp)
             }
         }
+        // ⛔ AND THE ROW'S OWN CHROME ABOVE THE BUBBLE — owner, 2026-09-27, a frame of his recording:
+        // the date pill over this row sat ON the bubble mid-animation. When the bubble grows from its
+        // bottom, the list has moved this whole row by `grow`, so the date pill, divider and sender
+        // name above the box jumped at once while the box was still easing from its old top. They
+        // ride the same curve from where they were.
+        if Self.growsFromBottom, abs(grow) > 0.5 {
+            for v in subviews where v !== bubbleBox && !v.isHidden && v.frame.maxY <= nb.bubble.minY + 1 {
+                add(v.layer, "transform.translation.y", grow)
+            }
+        }
         // Everything else in the bubble (text, time, ticks, media) glides from where it was.
         for v in bubbleBox.subviews where !v.isHidden {
             if let f = old.frames[ObjectIdentifier(v)], v !== fill, v !== rim, v !== highlight { move(v, from: f) }
