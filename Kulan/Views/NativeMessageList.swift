@@ -1412,6 +1412,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // layout transaction as the frame change, never a frame late. The delta is zero unless the changed row
     // lies ABOVE the reader's anchor; a row below the viewport moves nothing they can see.
     private func adoptHeight(_ h: CGFloat, for id: String) {
+        RxTrace.log("adoptHeight id=\(id.suffix(5)) h=\(h) cached=\(heights[id] ?? -1)")
         guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 2 else { return }
         guard canLandLoad else {
             pendingSettleHeights.insert(id)
@@ -1586,6 +1587,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let attr = layout.layoutAttributesForItem(at: ip) else { return }
         let want = clampOffset(attr.frame.minY - anchor.distanceFromOrigin)
         if abs(collectionView.contentOffset.y - want) > 2 {
+            RxTrace.log("verifyAnchor WRITE \(collectionView.contentOffset.y) -> \(want)")
             collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
             lastStableOffset = want
         }
@@ -2038,7 +2040,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                     - (collectionView.safeAreaInsets.top + topOverlayHeight) - bottomClearance
                 let newTop = topOverlayHeight + (room > 0 ? max(0, room - newContent) : 0)
                 if abs(collectionView.contentInset.top - newTop) > 0.5 {
+                    let before = collectionView.contentOffset.y
                     collectionView.contentInset.top = newTop
+                    RxTrace.log("pinBottom insetTop -> \(newTop) y \(before) -> \(collectionView.contentOffset.y)")
                     // Not a nav-bar inset arriving: the one-time landing repin must not read it as one.
                     if landedTopInset != nil { landedTopInset = collectionView.adjustedContentInset.top }
                 }
@@ -2055,8 +2059,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Which way a row that grows from a reaction is drawn growing: up from its bottom when the
         // offset just took the whole growth (reader at the newest), else down from its top.
         MessageRowView.growsFromBottom = pinBottom && abs(delta - grown) < 1
+        if heightChanged {
+            RxTrace.begin("refreshVisible grown=\(grown) pinBottom=\(pinBottom) delta=\(delta) y=\(collectionView.contentOffset.y) insetTop=\(collectionView.contentInset.top) moving=\(listIsMoving)")
+        }
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
+            if heightChanged { RxTrace.log("refreshVisible applied y=\(self.collectionView.contentOffset.y)") }
             self.layout.pendingContentOffsetAdjustment = 0
             if delta != 0 { self.verifyAnchor(landedAnchor) }
             if !listIsMoving { self.moveNeighboursWithReactionGrowth(target) }
@@ -2766,6 +2774,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // animates the reader on whichever of those curves happens to be running, which is a bug this
         // file has already recorded once. On the keyboard's own pass `updateInsets` has normally
         // corrected the reader already, so there is nothing here to strip.
+        RxTrace.log("restoreReaderPosition WRITE \(y) -> \(want)")
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
         }
@@ -3385,6 +3394,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.performWithoutAnimation {
             if didChangeInsets {
                 let keep = collectionView.contentOffset
+                RxTrace.log("updateInsets top \(oldInsets.top)->\(newInsets.top) bottom \(oldInsets.bottom)->\(newInsets.bottom) y=\(keep.y)")
                 collectionView.contentInset = newInsets
                 if collectionView.contentOffset != keep { collectionView.setContentOffset(keep, animated: false) }
             }
@@ -4420,6 +4430,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private func customMenuDidEnd(restoringKeyboard: Bool = true) {
         guard let menu = activeMenu else { return }
+        RxTrace.begin("menu ended y=\(collectionView.contentOffset.y) keyboardWasUp=\(menu.keyboardWasUp)")
         menu.sourceView.isHidden = false
         menu.sourceView.transform = .identity
         activeMenuCell?.isUserInteractionEnabled = true
@@ -4507,6 +4518,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        RxTrace.log("scroll y=\(scrollView.contentOffset.y) insetTop=\(scrollView.contentInset.top) h=\(scrollView.contentSize.height)")
         // A finger on the list ends the one-shot re-pin: whatever the insets do from here, this
         // reader has chosen where they are. See `repinIfTopInsetArrived`.
         if scrollView.isDragging || scrollView.isTracking { awaitingInitialRepin = false }
@@ -5083,6 +5095,7 @@ final class MessageLayout: UICollectionViewLayout {
     var pendingContentOffsetAdjustment: CGFloat = 0
 
     override func targetContentOffset(forProposedContentOffset proposed: CGPoint) -> CGPoint {
+        RxTrace.log("targetContentOffset proposed=\(proposed.y) adj=\(pendingContentOffsetAdjustment)")
         guard pendingContentOffsetAdjustment != 0 else { return proposed }
         return CGPoint(x: proposed.x, y: proposed.y + pendingContentOffsetAdjustment)
     }
@@ -5093,3 +5106,20 @@ final class MessageLayout: UICollectionViewLayout {
     }
 }
 
+
+/// TEMPORARY DIAGNOSTIC — 2026-09-27, the reaction "double jump" and the short-chat gap. Owner:
+/// "before you fix, get the real bug, no guessing". Every step that can move the list logs its
+/// numbers, with milliseconds since the event, for two seconds after a reaction lands or the message
+/// menu closes, and is silent the rest of the time. Read in the Appetize preview's log. REMOVE once
+/// the cause is proven.
+enum RxTrace {
+    private static var start: Date?
+    static func begin(_ what: String) {
+        if start == nil || Date().timeIntervalSince(start!) > 2 { start = Date() }
+        log("BEGIN " + what)
+    }
+    static func log(_ what: String) {
+        guard let s = start, Date().timeIntervalSince(s) <= 2 else { return }
+        NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what)
+    }
+}

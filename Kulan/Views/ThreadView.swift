@@ -5776,6 +5776,7 @@ struct ThreadView: View {
     /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
     /// the forward and jump paths use.
     private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        RxTrace.begin("sendReaction \(emoji ?? "remove")")   // TEMPORARY, see RxTrace
         // 2026-09-24 feature-audit: every pick feeds the quick bar's recents (bar, picker and
         // double-tap alike); only the full picker used to record one.
         if let e = emoji { ReactionRecents.add(e) }
