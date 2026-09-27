@@ -806,8 +806,16 @@ enum MessageRowLayout {
                 // is positioned from the bubble's TOP and was laid out before `decorations` ran, so
                 // extending the bottom edge moves none of it. Growing upward, or widening from the
                 // leading edge, would.
-                let padH: CGFloat = 10
-                let gapAbove: CGFloat = 2
+                // ⛔ THE OTHER REFERENCE APP'S NUMBERS — owner, 2026-09-27, the gap between a text and
+                // its reaction pills ringed: "make it like theirs, report before and after". Read from
+                // its source: the pills start where the TEXT starts (both sit on the bubble's content
+                // inset), the row sits 3pt under the last line, and the bubble ends ~6pt under the
+                // pills. Ours started the pills 10pt in under text that starts 15pt in (they stuck out
+                // 5pt to the left), 12pt under the text, and 10pt above the bubble's edge.
+                let padH = BubbleMetrics.hPad
+                // Measured from the old bubble bottom, which already sits `vPad` under the text:
+                // 3 - vPad puts the pills 3pt under the last line.
+                let gapAbove: CGFloat = 3 - BubbleMetrics.vPad
                 // ⛔ AND A GAP BELOW IT, WHICH THERE WAS NOT — owner, 2026-09-23: "react badge is
                 // touching bubble bottom angle".
                 //
@@ -819,7 +827,7 @@ enum MessageRowLayout {
                 // ⚠️ `vPad`, NOT A NEW NUMBER. That is the bubble's own vertical text inset, so the
                 // pills now sit the same distance off the bottom edge as the words sit off the top.
                 // The bubble gets its padding back instead of the strip eating it.
-                let gapBelow = BubbleMetrics.vPad
+                let gapBelow: CGFloat = 6   // theirs: 6 less a pixel under the row
                 let stripH = gapAbove + height + gapBelow
 
                 // ⛔ THE FOOTER JOINS THE REACTION ROW WHEN IT FITS — the reference app's rule

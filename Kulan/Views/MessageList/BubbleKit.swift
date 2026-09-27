@@ -32,7 +32,7 @@ enum BubbleMetrics {
     /// The reactor's face inside a reaction pill. Sized off the emoji beside it rather than picked:
     /// a circle much larger turns the pill into a row of avatars, and much smaller reads as a dot.
     /// See `MessageRowLayout.decorations`.
-    static let reactionFace: CGFloat = 18
+    static let reactionFace: CGFloat = 24   // theirs, 2026-09-27 (was 18)
     /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
     /// [the reference] react badge then make it like it, size and color".
     ///
@@ -49,7 +49,7 @@ enum BubbleMetrics {
     /// Each side. Their `sideInsets`.
     static let reactionChipInset: CGFloat = 11
     /// Between two pills. Their `spacing`.
-    static let reactionChipGap: CGFloat = 2
+    static let reactionChipGap: CGFloat = 6   // theirs, 2026-09-27 (was 2)
     /// The emoji's box. Theirs is a 20×20 image; ours is type, and 17pt renders to almost exactly
     /// 20 points tall, so the glyph fills the same square rather than floating in it.
     static let reactionEmojiFont: CGFloat = 17
