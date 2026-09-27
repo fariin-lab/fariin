@@ -62,12 +62,21 @@ final class ChatHeaderView: UIView {
         return label
     }()
 
+    /// ⛔ SOLID, NOT `.secondaryLabel` — owner, 2026-09-27, a yellow wallpaper: "last seen" came out
+    /// yellow. `.secondaryLabel` is a 60%-opaque colour, so over a wallpaper the picture shows through
+    /// the letters and the line takes its hue, while the fully opaque name beside it stays white. The
+    /// same dimmer grey he asked for in August, made opaque: nothing behind it can tint it. Resolves
+    /// through `textRows`' light/dark like the labels, so it follows the backdrop decision.
+    static let subtitleColor = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.82, alpha: 1) : UIColor(white: 0.32, alpha: 1)
+    }
+
     let subtitleLabel: UILabel = {
         let label = UILabel()
         // Secondary, not their full-opacity label: owner, 2026-08-25, with the header on his phone.
         // The one place this port departs from their numbers on purpose; everything else about the
         // line (13 medium, its slot, its spacing) is theirs.
-        label.textColor = .secondaryLabel
+        label.textColor = ChatHeaderView.subtitleColor
         label.lineBreakMode = .byTruncatingTail
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
@@ -210,7 +219,7 @@ final class ChatHeaderView: UIView {
         subtitleLabel.isHidden = model.subtitle == nil
         // Typing is the one state that colours the line; everything else is their full-opacity label.
         // `.tintColor` is UIKit's `Color.accentColor`, which is what the SwiftUI line used for typing.
-        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : .secondaryLabel
+        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : Self.subtitleColor
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
         // The measured answer is only the SEED for the first frame; once the glass probe has
@@ -221,7 +230,7 @@ final class ChatHeaderView: UIView {
         }
         // The timer glyph is a template so it re-resolves through `textRows`' style like the labels
         // do; a pre-tinted image would keep light-mode grey over a black wallpaper.
-        secondaryIconView.tintColor = .secondaryLabel
+        secondaryIconView.tintColor = Self.subtitleColor
         avatarView.configure(name: model.name, photoUrl: model.photoUrl, asset: model.avatarAsset)
         accessibilityLabel = model.name
     }
