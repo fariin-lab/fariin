@@ -852,7 +852,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.bottomEdgeEffect.isHidden = true
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
-        installHeaderEdgeEffectAnchor()
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.topAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -3707,6 +3706,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        // A push that was cancelled never reached viewDidAppear; the bar is shared with the chat list.
+        detachHeaderEdgeEffectForTransition()
         // Only once we are REALLY gone: an interactive pop that the user cancels runs
         // willDisappear then appears again, and viewDidAppear re-hooks on the way back in.
         unhookPopGesture()
@@ -3753,6 +3754,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// frame yet. Only on the way in, so a pop never makes the bar re-decide mid-animation.
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
+        attachHeaderEdgeEffectForTransition()
         if isMovingToParent || !didRegisterOnAppearing {
             didRegisterOnAppearing = true
             registerAsContentScrollView()
@@ -3760,30 +3762,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     private var didRegisterOnAppearing = false
 
-    /// ⛔ THE HEADER BLUR FROM THE FIRST FRAME OF THE PUSH — owner, 2026-09-27, two frames of a chat
-    /// sliding in with the messages sharp behind the header: "the blur comes only when the page is
-    /// 100% open; the reference app is not like that". The iOS 26 top edge effect is drawn by this
-    /// list, but only where something registers as a bar over it, and the navigation bar registers
-    /// with a page's list only once the push has finished (the reference's list is its controller's
-    /// own view, so the bar has it from the start; ours is inside a SwiftUI page). Registering the
-    /// region under the bar ourselves, with the system's own container interaction, gives the list
-    /// its edge from the moment it is on screen. The anchor draws nothing and takes no touches.
-    private func installHeaderEdgeEffectAnchor() {
-        let anchor = UIView()
-        anchor.isUserInteractionEnabled = false
-        anchor.backgroundColor = .clear
-        anchor.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(anchor)
-        NSLayoutConstraint.activate([
-            anchor.topAnchor.constraint(equalTo: view.topAnchor),
-            anchor.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            anchor.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            anchor.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-        ])
+    /// ⛔ THE HEADER BLUR FROM THE FIRST FRAME OF THE PUSH — owner, 2026-09-27, twice: "the blur
+    /// comes only when the page is 100% open". The navigation bar links itself to a page's list only
+    /// when the push has finished: the reference app's list is its controller's own first subview,
+    /// so the bar has it before the push starts, while ours is built inside a SwiftUI page during it.
+    ///
+    /// ⚠️ THE FIRST TRY AT THIS WAS INERT, AND APPLE'S DOCUMENTATION SAYS WHY. It put the
+    /// interaction on an empty, clear view laid over the header. The edge effect's shape is made by
+    /// the container's DESCENDANTS ("labels, images, glass views, and controls"), and that view had
+    /// none, so it drew nothing. The container that does hold the header's elements, the back
+    /// button, the title view and the call buttons, is the navigation bar itself. The interaction
+    /// goes on the bar from `viewIsAppearing` (before the push draws its first frame) and comes off
+    /// in `viewDidAppear`, when the bar's own link to this list has taken over.
+    private var pushEdgeInteraction: UIScrollEdgeElementContainerInteraction?
+
+    private func attachHeaderEdgeEffectForTransition() {
+        guard pushEdgeInteraction == nil, let bar = navigationController?.navigationBar,
+              let list = collectionView else { return }
         let interaction = UIScrollEdgeElementContainerInteraction()
-        interaction.scrollView = collectionView
+        interaction.scrollView = list
         interaction.edge = .top
-        anchor.addInteraction(interaction)
+        bar.addInteraction(interaction)
+        pushEdgeInteraction = interaction
+    }
+
+    private func detachHeaderEdgeEffectForTransition() {
+        guard let interaction = pushEdgeInteraction else { return }
+        interaction.view?.removeInteraction(interaction)
+        pushEdgeInteraction = nil
     }
 
     private func registerAsContentScrollView() {
@@ -3817,6 +3823,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        detachHeaderEdgeEffectForTransition()   // the bar's own link has the list now
         isDisappearing = false
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
