@@ -852,6 +852,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.bottomEdgeEffect.isHidden = true
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
+        installHeaderEdgeEffectAnchor()
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.topAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -3720,6 +3721,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
     private var didRegisterOnAppearing = false
+
+    /// ⛔ THE HEADER BLUR FROM THE FIRST FRAME OF THE PUSH — owner, 2026-09-27, two frames of a chat
+    /// sliding in with the messages sharp behind the header: "the blur comes only when the page is
+    /// 100% open; the reference app is not like that". The iOS 26 top edge effect is drawn by this
+    /// list, but only where something registers as a bar over it, and the navigation bar registers
+    /// with a page's list only once the push has finished (the reference's list is its controller's
+    /// own view, so the bar has it from the start; ours is inside a SwiftUI page). Registering the
+    /// region under the bar ourselves, with the system's own container interaction, gives the list
+    /// its edge from the moment it is on screen. The anchor draws nothing and takes no touches.
+    private func installHeaderEdgeEffectAnchor() {
+        let anchor = UIView()
+        anchor.isUserInteractionEnabled = false
+        anchor.backgroundColor = .clear
+        anchor.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(anchor)
+        NSLayoutConstraint.activate([
+            anchor.topAnchor.constraint(equalTo: view.topAnchor),
+            anchor.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            anchor.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            anchor.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+        ])
+        let interaction = UIScrollEdgeElementContainerInteraction()
+        interaction.scrollView = collectionView
+        interaction.edge = .top
+        anchor.addInteraction(interaction)
+    }
 
     private func registerAsContentScrollView() {
         guard isViewLoaded, let list = collectionView else { return }
