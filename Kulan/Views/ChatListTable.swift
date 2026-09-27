@@ -640,6 +640,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // See `ChatListSelfSizingTable` — the footer is the reference app's own cure for the
         // search-field jump, and it only works from inside the table.
         let t = ChatListSelfSizingTable(frame: .zero, style: .grouped)
+        t.addGestureRecognizer(TouchTimeRecognizer(target: nil, action: nil))   // TEMPORARY, see OpenTrace
         t.separatorStyle = .none
         t.backgroundColor = .clear
         // ⚠️ THESE TWO NOW SPEAK ONLY FOR THE STRANGER ROWS. A chat row's height is answered

@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass   // TEMPORARY, for TouchTimeRecognizer (see OpenTrace)
 
 extension Notification.Name {
     /// "Take me to the newest message." Posted by the down-arrow button, answered by whichever
@@ -5271,13 +5272,61 @@ enum OpenTrace {
         let n = (opens[what] ?? 0) + 1
         guard n <= 3 else { return }
         opens[what] = n
+        generation += 1
         t0 = CFAbsoluteTimeGetCurrent()
         title = what.uppercased()
         lines = ["tap (\(what) open \(n) since launch)"]
         once = []
+        let now = ProcessInfo.processInfo.systemUptime
+        if launchAt > 0 { lines.append(String(format: "  %.1fs after launch", now - launchAt)) }
+        if lastTouchAt > 0, now - lastTouchAt < 10 {
+            lines.append(String(format: "  finger touched %.0fms before this; app heard it %.0fms late",
+                                (now - lastTouchAt) * 1000, lastTouchLag * 1000))
+        }
     }
 
     static var isActive: Bool { t0 > 0 }
+    /// Which open is being timed, so a late timeout from an earlier open cannot close this one's box.
+    private(set) static var generation = 0
+
+    // MARK: Before the tap — owner, 2026-09-27: build 781's box showed the chat on screen 0.2s after
+    // the tap, and he says the open still felt slow. So the time goes BEFORE the app sees the tap:
+    // the main thread is busy when his finger lands. These record every main-thread freeze in the
+    // first minute after launch, and when his finger really touched the row.
+    private static var launchAt: TimeInterval = 0
+    private static var launchLog: [String] = []
+    private static var lastTouchAt: TimeInterval = 0
+    private static var lastTouchLag: TimeInterval = 0
+
+    /// From `didFinishLaunching`. A background queue asks the main thread to answer every 50ms and
+    /// writes down any answer that took longer than 150ms: that is a freeze, and when it happened.
+    static func startLaunchWatch() {
+        launchAt = ProcessInfo.processInfo.systemUptime
+        let q = DispatchQueue(label: "kulan.opentrace.watch", qos: .userInteractive)
+        func ping() {
+            let sent = ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.async {
+                let back = ProcessInfo.processInfo.systemUptime
+                if back - sent > 0.15 { launchNote(String(format: "app frozen %.0fms", (back - sent) * 1000), at: sent) }
+                guard back - launchAt < 60 else { return }
+                q.asyncAfter(deadline: .now() + 0.05, execute: ping)
+            }
+        }
+        q.async(execute: ping)
+    }
+
+    /// Main thread only.
+    static func launchNote(_ what: String, at t: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard launchAt > 0, launchLog.count < 20, t - launchAt < 60 else { return }
+        launchLog.append(String(format: "%5.1fs  %@", t - launchAt, what))
+    }
+
+    /// `touch.timestamp` is when the finger landed on the glass, whatever the main thread was doing;
+    /// the difference to now is how late the app got to hear about it.
+    static func noteTouchDown(_ touch: UITouch) {
+        lastTouchAt = touch.timestamp
+        lastTouchLag = ProcessInfo.processInfo.systemUptime - touch.timestamp
+    }
 
     @MainActor static func finishInKeyWindow(_ last: String) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -5318,13 +5367,29 @@ enum OpenTrace {
         label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         label.textColor = .white
         label.backgroundColor = UIColor.black.withAlphaComponent(0.8)
-        label.text = "\(title) OPEN TIMING (ms from tap)\n" + lines.joined(separator: "\n")
+        var text = "\(title) OPEN TIMING (ms from tap)\n" + lines.joined(separator: "\n")
+        if !launchLog.isEmpty { text += "\nSINCE LAUNCH\n" + launchLog.joined(separator: "\n") }
+        label.text = text
         let width = window.bounds.width - 24
         let size = label.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         label.frame = CGRect(x: 12, y: window.safeAreaInsets.top + 60, width: width, height: size.height + 8)
         label.isUserInteractionEnabled = false
         window.addSubview(label)
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { label.removeFromSuperview() }
+    }
+}
+
+/// TEMPORARY, see OpenTrace: hears every touch on the chat list the moment UIKit hands it over and
+/// fails at once, so it never takes part in a tap or a scroll.
+final class TouchTimeRecognizer: UIGestureRecognizer {
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        cancelsTouchesInView = false
+        delaysTouchesEnded = false
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let t = touches.first { OpenTrace.noteTouchDown(t) }
+        state = .failed
     }
 }
 

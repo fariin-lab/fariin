@@ -2685,6 +2685,7 @@ struct ChatsView: View {
             // 2026-09-25: warm the top chats' saved messages off the main thread, so the first tap
             // on a chat after launch does not read and decode them inside the tap. See `prewarm`.
             .task(id: repo.conversations.prefix(12).map(\.id).joined(separator: ",")) {
+                OpenTrace.launchNote("chat list: \(repo.conversations.count) chats")   // TEMPORARY, see OpenTrace
                 ThreadMessageCache.shared.prewarm(repo.conversations.prefix(12).map(\.id))
             }
             // 2026-09-27: the wallpaper blur's one-time setup, paid here and not in the first chat.

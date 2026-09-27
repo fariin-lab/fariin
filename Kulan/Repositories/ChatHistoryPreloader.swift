@@ -82,10 +82,12 @@ final class ChatHistoryPreloader {
             return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)
         }
 
+        let before = warming.count
         for conv in ranked {
             guard warming.count < Self.maxConcurrent else { break }
             warm(conv, me: me)
         }
+        if warming.count > before { OpenTrace.launchNote("preloading \(warming.count - before) chats") }   // TEMPORARY
     }
 
     /// Every conversation is gone (sign-out, account wipe). Drop the listeners with them.

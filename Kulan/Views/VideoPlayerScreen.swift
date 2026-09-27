@@ -546,7 +546,14 @@ struct VideoPlayerScreen: View {
             readyObservation = p.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
                 guard item.status != .unknown else { return }
                 let ok = item.status == .readyToPlay
-                Task { @MainActor in OpenTrace.finishInKeyWindow(ok ? "video ready to show" : "video failed") }
+                // The box closes on the first frame actually drawn (PlayerLayerUIView), or here after
+                // 10s if no frame ever is: that difference is the question now.
+                let gen = OpenTrace.generation
+                Task { @MainActor in
+                    OpenTrace.mark(ok ? "video ready to show" : "video failed")
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    if OpenTrace.generation == gen { OpenTrace.finishInKeyWindow("no frame drawn after 10s") }
+                }
             }
         }
         duration = message.duration ?? 0
@@ -591,11 +598,20 @@ private struct PlayerLayerView: UIViewRepresentable {
 private final class PlayerLayerUIView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private var frameObservation: NSKeyValueObservation?   // TEMPORARY, see OpenTrace
     init(player: AVPlayer) {
         super.init(frame: .zero)
         backgroundColor = .black
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspect
+        // TEMPORARY, see OpenTrace: when the first picture is really on screen, and how big this view is.
+        frameObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            Task { @MainActor in
+                let size = self?.bounds.size ?? .zero
+                OpenTrace.finishInKeyWindow("first frame drawn (view \(Int(size.width))x\(Int(size.height)), in window: \(self?.window != nil))")
+            }
+        }
     }
     required init?(coder: NSCoder) { fatalError("not implemented") }
     func setPlayer(_ p: AVPlayer) { if playerLayer.player !== p { playerLayer.player = p } }

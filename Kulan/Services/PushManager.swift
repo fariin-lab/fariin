@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        OpenTrace.startLaunchWatch()   // TEMPORARY, see OpenTrace
         // Large PERSISTENT URLCache — this is the story viewer's cache tier (StoryUI's image loader +
         // its AVPlayer both read URLCache.shared first). It was left at the tiny iOS default, so warmed
         // story images/videos were evicted between launches and re-downloaded. A 100 MB memory / 1 GB
