@@ -9,7 +9,9 @@ struct ChatColorSpec: Equatable, Identifiable {
     var isGradient: Bool { colors.count >= 2 }
     var solid: Color { Color(hex: colors.first ?? 0x3A76F0) }
     var gradient: LinearGradient {
-        LinearGradient(colors: colors.map { Color(hex: $0) }, startPoint: .topLeading, endPoint: .bottomTrailing)
+        // Top to bottom, the first colour on top — the reference app's gradients all run this way
+        // (their angles are 180°, or within 12° of it). Was corner to corner.
+        LinearGradient(colors: colors.map { Color(hex: $0) }, startPoint: .top, endPoint: .bottom)
     }
     // The fill used behind a bubble — solid Color or the gradient, type-erased for one `.background(_:)`.
     var fill: AnyShapeStyle { isGradient ? AnyShapeStyle(gradient) : AnyShapeStyle(solid) }
@@ -46,12 +48,34 @@ struct ChatColorSpec: Equatable, Identifiable {
 
 enum ChatColors {
     // Preset swatches shown in the picker (a mix of gradients + solids, the standard style).
+    // ⛔ THE REFERENCE APP'S WHOLE PALETTE — owner, 2026-09-27, with its Chat Color page: "my chat
+    // colours look ugly; copy theirs, all of them". Read from its source
+    // (`PaletteChatColor+Constants.swift`): Ultramarine (its default), twelve solids, nine
+    // gradients, in its order and with its exact values. Our five old presets are gone; a chat that
+    // stored one still shows it (a stored colour is the colour itself, not a reference to this list).
     static let presets: [ChatColorSpec] = [
-        .init(colors: [0xE9459B, 0xF06CC9]),   // pink gradient
-        .init(colors: [0x5B6CF0, 0x8A4BF0]),   // blue → purple
-        .init(colors: [0xC0243A]),             // red
-        .init(colors: [0x14245B]),             // navy
-        .init(colors: [0x101827]),             // near-black
+        .init(colors: [0x0552F0, 0x2C6BED]),   // Ultramarine
+        .init(colors: [0xCF163E]),   // Crimson
+        .init(colors: [0xC73F0A]),   // Vermilion
+        .init(colors: [0x6F6A58]),   // Burlap
+        .init(colors: [0x3B7845]),   // Forest
+        .init(colors: [0x1D8663]),   // Wintergreen
+        .init(colors: [0x077D92]),   // Teal
+        .init(colors: [0x336BA3]),   // Blue
+        .init(colors: [0x6058CA]),   // Indigo
+        .init(colors: [0x9932C8]),   // Violet
+        .init(colors: [0xAA377A]),   // Plum
+        .init(colors: [0x8F616A]),   // Taupe
+        .init(colors: [0x71717F]),   // Steel
+        .init(colors: [0xE57C00, 0x5E0000]),   // Ember
+        .init(colors: [0x2C2C3A, 0x787891]),   // Midnight
+        .init(colors: [0xF65560, 0x442CED]),   // Infrared
+        .init(colors: [0x004066, 0x32867D]),   // Lagoon
+        .init(colors: [0xEC13DD, 0x1B36C6]),   // Fluorescent
+        .init(colors: [0x2F9373, 0x077343]),   // Basil
+        .init(colors: [0x6281D5, 0x974460]),   // Sublime
+        .init(colors: [0x498FD4, 0x2C66A0]),   // Sea
+        .init(colors: [0xDB7133, 0x911231]),   // Tangerine
     ]
 }
 

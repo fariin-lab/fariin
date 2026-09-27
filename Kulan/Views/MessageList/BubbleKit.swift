@@ -127,7 +127,7 @@ enum BubblePalette {
 /// colour) and carried in the model, so a cell never reaches into app state to decide its own look.
 enum BubbleFill: Equatable {
     case solid(UInt)                 // RGB hex — a chat colour or the default blue
-    case gradient([UInt])            // 2+ stops, topLeading → bottomTrailing
+    case gradient([UInt])            // 2+ stops, top → bottom (2026-09-27; was topLeading → bottomTrailing)
     case received                    // the flat incoming grey
     /// The page background. `Theme.receivedSurface` returns THIS, not the incoming grey, when
     /// Reduce Transparency is on over a wallpaper — collapsing the two flats into one was a real
@@ -444,8 +444,8 @@ final class BubbleFillView: UIView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         layer.addSublayer(shape)
-        gradient.startPoint = CGPoint(x: 0, y: 0)     // topLeading → bottomTrailing, as SwiftUI draws it
-        gradient.endPoint = CGPoint(x: 1, y: 1)
+        gradient.startPoint = CGPoint(x: 0.5, y: 0)   // top → bottom, as `ChatColorSpec.gradient` draws it
+        gradient.endPoint = CGPoint(x: 0.5, y: 1)
         gradient.mask = gradientMask
         gradient.isHidden = true
         layer.addSublayer(gradient)
