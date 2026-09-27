@@ -108,9 +108,10 @@ final class RowImageView: UIImageView {
         }
     }
 
-    /// Chat photo bubbles set this: Settings › Storage and Data and the automatic size ceiling may
-    /// hold the download until a tap. Reply thumbnails, album placeholders and link previews leave
-    /// it off — they are small and part of reading the message.
+    /// Chat photo bubbles set this, and so does an album's own photo tiles (`AlbumTileView.configure`):
+    /// Settings › Storage and Data and the automatic size ceiling may hold the download until a
+    /// tap, same as a single photo. Reply thumbnails and link previews leave it off — they are
+    /// small and part of reading the message.
     var gated = false
     private var watching: (url: String, id: UUID)?
 
@@ -200,6 +201,10 @@ final class RowAvatarView: UIView {
     private var glyphSize: CGFloat = 0
     private var token = 0
     private var currentUrl: String?
+    /// The url currently being fetched. Without it a reconfigure mid-fetch (a cell reconfigures
+    /// constantly — a tick landing, a reaction, a scroll) looks identical to a fresh one and
+    /// restarts the load. Same pattern as `RowImageView.inFlight` next door.
+    private var inFlight: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -222,11 +227,13 @@ final class RowAvatarView: UIView {
         let mine = token
         guard let photoUrl, !photoUrl.isEmpty else {
             currentUrl = nil
+            inFlight = nil
             imageView.image = nil
             imageView.isHidden = true
             return
         }
         guard photoUrl != currentUrl || imageView.image == nil else { return }
+        guard inFlight != photoUrl else { return }
         currentUrl = photoUrl
 
         // The synchronous seed, for the same reason the SwiftUI avatar takes it: memory starts empty
@@ -241,9 +248,14 @@ final class RowAvatarView: UIView {
         }
         imageView.image = nil
         imageView.isHidden = true
+        inFlight = photoUrl
         Task { @MainActor [weak self] in
             let found = await ProfilePhotoLoader.shared.avatar(photoUrl)
-            guard let self, let found, self.token == mine else { return }
+            guard let self, self.token == mine else { return }
+            // Cleared on a failure too, so a later reconfigure retries instead of finding this
+            // url permanently marked in flight.
+            if self.inFlight == photoUrl { self.inFlight = nil }
+            guard let found else { return }
             self.imageView.image = found
             self.imageView.isHidden = false
             self.imageView.alpha = 0

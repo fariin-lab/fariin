@@ -61,16 +61,47 @@ enum BubbleMetrics {
     /// The bubble RIM only — dividers keep `hairline` above. See `Theme.bubbleRimWidth`.
     static let rimWidth: CGFloat = Theme.bubbleRimWidth
 
-    static let bodyFont = UIFont.systemFont(ofSize: 17)
-    // ⛔ 11pt — owner, 2026-09-26, "my timestamp looks small". The reference app's date font is
-    // floor(chat font × 11/17): 11 at its default 17, which is our body size.
-    static let metaFont = UIFont.systemFont(ofSize: 11)
-    static let metaItalicFont = UIFont.italicSystemFont(ofSize: 11)
-    static let senderNameFont = UIFont.systemFont(ofSize: 12, weight: .semibold)
-    static let forwardedFont = UIFont.italicSystemFont(ofSize: 11)
-    static let quoteNameFont = UIFont.systemFont(ofSize: 12, weight: .semibold)
-    static let quoteTextFont = UIFont.systemFont(ofSize: 12)
-    static let noticeFont = UIFont.systemFont(ofSize: 12, weight: .semibold)   // .caption.weight(.semibold)
+    // ⛔ THE CHAT'S TEXT FOLLOWS THE PHONE'S TEXT SIZE, capped. Every size below is the size at the
+    // default setting, exactly as it was before; Larger Text scales them with the body style, up to
+    // `accessibilityMedium` and never past 1.5x, so a bubble cannot outgrow the screen. The list sets
+    // `contentSizeCategory` from its trait collection (see MessageListController), the fonts are
+    // rebuilt once on a change, and RowPlanStore keys its plans on the same value.
+    static var contentSizeCategory: UIContentSizeCategory = .large {
+        didSet { if contentSizeCategory != oldValue { fonts = ChatFonts(contentSizeCategory) } }
+    }
+    private static var fonts = ChatFonts(.large)
+
+    private struct ChatFonts {
+        let body, meta, metaItalic, senderName, forwarded, quoteName, quoteText, notice: UIFont
+        init(_ category: UIContentSizeCategory) {
+            var c: UIContentSizeCategory = category == .unspecified ? .large : category
+            if c > .accessibilityMedium { c = .accessibilityMedium }
+            let traits = UITraitCollection(preferredContentSizeCategory: c)
+            let metrics = UIFontMetrics(forTextStyle: .body)
+            func s(_ base: CGFloat) -> CGFloat {
+                min(base * 1.5, metrics.scaledValue(for: base, compatibleWith: traits))
+            }
+            body = UIFont.systemFont(ofSize: s(17))
+            // ⛔ 11pt — owner, 2026-09-26, "my timestamp looks small". The reference app's date font
+            // is floor(chat font × 11/17): 11 at its default 17, which is our body size.
+            meta = UIFont.systemFont(ofSize: s(11))
+            metaItalic = UIFont.italicSystemFont(ofSize: s(11))
+            senderName = UIFont.systemFont(ofSize: s(12), weight: .semibold)
+            forwarded = UIFont.italicSystemFont(ofSize: s(11))
+            quoteName = UIFont.systemFont(ofSize: s(12), weight: .semibold)
+            quoteText = UIFont.systemFont(ofSize: s(12))
+            notice = UIFont.systemFont(ofSize: s(12), weight: .semibold)   // .caption.weight(.semibold)
+        }
+    }
+
+    static var bodyFont: UIFont { fonts.body }
+    static var metaFont: UIFont { fonts.meta }
+    static var metaItalicFont: UIFont { fonts.metaItalic }
+    static var senderNameFont: UIFont { fonts.senderName }
+    static var forwardedFont: UIFont { fonts.forwarded }
+    static var quoteNameFont: UIFont { fonts.quoteName }
+    static var quoteTextFont: UIFont { fonts.quoteText }
+    static var noticeFont: UIFont { fonts.notice }
 
     /// The width a row is laid out at. Never `UIScreen` inside a cell: on an iPad in Stage Manager
     /// the list is narrower than the screen, and the sizer and the cell must be handed one number.

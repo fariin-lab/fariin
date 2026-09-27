@@ -1038,7 +1038,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         NotificationCenter.default.addObserver(self, selector: #selector(jumpToNewestRequested),
                                                name: .chatListJumpToNewest, object: nil)
 
+        // The chat's text follows the phone's text size (see BubbleMetrics). Read before the first
+        // plan is made; a change re-measures every row exactly as a width change does.
+        BubbleMetrics.contentSizeCategory = traitCollection.preferredContentSizeCategory
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (vc: MessageListController, _) in
+            vc.textSizeDidChange()
+        }
+
         buildDataSource()
+    }
+
+    /// Larger Text changed. Every plan and height was measured with the old fonts, so they all go,
+    /// through the same reset a width change runs. Each live list runs its own: the font setting is
+    /// shared, but the measured heights are per list.
+    private func textSizeDidChange() {
+        BubbleMetrics.contentSizeCategory = traitCollection.preferredContentSizeCategory
+        let w = collectionView.bounds.width
+        guard w > 0, measuredWidth > 0 else { return }   // nothing measured yet: the first land will
+        // The saved rendered heights were proven at the old text size, so they are not re-read.
+        remeasureAll(width: w, reseedRenderedHeights: false)
     }
 
     /// One live list at a time answers this. A pushed-then-popped thread leaves its controller alive
@@ -1126,11 +1144,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         // Native UIKit row registration (the migration path).
         uikitReg = UICollectionView.CellRegistration<MessageRowCell, String> { [weak self] cell, _, id in
-            guard let self, let m = self.rowModels[id], self.collectionView.bounds.width > 0 else { return }
+            // A forced route (see the router's crash guard) can land here with no model. Blank the
+            // cell rather than leave a recycled one showing another message until the repair.
+            guard let self, let m = self.rowModels[id], self.collectionView.bounds.width > 0 else {
+                cell.blank()
+                return
+            }
             // (The per-row timing that stood here was the 2026-08-30 scroll measurement. It went out
             // with the scroll log on 2026-09-25, the question it asked being answered.)
             let plan = self.planStore.plan(for: m, width: self.collectionView.bounds.width)
             cell.delegate = self
+            cell.reactionGrowsFromBottom = self.reactionGrowsFromBottom
             cell.configure(m, plan: plan, cid: self.cid)
             // Safety net: UIKit rows never report a rendered height (they cannot drift on their own —
             // the plan IS the height), but an OFFSCREEN content change can leave a stale cached
@@ -1950,6 +1974,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// Which way a row that a reaction resized is drawn growing, decided by `refreshVisible` and
+    /// handed to each cell as it is configured. This screen's own, never shared with another chat.
+    private var reactionGrowsFromBottom = true
+
     // Re-measure + reconfigure on-screen rows whose content changed, then let the layout absorb any height
     // change with the reader held still.
     //
@@ -2040,7 +2068,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         // Which way a row that grows from a reaction is drawn growing: up from its bottom when the
         // offset just took the whole growth (reader at the newest), else down from its top.
-        MessageRowView.growsFromBottom = pinBottom && abs(delta - grown) < 1
+        reactionGrowsFromBottom = pinBottom && abs(delta - grown) < 1
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0
@@ -2073,7 +2101,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         guard grown.count == 1, let only = grown.first else { return }
         let source = only.cell, g = only.g
-        let up = MessageRowView.growsFromBottom
+        let up = reactionGrowsFromBottom
         for cell in collectionView.visibleCells where cell !== source {
             let isAbove = cell.frame.minY < source.frame.minY
             guard up ? isAbove : !isAbove else { continue }
@@ -2091,6 +2119,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // The box a load waits in when it cannot land yet. It holds ONE set of ids â€” the latest â€” so a burst
     // of Firestore emissions collapses into a single land instead of a queue of stale ones.
     private var pendingIdsApply: [String]?
+    /// A jump (reply, search result, jump arrow) that arrived while the gate was shut. It waits with
+    /// the parked ids and rides whichever land goes through next, so a jump is held back exactly like
+    /// a load instead of reloading and scrolling under a closing menu or a send glide.
+    private var pendingScrollTarget: String?
+
+    /// Park a jump that cannot land yet. The retry loop is what brings it back: if ids are already
+    /// waiting they carry it, otherwise the current ids are parked as the vehicle (a land of the same
+    /// ids is the "target already loaded" path, which then performs the jump).
+    private func parkScrollTarget(_ target: String) {
+        pendingScrollTarget = target
+        guard pendingIdsApply == nil else { return }
+        pendingIdsApply = currentIds
+        scheduleLandRetry()
+    }
 
     /// the reference app's retry loop: `asyncAfter` takes longer than `async` under load, which is what you want here
     /// â€” it backs off exactly when the CPU is busy. The load lands the instant the block clears.
@@ -2119,18 +2161,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Chronological, as handed to us. Index 0 is the oldest loaded row, the newest is last.
         let ids = unique
         let width = collectionView.bounds.width
+        // A jump parked earlier comes back with whichever land goes through (the retry loop and the
+        // settle flush pass nil). A newer jump wins over a parked one.
+        let scrollTarget = scrollTarget ?? pendingScrollTarget
+        pendingScrollTarget = nil
 
-        if didFirstLand, ids != currentIds, scrollTarget == nil, !canLandLoad {
+        // Jumps are parked like every other load: a jump that pages in history reloads the list and
+        // scrolls, which is the same work the gate holds back for everything else.
+        if didFirstLand, ids != currentIds, !canLandLoad {
             let wasWaiting = pendingIdsApply != nil
             pendingIdsApply = ids
+            if let scrollTarget { pendingScrollTarget = scrollTarget }
             if !wasWaiting { scheduleLandRetry() }
             return
         }
         pendingIdsApply = nil       // an immediate land supersedes anything deferred (ids are the latest)
 
         guard ids != currentIds else {
-            // A jump with no data change (target already in the loaded window).
-            if let target = scrollTarget { performScrollTarget(target) }
             // THE GATE COMES FIRST, INCLUDING FOR THE SELECTION LAND. It used to sit below the selection
             // branch, so entering selection mode was the one update that bypassed every block â€” and it is
             // the single most destructive one to let through, because selection routes every row to the
@@ -2138,6 +2185,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // dismissing destroys the cell the menu is animating back into. (Motion is not a reason to
             // defer anything any more, so the exception it was written for no longer exists.)
             guard canLandLoad else {
+                // A jump with no data change waits for the gate too, and comes back through the retry.
+                if let target = scrollTarget { parkScrollTarget(target) }
                 needsRefreshOnSettle = true
                 // THE CHECKBOXES DO NOT HAVE TO WAIT FOR THE WHOLE MENU (user: "checkbox is coming
                 // late", three times). Selection was blocked wholesale until the context menu had
@@ -2149,6 +2198,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 if selectionAnimationState == .willAnimate { refreshSelectionExceptMenuSource() }
                 return
             }
+            // A jump with no data change (target already in the loaded window), behind the gate.
+            if let target = scrollTarget { performScrollTarget(target) }
             // Selection flip: refresh EVERY live cell, not the signature-diffed subset. Entering or
             // leaving selection changes the render route of every row at once, so a per-row diff is just a
             // slower way of reaching the same answer â€” and any row the diff misses keeps its checkbox
@@ -2368,7 +2419,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale
             self.lastStableOffset = self.collectionView.contentOffset.y
             if let target = scrollTarget {
-                self.performScrollTarget(target)
+                // The land itself passed the gate, but the completion can run later than it: if the
+                // gate shut in between, the jump waits for it rather than scrolling under it.
+                if self.canLandLoad { self.performScrollTarget(target) } else { self.parkScrollTarget(target) }
             } else if glide {
                 startGlide()
             } else if adjustment != 0 {
@@ -3582,9 +3635,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// image, scroll the image down to close it, and the chat comes back to where it sat while the
     /// keyboard was still up.
     ///
-    /// ⚠️ THE IMAGE VIEWER IS NOT INVOLVED. This list is inverted, so `adjustedContentInset.top` is
-    /// visually the BOTTOM edge and the keyboard grows it by its own height (see the Keyboard note
-    /// above). `reportReadingPosition` measures its pair against `contentOffset.y + inset.top`
+    /// ⚠️ THE IMAGE VIEWER IS NOT INVOLVED. When this was written the list was inverted, so
+    /// `adjustedContentInset.top` was visually the BOTTOM edge and the keyboard grew it by its own
+    /// height. The list has been top-down since 2026-08-25: the keyboard now grows the BOTTOM inset
+    /// (see the Keyboard note above), and the rule stands for the same reason, an inset in the pair
+    /// carries the keyboard into the restore. `reportReadingPosition` measures its pair against `contentOffset.y + inset.top`
     /// because it answers a different question — "where should this chat open next time", a place in
     /// the conversation. This pair answers "put this screen back exactly as it was", and it is
     /// captured in `viewWillDisappear`, which fires while the keyboard is STILL UP: opening an image
@@ -3828,26 +3883,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // restored by viewWillTransition's anchor, which brackets this.
         let w = collectionView.bounds.width
         if w > 0, measuredWidth > 0, w != measuredWidth {
-            heights.removeAll(keepingCapacity: true)
-            sizerRefused.removeAll()
-            renderedHeights.removeAll()   // a rendered height is only true at the width it rendered at
-            seededRenderedHeights = false  // ...so the store is re-read for the NEW width
-            // A plan is only true at the width it was planned at, for the same reason.
-            planStore.invalidateAll()
-            for id in currentIds { heights[id] = measure(id, width: w) }
-            measuredWidth = w
-            layout.generation += 1
-            layout.invalidateLayout()
-            let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-            if !visible.isEmpty {
-                var snap = dataSource.snapshot()
-                // Route-flip split here too (build-542 .ips): a width change can arrive with stale
-                // routes, and reconfigure cannot cross cell classes.
-                let split = splitByRouteFlip(visible)
-                if !split.reconfigure.isEmpty { snap.reconfigureItems(split.reconfigure) }
-                queueReload(split.reload, into: &snap)
-                dataSource.apply(snap, animatingDifferences: false)
-            }
+            remeasureAll(width: w, reseedRenderedHeights: true)
+        }
+    }
+
+    /// Drop every measured height and plan, re-measure at `w`, and reconfigure the on-screen cells.
+    /// Run by a width change and by a text-size change: both make every number measured before them
+    /// untrue.
+    private func remeasureAll(width w: CGFloat, reseedRenderedHeights: Bool) {
+        heights.removeAll(keepingCapacity: true)
+        sizerRefused.removeAll()
+        renderedHeights.removeAll()   // a rendered height is only true at the width it rendered at
+        // ...so the store is re-read for the NEW width (not for a new text size: what it holds was
+        // rendered at the old one).
+        if reseedRenderedHeights { seededRenderedHeights = false }
+        // A plan is only true at the width it was planned at, for the same reason.
+        planStore.invalidateAll()
+        for id in currentIds { heights[id] = measure(id, width: w) }
+        measuredWidth = w
+        layout.generation += 1
+        layout.invalidateLayout()
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        if !visible.isEmpty {
+            var snap = dataSource.snapshot()
+            // Route-flip split here too (build-542 .ips): a width change can arrive with stale
+            // routes, and reconfigure cannot cross cell classes.
+            let split = splitByRouteFlip(visible)
+            if !split.reconfigure.isEmpty { snap.reconfigureItems(split.reconfigure) }
+            queueReload(split.reload, into: &snap)
+            dataSource.apply(snap, animatingDifferences: false)
         }
     }
 

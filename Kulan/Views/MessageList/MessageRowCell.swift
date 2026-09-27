@@ -54,6 +54,12 @@ final class MessageRowCell: UICollectionViewCell {
     /// uses it to move the rest of the conversation along with the bubble.
     func takeReactionGrowth() -> CGFloat { rowView.takeReactionGrowth() }
 
+    /// Which way a reaction resize grows this row, set by the owning list before it configures.
+    var reactionGrowsFromBottom: Bool {
+        get { rowView.growsFromBottom }
+        set { rowView.growsFromBottom = newValue }
+    }
+
     /// The rect the long-press menu should lift, in window coordinates. Wider than the bubble when
     /// reactions hang off its corner: lifting the bubble alone slices the badge in half.
     var liftFrameInWindow: CGRect {
@@ -81,10 +87,22 @@ final class MessageRowCell: UICollectionViewCell {
 
     // MARK: - Configure
 
+    /// Draw nothing. For a cell served on a forced route that has no model to configure it with: a
+    /// recycled cell would otherwise show the last message it drew until the route repair reloads
+    /// it one runloop later.
+    func blank() {
+        rowId = nil
+        model = nil
+        rowView.isHidden = true
+        accessibilityLabel = nil
+        accessibilityValue = nil
+    }
+
     func configure(_ m: MessageRowModel, plan: RowPlan, cid: String) {
         let previous = model
         rowId = m.id
         model = m
+        rowView.isHidden = false   // undo `blank()`
         rowView.frame = CGRect(origin: .zero, size: CGSize(width: plan.width, height: plan.height))
 
         // ⛔ THE ANIMATION IS DECIDED BY THE MODEL, NOT BY WHAT THIS CELL DREW LAST.
@@ -268,7 +286,9 @@ final class MessageRowCell: UICollectionViewCell {
                 // comparison changes — so without it the row repainted at its old frame and the
                 // rows below it were laid out over the gap.
                 && x.storyReply == y.storyReply
-                && x.forwarded == y.forwarded && x.reactions.count == y.reactions.count
+                // The whole chip, not only how many: a second person on the same emoji swaps the
+                // face for a count, which changes the chip's width and can wrap the footer.
+                && x.forwarded == y.forwarded && x.reactions == y.reactions
                 && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
                 // The countdown is drawn over the footer and adds no size, so a change to it is

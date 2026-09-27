@@ -170,8 +170,10 @@ struct ThreadView: View {
     @State private var previewProgress: Double = 0
     @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
+    @State private var holdHintDismiss: DispatchWorkItem?   // cancels a superseded flash's own timer (audit)
     @State private var voiceViewOnce = false        // "1" armed on the recording bar → send as one-time listen
     @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
+    @State private var voiceOnceDismiss: DispatchWorkItem?   // cancels a superseded toast's own timer (audit)
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
@@ -322,6 +324,12 @@ struct ThreadView: View {
         // typing broadcast on every chat open with an empty draft (audit).
         if input != s { typingBox.suppressNext = true }
         input = s
+        // A stale @mention can notify the wrong person (audit): mentionMap used to be cleared only
+        // on send, so a pick made before a cancelled edit / draft restore / reply-cancels-edit swap
+        // stayed on file and could resurface if the same name was ever typed by hand again. Every
+        // programmatic replacement of the composer's content invalidates it — a plain-text draft is
+        // just text until a name is picked again.
+        mentionMap = [:]
     }
 
     private func broadcastTyping(_ v: Bool) {
@@ -1010,7 +1018,8 @@ struct ThreadView: View {
     /// hangs from the keyboard. Their blocking and error panels pin to the screen bottom, and ours
     /// stay in SwiftUI for the same reason — there is no keyboard when you cannot type.
     private var canShowComposer: Bool {
-        !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
+        !preview
+            && !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming && requestStance != .awaitingReply
             && !cannotMessageThem
             && !otherAccountDeleted   // 2026-09-24 decision D15
@@ -1895,10 +1904,11 @@ struct ThreadView: View {
             // that expired before a slow chat finished loading let the WHOLE opening batch slide/fade in
             // ("the chat animates open"). Tied to the reveal, the opening batch always just appears.
             settled = false
-            if isGroup || !cid.contains("_") { startGroupCallListener() }
-            // A preview is a glance, not an open: none of what follows (banner suppression, clearing
-            // notifications, the unread reset and the read receipt) may happen from it.
+            // A preview is a glance, not an open: none of what follows (the call listener, banner
+            // suppression, clearing notifications, the unread reset and the read receipt) may happen
+            // from it.
             if !preview {
+            if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
             // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
@@ -2489,6 +2499,7 @@ struct ThreadView: View {
                 onEdit: { m in
                     withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                     input = m.text
+                    mentionMap = [:]   // a stale pick from before must not resurface (audit)
                     inputFocused = true
                 },
                 onReactMore: { morePickerTarget = $0 },
@@ -2966,6 +2977,7 @@ struct ThreadView: View {
             items.append(UIAction(title: "Edit", image: UIImage(systemName: "pencil")) { _ in
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 input = m.text
+                mentionMap = [:]   // a stale pick from before must not resurface (audit)
                 inputFocused = true
             })
         }
@@ -3128,6 +3140,7 @@ struct ThreadView: View {
             out.append(CMAction(title: "Edit", icon: "pencil") {
                 withAnimation(.easeInOut(duration: 0.2)) { editingMessage = m; replyingTo = nil }
                 input = m.text
+                mentionMap = [:]   // a stale pick from before must not resurface (audit)
                 inputFocused = true
             })
         }
@@ -4635,6 +4648,8 @@ struct ThreadView: View {
         Task { await sendDocument(url) }
     }
     private func sendDocument(_ url: URL) async {
+        // Demo: as sendPhoto — no local representation for media, so no-op (audit).
+        if DemoMode.isDemoConversation(cid) { return }
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         // Check the size BEFORE materializing the whole file (attributes, not a full read).
@@ -4730,7 +4745,10 @@ struct ThreadView: View {
     // 2026-09-24 decision D-composer-5: at the CARET, not the end of the whole text, so a mention
     // can be added to a message already written. With no caret report yet it is the end, as before.
     private var mentionQuery: String? {
-        guard isGroup else { return nil }
+        // Hidden while editing (audit): editMessage carries no mention/notify path, so a name picked
+        // here would silently never notify anyone — better to not offer the picker at all than to
+        // let it look like it did something.
+        guard isGroup, editingMessage == nil else { return nil }
         let head = mentionSplit.head
         guard let r = head.range(of: "@[^\\s@]*$", options: .regularExpression) else { return nil }
         return String(head[r].dropFirst())
@@ -4811,7 +4829,7 @@ struct ThreadView: View {
         // in a real chat is completely untouched by this — without it, a message typed into a demo
         // chat would be encrypted and sent to a person who does not exist.
         if DemoMode.isDemoConversation(cid) {
-            input = ""; typingSent = false
+            input = ""; typingSent = false; mentionMap = [:]
             repo.addDemoMessage(text, from: me)
             return
         }
@@ -5115,6 +5133,8 @@ struct ThreadView: View {
     }
 
     private func sendOneAlbum(_ datas: [Data], caption: String) async {
+        // Demo: as sendPhoto — no local representation for media, so no-op (audit).
+        if DemoMode.isDemoConversation(cid) { return }
         let previews = datas.map { ChatService.downscaledJPEG($0) }
         let clientId = UUID().uuidString
         await MainActor.run {
@@ -5152,7 +5172,13 @@ struct ThreadView: View {
         // The document, if the send got as far as committing one. `announcedId` is the send's own
         // record; `m.id` covers a row that has already reconciled to the server copy, where the
         // row id stays the clientId and `id` has become the document's.
-        let announced = MediaSend.shared.announcedId(clientId) ?? (m.id == clientId ? nil : m.id)
+        //
+        // ONLY WHILE STILL `.sending` (audit): `announcedId` also comes back nil once a send has
+        // ALREADY finished (MediaSend.finish clears it) — at that point `m.id` is a real, DELIVERED
+        // message, and falling back to it here would hard-delete it via `cancelAnnounced` instead of
+        // doing nothing, for a Cancel tapped at the exact moment the send landed.
+        let announced = MediaSend.shared.announcedId(clientId)
+            ?? (m.sendState == .sending && m.id != clientId ? m.id : nil)
         if let announced {
             Task { await ChatService.cancelAnnounced(cid: cid, messageId: announced) }
         }
@@ -5188,6 +5214,13 @@ struct ThreadView: View {
     /// on the Send tap) and this call must adopt it rather than post a second one.
     private func sendMixedGroup(_ ordered: [SendMedia], caption: String, hd: Bool,
                                 clientId posted: String? = nil) async {
+        // Demo: as sendPhoto — no local representation for media, so no-op. Still retire a bubble the
+        // attach sheet already posted, or it would sit "sending" forever with nothing left to resolve
+        // it (audit).
+        if DemoMode.isDemoConversation(cid) {
+            if let posted { await MainActor.run { repo.removePending(clientId: posted) } }
+            return
+        }
         // A lone item → the normal single-media send (keeps the existing UX). That path posts its own
         // bubble, so retire the group bubble first — otherwise it would sit "sending" forever (this
         // happens when several were picked but only one survived the resolve).
@@ -5244,11 +5277,26 @@ struct ThreadView: View {
                 }
                 sendItems.append(.image(d))
             case .video(let url, let thumb, let duration):
-                guard let prepared = await VideoTranscoder.prepare(url, hd: hd) else {
+                // Same size check + standard-quality retry as the single-video path (audit): without
+                // it a mixed album could ship a video the server would refuse, or refuse the whole
+                // group for no visible reason.
+                var exported = await VideoTranscoder.prepare(url, hd: hd)
+                if hd, let big = exported, big.data.count > Limits.videoMessageBytes {
+                    exported = await VideoTranscoder.prepare(url, hd: false)
+                }
+                guard let prepared = exported else {
+                    try? FileManager.default.removeItem(at: url)   // audit: else left this temp file behind
                     await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't process one of the videos." }
                     return
                 }
                 try? FileManager.default.removeItem(at: url)
+                guard prepared.data.count <= Limits.videoMessageBytes else {
+                    await MainActor.run {
+                        repo.markFailed(clientId: clientId)
+                        sendError = "One of the videos is \(prepared.data.count / 1_048_576) MB, and the most that can be sent is \(Limits.videoMessageBytes / 1_048_576) MB. Try a shorter clip."
+                    }
+                    return
+                }
                 let thumbData = thumb.jpegData(compressionQuality: 0.8) ?? prepared.thumbnail
                 sendItems.append(.video(prepared.data, thumbnail: thumbData,
                                         duration: duration > 0 ? duration : prepared.duration,
@@ -5270,6 +5318,10 @@ struct ThreadView: View {
     }
 
     private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
+        // Demo: no local representation for media (repo.addDemoMessage, used by send()/sendMarker(),
+        // is text-only), so short-circuit rather than run a real upload against a person who does
+        // not exist — it would only hang or fail (audit).
+        if DemoMode.isDemoConversation(cid) { return }
         let preview = ChatService.downscaledJPEG(data)
         let size = UIImage(data: preview)?.size ?? CGSize(width: 1, height: 1)
         let clientId = UUID().uuidString
@@ -5287,8 +5339,11 @@ struct ThreadView: View {
             repo.addPending(pending)
             withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         }
-        do { try await ChatService.sendImage(cid: cid, data: data, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption) }
-        catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+        // Registered like sendOneAlbum, so Cancel Sending can actually stop this upload instead of
+        // letting it run to completion in the background (audit).
+        await runRegisteredSend(clientId) {
+            try await ChatService.sendImage(cid: cid, data: data, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce, caption: caption)
+        }
     }
 
     // Save a chat photo to the camera roll (decrypts if needed) with a success haptic.
@@ -5918,6 +5973,12 @@ struct ThreadView: View {
     // Transcode → optimistic thumbnail bubble → E2EE upload (ChatService.sendVideo keeps
     // the sender's copy on-device; the recipient's player deletes the server object).
     private func sendVideo(from url: URL, caption: String = "", hd: Bool = false) async {
+        // Demo: as sendPhoto — no local representation for media, so no-op (audit). Still clean up
+        // the picked/recorded clip, which every other exit from this function also does.
+        if DemoMode.isDemoConversation(cid) {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
         // THE BUBBLE COMES FIRST, BEFORE THE TRANSCODE. It used to come after: this function awaited
         // `VideoTranscoder.prepare` and only then had a thumbnail to draw with, so tapping send on a
         // video did nothing visible for as long as the compression took — the owner timed it at 3.88
@@ -5954,6 +6015,11 @@ struct ThreadView: View {
         // bubble that spins for ever — hence the `cancelAnnounced` on every exit path from here on.
         // Declared without a value and assigned in the `do`: the `catch` returns, so by the line
         // after it this is definitely a real id and never an optional to unwrap.
+        //
+        // Registered like sendOneAlbum, so Cancel Sending can actually reach in and stop the upload
+        // below instead of letting it run to completion in the background (audit): before this,
+        // `MediaSend.cancel` had no task to cancel for a single photo or video.
+        await runRegisteredSend(clientId) {
         let announcedId: String
         do {
             announcedId = try await ChatService.announceVideo(
@@ -5965,9 +6031,10 @@ struct ThreadView: View {
             // nothing to clean up, and the transcode below would only be wasted work.
             print("announceVideo failed:", error)
             try? FileManager.default.removeItem(at: url)
+            let cancelled = await MediaSend.shared.wasCancelled(clientId)
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
-                sendError = "Couldn't send the video. \(error.localizedDescription)"
+                if !cancelled { sendError = "Couldn't send the video. \(error.localizedDescription)" }
             }
             return
         }
@@ -5996,19 +6063,26 @@ struct ThreadView: View {
             // The bubble is already on screen, so a failure has to be shown ON it. Before this the
             // function could return with only an alert, which would have been correct when nothing
             // had been drawn yet and is not correct now.
-            await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't process this video." }
+            let cancelled = await MediaSend.shared.wasCancelled(clientId)
+            await MainActor.run {
+                repo.markFailed(clientId: clientId)
+                if !cancelled { sendError = "Couldn't process this video." }
+            }
             return
         }
         try? FileManager.default.removeItem(at: url)
         guard prepared.data.count <= Limits.videoMessageBytes else {
             await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)
+            let cancelled = await MediaSend.shared.wasCancelled(clientId)
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
                 // Says the actual size it reached, because "too long" was misleading: the owner's
                 // clip was 18 seconds. Length is not what fails, weight is, and a 60fps 1080p clip
                 // is heavy at any length. By the time this shows, the standard-quality retry above
                 // has already been tried, so there is genuinely nothing smaller left to offer.
-                sendError = "This video is \(prepared.data.count / 1_048_576) MB, and the most that can be sent is \(Limits.videoMessageBytes / 1_048_576) MB. Try a shorter clip."
+                if !cancelled {
+                    sendError = "This video is \(prepared.data.count / 1_048_576) MB, and the most that can be sent is \(Limits.videoMessageBytes / 1_048_576) MB. Try a shorter clip."
+                }
             }
             return
         }
@@ -6031,11 +6105,16 @@ struct ThreadView: View {
             // it, since the one fact that would identify the cause was thrown away at the moment it
             // was known. An 18s clip failing while a 7s clip in the same chat minutes later
             // succeeded is exactly the case this silence made impossible to diagnose.
-            print("sendVideo failed:", error)
+            //
+            // A CANCEL lands here too (aborting the upload throws), and is not a real failure: the
+            // bubble is already gone (Cancel Sending removed it), so say nothing.
+            let cancelled = await MediaSend.shared.wasCancelled(clientId)
+            if !cancelled { print("sendVideo failed:", error) }
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
-                sendError = "Couldn't send the video. \(error.localizedDescription)"
+                if !cancelled { sendError = "Couldn't send the video. \(error.localizedDescription)" }
             }
+        }
         }
     }
 
@@ -6076,6 +6155,7 @@ struct ThreadView: View {
                             .frame(width: 32, height: 32).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Clear")   // audit: an icon-only button had nothing for VoiceOver
                 }
             }
             .padding(.horizontal, 12).frame(height: 44)   // substantial native search field (matches the X)
@@ -6088,6 +6168,7 @@ struct ThreadView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close search")   // audit: an icon-only button had nothing for VoiceOver
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
     }
@@ -6950,9 +7031,12 @@ struct ThreadView: View {
             voiceViewOnce.toggle()
             if voiceViewOnce {
                 withAnimation(.easeOut(duration: 0.2)) { voiceOnceToast = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                    withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false }
-                }
+                // Cancel any earlier toast's own dismiss (audit): toggling off then on again inside
+                // 1.6s used to leave the FIRST timer standing, hiding the RE-shown toast early.
+                voiceOnceDismiss?.cancel()
+                let work = DispatchWorkItem { withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false } }
+                voiceOnceDismiss = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
             }
         }
         return a
@@ -6985,6 +7069,8 @@ struct ThreadView: View {
     /// the send glide to the newest message. GIF was the one send type without an optimistic bubble:
     /// it only appeared on the server echo, which never scrolled.
     private func sendGif(_ gif: GiphyService.Gif) {
+        // Demo: as sendPhoto — no local representation for media, so no-op (audit).
+        if DemoMode.isDemoConversation(cid) { return }
         let clientId = UUID().uuidString
         // A GIF sent while replying carries the reply and clears the bar, like text/photo/voice.
         // It was the only send path that did neither: the quote was silently dropped and then LEFT
@@ -7357,9 +7443,12 @@ struct ThreadView: View {
     }
     private func flashHoldHint() {
         withAnimation(.easeOut(duration: 0.2)) { holdHint = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            withAnimation(.easeIn(duration: 0.25)) { holdHint = false }
-        }
+        // Cancel any earlier flash's own dismiss (audit): back-to-back accidental taps used to leave
+        // the FIRST timer standing, which could hide the hint from the SECOND flash early.
+        holdHintDismiss?.cancel()
+        let work = DispatchWorkItem { withAnimation(.easeIn(duration: 0.25)) { holdHint = false } }
+        holdHintDismiss = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
     }
     // Through the shared, kept-warm generators. These used to build a generator, fire it and drop
     // it, which is the pattern Apple's documentation warns against: the engine is asleep, waking it
@@ -7382,6 +7471,9 @@ struct ThreadView: View {
         // finish the segment files are already cleaned and stale meta must not resurrect them.
         defer { AudioRecorder.discardDraft(cid) }
         guard let (data, dur, meteredWf) = await recorder.finish() else { return }
+        // Demo: as sendPhoto — no local representation for media, so no-op. The recording session
+        // has already been torn down cleanly above; there is simply nothing left to send (audit).
+        if DemoMode.isDemoConversation(cid) { return }
         let wf = reviewedBars.isEmpty ? meteredWf : reviewedBars
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
         // recording), then reconcile when the upload echoes back — no dead lag on release.
@@ -7576,8 +7668,10 @@ private struct SelectionToolbar: UIViewRepresentable {
         let trash = UIBarButtonItem(image: UIImage(systemName: "trash"),
                                     style: .plain, target: c, action: #selector(Coordinator.delete))
         trash.tintColor = .systemRed
+        trash.accessibilityLabel = "Delete"   // audit: an icon-only bar button had nothing for VoiceOver
         let fwd = UIBarButtonItem(image: UIImage(systemName: "arrowshape.turn.up.right"),
                                   style: .plain, target: c, action: #selector(Coordinator.forward))
+        fwd.accessibilityLabel = "Forward"   // audit: an icon-only bar button had nothing for VoiceOver
         let labelItem = UIBarButtonItem(customView: c.label)
         labelItem.isEnabled = false        // a caption, not a control — theirs disables it too
         bar.items = [trash, .flexibleSpace(), labelItem, .flexibleSpace(), fwd]
@@ -8240,11 +8334,15 @@ struct MessageBubble: View, Equatable {
                     // 0.8s; a normal send flips to ✓ inside that window and the clock is never
                     // seen. Only a send still pending after the window shows it — the honest
                     // slow-network indicator, which is all the clock was ever for.
-                    PendingClockGlyph(bornAt: message.createdAt)
+                    // .id keyed by the message's stable client id (audit): @State inside a struct
+                    // View is otherwise kept by SwiftUI's identity matching, which is positional in
+                    // this switch — a reused row slot could keep the PREVIOUS message's `showClock`
+                    // and skip the grace window for a send that had only just started.
+                    PendingClockGlyph(bornAt: message.createdAt).id(message.clientId ?? message.id)
                 case .failed:
                     Image(systemName: "exclamationmark.circle.fill").font(.system(size: 10)).foregroundStyle(.red)
                 case nil where editPending:
-                    PendingClockGlyph(bornAt: .distantPast)   // 2026-09-24 feature-audit: edit in flight
+                    PendingClockGlyph(bornAt: .distantPast).id(message.clientId ?? message.id)   // 2026-09-24 feature-audit: edit in flight
                 case nil:
                     // Overlapping pair, same spacing as the chat list's ticks.
                     HStack(spacing: -2.5) {
@@ -8313,6 +8411,43 @@ struct MessageBubble: View, Equatable {
         var dw = maxW, dh = dw / aspect
         if dh > maxH { dh = maxH; dw = dh * aspect }
         return CGSize(width: dw, height: dh)
+    }
+
+    /// The delivered photo bubble's box: screen-relative width, the 2026-08-20 portrait boost, the
+    /// caption min-width floor, and the anti-upscale clamp. Factored out of the delivered-image
+    /// branch (audit) so the RECEIVING SIDE'S pending placeholder can use the exact same math —
+    /// before this it drew at the fixed `imageDisplaySize` cap instead, and the bubble visibly
+    /// changed size the instant the upload finished (a 191x340 placeholder becoming a 197x351 photo).
+    private func deliveredImageBox(hasCaption: Bool) -> CGSize {
+        let boxMax = min(maxBubbleWidth, 350)   // max media message width cap
+        let aspect: CGFloat = {
+            guard let w = message.width, let h = message.height, w > 0, h > 0 else { return 1 }
+            return min(max(CGFloat(w / h), 0.35), 2.857)
+        }()
+        // Caption min-width floor: single-line caption width + 2×12pt text insets, capped at the box.
+        let minW: CGFloat = hasCaption
+            ? min(boxMax, (message.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24)
+            : 0
+        // Portrait boost: see the delivered-image branch for the full reasoning (owner, 2026-08-20).
+        let maxH = boxMax * 1.3
+        let comfortW = maxH * (9.0 / 16.0)
+        var h = boxMax
+        var w = h * aspect
+        if w < comfortW {
+            h = min(maxH, comfortW / aspect)
+            w = h * aspect
+        }
+        w = max(w, minW)
+        if w > boxMax { w = boxMax; h = w / aspect }
+        // Anti-upscale: never enlarge a tiny original (but never drop below 150pt either).
+        if let sw = message.width, let sh = message.height {
+            let srcShort = CGFloat(min(sw, sh)), dispShort = min(w, h)
+            if dispShort > srcShort, dispShort > 150 {
+                let f = max(150, srcShort) / dispShort
+                w *= f; h *= f
+            }
+        }
+        return CGSize(width: w.rounded(), height: h.rounded())
     }
 
     /// Video bubble box. Same as `imageDisplaySize`, plus the PHOTO path's caption min-width floor.
@@ -8874,11 +9009,14 @@ struct MessageBubble: View, Equatable {
             // THE PHOTO IS ON ITS WAY. Only the recipient ever reaches this: the sender keeps their
             // own local copy until the upload lands (ThreadRepository.refreshItems).
             //
-            // ⚠️ It uses `imageDisplaySize`, exactly like the finished bubble, and the sender writes
-            // the real pixel width and height in the FIRST write for that reason. The placeholder is
+            // ⚠️ It uses `deliveredImageBox`, exactly like the finished bubble (audit: this used to
+            // call the fixed-cap `imageDisplaySize` instead, which is NOT the same box, and the
+            // bubble visibly resized the instant the upload finished), and the sender writes the
+            // real pixel width and height in the FIRST write for that reason. The placeholder is
             // therefore the same size and shape as the photo that replaces it, so nothing in the
             // list moves or re-measures when the media arrives — which is the whole reason this is a
             // sibling branch of the image bubble rather than a smaller stand-in.
+            let box = deliveredImageBox(hasCaption: !message.text.isEmpty)
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 ZStack {
@@ -8898,7 +9036,7 @@ struct MessageBubble: View, Equatable {
                         .padding(8)
                         .background(.black.opacity(0.28), in: Circle())
                 }
-                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                .frame(width: box.width, height: box.height)
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
                     metaRow.padding(.horizontal, 7).padding(.vertical, 3)
@@ -9095,64 +9233,12 @@ struct MessageBubble: View, Equatable {
             // floor (it never stretches or distorts the media beyond that), tiny originals never upscale,
             // and the caption wraps at the bubble width with 12pt insets.
             let hasCaption = !message.text.isEmpty
-            let box: CGSize = {
-                let boxMax = min(maxBubbleWidth, 350)   // max media message width cap
-                let aspect: CGFloat = {
-                    guard let w = message.width, let h = message.height, w > 0, h > 0 else { return 1 }
-                    return min(max(CGFloat(w / h), 0.35), 2.857)
-                }()
-                // Caption min-width floor: single-line caption width + 2×12pt text insets, capped at the box.
-                // MEASURED AT 17, the size the caption actually renders at below — it used to measure at
-                // 15, so every floor came out ~12% short and a caption that would have fitted on one line
-                // wrapped early, leaving the dead space at the end of the line the user photographed.
-                let minW: CGFloat = hasCaption
-                    ? min(boxMax, (message.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24)
-                    : 0
-                // ⛔ A PORTRAIT PHOTO MAY RUN TALLER THAN THE BOX IS WIDE (owner, 2026-08-20, with
-                // the two side-by-side shots).
-                //
-                // `h = boxMax` pinned every image's height to the WIDTH cap, so the taller the
-                // picture the narrower the bubble: a phone screenshot at 9:19.5 came out about 140pt
-                // across on his screen — a stamp beside the same photo in the reference. Landscape
-                // never noticed, because it clamps on width one line below and always did.
-                //
-                // 1.3 rather than a free rein: the bubble still has to read as a message in a list
-                // and not as a full-screen page, and a picture that keeps growing pushes the rest of
-                // the conversation off the screen.
-                // ⚠️ AND THE EXTRA HEIGHT IS EARNED, NOT GIVEN TO EVERY PORTRAIT (owner, 2026-08-20:
-                // "keep the 9:16 images exactly as they are … for all other image aspect ratios, do
-                // not enlarge them").
-                //
-                // The first version of this fix was `aspect < 1 ? tallMax : boxMax`, which handed
-                // the full 1.3 to ANY picture taller than it is wide. A 3:4 photo does not have the
-                // problem this exists to solve — at `h = boxMax` it is already 0.75 of the box
-                // across, a perfectly good bubble — and it came out a third larger for no reason.
-                //
-                // The rule is width, not orientation: start at the height every image has always
-                // had, and only grow one that would otherwise be too NARROW to read. `comfortW` is
-                // the width a 9:16 has today at the 1.3 cap, so 9:16 lands on exactly the size he
-                // approved, anything taller is capped there, anything between ramps smoothly, and
-                // 3:4, square and every landscape ratio are left exactly as they were.
-                let maxH = boxMax * 1.3
-                let comfortW = maxH * (9.0 / 16.0)
-                var h = boxMax
-                var w = h * aspect
-                if w < comfortW {
-                    h = min(maxH, comfortW / aspect)
-                    w = h * aspect
-                }
-                w = max(w, minW)
-                if w > boxMax { w = boxMax; h = w / aspect }
-                // Anti-upscale: never enlarge a tiny original (but never drop below 150pt either).
-                if let sw = message.width, let sh = message.height {
-                    let srcShort = CGFloat(min(sw, sh)), dispShort = min(w, h)
-                    if dispShort > srcShort, dispShort > 150 {
-                        let f = max(150, srcShort) / dispShort
-                        w *= f; h *= f
-                    }
-                }
-                return CGSize(width: w.rounded(), height: h.rounded())
-            }()
+            // ⛔ A PORTRAIT PHOTO MAY RUN TALLER THAN THE BOX IS WIDE (owner, 2026-08-20, with
+            // the two side-by-side shots), and the caption reserves only a min-width floor — see
+            // `deliveredImageBox` for the full reasoning. Factored out (audit) so the pending
+            // placeholder on the receiving side sizes identically and the bubble does not visibly
+            // change size the instant the upload finishes.
+            let box: CGSize = deliveredImageBox(hasCaption: hasCaption)
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 VStack(alignment: .leading, spacing: 0) {
@@ -9430,86 +9516,6 @@ struct MessageBubble: View, Equatable {
     // Album MOSAIC (not a uniform grid): 2 = side-by-side (or stacked when the shots are
     // wide), 3 = one large + two stacked, 4 = 2×2, 5+ = 2×2 with a "+N" on the last. Photos crop-to-fill
     // their cells; the caption rides below in the SAME bubble (handled by the album branch).
-    // Portrait card for the stacked-album look (4:5, capped to the bubble width).
-    private var albumCardSize: CGSize {
-        let w = min(maxBubbleWidth * 0.70, 228)
-        return CGSize(width: w, height: (w * 1.16).rounded())
-    }
-
-    // ONE photo card: image cropped to Apple continuous ("squircle") rounded corners, NO border, with a soft
-    // shadow so the stacked cards separate. Each card is its own zoom-hero source (matches the viewer covers).
-    private func albumCard(_ i: Int, _ size: CGSize) -> some View {
-        albumImage(i)
-            .frame(width: size.width, height: size.height)
-            .overlay {
-                if albumItemIsVideo(i) {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: min(size.width, size.height) * 0.22))
-                        .foregroundStyle(.white.opacity(0.95)).shadow(color: .black.opacity(0.4), radius: 3)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
-            // Album tiles reported a hero anchor but never a LIVE RECT, so drag-closing an album
-            // photo had no destination: the copy drifted off into nothing instead of flying back
-            // to its tile, which is what single photos have done all along.
-            // 22 = the tile's own clip radius above; the modifier's 14 default made the copy land on a
-            // rounder shape than the tile it was flying into.
-            .modifier(MediaRectReporter(id: "\(message.id)-\(i)", scope: .chat, cornerRadius: 22))
-    }
-
-    // The image/poster content of an album item (local optimistic bytes, else the decrypted remote photo).
-    @ViewBuilder private func albumImage(_ i: Int) -> some View {
-        if !message.localAlbum.isEmpty, message.localAlbum.indices.contains(i), let ui = UIImage(data: message.localAlbum[i]) {
-            Image(uiImage: ui).resizable().scaledToFill()
-        } else if message.album.indices.contains(i) {
-            let it = message.album[i]
-            // The message carries ONE blur hash, taken from the first tile, so only the first tile
-            // can honestly use it. Giving every tile the first one's blur would show people a sketch
-            // of the wrong photo, which is worse than a plain hold.
-            SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid,
-                            placeholderHash: i == 0 ? message.blurhash : nil,
-                            placeholderImage: i == 0 ? message.previewImage : nil)
-        } else {
-            Rectangle().fill(Color.gray.opacity(0.18))
-        }
-    }
-
-    // Stacked / fanned cards. 2–3 photos FAN OUT (front card centered, the rest tilted behind, peeking left/
-    // right); 4+ form a DECK (up to 4 cards, subtle alternating rotation + outward offset for depth). Front
-    // card is always the first photo, on top. Tapping the stack opens the full album gallery.
-    @ViewBuilder private func albumStack(_ n: Int) -> some View {
-        let s = albumCardSize
-        ZStack {
-            if n <= 2 {
-                // Peek the back card INWARD (away from the screen edge the bubble hugs) so its tilted
-                // corner is never clipped: my messages hug the right → back card leans left; received hug
-                // the left → back card leans right.
-                if n == 2 { albumCard(1, s).rotationEffect(.degrees(isMe ? -7 : 7)).offset(x: isMe ? -18 : 18, y: 6) }
-                albumCard(0, s)
-            } else if n == 3 {
-                // Loose organic fan (reference): two cards spread UP-and-OUT behind, tilted; the front card
-                // sits lower-center with a slight lean, overlapping both.
-                albumCard(1, s).rotationEffect(.degrees(-14)).offset(x: -30, y: -14)   // back left
-                albumCard(2, s).rotationEffect(.degrees(8)).offset(x: 34, y: -6)       // back right
-                albumCard(0, s).rotationEffect(.degrees(3)).offset(x: 2, y: 16)        // front, on top
-            } else {
-                let visible = min(n, 4)
-                ForEach(Array((1..<visible).reversed()), id: \.self) { i in
-                    let dir: CGFloat = (i % 2 == 1) ? -1 : 1
-                    albumCard(i, s)
-                        .rotationEffect(.degrees(Double(dir) * (5 + Double(i) * 1.5)))
-                        .offset(x: dir * CGFloat(16 + i * 5), y: CGFloat(-6 - i * 2))
-                }
-                albumCard(0, s)                                    // front, on top
-            }
-        }
-        .padding(.horizontal, n <= 2 ? 16 : 46)   // room for the tilt/peek so it isn't clipped by neighbors
-        .padding(.vertical, n <= 2 ? 12 : 30)
-        .contentShape(Rectangle())
-        .onTapGesture { if message.sendState == nil { openAlbumItem(0) } }
-    }
-
     // THE MOSAIC, driven by the photos' real shapes (MediaGroupLayout, which is the reference app's algorithm
     // written as our own code — see that file's header).
     //
@@ -9653,7 +9659,10 @@ struct MessageBubble: View, Equatable {
         // overflow tile, whose whole meaning is "there is more to see than this grid".
         .onTapGesture {
             guard message.sendState == nil else { return }
-            if message.album.count > 10 || extra > 0 { onOpenAlbum(message) }
+            // The VISIBLE count (audit): `message.album.count` ignores items hidden by "Delete for
+            // Me", so an 11-photo album with one hidden down to 10 visible still forced the list
+            // sheet even though the mosaic shows every remaining tile with no "+N" overflow.
+            if visibleAlbumIndices.count > 10 || extra > 0 { onOpenAlbum(message) }
             else { openAlbumItem(i) }
         }
     }

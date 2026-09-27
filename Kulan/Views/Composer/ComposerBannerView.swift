@@ -57,6 +57,7 @@ final class ComposerBannerView: UIView {
         foot.lineBreakMode = .byTruncatingTail
         addSubview(foot)
         close.icon.tintColor = .secondaryLabel
+        close.accessibilityLabel = "Dismiss"
         close.addAction(UIAction { [weak self] _ in self?.onClose() }, for: .touchUpInside)
         addSubview(close)
         divider.backgroundColor = .separator
@@ -67,15 +68,30 @@ final class ComposerBannerView: UIView {
 
     // MARK: - Size
 
+    /// What `configure` will size `detail` to, worked out from the banner alone (no live view yet).
+    private static func detailHeight(for b: ChatComposerBanner) -> CGFloat {
+        switch b.detail {
+        case .text(let t):
+            guard !t.isEmpty else { return 0 }
+            return ceil((b.style == .link ? M.caption2 : M.caption).lineHeight)
+        case .labelled:
+            return ceil(M.caption.lineHeight)
+        case .voice:
+            return ceil(max(M.caption2.lineHeight, 14))
+        }
+    }
+
     private static func contentHeight(for b: ChatComposerBanner) -> CGFloat {
+        // The text column: title, then the detail row, then the footnote — any style can carry a
+        // footnote (only the link card does today), so this is not just the `.link` case.
+        var text = ceil(M.title.lineHeight)
+        let detailH = detailHeight(for: b)
+        if detailH > 0 { text += 2 + detailH }
+        if b.footnote != nil { text += 2 + ceil(M.caption2.lineHeight) }
         switch b.style {
-        case .reply: return b.thumb != nil ? M.thumb : M.barH
-        case .edit:  return M.barH
-        case .link:
-            var text = ceil(M.title.lineHeight)
-            if case .text(let d) = b.detail, !d.isEmpty { text += 2 + ceil(M.caption2.lineHeight) }
-            if b.footnote != nil { text += 2 + ceil(M.caption2.lineHeight) }
-            return max(b.thumb != nil ? M.linkThumb : 0, text)
+        case .reply: return max(b.thumb != nil ? M.thumb : M.barH, text)
+        case .edit:  return max(M.barH, text)
+        case .link:  return max(b.thumb != nil ? M.linkThumb : 0, text)
         }
     }
 

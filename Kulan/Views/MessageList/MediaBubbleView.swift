@@ -918,6 +918,9 @@ final class UploadRingView: UIView {
     private let cross = UIImageView()
     private var bag = Set<AnyCancellable>()
     private var spinning = false
+    /// The last value handed to `onCancelled`, so `paint` — which runs many times a second while an
+    /// upload is progressing — tells its owner only when the answer actually changes.
+    private var lastCancelled: Bool?
 
     /// Where this ring's bytes are filed: a single photo's `clientId`, an album tile's
     /// "clientId#index". The cell reads it back to know what the X cancels.
@@ -973,6 +976,7 @@ final class UploadRingView: UIView {
         arc.strokeEnd = 0
         alpha = 1                            // a recycled cell must not inherit a hidden ring
         onCancelled = nil
+        lastCancelled = nil
     }
 
     /// One subscription, rebuilt on every configure so a recycled cell never keeps the previous
@@ -1000,7 +1004,10 @@ final class UploadRingView: UIView {
         // is per-message and an album tile finishes long before its siblings — so the per-ITEM
         // truth is the only one that can take an indicator off a finished photo.
         let cancelled = MediaSend.shared.isItemCancelled(key)
-        onCancelled?(cancelled)
+        if cancelled != lastCancelled {
+            lastCancelled = cancelled
+            onCancelled?(cancelled)
+        }
         let settled = cancelled || sendFailed || MediaSend.shared.isItemDone(key)
         alpha = settled ? 0 : 1
         guard !settled else { stopSpinning(); return }

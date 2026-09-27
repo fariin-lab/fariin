@@ -1216,9 +1216,10 @@ final class MessageRowView: UIView {
 
     static let reactionDuration: CFTimeInterval = 0.4
     static let reactionCurve = CAMediaTimingFunction(controlPoints: 0.38, 0.7, 0.125, 1.0)
-    /// Set by the list just before it re-applies rows: true when a row that grows keeps its bottom
-    /// edge still (a reader at the newest message), false when it grows down from a fixed top.
-    static var growsFromBottom = true
+    /// Handed in by the list through the cell before each configure: true when a row that grows
+    /// keeps its bottom edge still (a reader at the newest message), false when it grows down from a
+    /// fixed top. Per row, not static: two chat screens alive during a push or pop each own theirs.
+    var growsFromBottom = true
 
     /// The emoji shown by each entry of `reactionViews`, "" when unknown.
     private var chipKeys: [String] = []
@@ -1280,7 +1281,7 @@ final class MessageRowView: UIView {
         let grow = nb.bubble.height - old.bubble.height
         // Where the old bubble sat in THIS pass's coordinates. The list moved the row by the growth
         // when it kept the bottom still, so the old box's top is that much lower here.
-        let oldRect = Self.growsFromBottom ? old.bubble.offsetBy(dx: 0, dy: grow) : old.bubble
+        let oldRect = growsFromBottom ? old.bubble.offsetBy(dx: 0, dy: grow) : old.bubble
         if oldRect != nb.bubble {
             add(bubbleBox.layer, "bounds.size", NSValue(cgSize: oldRect.size))
             add(bubbleBox.layer, "position", NSValue(cgPoint: CGPoint(x: oldRect.midX, y: oldRect.midY)))

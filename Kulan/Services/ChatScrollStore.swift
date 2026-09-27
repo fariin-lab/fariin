@@ -117,6 +117,9 @@ final class RenderedHeightStore {
     private struct Key: Hashable {
         let cid: String
         let width: Int      // whole points: a width is a device fact, never a fraction that matters
+        // The chat's text follows the phone's text size now (BubbleMetrics), so a height measured at
+        // one size is not true at another, the same way it is not true at another width.
+        let textSize = BubbleMetrics.contentSizeCategory.rawValue
     }
 
     private var byKey: [Key: [String: CGFloat]] = [:]

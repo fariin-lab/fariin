@@ -149,7 +149,7 @@ final class ChatComposerView: UIView {
     private let fieldRow = UIView()
     private let textView = ComposerTextView()
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
-    private let micButton = UIView()
+    private let micButton = AccessibleActivationView()
     /// ⛔ THE REFERENCE APP'S OWN MIC AND PLUS — owner, 2026-09-27, both ringed: "use their recording
     /// icon and + icon". Their `mic` and `plus` vectors (`ic_composer_mic`, `ic_composer_plus`), drawn
     /// at their own 24pt, as their composer draws them. The recording disc keeps `ic_mic`.
@@ -287,6 +287,7 @@ final class ChatComposerView: UIView {
         // brightness but don't touch the voice recording icon"). The mic is the button people
         // reach for without looking; the stickers are a browse.
         gifButton.icon.tintColor = UIColor.label.withAlphaComponent(0.55)
+        gifButton.accessibilityLabel = "GIF"
         gifButton.addAction(UIAction { [weak self] _ in self?.actions.gif() }, for: .touchUpInside)
         micGlyph.contentMode = .scaleAspectFit
         micGlyph.tintColor = .label
@@ -302,6 +303,19 @@ final class ChatComposerView: UIView {
         hold.cancelsTouchesInView = false
         hold.delegate = self
         micButton.addGestureRecognizer(hold)
+        // VoiceOver cannot hold a finger down, so its double-tap goes straight to the locked,
+        // hands-free mode rather than the ordinary hold: `holdBegan()` immediately followed by
+        // `holdEnded(.zero, false)` is indistinguishable from the quick, unmoved tap that
+        // `endHoldRecording` already reads as "lock hands-free" — the same `lockRecording()` a
+        // slide onto the lock target reaches, just with no drag involved.
+        micButton.accessibilityLabel = "Record voice message"
+        micButton.accessibilityTraits = .button
+        micButton.onActivate = { [weak self] in
+            guard let self else { return false }
+            self.actions.holdBegan()
+            self.actions.holdEnded(.zero, false)
+            return true
+        }
 
         // The hold row: red dot + timer + "‹ slide to cancel".
         pill.contentView.addSubview(holdRow)
@@ -516,6 +530,7 @@ final class ChatComposerView: UIView {
             textView.refreshPlaceholder()
         }
         textView.placeholder = s.placeholder
+        textView.textOnly = s.textOnly
         // ⛔ THE FOCUS FLAG IS A REQUEST, HONOURED WHEN IT CHANGES — NOT A TRUTH TO BE ENFORCED.
         // Owner, builds 693-695: "tap the composer, the keyboard often does not open; several taps
         // before it appears." The field took the tap and became first responder on its own; the
@@ -576,6 +591,7 @@ final class ChatComposerView: UIView {
         playButton.icon.image = UIImage(systemName: s.previewPlaying ? "pause.fill" : "play.fill",
                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 14))
         playButton.icon.tintColor = accent
+        playButton.accessibilityLabel = s.previewPlaying ? "Pause preview" : "Play preview"
         waveform.decibels = s.previewDecibels
         waveform.progress = s.previewProgress
         waveform.played = accent
@@ -646,6 +662,9 @@ final class ChatComposerView: UIView {
         // voice path consults `editingMessage`; the honest fix is not to offer the mic at all.
         // ...and never on a text-only request (`textOnly`): a voice note is not text.
         micButton.alpha = (s.hasText || s.recordLocked || s.editing || s.textOnly) ? 0 : 1
+        // VoiceOver should only land on this when it is actually offered — otherwise a double-tap
+        // while typing or already locked would start a second recording nothing on screen shows.
+        micButton.isAccessibilityElement = micButton.alpha > 0
         // The capsule and its glyph fade as one — the glyph is its subview now.
         // 2026-09-24 decision D-composer-5: `editing` too, as on the button above; the capsule
         // was left drawn as a dead mic when an edit's text was emptied.
@@ -1213,6 +1232,15 @@ extension ChatComposerView: UIGestureRecognizerDelegate {
     @objc func tick() { target?.tick() }
 }
 
+/// `micButton` is an invisible gesture host, not a real control (see the comment above it), so
+/// VoiceOver has nothing to double-tap unless a plain view says otherwise. This gives it exactly
+/// that: an activation action, without turning it into a `UIButton` and disturbing the hold
+/// gesture that already owns its touches.
+private final class AccessibleActivationView: UIView {
+    var onActivate: () -> Bool = { false }
+    override func accessibilityActivate() -> Bool { onActivate() }
+}
+
 // MARK: - The text view
 
 /// The field: 17pt, a placeholder, grows to six lines then scrolls. Insets are the old
@@ -1263,6 +1291,12 @@ final class ComposerTextView: UITextView {
     /// Returns false when pictures are not accepted here (a first message to a stranger is text only).
     var onPasteImages: (([UIImage]) -> Bool)?
 
+    /// A first message to a stranger (`ChatComposerState.textOnly`) — kept in sync by `syncText`.
+    /// Paste is hidden rather than offered and silently swallowed when the clipboard has nothing
+    /// but a picture: `onPasteImages` already refuses it there, and `super.paste` has no text to
+    /// fall back to, so the menu item used to do nothing at all.
+    var textOnly = false
+
     /// Pictures win unless the clipboard also carries real text: an image copied from a web page
     /// comes with its address, which is not what the person meant to paste.
     private var pastedImages: [UIImage]? {
@@ -1274,7 +1308,11 @@ final class ComposerTextView: UITextView {
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(paste(_:)), onPasteImages != nil, UIPasteboard.general.hasImages { return true }
+        if action == #selector(paste(_:)) {
+            let pb = UIPasteboard.general
+            if textOnly, pb.hasImages, !pb.hasStrings { return false }
+            if onPasteImages != nil, pb.hasImages { return true }
+        }
         return super.canPerformAction(action, withSender: sender)
     }
 

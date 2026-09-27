@@ -14,6 +14,8 @@ final class RowPlanStore {
     private struct Entry {
         var model: MessageRowModel
         var width: CGFloat
+        /// The text size the plan's fonts were built at. A plan is only true at that size.
+        var textSize: UIContentSizeCategory
         var plan: RowPlan
     }
 
@@ -25,7 +27,8 @@ final class RowPlanStore {
     init(capacity: Int = 400) { self.capacity = capacity }
 
     func plan(for model: MessageRowModel, width: CGFloat) -> RowPlan {
-        if let hit = entries[model.id], hit.width == width, hit.model == model {
+        let textSize = BubbleMetrics.contentSizeCategory
+        if let hit = entries[model.id], hit.width == width, hit.textSize == textSize, hit.model == model {
             return hit.plan
         }
         let plan = MessageRowLayout.plan(model, width: width)
@@ -36,20 +39,12 @@ final class RowPlanStore {
                 entries.removeValue(forKey: drop)
             }
         }
-        entries[model.id] = Entry(model: model, width: width, plan: plan)
+        entries[model.id] = Entry(model: model, width: width, textSize: textSize, plan: plan)
         return plan
     }
 
-    /// The cached plan without computing one — for the paths that only want to know where a bubble
-    /// already is (the menu's lift rect, the swipe's arrow anchor) and must not do layout work.
-
-    func invalidate(id: String) {
-        entries.removeValue(forKey: id)
-        order.removeAll { $0 == id }
-    }
-
     /// A width change invalidates every row at once — a rotation, or an iPad split view resizing
-    /// the list. Nothing measured at the old width can be trusted.
+    /// the list. Nothing measured at the old width can be trusted. A text-size change does too.
     func invalidateAll() {
         entries.removeAll()
         order.removeAll()
