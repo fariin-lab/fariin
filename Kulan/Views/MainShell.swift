@@ -2282,7 +2282,17 @@ struct ChatsView: View {
             //
             // Telling it the size the view already committed to makes the two agree.
             peek: { conv in
-                let vc = UIHostingController(rootView: ChatPeekPreview(cid: conv.id, me: me))
+                // ⛔ THE REAL CHAT, NOT A DRAWING OF IT — owner, 2026-09-27: "the preview is not
+                // real; do what the reference app does". Theirs hands the menu its actual
+                // conversation screen in a preview mode (read from its source, four passes): same
+                // wallpaper, same bubbles, same colour, same ticks, no input bar, no header, nothing
+                // marked read. `ChatPeekPreview` redrew the chat with the old SwiftUI bubble, which is
+                // why its colours, ticks and spacing never matched. The official channel keeps its
+                // own page, as it does when opened.
+                let vc: UIViewController = OfficialChannel.isOfficial(conv.id)
+                    ? UIHostingController(rootView: ChatPeekPreview(cid: conv.id, me: me))
+                    : UIHostingController(rootView: ThreadView(cid: conv.id, title: conv.displayName(me),
+                                                               photoUrl: conv.displayPhoto(me), preview: true))
                 vc.view.backgroundColor = .clear
                 vc.preferredContentSize = ChatPeekPreview.platterSize
                 // ⛔ AND THE CORNERS COME BACK WITH THE BACKGROUND — his report, 2026-09-09, once

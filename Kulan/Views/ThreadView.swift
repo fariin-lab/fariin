@@ -50,6 +50,12 @@ struct ThreadView: View {
     let cid: String
     let title: String
     let photoUrl: String?
+    /// ⛔ THE CHAT LIST'S LONG-PRESS PREVIEW — owner, 2026-09-27: "the preview is not real; do what
+    /// the reference app does". Theirs is the real conversation screen with one flag
+    /// (`isInPreviewPlatter`): no input bar, no banners, and nothing it shows is marked read, because
+    /// a preview is a glance, not an open. True here means exactly that: the whole chat as it is,
+    /// and no side effect on the server or on the rest of the app.
+    var preview = false
 
     @State private var repo: ThreadRepository
     @State private var input = ""
@@ -395,10 +401,11 @@ struct ThreadView: View {
     /// the auth flow were dead for weeks before anyone noticed. See [[kulan-preferredcolorscheme-trap]].
     private var dark: Bool { chatHasWallpaper || scheme == .dark }
 
-    init(cid: String, title: String, photoUrl: String?) {
+    init(cid: String, title: String, photoUrl: String?, preview: Bool = false) {
         self.cid = cid
         self.title = title
         self.photoUrl = photoUrl
+        self.preview = preview
         let r = ThreadRepository(cid: cid)
         _repo = State(initialValue: r)
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
@@ -712,7 +719,7 @@ struct ThreadView: View {
                 // ACTIVE only (2026-09-24 audit): the listener keeps delivering while the app is in
                 // the background (a voice note or a call keeps it awake), and those arrivals were
                 // marked read with nobody looking. `didBecomeActive` below sends the receipt instead.
-                if !incoming.isEmpty && isAtBottom && !repo.iBlocked
+                if !incoming.isEmpty && isAtBottom && !repo.iBlocked && !preview
                     && UIApplication.shared.applicationState == .active {
                     ChatService.markReadThrottled(cid)
                     // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
@@ -1020,7 +1027,10 @@ struct ThreadView: View {
 
     @ViewBuilder private var bottomBarContent: some View {
         Group {
-            if selecting {
+            if preview {
+                // The reference's preview has no bottom bar at all.
+                EmptyView()
+            } else if selecting {
                 selectionActionBar.transition(.opacity)
             } else if searchActive {
                 searchNavBar.transition(.opacity)
@@ -1865,7 +1875,7 @@ struct ThreadView: View {
             // A parked note from last time — leaving the chat, or the whole app, mid-recording —
             // is adopted back and the bar lands on the review: listen, continue with the red mic,
             // send or bin. His order, the reference's model: nothing recorded is silently gone.
-            if !recordLocked, AudioRecorder.hasDraft(cid), recorder.adoptDraft(cid: cid) {
+            if !preview, !recordLocked, AudioRecorder.hasDraft(cid), recorder.adoptDraft(cid: cid) {
                 recordLocked = true
                 beginPreview()
             }
@@ -1884,6 +1894,9 @@ struct ThreadView: View {
             // ("the chat animates open"). Tied to the reveal, the opening batch always just appears.
             settled = false
             if isGroup || !cid.contains("_") { startGroupCallListener() }
+            // A preview is a glance, not an open: none of what follows (banner suppression, clearing
+            // notifications, the unread reset and the read receipt) may happen from it.
+            if !preview {
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
             keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
             // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
@@ -1908,8 +1921,15 @@ struct ThreadView: View {
                 }
                 if !repo.iBlocked { await ChatService.markRead(cid) }
             }
+            }
         }
         .onDisappear {
+            // A preview only stops what it started listening to; it never opened anything else.
+            if preview {
+                repo.stop()
+                groupCallListener?.remove(); groupCallListener = nil
+                return
+            }
             // HAND THE REST OF THE RUN TO THE ENGINE BEFORE ANYTHING ELSE HERE. The auto-advance chain
             // is an `.onReceive` on this view and reads `repo.items`, so both die with it: a run of four
             // notes finished the one in your ear and stopped. This is the last moment the list still
@@ -1966,7 +1986,7 @@ struct ThreadView: View {
         // Back in front with the newest message on screen: send the read receipt the background
         // arrivals were denied above (2026-09-24 audit).
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            guard isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
+            guard !preview, isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
             ChatService.markReadThrottled(cid)
             Task { await ChatService.resetUnread(cid) }
         }
@@ -2573,7 +2593,7 @@ struct ThreadView: View {
             .onChange(of: isAtBottom) { _, atBottom in
                 if atBottom {
                     newWhileAway = 0
-                    if !repo.iBlocked {
+                    if !repo.iBlocked, !preview {
                         ChatService.markReadThrottled(cid)
                         // Mirror the arrival path: zero the stored counter the moment these are seen,
                         // so the badge is right even if the app dies before onDisappear.

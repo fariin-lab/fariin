@@ -1629,6 +1629,23 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                                           actionProvider: { _ in UIMenu(children: p.menuActions(c)) })
     }
 
+    /// ⛔ A TAP ON THE PREVIEW OPENS THE CHAT — the reference app's `willPerformPreviewActionForMenuWith`
+    /// (read from its source, 2026-09-27): the menu dismisses and the chat is opened the ordinary way,
+    /// without animation, so the preview becomes the chat instead of closing onto the list. Nothing
+    /// here handled it before, so a tap on the preview did nothing but close the menu.
+    func tableView(_ tableView: UITableView,
+                   willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
+                   animator: UIContextMenuInteractionCommitAnimating) {
+        guard let id = configuration.identifier as? String, let host,
+              let c = host.conversation(id) else { return }
+        animator.preferredCommitStyle = .dismiss
+        animator.addAnimations {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { host.parent.onOpen(c) }
+        }
+    }
+
     /// ⛔ THE ROW LETS GO OF ITS HIGHLIGHT WHEN THE MENU CLOSES — owner, 2026-09-11: "when I long
     /// press, the highlight is locked, never gone".
     ///
