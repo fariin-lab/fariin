@@ -794,9 +794,13 @@ enum MessageRowLayout {
             let height: CGFloat = BubbleMetrics.reactionChipHeight
             for (attr, _, face) in chips {
                 let s = BubbleText.size(attr, width: .greatestFiniteMagnitude)
-                // A face adds its own circle and the gap before it.
-                let faceW = face == nil ? 0 : BubbleMetrics.reactionFace + 4
-                widths.append(s.width + BubbleMetrics.reactionChipInset * 2 + faceW)
+                // A face: lead, emoji, gap, face, trail (see `BubbleMetrics.reactionFaceLead`).
+                if face == nil {
+                    widths.append(s.width + BubbleMetrics.reactionChipInset * 2)
+                } else {
+                    widths.append(BubbleMetrics.reactionFaceLead + s.width + BubbleMetrics.reactionFaceGap
+                                  + BubbleMetrics.reactionFace + BubbleMetrics.reactionFaceTrail)
+                }
             }
             let total = widths.reduce(0, +)
                 + CGFloat(max(0, chips.count - 1)) * BubbleMetrics.reactionChipGap

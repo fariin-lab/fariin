@@ -33,6 +33,13 @@ enum BubbleMetrics {
     /// a circle much larger turns the pill into a row of avatars, and much smaller reads as a dot.
     /// See `MessageRowLayout.decorations`.
     static let reactionFace: CGFloat = 24   // theirs, 2026-09-27 (was 18)
+    /// ⛔ A PILL WITH A FACE HAS ITS OWN SPACING — owner, 2026-09-27, ringed: the heart sat well in
+    /// from the left, the avatar touched the right end, and the gap between them was wide. It was the
+    /// emoji's 11pt insets on BOTH sides plus 4, with the face squeezed into the last 3pt. Now: 10 to
+    /// the emoji (where it already sat), 6 between emoji and face, 6 after the face.
+    static let reactionFaceLead: CGFloat = 10
+    static let reactionFaceGap: CGFloat = 6
+    static let reactionFaceTrail: CGFloat = 6
     /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
     /// [the reference] react badge then make it like it, size and color".
     ///

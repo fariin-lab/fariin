@@ -177,9 +177,12 @@ final class ReactionChipView: UIView {
         // order in his screenshot. With no face the label owns the whole pill, as it always did.
         if hasFace, let faceView {
             let d = BubbleMetrics.reactionFace
-            let inset = (bounds.height - d) / 2
-            faceView.frame = CGRect(x: bounds.width - inset - d, y: inset, width: d, height: d)
-            label.frame = CGRect(x: 0, y: 0, width: faceView.frame.minX - 2, height: bounds.height)
+            faceView.frame = CGRect(x: bounds.width - BubbleMetrics.reactionFaceTrail - d,
+                                    y: (bounds.height - d) / 2, width: d, height: d)
+            let lead = BubbleMetrics.reactionFaceLead
+            label.frame = CGRect(x: lead, y: 0,
+                                 width: max(0, faceView.frame.minX - BubbleMetrics.reactionFaceGap - lead),
+                                 height: bounds.height)
         } else {
             label.frame = bounds
         }
