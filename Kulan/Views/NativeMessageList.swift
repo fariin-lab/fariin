@@ -2098,7 +2098,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if heightChanged { RxTrace.log("refreshVisible applied y=\(self.collectionView.contentOffset.y)") }
             self.layout.pendingContentOffsetAdjustment = 0
             if delta != 0 { self.verifyAnchor(landedAnchor) }
-            if !listIsMoving { self.moveNeighboursWithReactionGrowth(target) }
             // ⛔ A ROW THAT GREW UNDER A READER AT THE NEWEST MESSAGE GROWS UPWARD — owner,
             // 2026-09-26, two screenshots: reacting to the last message put its reaction row under
             // the composer. The anchor above is top-biased, so the grown row's extra height went
@@ -2127,6 +2126,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 }
                 lastStableOffset = target
             }
+        }
+        // ⛔ THE NEIGHBOURS' SLIDE STARTS IN THIS TURN TOO — owner, 2026-09-27, after the fix above:
+        // "the chat jumps and goes back to the correct position, like 0.020 seconds". This used to
+        // run in the apply's completion, and that completion runs after the screen has drawn: the
+        // same lateness that made `restoreReaderPosition` a visible second move. So one frame showed
+        // the rows around the reacted bubble already at their new place, and the next frame put
+        // them back at `fromValue` to start the slide. Here it is added with the new layout, so the
+        // first frame drawn is the first frame of the slide. The cells were reconfigured inside
+        // `apply` (visible cells are reconfigured at once), so the growth is already recorded.
+        if !listIsMoving {
+            collectionView.layoutIfNeeded()
+            moveNeighboursWithReactionGrowth(target)
         }
     }
 
