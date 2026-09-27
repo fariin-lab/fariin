@@ -2079,88 +2079,17 @@ private final class ChatListCell: UITableViewCell {
     /// anything, but leaving it is what keeps UIKit delivering the highlighted state at all.
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
-        var background = UIBackgroundConfiguration.clear()
-        // ⚠️ HIGHLIGHTED ONLY, AND NEVER WHILE SWIPED. Out of Select mode a SELECTED row is a row on
-        // its way into a chat and `didSelectRowAt` deselects it in the same breath; inside Select
-        // mode the mark is the tick, and grey behind it would be a second answer to a question the
-        // circle already answers. While swiped the row must stay clear so the platter's colour is
-        // never seen through it.
-        // ⛔ AND THE `!isSwiped` HALF IS GONE AGAIN — owner, 2026-09-11, third report on this one
-        // line: "when I swipe left or right chat the grey highlight is not appearing".
-        //
-        // ⚠️ WHAT HE OBJECTED TO EARLIER WAS THE CUSTOM PLATE, NOT THIS. The complaint that put
-        // `!isSwiped` here read "it is appearing when I start swipe, I see also grey highlights,
-        // please use native Apple not custom, and also Apple rounded corners" — and the thing in
-        // that photograph with a hand-drawn radius was the 18pt plate deleted below. This clause is
-        // the SYSTEM's press fill, resolved from `listPlainCell()`, which is the native treatment he
-        // was asking for. Suppressing it threw out the native half of the answer with the custom
-        // half, and the row has been going straight from clear to slid-open with no press feedback
-        // at all ever since.
-        //
-        // ⚠️ THE REFERENCE APP DOES NOT CONSULT THE SWIPE STATE EITHER. Its cell branches on exactly
-        // `isSelected || isHighlighted` and has no swipe clause anywhere, so an opening swipe gets
-        // the same fill any press gets. That is the whole of what "native" means here.
-        if state.isHighlighted {
-            // The system's own press fill, resolved for this state rather than picked by eye, so it
-            // is right in both themes and stays right if Apple changes it.
-            background.backgroundColor = UIBackgroundConfiguration.listPlainCell()
-                .updated(for: state).backgroundColor ?? .systemFill
-        }
-        // ⛔ THE SWIPED ROW WEARS A GREY PLATE — owner, 2026-09-11, with Messages beside it: "when I
-        // swipe left or right there is now no grey, please make the Apple grey highlight like image
-        // 2". It is the same `isSwiped` state the clause above deliberately keeps CLEAR, and the two
-        // are not in conflict: that one is about the PRESS fill, which must not sit under a half-open
-        // platter, and this is the plate the row itself slides on.
-        //
-        // ⚠️ THIS IS NOT A RETURN OF THE 2026-09-05 REMNANT. That bug was a background resolved for
-        // one state and never re-asked when the swipe closed; this is resolved by the same
-        // `updateConfiguration` pass as everything else, so it goes when `isSwiped` goes. The reason
-        // the reset lives here and not in a completion handler is written above and still holds.
-        //
-        // ⚠️ THE TWO NUMBERS ARE MEASURED OFF HIS SCREENSHOT, not read from a system API, because
-        // there is no system background configuration for a swiped row to resolve. The radius is
-        // about a quarter of the row's height in his reference, and the plate bleeds off the leading
-        // edge rather than being inset there — it is sliding out from under the screen edge, so an
-        // inset would draw a corner in mid-air.
-        // ⛔ AND IT IS GONE AGAIN — owner, 2026-09-11, hours later and with the swipe photographed
-        // mid-open: "when I start swipe I see also grey highlights, please use native Apple not
-        // custom, and also Apple rounded corners ... now it looks like under the chat height".
-        //
-        // ⚠️ HE HAS REVERSED HIS OWN ASK AND BOTH READINGS WERE FAIR. The note above is his, from
-        // this morning, with a reference screenshot; what that reference actually showed was the
-        // system's own row treatment, and a hand-drawn plate is not that. These two lines were the
-        // only thing on this screen the system did not draw: a colour and an 18pt radius measured
-        // off a picture, which is what "custom" means and is exactly what he is now pointing at —
-        // the plate's corner floats inside the row's height, so the row looks shorter than its
-        // neighbours the moment a swipe starts.
-        //
-        // ⚠️ THE BUTTONS THEMSELVES WERE ALWAYS APPLE'S. They are `UIContextualAction`s in a
-        // `UISwipeActionsConfiguration` (see the two delegate methods above) — the circles with
-        // labels underneath are how iOS 26 draws that, not a style of ours, and there is no API to
-        // ask for the older pill shape. Nothing to change there; deleting the plate is the whole of
-        // what was ours.
-        //
-        // ⛔ THE SYSTEM'S SWIPED CARD, NOT OURS — owner, 2026-09-26, with the Archived list beside
-        // this one: "make the chat swipe look exactly like the reference". The Archived list is a
-        // SwiftUI `List`, and what it draws under a swiped row (a grey card with rounded trailing
-        // corners, the row's content still on it) is the system LIST CELL background resolved for
-        // the swiped state. This cell pinned `.clear` for every state, so a swiped row here slid on
-        // nothing. Resolving the same system configuration for `isSwiped` is that card with no
-        // colour or radius of ours — the objection to the 09-11 plate was that it was hand-drawn.
-        // ⛔ FOR THE SWIPED STATE ALONE — owner, 2026-09-26, two crops side by side: "when I swipe,
-        // the grey is sometimes rounded and sometimes not". A finger that pressed long enough to
-        // highlight the row before it started panning is still on it as the platter opens, so the
-        // state handed here is highlighted AND swiped, and the system resolves that as its flat
-        // press fill, square-cornered and darker. A quick flick never highlights and gets the
-        // rounded card. Resolving with the press cleared gives the one card every time; the press
-        // fill above still draws while a finger is merely down.
-        if state.isSwiped {
-            var swiped = state
-            swiped.isHighlighted = false
-            swiped.isSelected = false
-            background = UIBackgroundConfiguration.listPlainCell().updated(for: swiped)
-        }
-        backgroundConfiguration = background
+        // ⛔ APPLE'S CELL BACKGROUND FOR EVERY STATE, NOTHING OF OURS — owner, 2026-09-27, the swiped
+        // row's grey "sometimes rounded, sometimes not; why a custom grey, use Apple's native one".
+        // This used to be three rules of ours: clear at rest, the press fill borrowed when
+        // highlighted, and the swiped card resolved on its own (with the press cleared, `d9af1f1b`,
+        // which did not help). Mixing them is what made the swipe look different depending on how
+        // the finger started. The list cell configuration resolved for the ACTUAL state — rest,
+        // pressed, selected, swiped, any combination — is the system's own answer to all of them,
+        // the one every stock list uses. The history of this method (09-05 remnant, 09-11 plate and
+        // press fill, 09-26 card) is in git; the remnant it once fixed cannot come back, because
+        // this still re-resolves on every state change.
+        backgroundConfiguration = UIBackgroundConfiguration.listPlainCell().updated(for: state)
     }
 }
 
