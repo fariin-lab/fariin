@@ -2418,7 +2418,17 @@ struct ProfilePhotoViewer: View {
         // The avatar this grows out of is already on screen, so its bitmap is already in memory.
         // Seeding here means the morph begins holding the photo, instead of a grey disc that swaps
         // to the photo a frame later — which reads as part of the "jump".
-        _image = State(initialValue: DiskImageCache.shared.memoryImage(for: photoUrl))
+        //
+        // ⛔ AND FROM THE AVATAR'S OWN CACHE — owner, 2026-09-27: "the first time I tap my photo in
+        // Settings it opens like a pop". Since 2026-09-25 the avatar on screen is drawn by
+        // `ProfilePhotoLoader`, which keeps its own memory, not `DiskImageCache`'s. So on a first
+        // tap this found nothing, the morph started with no picture and no aspect, and the photo
+        // popped in when the load landed; the second tap found it, because the first had stored it
+        // here. The avatar's bitmap is the thing on screen, so it is asked first, then the disk
+        // (a synchronous read of a file the avatar already has, for the same reason).
+        _image = State(initialValue: ProfilePhotoLoader.shared.cachedAvatar(photoUrl)
+                       ?? DiskImageCache.shared.memoryImage(for: photoUrl)
+                       ?? DiskImageCache.shared.smallImageSync(photoUrl))
     }
     @State private var progress: CGFloat = 0   // 0 = sitting on the avatar, 1 = open in the center
     @State private var drag: CGSize = .zero
@@ -2539,8 +2549,10 @@ struct ProfilePhotoViewer: View {
             }
         }
         .task {
-            if image != nil { return }   // already seeded from memory — don't re-fetch or flash
+            // The seed may be the avatar's small thumbnail (see `init`), so the full picture is still
+            // read and swapped in: the same photo, sharper, never a different one, so nothing flashes.
             if let cached = await DiskImageCache.shared.image(for: photoUrl) { image = cached; return }
+            if image != nil, DiskImageCache.shared.memoryImage(for: photoUrl) != nil { return }
             // The shared download (2026-09-25): one request with every avatar of the same person.
             guard case .image(let data) = await ProfilePhotoLoader.shared.fetch(photoUrl),
                   let ui = UIImage(data: data) else { return }
