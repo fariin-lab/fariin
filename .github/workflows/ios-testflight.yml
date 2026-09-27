@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FREEZE FIX, COLOURS, REACTIONS, HEADER BLUR, AND A TIMING BOX.
+            GRADIENT BUBBLES AND MORE TIMING.
+
+            GRADIENT CHAT COLOUR: one gradient now runs across the whole screen, as in the reference app. Bubbles near the top take the first colour, bubbles lower down the second, and each bubble is its slice. It moves with scrolling. The nine palette gradients also use the reference app's angles.
+
+            TIMING BOX (temporary): now also shows when your finger touched the chat, every freeze in the first minute after launch, and for a video the moment its first picture appears.
+
+            PLEASE TEST: open a chat with a gradient colour (for example Auto on the yellow-red wallpaper) and scroll. Force-close the app, open it, tap a chat right away and screenshot the box. Open a video, close it, open it again, and screenshot each box.
+
+            EARLIER IN THIS ROUND: FREEZE FIX, COLOURS, REACTIONS, HEADER BLUR, AND A TIMING BOX.
 
             FREEZE: opening a chat could freeze the app until iOS closed it. Fixed.
 
