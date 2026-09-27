@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            GRADIENT BUBBLES AND MORE TIMING.
+            RED SERVER BOX, FINER TIMING, SELECT-MODE LINES.
+
+            SELECT MODE: ticked chats join into one grey block, no dark lines between them.
+
+            RED BOX (temporary): if the server ever refuses the app (the "everything breaks, accounts look deleted" problem), a red box shows the sign-in state for 20 seconds. Please screenshot it.
+
+            TIMING BOX (temporary): the chat-open box now shows the header, the message list and the push separately, and when the app was too busy to draw.
+
+            PLEASE TEST: force-close the app, open it, tap a chat and screenshot the black box. If the app breaks again, screenshot the red box.
+
+            EARLIER IN THIS ROUND: GRADIENT BUBBLES AND MORE TIMING.
 
             GRADIENT CHAT COLOUR: one gradient now runs across the whole screen, as in the reference app. Bubbles near the top take the first colour, bubbles lower down the second, and each bubble is its slice. It moves with scrolling. The nine palette gradients also use the reference app's angles.
 
