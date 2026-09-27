@@ -2378,6 +2378,9 @@ struct ThreadView: View {
     // re-render live when the colour is changed in the wallpaper sheet.
     private var chatColorSpec: ChatColorSpec? {
         _ = ChatColorStore.shared.version
+        // A chat on Auto takes its colour from the wallpaper (2026-09-27), so a wallpaper change must
+        // re-render the bubbles too.
+        _ = WallpaperStore.shared.version
         return ChatColorStore.shared.color(for: cid)
     }
 

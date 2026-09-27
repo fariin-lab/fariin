@@ -84,6 +84,8 @@ enum ChatColors {
 @Observable final class ChatColorStore {
     static let shared = ChatColorStore()
     private(set) var version = 0
+    /// Stored picks by UserDefaults key (a chat's, or the default's). Resolution is not cached: it
+    /// depends on the wallpaper store too, and is a few dictionary reads.
     @ObservationIgnored private var cache: [String: ChatColorSpec?] = [:]
 
     // CUSTOM COLOR LIBRARY (same idea as the wallpaper library): every colour the user builds in the
@@ -125,21 +127,67 @@ enum ChatColors {
         UserDefaults.standard.set(customColors.map(\.stored), forKey: "chatColor.customLibrary.v1")
     }
 
+    // MARK: - Auto colour, the reference app's rule
+    //
+    // ⛔ OWNER, 2026-09-27: "do it exactly like the reference app: the same Auto colour system". From its
+    // source (`ChatColorSettingStore.resolvedChatColor` / `autoChatColor`, `Wallpaper.defaultChatColor`):
+    //
+    //   1. this chat's own chosen colour, if it has one — it always wins;
+    //   2. otherwise AUTO, which asks, in order:
+    //      a. this chat's OWN wallpaper (not the inherited one): its paired colour;
+    //      b. the colour chosen in Settings;
+    //      c. the Settings wallpaper: its paired colour;
+    //      d. the app's default blue (nil here).
+    //
+    // A wallpaper has a paired colour only if it is one of the built-in themes (`bubbleHex`); a photo
+    // or a plain-colour wallpaper has none and falls through, exactly as a photo does there.
+    //
+    // ⚠️ AUTO IS STORED AS NOTHING. No key for a chat = that chat is on Auto; no default key = the
+    // Settings colour is Auto. Setting a wallpaper never writes a colour, so a colour somebody chose
+    // stays until they pick Auto or reset it, and a chat on Auto follows every wallpaper change.
+
+    /// What the bubbles draw. nil = the app's default blue.
     func color(for cid: String) -> ChatColorSpec? {
-        if let c = cache[cid] { return c }
-        // An explicit per-chat reset is stored as `noneMarker` so it does NOT fall through to the
-        // all-chats default — "Reset" in one chat has to beat "Apply For All Chats" for that chat.
-        if UserDefaults.standard.string(forKey: Self.key(cid)) == Self.noneMarker { return nil }
-        // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
-        let raw = UserDefaults.standard.string(forKey: Self.key(cid))
-            ?? UserDefaults.standard.string(forKey: Self.defaultKey)
-        let spec = ChatColorSpec(stored: raw)
-        cache[cid] = spec
+        chosenColor(for: cid) ?? autoColor(for: cid)
+    }
+
+    /// This chat's own pick; nil = Auto.
+    func chosenColor(for cid: String) -> ChatColorSpec? { stored(Self.key(cid)) }
+
+    /// The colour chosen in Settings; nil = Auto.
+    var globalChosenColor: ChatColorSpec? { stored(Self.defaultKey) }
+
+    /// What Auto gives this chat right now (the sheet's Auto circle shows it). nil = default blue.
+    /// The sheet previews a wallpaper by writing it as the chat's own, so a previewed wallpaper's
+    /// pairing is what this answers while it is being tried — their `previewWallpaper`.
+    func autoColor(for cid: String) -> ChatColorSpec? {
+        let walls = WallpaperStore.shared
+        if walls.hasOverride(for: cid), let c = walls.wallpaper(for: cid).pairedColor { return c }
+        return globalColor
+    }
+
+    /// What a chat with no wallpaper or colour of its own draws: the Settings colour, else the
+    /// Settings wallpaper's pairing, else nil (default blue). Steps b–d above.
+    var globalColor: ChatColorSpec? {
+        globalChosenColor ?? WallpaperStore.shared.defaultWallpaper.pairedColor
+    }
+
+    /// Auto for the Settings colour itself: the Settings wallpaper's pairing, else default blue.
+    var globalAutoColor: ChatColorSpec? { WallpaperStore.shared.defaultWallpaper.pairedColor }
+
+    private func stored(_ key: String) -> ChatColorSpec? {
+        if let hit = cache[key] { return hit }
+        let raw = UserDefaults.standard.string(forKey: key)
+        // `noneMarker` was the old per-chat Reset ("app blue, whatever the default says"). Reset now
+        // means Auto, as it does there, so an old marker reads as Auto.
+        let spec = raw == Self.noneMarker ? nil : ChatColorSpec(stored: raw)
+        cache[key] = spec
         return spec
     }
 
+    /// nil = Auto.
     func set(_ spec: ChatColorSpec?, for cid: String) {
-        cache[cid] = spec
+        cache[Self.key(cid)] = nil
         if let spec { UserDefaults.standard.set(spec.stored, forKey: Self.key(cid)) }
         else { UserDefaults.standard.removeObject(forKey: Self.key(cid)) }
         version &+= 1
@@ -147,14 +195,12 @@ enum ChatColors {
 
     static let noneMarker = "__none__"
 
-    /// Per-chat "Reset": pin this chat to the APP default bubble colour, even when an all-chats
-    /// default is set. Removing the key would just re-inherit that default, which is why Reset
-    /// used to look like a dead button.
-    func resetToAppDefault(for cid: String) {
-        cache[cid] = nil
-        UserDefaults.standard.set(Self.noneMarker, forKey: Self.key(cid))
-        version &+= 1
-    }
+    /// "Reset Chat Color" for one chat: back to Auto.
+    func resetChatColor(for cid: String) { set(nil, for: cid) }
+
+    /// "Reset All Chat Colors": every chat and the Settings colour back to Auto (their
+    /// `resetAllSettings`). The custom colour library is kept.
+    func resetAllColors() { applyToAllChats(nil, clearingChatPicks: true) }
 
     /// "Apply For All Chats": the default bubble colour (nil = app default). Same rule as
     /// `WallpaperStore.applyToAllChats` (owner, 2026-09-27): a chat's own colour beats the default,

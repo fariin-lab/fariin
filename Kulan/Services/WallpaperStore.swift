@@ -43,6 +43,16 @@ enum ChatWallpaper: Equatable {
         }
     }
     static let legacyMarker = "__legacy__"
+
+    /// The bubble colour Auto uses on this wallpaper — its theme's `bubbleHex`, the reference app's
+    /// `defaultChatColor`. A photo, a plain colour and None have none (see `ChatColorStore.autoColor`).
+    var pairedColor: ChatColorSpec? {
+        switch self {
+        case .gradient(let id): return ChatWallpapers.themeColor(id)
+        case .preset(let id):   return WallpaperPreset(id: id).theme.map { ChatColorSpec(colors: [$0.bubbleHex]) }
+        case .none, .photo, .color: return nil
+        }
+    }
 }
 
 /// THE DOODLE SHEET, ONCE. It is an ALPHA MASK — white ink on transparent — so this single file
@@ -377,6 +387,11 @@ enum ChatWallpapers {
         cache[cid] = w
         UserDefaults.standard.set(w.stored, forKey: Self.key(cid))
         version &+= 1                                           // observed → live re-render
+    }
+
+    /// The Settings wallpaper every chat without its own falls back to.
+    var defaultWallpaper: ChatWallpaper {
+        ChatWallpaper(stored: UserDefaults.standard.string(forKey: Self.defaultKey))
     }
 
     /// Does this chat have its OWN stored pick (vs inheriting the all-chats default)?

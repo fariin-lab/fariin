@@ -562,12 +562,13 @@ struct ChatColorPage: View {
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 16), count: 5)
 
-    private var selected: ChatColorSpec? {
-        ChatColorSpec(stored: UserDefaults.standard.string(forKey: ChatColorStore.defaultKey))
-    }
+    /// The colour chosen here; nil = Auto (2026-09-27, see `ChatColorStore.autoColor`).
+    private var selected: ChatColorSpec? { colorStore.globalChosenColor }
+    @State private var confirmResetAll = false
 
     var body: some View {
         let _ = colorStore.version
+        let _ = WallpaperStore.shared.version   // Auto follows the Settings wallpaper
         ScrollView {
             VStack(spacing: 18) {
                 // Live preview on the current all-chats wallpaper.
@@ -581,10 +582,12 @@ struct ChatColorPage: View {
                 .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                 LazyVGrid(columns: cols, spacing: 16) {
-                    // "auto" = the app default blue.
+                    // "Auto" = no colour chosen: the Settings wallpaper's paired colour, else the app
+                    // default blue. Filled with what it gives right now, as the reference's is.
                     circleButton(nil) {
-                        Circle().fill(Theme.defaultBubble(dark))
-                            .overlay(Text("auto").font(.system(size: 13, weight: .medium)).foregroundStyle(.white))
+                        Circle().fill(colorStore.globalAutoColor.map { AnyShapeStyle($0.fill) }
+                                      ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+                            .overlay(Text("Auto").font(.system(size: 13, weight: .medium)).foregroundStyle(.white))
                     }
                     ForEach(ChatColors.presets) { p in
                         circleButton(p) { Circle().fill(p.fill) }
@@ -606,8 +609,25 @@ struct ChatColorPage: View {
                 .padding(18)
                 .background(Color(.secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+
+                // ⛔ RESET ALL CHAT COLORS — owner, 2026-09-27, the reference's global reset: every
+                // chat, and this page, back to Auto. Custom colours stay in the picker.
+                Button { confirmResetAll = true } label: {
+                    Text("Reset All Chat Colors")
+                        .font(.body).foregroundStyle(.red)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Color(.secondarySystemGroupedBackground),
+                                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
             .padding(16)
+        }
+        .confirmationDialog("Reset all chat colors?", isPresented: $confirmResetAll, titleVisibility: .visible) {
+            Button("Reset All Chat Colors", role: .destructive) { colorStore.resetAllColors() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every chat goes back to Auto and follows its wallpaper's color.")
         }
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Chat Color")
@@ -647,7 +667,8 @@ struct ChatColorPage: View {
             .font(.system(size: 14))
             .foregroundStyle(mine ? .white : .primary)
             .padding(.horizontal, 13).padding(.vertical, 8)
-            .background(mine ? (selected.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+            // What a chat without its own colour draws: this page's pick, or Auto's.
+            .background(mine ? (colorStore.globalColor.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
                              : AnyShapeStyle(Color(.systemGray5)),
                         in: RoundedRectangle(cornerRadius: 17, style: .continuous))
     }

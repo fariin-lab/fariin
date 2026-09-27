@@ -4442,6 +4442,7 @@ private struct ChatPeekPreview: View {
     private var size: CGSize { Self.platterSize }
     private var peekChatColor: ChatColorSpec? {
         _ = ChatColorStore.shared.version
+        _ = WallpaperStore.shared.version   // Auto follows the wallpaper
         return ChatColorStore.shared.color(for: cid)
     }
 
