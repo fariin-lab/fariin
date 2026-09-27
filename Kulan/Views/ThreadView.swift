@@ -6199,13 +6199,40 @@ struct ThreadView: View {
         //
         // ⚠️ THE LABEL IS NOW THE WHOLE BAR, so it carries the accessibility meaning on its own.
         // "Unblock" alone reads as an action without a subject to a screen reader, hence the hint.
+        // ⛔ TWO BUTTONS, IN THE TEXT COLOUR — owner, 2026-09-27: "Unblock in the normal text
+        // colour, not red; show 2 buttons, Clear Chat and Unblock". Clear Chat is the chat list's
+        // own "delete for me" (`ChatService.deleteForMe`), asked first. A refused unblock says so
+        // instead of leaving the button looking dead.
         composerNotice(hugsContent: true) {
-            Button("Unblock") { Task { await ChatService.setBlocked(cid, false) } }
-                .font(.body)
-                .tint(.red)
+            HStack(spacing: 28) {
+                Button("Clear Chat") { confirmClearBlocked = true }
+                Button("Unblock") {
+                    Task {
+                        if !(await ChatService.setBlocked(cid, false)) {
+                            await MainActor.run { unblockFailed = true }
+                        }
+                    }
+                }
                 .accessibilityHint("Unblocks \(title)")
+            }
+            .font(.body)
+            .tint(.primary)
+            .padding(.horizontal, 8)
+        }
+        .confirmationDialog("Clear this chat?", isPresented: $confirmClearBlocked, titleVisibility: .visible) {
+            Button("Clear Chat", role: .destructive) { Task { await ChatService.deleteForMe(cid) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every message is removed from this chat on your phone. The other person's copy is not affected.")
+        }
+        .alert("Couldn't unblock", isPresented: $unblockFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The server did not accept it. Try again in a moment.")
         }
     }
+    @State private var confirmClearBlocked = false
+    @State private var unblockFailed = false
 
     // A group I'm no longer in (removed by an admin, or left on another device): the conv is
     // still cached but I'm not in `users`. Show a non-interactive bar instead of the composer.

@@ -146,6 +146,8 @@ struct ContactInfoView: View {
     /// The Delete Chat confirmation on a blocked person's page. Deleting a conversation cannot be
     /// undone from here, so it asks first, the same way the chat list's own delete does.
     @State private var showDeleteChat = false
+    /// The server refused an unblock (the row has flipped back).
+    @State private var unblockFailed = false
     /// CHAT PIN + REMOVE FRIEND — owner's spec, 2026-09-11. The prompt is his fourth screenshot
     /// ("doesn't follow you. If you know their X Number you can message them now", Not Now / Use);
     /// the sheet is his third; the remove confirm is §23.
@@ -483,11 +485,18 @@ struct ContactInfoView: View {
                 // `infoRow` routes anything without that prefix to SF Symbols.
                 infoRow("Delete Chat", "trash", tint: .red, chevron: false) { showDeleteChat = true }
                 rowDivider
-                infoRow("Unblock \(shownName)", "checkmark.circle", chevron: false) {
+                // ⛔ THE BLOCK ICON, IN THE PAGE'S TEXT COLOUR — owner, 2026-09-27: "Unblock in the
+                // normal text colour, not red; block and unblock use the same icon, do not change it".
+                infoRow("Unblock \(shownName)", "ic_block", chevron: false) {
                     // Flip first (audit, 2026-09-24): the write only returns once the server
-                    // answers, so offline the row sat unchanged and read as a dead button.
+                    // answers, so offline the row sat unchanged and read as a dead button. A refusal
+                    // flips it back and says so, instead of leaving a row that lies.
                     blocked = false
-                    Task { await ChatService.setBlocked(cid, false) }
+                    Task {
+                        if !(await ChatService.setBlocked(cid, false)) {
+                            await MainActor.run { blocked = true; unblockFailed = true }
+                        }
+                    }
                 }
             } else {
                 // ⛔ HIS OWN GLYPHS — owner, 2026-08-23, who sent both vectors. `nosign` and
@@ -516,8 +525,12 @@ struct ContactInfoView: View {
                 }
                 infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
             }
-            rowDivider
-            infoRow("Report \(shownName)", "ic_report", tint: .red, chevron: false) { showReport = true }
+            // ⛔ NO REPORT WHILE BLOCKED — owner, 2026-09-27: "hide the Report button when the user is
+            // blocked". The blocked page is Delete Chat and Unblock and nothing else.
+            if !blocked {
+                rowDivider
+                infoRow("Report \(shownName)", "ic_report", tint: .red, chevron: false) { showReport = true }
+            }
         }
         .profileSurface(plain: cardColor)
     }
@@ -756,6 +769,11 @@ struct ContactInfoView: View {
             Text("This person restricts who can call them.")
         }
         // 2026-09-24 fix-all #196: a refused glow write, same wording as the other "Couldn't update" alerts.
+        .alert("Couldn't unblock", isPresented: $unblockFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The server did not accept it. Try again in a moment.")
+        }
         .alert("Couldn't update", isPresented: $glowWriteFailed) {
             Button("OK", role: .cancel) {}
         } message: {
