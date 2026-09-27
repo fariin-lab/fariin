@@ -33,6 +33,13 @@ enum BubbleMetrics {
     /// a circle much larger turns the pill into a row of avatars, and much smaller reads as a dot.
     /// See `MessageRowLayout.decorations`.
     static let reactionFace: CGFloat = 24   // theirs, 2026-09-27 (was 18)
+    /// ⛔ A PILL WITH A FACE HAS ITS OWN SPACING — owner, 2026-09-27, ringed: the heart sat well in
+    /// from the left, the avatar touched the right end, and the gap between them was wide. It was the
+    /// emoji's 11pt insets on BOTH sides plus 4, with the face squeezed into the last 3pt. Now: 10 to
+    /// the emoji (where it already sat), 6 between emoji and face, 6 after the face.
+    static let reactionFaceLead: CGFloat = 10
+    static let reactionFaceGap: CGFloat = 6
+    static let reactionFaceTrail: CGFloat = 6
     /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
     /// [the reference] react badge then make it like it, size and color".
     ///
@@ -427,8 +434,11 @@ enum BubbleTicks {
         let all = strokes.flatMap { $0 }
         let minX = all.map(\.x).min()!, maxX = all.map(\.x).max()!
         let minY = all.map(\.y).min()!, maxY = all.map(\.y).max()!
-        let scale: CGFloat = 8 / 12                      // the double mark's 12 units → 8pt
-        let line = 2 * scale, pad = line / 2
+        // ⛔ SMALLER — owner, 2026-09-27, both ringed, "the tick in the chat list and in the chat
+        // still looks big". It was 8pt tall and the double mark ~19pt wide, heavier than the 11pt
+        // time beside it. Now 6.5pt tall (~15pt wide doubled) on a 1.2pt stroke.
+        let scale: CGFloat = 6.5 / 12                    // the double mark's 12 units → 6.5pt
+        let line: CGFloat = 1.2, pad = line / 2
         let size = CGSize(width: (maxX - minX) * scale + line, height: (maxY - minY) * scale + line)
         let img = UIGraphicsImageRenderer(size: size).image { _ in
             let p = UIBezierPath()

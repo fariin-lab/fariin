@@ -23,6 +23,14 @@ struct WallpaperPickerSheet: View {
     @State private var committed = false          // Apply pressed → keep it; otherwise revert on close
     @State private var photoItem: PhotosPickerItem?
     @State private var showCustomColor = false    // "+" → Custom Color editor
+    /// ⛔ THE SECOND BUTTON WAITS FOR THE SHEET — owner, 2026-09-27: picking a wallpaper for the first
+    /// time, the Chat Color row jumped up over the wallpapers. The pending change grows the detent by
+    /// 44 AND the bar by 40 ("Apply For All Chats" under "Apply Wallpaper"), but the bar grows at once
+    /// while the sheet is still animating up, so for that moment the 40 came out of the rows above it.
+    /// "Apply Wallpaper" takes the Photos button's place at once (same 50pt, nothing moves); this row
+    /// arrives once the sheet has grown into the room for it. It leaves at once, which only gives the
+    /// rows more room while the sheet shrinks.
+    @State private var showAllChatsRow = false
     private var colorStore: ChatColorStore { .shared }
     // The wallpaper/colour in use when the sheet OPENED — must be @State: the live preview writes to the
     // observed store, which re-creates this struct, and a plain `let` re-captured the PREVIEWED value as
@@ -43,7 +51,9 @@ struct WallpaperPickerSheet: View {
         let cur = WallpaperStore.shared.wallpaper(for: cid)
         _selected = State(initialValue: cur)
         _original = State(initialValue: cur)
-        let col = ChatColorStore.shared.color(for: cid)
+        // The chat's OWN pick, nil = Auto — not the resolved colour, which would turn "following the
+        // wallpaper" into a fixed copy of today's colour the moment Apply or Cancel wrote it back.
+        let col = ChatColorStore.shared.chosenColor(for: cid)
         _selectedColor = State(initialValue: col)
         _originalColor = State(initialValue: col)
     }
@@ -189,6 +199,13 @@ struct WallpaperPickerSheet: View {
         // material is the thing that no longer matches a clear sheet. They stay edge-attached and
         // above the home indicator; only the background they were carrying is gone.
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+        .onChange(of: hasPendingChange) { _, pending in
+            guard pending else { showAllChatsRow = false; return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard hasPendingChange else { return }
+                withAnimation(.easeOut(duration: 0.2)) { showAllChatsRow = true }
+            }
+        }
         // ⛔ THE HEIGHT CAME DOWN 48 — owner, 2026-09-02, ringing the dead band above Apply
         // Wallpaper. Moving both bars out of the VStack did not shrink the sheet with them: a fixed
         // detent is a number, it does not follow its content, so the space the two rows used to
@@ -298,8 +315,11 @@ struct WallpaperPickerSheet: View {
         store.deleteFromLibrary(pid)       // history entry + file removed; other photos untouched
     }
 
-    // Something non-default is picked / in use → offer Reset.
-    private var hasCustom: Bool { selected != .none || selectedColor != nil }
+    // Something of this chat's own is in use or being tried → offer Reset. Each reset in the menu
+    // appears only when there is something of that kind to reset.
+    private var canResetColor: Bool { originalColor != nil || selectedColor != nil }
+    private var canResetWallpaper: Bool { hadOwnWallpaper || selected != original }
+    private var hasCustom: Bool { canResetColor || canResetWallpaper }
 
     private var header: some View {
         ZStack {
@@ -317,8 +337,17 @@ struct WallpaperPickerSheet: View {
                 Spacer()
                 // Reset back to the default (no wallpaper + default chat color) — only when a custom
                 // wallpaper or chat color is set.
+                // ⛔ TWO RESETS, AS THE REFERENCE HAS — owner, 2026-09-27: "reset this chat's color,
+                // reset this chat's wallpaper". Same Reset capsule; it opens a menu now.
                 if hasCustom {
-                    Button { resetToDefault() } label: {
+                    Menu {
+                        if canResetColor {
+                            Button { resetColorOnly() } label: { Label("Reset Chat Color", systemImage: "paintpalette") }
+                        }
+                        if canResetWallpaper {
+                            Button { resetWallpaperOnly() } label: { Label("Reset Wallpaper", systemImage: "photo") }
+                        }
+                    } label: {
                         Text("Reset").font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
                             .frame(height: 48).padding(.horizontal, 18)   // 48pt — matches the X (user spec)
                             .liquidGlass(Capsule(), interactive: true)
@@ -357,25 +386,43 @@ struct WallpaperPickerSheet: View {
     private func resetToDefault() {
         committed = true                       // persist the reset (don't let onDisappear revert it)
         if globalOnly {
-            // Global reset: plain app look everywhere (default cleared + all per-chat picks).
-            store.applyToAllChats(.none)
-            colorStore.applyToAllChats(nil)
+            // Global reset: plain app look everywhere (default cleared + all per-chat picks). The one
+            // path that still clears chats' own picks — an explicit "reset all", as the reference has.
+            store.applyToAllChats(.none, clearingChatPicks: true)
+            colorStore.resetAllColors()
         } else {
-            // Per-chat reset: this chat goes back to the PLAIN default look. Clearing the override
-            // instead made Reset do nothing whenever an "Apply For All Chats" wallpaper was set —
-            // the chat simply re-inherited it. An explicit per-chat "none" wins over the default.
-            store.set(.none, for: cid)
-            colorStore.resetToAppDefault(for: cid)
+            store.clearOverride(for: cid)
+            colorStore.resetChatColor(for: cid)
         }
         selected = .none; selectedColor = nil
         original = .none; originalColor = nil
         dismiss()
     }
 
+    /// "Reset Chat Color": this chat back to Auto. A wallpaper being tried is dropped, and the one
+    /// the chat had is put back as it was (its own, or following Settings).
+    private func resetColorOnly() {
+        committed = true
+        colorStore.resetChatColor(for: cid)
+        if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
+        dismiss()
+    }
+
+    /// "Reset Wallpaper": this chat follows the Settings wallpaper again (their per-chat reset removes
+    /// the chat's own). A colour being tried is dropped; the chat's chosen colour, or Auto, stays.
+    private func resetWallpaperOnly() {
+        committed = true
+        store.clearOverride(for: cid)
+        colorStore.set(originalColor, for: cid)
+        dismiss()
+    }
+
     private func applyForAllChats() {
         committed = true
-        store.applyToAllChats(selected)
-        colorStore.applyToAllChats(selectedColor)
+        // Every chat without its own pick follows this; the chat it was pressed in joins them. Other
+        // chats' own picks are kept (owner, 2026-09-27: a chat's own wallpaper beats the default).
+        store.applyToAllChats(selected, alsoFor: cid)
+        colorStore.applyToAllChats(selectedColor, alsoFor: cid)
         dismiss()
     }
 
@@ -417,7 +464,7 @@ struct WallpaperPickerSheet: View {
                             .liquidGlass(Capsule(), interactive: true, tint: applyTint)
                             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
                     }
-                    if !globalOnly {
+                    if !globalOnly && showAllChatsRow {
                         Button { applyForAllChats() } label: {
                             Text("Apply For All Chats").font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(.secondary)
@@ -425,6 +472,7 @@ struct WallpaperPickerSheet: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .transition(.opacity)
                     }
                 }
                 .transition(.opacity)
@@ -472,17 +520,21 @@ struct WallpaperPickerSheet: View {
         }
     }
 
+    /// ⛔ AUTO — the reference app's first circle (owner, 2026-09-27). Picking it stores no colour, so
+    /// the chat follows its wallpaper's paired colour (see `ChatColorStore.autoColor`). Filled with what
+    /// Auto gives right now, so it changes as wallpapers are tried above it (the body reads the
+    /// wallpaper store's version, and a tried wallpaper is written live as this chat's own).
     private var defaultColorCircle: some View {
-        let isDefault = selectedColor == nil
-        // "Default" = follow the all-chats colour when one is set, else the app blue —
-        // the swatch shows what following the default actually LOOKS like.
-        let globalSpec = ChatColorSpec(stored: UserDefaults.standard.string(forKey: ChatColorStore.defaultKey))
+        let isAuto = selectedColor == nil
+        let auto = colorStore.autoColor(for: cid)
         return Button { chooseColor(nil) } label: {
-            Circle().fill(globalSpec.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
+            Circle().fill(auto.map { AnyShapeStyle($0.fill) } ?? AnyShapeStyle(Theme.defaultBubble(dark)))
                 .frame(width: 52, height: 52)
-                .overlay(Image(systemName: "message.fill").font(.system(size: 18)).foregroundStyle(.white))
-                .overlay(Circle().strokeBorder(isDefault ? Color.primary : .clear, lineWidth: 3))
-        }.buttonStyle(.plain)
+                .overlay(Text("Auto").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white))
+                .overlay(Circle().strokeBorder(isAuto ? Color.primary : .clear, lineWidth: 3))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Auto chat color")
     }
 
     private func colorCircle(_ p: ChatColorSpec) -> some View {

@@ -930,7 +930,9 @@ struct ThreadView: View {
     // One exception to the list's distance test: anything that landed while the reader was away brings
     // the arrow back at once, count and all, however small the scroll was. `newWhileAway` zeroes itself
     // the moment the bottom is reached, so this never keeps the button up on its own.
-    private var showsJumpButton: Bool { showJumpButton || newWhileAway > 0 }
+    // ⛔ NOT IN THE LONG-PRESS PREVIEW — owner, 2026-09-27, composer and arrow ringed: "in preview
+    // don't show the composer and the arrow button". A preview is the messages only.
+    private var showsJumpButton: Bool { !preview && (showJumpButton || newWhileAway > 0) }
 
     @ViewBuilder private var jumpToBottomButton: some View {
         if showsJumpButton && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
@@ -1018,8 +1020,9 @@ struct ThreadView: View {
     /// hangs from the keyboard. Their blocking and error panels pin to the screen bottom, and ours
     /// stay in SwiftUI for the same reason — there is no keyboard when you cannot type.
     private var canShowComposer: Bool {
-        !preview
-            && !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
+        // The UIKit bar lives in the list's controller, so the preview's empty `bottomBarContent`
+        // never hid it: `nil` state here is what takes it out (`hideComposer`). See `showsJumpButton`.
+        !preview && !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
             && !repo.iBlocked && requestStance != .incoming && requestStance != .awaitingReply
             && !cannotMessageThem
             && !otherAccountDeleted   // 2026-09-24 decision D15
@@ -2384,6 +2387,9 @@ struct ThreadView: View {
     // re-render live when the colour is changed in the wallpaper sheet.
     private var chatColorSpec: ChatColorSpec? {
         _ = ChatColorStore.shared.version
+        // A chat on Auto takes its colour from the wallpaper (2026-09-27), so a wallpaper change must
+        // re-render the bubbles too.
+        _ = WallpaperStore.shared.version
         return ChatColorStore.shared.color(for: cid)
     }
 

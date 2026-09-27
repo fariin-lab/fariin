@@ -996,9 +996,9 @@ struct AppearanceSettingsView: View {
     private var defaultWallpaper: ChatWallpaper {
         ChatWallpaper(stored: UserDefaults.standard.string(forKey: WallpaperStore.defaultKey))
     }
-    private var defaultColor: ChatColorSpec? {
-        ChatColorSpec(stored: UserDefaults.standard.string(forKey: ChatColorStore.defaultKey))
-    }
+    /// What a chat with no colour of its own draws: the Settings colour, else Auto's (the Settings
+    /// wallpaper's paired colour). nil = the default blue. 2026-09-27, see `ChatColorStore.autoColor`.
+    private var defaultColor: ChatColorSpec? { colorStore.globalColor }
 
     var body: some View {
         let _ = wallStore.version
@@ -1090,12 +1090,17 @@ struct AppearanceSettingsView: View {
             HStack(spacing: 10) {
                 ForEach(ChatWallpapers.all) { g in
                     let themeColor = ChatColorSpec(colors: [g.bubbleHex])
-                    // Selected only when BOTH halves of the theme are the active ones.
+                    // Selected only when BOTH halves of the theme are the active ones: this wallpaper,
+                    // and its colour showing (Auto, or the same colour chosen outright).
                     let isSel = defaultWallpaper == .gradient(g.id)
                         && defaultColor?.stored == themeColor.stored
                     Button {
+                        // ⛔ THE WALLPAPER, AND THE COLOUR ON AUTO — owner, 2026-09-27, the reference's
+                        // Auto system. The card still shows its paired colour, because Auto on this
+                        // wallpaper IS that colour; storing it as a fixed pick instead would stop it
+                        // following the next wallpaper change.
                         wallStore.applyToAllChats(.gradient(g.id))
-                        colorStore.applyToAllChats(themeColor)
+                        colorStore.applyToAllChats(nil)
                     } label: {
                         VStack(spacing: 6) {
                             Capsule().fill(.white.opacity(0.9)).frame(width: 44, height: 12)

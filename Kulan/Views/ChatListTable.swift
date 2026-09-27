@@ -1067,7 +1067,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // after pin, or any re-sort) landing inside a transaction's flight opened its own
         // `beginUpdates` and repainted cells that were still moving. It waits for the landing the
         // same way it waits for a finger; the transaction's completion block replays it.
-        if tableView.isDragging || tableView.isDecelerating || isInTransition || isAnimatingRows || menuIsUp {
+        if tableView.isDragging || tableView.isDecelerating || isInTransition || isAnimatingRows {
             deferredState = (new, animated)
             // `state` has already advanced to `new` above, and the replay needs the diff against
             // what is actually ON SCREEN — so it is rewound here and the replay does the comparing.
@@ -1762,37 +1762,32 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The timing above was never the problem and is kept: in the completion when there is an
         // animator, because clearing mid-flight would take the grey out from under the preview as it
         // flies home, and immediately when there is none to wait for.
-        // The list was held while the menu was up (see `menuIsUp`). It lands once the preview is
-        // home, with the animation it arrived with, so the pin is seen moving into its section.
-        let release: () -> Void = { [weak self] in
-            guard let self else { return }
-            self.menuIsUp = false
-            self.flushDeferredState(afterFlight: true)
-        }
-        if let animator {
-            animator.addCompletion { clear(); release() }
-        } else {
-            clear(); release()
-        }
+        if let animator { animator.addCompletion(clear) } else { clear() }
     }
 
-    func tableView(_ tableView: UITableView,
-                   willDisplayContextMenu configuration: UIContextMenuConfiguration,
-                   animator: (any UIContextMenuInteractionAnimating)?) {
-        menuIsUp = true
-    }
-
-    /// ⛔ TRUE FROM THE MOMENT THE LONG-PRESS MENU OPENS UNTIL ITS PREVIEW HAS FLOWN HOME — owner,
-    /// 2026-09-27: "when I long-press a chat and pin, the chat takes seconds to appear; I see an
-    /// empty Pinned area first. Only when I pin from the context menu."
+    /// ⛔ THE PREVIEW FLIES HOME TO WHERE THE CHAT IS NOW — the reference app's own answer, read from
+    /// its chat list source (`previewForDismissingContextMenuWithConfiguration`), 2026-09-27. Owner:
+    /// "when I pin or unpin from the menu it happens late".
     ///
-    /// ⚠️ WHAT HAPPENED: the menu hides the pressed row's cell while its preview is up and gives it
-    /// back as the preview flies home. Pin moved that same cell into the Pinned section DURING the
-    /// flight, so the cell was handed back hidden in its new place, and stayed blank under a "Pinned"
-    /// heading until some unrelated update happened to repaint it. A swipe pin never hides a cell,
-    /// which is why only the menu showed it. The fix is the order the system itself expects: nothing
-    /// moves under an open menu; the change is applied the instant the menu has closed.
-    private var menuIsUp = false
+    /// ⚠️ WHAT THIS REPLACES. A pin moves the pressed row to another section while the menu is still
+    /// closing. The first build of the menu drew that as an empty row under "Pinned"; the next one
+    /// held every list update until the preview had landed, which is the lateness he timed: the pin
+    /// only started after the menu had finished closing. The reference does neither. It lets the
+    /// list update at once and hands the menu a dismissal target at the row's CURRENT index path,
+    /// found by the configuration's identifier (the chat id), with a CLEAR background so no opaque
+    /// empty row is left behind if the row moves under the flight.
+    func tableView(_ tableView: UITableView,
+                   previewForDismissingContextMenuWithConfiguration configuration: UIContextMenuConfiguration
+    ) -> UITargetedPreview? {
+        guard let id = configuration.identifier as? String,
+              let ip = state.indexPath(of: id),
+              let cell = tableView.cellForRow(at: ip) else { return nil }
+        let frame = tableView.rectForRow(at: ip)
+        let target = UIPreviewTarget(container: tableView, center: CGPoint(x: frame.midX, y: frame.midY))
+        let params = UIPreviewParameters()
+        params.backgroundColor = .clear
+        return UITargetedPreview(view: cell, parameters: params, target: target)
+    }
 
     /// ⛔ A SWIPE LEAVES THE SAME STUCK GREY, AND IT IS THE THIRD REPORT OF ONE — owner, 2026-09-11:
     /// "still sometime highlight is not hidden, is locked", photographed on a row with no swipe open

@@ -74,16 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            REACTION ANIMATION, NEW COMPOSER ICONS, KEYBOARD AFTER SCREENSHOT, HEADER BLUR.
+            INSTANT PIN, SMALLER TICKS, SMOOTHER REACTIONS, CLEANER PREVIEW.
 
-            REACTIONS: adding a reaction pops the pill in and the bubble grows smoothly, pushing the messages above it up. Removing one shrinks it away.
+            PIN: pinning or unpinning a chat from the long-press menu happens straight away.
 
-            COMPOSER: new + and microphone icons.
+            TICKS: the sent and read ticks are smaller and thinner, in chats and in the chat list.
 
-            KEYBOARD: after taking a screenshot with the keyboard open, the message bar returns to its place.
+            REACTIONS: the date label above a message now moves together with the bubble when you react or remove a reaction.
 
-            HEADER: the chat header blur should appear as the chat opens, not after.
+            PREVIEW: the long-press chat preview no longer shows the message bar or the down arrow.
 
-            PLEASE TEST: react to the last message and to one higher up, then remove it; open the keyboard and take a screenshot; open a few chats and watch the header.
+            PLEASE TEST: pin and unpin a chat from the long-press menu; react under a date label; look at the ticks.
 
         run: fastlane beta

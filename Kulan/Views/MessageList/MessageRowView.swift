@@ -177,9 +177,12 @@ final class ReactionChipView: UIView {
         // order in his screenshot. With no face the label owns the whole pill, as it always did.
         if hasFace, let faceView {
             let d = BubbleMetrics.reactionFace
-            let inset = (bounds.height - d) / 2
-            faceView.frame = CGRect(x: bounds.width - inset - d, y: inset, width: d, height: d)
-            label.frame = CGRect(x: 0, y: 0, width: faceView.frame.minX - 2, height: bounds.height)
+            faceView.frame = CGRect(x: bounds.width - BubbleMetrics.reactionFaceTrail - d,
+                                    y: (bounds.height - d) / 2, width: d, height: d)
+            let lead = BubbleMetrics.reactionFaceLead
+            label.frame = CGRect(x: lead, y: 0,
+                                 width: max(0, faceView.frame.minX - BubbleMetrics.reactionFaceGap - lead),
+                                 height: bounds.height)
         } else {
             label.frame = bounds
         }
@@ -1291,6 +1294,16 @@ final class MessageRowView: UIView {
             if let rp = old.rimPath {
                 move(rim, from: oldLocal); add(rim.shape, "path", rp)
                 move(highlight, from: oldLocal); add(highlight.shape, "path", rp)
+            }
+        }
+        // ⛔ AND THE ROW'S OWN CHROME ABOVE THE BUBBLE — owner, 2026-09-27, a frame of his recording:
+        // the date pill over this row sat ON the bubble mid-animation. When the bubble grows from its
+        // bottom, the list has moved this whole row by `grow`, so the date pill, divider and sender
+        // name above the box jumped at once while the box was still easing from its old top. They
+        // ride the same curve from where they were.
+        if Self.growsFromBottom, abs(grow) > 0.5 {
+            for v in subviews where v !== bubbleBox && !v.isHidden && v.frame.maxY <= nb.bubble.minY + 1 {
+                add(v.layer, "transform.translation.y", grow)
             }
         }
         // Everything else in the bubble (text, time, ticks, media) glides from where it was.

@@ -43,6 +43,16 @@ enum ChatWallpaper: Equatable {
         }
     }
     static let legacyMarker = "__legacy__"
+
+    /// The bubble colour Auto uses on this wallpaper — its theme's `bubbleHex`, the reference app's
+    /// `defaultChatColor`. A photo, a plain colour and None have none (see `ChatColorStore.autoColor`).
+    var pairedColor: ChatColorSpec? {
+        switch self {
+        case .gradient(let id): return ChatWallpapers.themeColor(id)
+        case .preset(let id):   return WallpaperPreset(id: id).theme.map { ChatColorSpec(colors: [$0.bubbleHex]) }
+        case .none, .photo, .color: return nil
+        }
+    }
 }
 
 /// THE DOODLE SHEET, ONCE. It is an ALPHA MASK — white ink on transparent — so this single file
@@ -379,6 +389,11 @@ enum ChatWallpapers {
         version &+= 1                                           // observed → live re-render
     }
 
+    /// The Settings wallpaper every chat without its own falls back to.
+    var defaultWallpaper: ChatWallpaper {
+        ChatWallpaper(stored: UserDefaults.standard.string(forKey: Self.defaultKey))
+    }
+
     /// Does this chat have its OWN stored pick (vs inheriting the all-chats default)?
     /// The picker needs the raw answer, which `wallpaper(for:)` hides behind its fallback.
     func hasOverride(for cid: String) -> Bool {
@@ -392,13 +407,25 @@ enum ChatWallpapers {
         version &+= 1
     }
 
-    /// "Apply For All Chats": the pick becomes the default every chat falls back to, and
-    /// per-chat picks are cleared so it truly shows everywhere.
-    func applyToAllChats(_ w: ChatWallpaper) {
+    /// "Apply For All Chats": the pick becomes the default every chat falls back to.
+    ///
+    /// ⛔ A CHAT'S OWN WALLPAPER BEATS THE DEFAULT — owner, 2026-09-27: "per-chat custom wallpaper >
+    /// global Settings wallpaper; only chats without their own should follow Settings". This used to
+    /// delete every chat's own pick, so changing the wallpaper in Settings wiped the one he had set
+    /// for one person. Now only the default changes; chats with their own pick keep it.
+    ///
+    /// `alsoFor`: the chat the button was pressed in, which joins the default rather than keeping a
+    /// copy of it. `clearingChatPicks`: the explicit Reset in Settings, which is "plain look
+    /// everywhere" and so the one path that still clears every chat's own pick.
+    func applyToAllChats(_ w: ChatWallpaper, alsoFor cid: String? = nil, clearingChatPicks: Bool = false) {
         let d = UserDefaults.standard
-        for k in d.dictionaryRepresentation().keys
-            where k.hasPrefix("wallpaper.") && !k.hasPrefix("wallpaper.library") && k != Self.defaultKey {
-            d.removeObject(forKey: k)
+        if clearingChatPicks {
+            for k in d.dictionaryRepresentation().keys
+                where k.hasPrefix("wallpaper.") && !k.hasPrefix("wallpaper.library") && k != Self.defaultKey {
+                d.removeObject(forKey: k)
+            }
+        } else if let cid {
+            d.removeObject(forKey: Self.key(cid))
         }
         cache = [:]
         d.set(w.stored, forKey: Self.defaultKey)
