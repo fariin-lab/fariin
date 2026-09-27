@@ -2036,10 +2036,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
             if delta != 0 { layout.pendingContentOffsetAdjustment = delta }
         }
+        // Which way a row that grows from a reaction is drawn growing: up from its bottom when the
+        // offset just took the whole growth (reader at the newest), else down from its top.
+        MessageRowView.growsFromBottom = pinBottom && abs(delta - grown) < 1
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0
             if delta != 0 { self.verifyAnchor(landedAnchor) }
+            if !listIsMoving { self.moveNeighboursWithReactionGrowth(target) }
             // ⛔ A ROW THAT GREW UNDER A READER AT THE NEWEST MESSAGE GROWS UPWARD — owner,
             // 2026-09-26, two screenshots: reacting to the last message put its reaction row under
             // the composer. The anchor above is top-biased, so the grown row's extra height went
@@ -2048,6 +2052,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // layout pass, which a collection view re-laying out its cells does not trigger. The
             // reference app keeps the bottom edge still when the last message changes size.
             if heightChanged { self.restoreReaderPosition() }
+        }
+    }
+
+    /// ⛔ THE CONVERSATION MOVES WITH A BUBBLE THAT A REACTION RESIZED — owner, 2026-09-27, "copy
+    /// the reference app's animation when I react". The list has already landed its final layout in
+    /// one pass; the bubble animates from its old size (`MessageRowView.animateReactionChange`), and
+    /// the rows that the resize pushed are animated back from where they were, on the same 0.4s
+    /// curve: the rows ABOVE when the bubble grew up from its bottom, the rows BELOW when it grew down.
+    /// Only for a single resized row: two at once would each claim the rows between them.
+    private func moveNeighboursWithReactionGrowth(_ ids: [String]) {
+        var grown: [(cell: UICollectionViewCell, g: CGFloat)] = []
+        for id in ids {
+            guard let ip = dataSource.indexPath(for: id),
+                  let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { continue }
+            let g = cell.takeReactionGrowth()
+            if abs(g) > 0.5 { grown.append((cell, g)) }
+        }
+        guard grown.count == 1, let only = grown.first else { return }
+        let source = only.cell, g = only.g
+        let up = MessageRowView.growsFromBottom
+        for cell in collectionView.visibleCells where cell !== source {
+            let isAbove = cell.frame.minY < source.frame.minY
+            guard up ? isAbove : !isAbove else { continue }
+            let a = CABasicAnimation(keyPath: "transform.translation.y")
+            a.fromValue = up ? g : -g
+            a.toValue = 0
+            a.duration = MessageRowView.reactionDuration
+            a.timingFunction = MessageRowView.reactionCurve
+            cell.layer.add(a, forKey: "reaction.neighbour")
         }
     }
 

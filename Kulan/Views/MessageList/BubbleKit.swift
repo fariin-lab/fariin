@@ -530,4 +530,30 @@ final class BubbleFillView: UIView {
         }
     }
 
+    /// The geometry `apply` just wrote, animated FROM an earlier shape. Explicit layer animations,
+    /// because `apply` writes every value with actions disabled (see there) and a shape layer's path
+    /// never follows a UIView animation. Used by a reaction arriving or leaving (`MessageRowView`),
+    /// with the reference app's numbers. A wallpaper slice keeps its own mask and simply lands.
+    func animateGeometry(fromPath old: UIBezierPath, fromSize size: CGSize,
+                         duration: CFTimeInterval, timing: CAMediaTimingFunction) {
+        func add(_ layer: CALayer, _ key: String, _ from: Any) {
+            let a = CABasicAnimation(keyPath: key)
+            a.fromValue = from
+            a.duration = duration
+            a.timingFunction = timing
+            layer.add(a, forKey: "reactionGrow.\(key)")
+        }
+        let oldBox = CGRect(origin: .zero, size: size)
+        for l in [shape, gradient, gradientMask] as [CALayer] {
+            add(l, "bounds", NSValue(cgRect: oldBox))
+            add(l, "position", NSValue(cgPoint: CGPoint(x: oldBox.midX, y: oldBox.midY)))
+        }
+        add(shape, "path", old.cgPath)
+        add(gradientMask, "path", old.cgPath)
+        if let bv = blurView, !bv.isHidden {
+            add(bv.layer, "bounds", NSValue(cgRect: oldBox))
+            add(bv.layer, "position", NSValue(cgPoint: CGPoint(x: oldBox.midX, y: oldBox.midY)))
+            add(blurMask, "path", old.cgPath)
+        }
+    }
 }

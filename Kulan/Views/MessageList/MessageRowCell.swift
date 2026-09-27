@@ -50,6 +50,10 @@ final class MessageRowCell: UICollectionViewCell {
     /// bubble still carrying the frame of the last row this cell drew.
     var previewBubble: UIView { rowView.liftTarget }
 
+    /// How much this row's bubble just grew (or shrank, negative) from a reaction, read once. The list
+    /// uses it to move the rest of the conversation along with the bubble.
+    func takeReactionGrowth() -> CGFloat { rowView.takeReactionGrowth() }
+
     /// The rect the long-press menu should lift, in window coordinates. Wider than the bubble when
     /// reactions hang off its corner: lifting the bubble alone slices the badge in half.
     var liftFrameInWindow: CGRect {

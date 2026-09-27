@@ -575,10 +575,21 @@ final class MessageRowView: UIView {
     // MARK: - Apply
 
     func apply(_ m: MessageRowModel, plan p: RowPlan, cid: String) {
+        // A reaction arriving on, or leaving, the message this view is ALREADY showing. Never on a
+        // recycled cell (a different id): that would be motion out of nowhere mid-scroll.
+        let oldKeys = Self.reactionKeys(model), newKeys = Self.reactionKeys(m)
+        var before: ReactionBefore?
+        if model?.id == m.id, let oldKeys, let newKeys, oldKeys != newKeys,
+           !UIAccessibility.isReduceMotionEnabled, case .bubble(let ob)? = plan?.body {
+            before = captureBefore(ob, oldKeys: oldKeys, newKeys: newKeys)
+        }
         model = m
         plan = p
         self.cid = cid
         let dark = traitCollection.userInterfaceStyle == .dark
+        defer {
+            if let before, case .bubble(let nb) = p.body { animateReactionChange(from: before, to: nb) }
+        }
 
         applyHeader(p, dark: dark)
         applyDivider(p)
@@ -1152,10 +1163,29 @@ final class MessageRowView: UIView {
     }
 
     private func applyReactions(_ b: BubblePlan) {
+        // Each chip view keeps the emoji it showed, so a reaction added before an existing one does
+        // not hand that existing chip's view to the newcomer (which would animate the wrong pill).
+        if let keys = Self.reactionKeys(model), keys.count == b.reactions.count {
+            var byKey: [String: ReactionChipView] = [:]
+            for (k, v) in zip(chipKeys, reactionViews) where !k.isEmpty { byKey[k] = v }
+            var spare = zip(chipKeys, reactionViews).filter { !keys.contains($0.0) }.map { $0.1 }
+            var ordered: [ReactionChipView] = []
+            for k in keys {
+                if let v = byKey[k] { ordered.append(v); continue }
+                if let v = spare.popLast() { ordered.append(v); continue }
+                let v = ReactionChipView(); bubbleBox.addSubview(v); ordered.append(v)
+            }
+            reactionViews = ordered + spare
+            chipKeys = keys + Array(repeating: "", count: spare.count)
+        }
         while reactionViews.count < b.reactions.count {
             let v = ReactionChipView()
             bubbleBox.addSubview(v)
             reactionViews.append(v)
+            chipKeys.append("")
+        }
+        if Self.reactionKeys(model)?.count != b.reactions.count {
+            chipKeys = Array(repeating: "", count: reactionViews.count)   // identity unknown this time
         }
         for (i, v) in reactionViews.enumerated() {
             guard i < b.reactions.count else { v.isHidden = true; continue }
@@ -1167,6 +1197,122 @@ final class MessageRowView: UIView {
                         onMyBubble: b.reactionsOnMyBubble,
                         face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil)
         }
+    }
+
+    // MARK: - A reaction arriving or leaving
+    //
+    // ⛔ THE REFERENCE APP'S MOTION AND NUMBERS — owner, 2026-09-27: "copy the animation when I
+    // react: the badge effect and the bubble animation, its maths and logic". Read from its source
+    // (behaviour and numbers only; nothing of its code is here):
+    //   · every change runs 0.4s on its list curve, a cubic bezier (0.38, 0.70, 0.125, 1.00): quick
+    //     start, long soft landing, no overshoot;
+    //   · a NEW pill scales 0.01 → 1 on that curve while fading 0 → 1 in 0.2s ease-in-out;
+    //   · pills already there slide to their new places on the same 0.4s;
+    //   · a REMOVED pill scales to 0.01 and fades out in 0.2s ease-in-out, then goes;
+    //   · the bubble grows or shrinks on the 0.4s curve. Their list is upside down, so a message at
+    //     the bottom keeps its bottom edge and grows UP, pushing the conversation above it up.
+    // The list lands its final layout in one pass as always (see `refreshVisible`); everything here
+    // is a layer animation FROM where things were, so no frame the list relies on is ever mid-flight.
+
+    static let reactionDuration: CFTimeInterval = 0.4
+    static let reactionCurve = CAMediaTimingFunction(controlPoints: 0.38, 0.7, 0.125, 1.0)
+    /// Set by the list just before it re-applies rows: true when a row that grows keeps its bottom
+    /// edge still (a reader at the newest message), false when it grows down from a fixed top.
+    static var growsFromBottom = true
+
+    /// The emoji shown by each entry of `reactionViews`, "" when unknown.
+    private var chipKeys: [String] = []
+    /// How much this row's bubble grew in its last reaction animation; the list reads it once to
+    /// move the rest of the conversation with it (see `takeReactionGrowth`).
+    private var pendingGrowth: CGFloat = 0
+    func takeReactionGrowth() -> CGFloat { defer { pendingGrowth = 0 }; return pendingGrowth }
+
+    private struct ReactionBefore {
+        var bubble: CGRect
+        var fillPath: UIBezierPath
+        var rimPath: CGPath?
+        var frames: [ObjectIdentifier: CGRect]      // bubble-box children, by view
+        var chipFrames: [String: CGRect]            // surviving pills, by emoji
+        var leaving: [(UIView, CGRect)]             // snapshots of pills about to go
+        var arriving: Set<String>
+    }
+
+    private static func reactionKeys(_ m: MessageRowModel?) -> [String]? {
+        guard let m, case .bubble(let row) = m.content else { return nil }
+        return row.reactions.map(\.emoji)
+    }
+
+    private func captureBefore(_ ob: BubblePlan, oldKeys: [String], newKeys: [String]) -> ReactionBefore {
+        var frames: [ObjectIdentifier: CGRect] = [:]
+        let chipSet = Set(reactionViews.map(ObjectIdentifier.init))
+        for v in bubbleBox.subviews where !v.isHidden && !chipSet.contains(ObjectIdentifier(v)) {
+            frames[ObjectIdentifier(v)] = v.frame
+        }
+        var chipFrames: [String: CGRect] = [:]
+        var leaving: [(UIView, CGRect)] = []
+        for (k, v) in zip(chipKeys, reactionViews) where !k.isEmpty && !v.isHidden {
+            if newKeys.contains(k) {
+                chipFrames[k] = v.frame
+            } else if let snap = v.snapshotView(afterScreenUpdates: false) {
+                leaving.append((snap, v.frame))
+            }
+        }
+        return ReactionBefore(bubble: ob.bubble, fillPath: fill.path, rimPath: rim.shape.path,
+                              frames: frames, chipFrames: chipFrames, leaving: leaving,
+                              arriving: Set(newKeys).subtracting(oldKeys))
+    }
+
+    private func animateReactionChange(from old: ReactionBefore, to nb: BubblePlan) {
+        let dur = Self.reactionDuration, curve = Self.reactionCurve
+        func add(_ layer: CALayer, _ key: String, _ from: Any, duration: CFTimeInterval = dur,
+                 timing: CAMediaTimingFunction = curve) {
+            let a = CABasicAnimation(keyPath: key)
+            a.fromValue = from
+            a.duration = duration
+            a.timingFunction = timing
+            layer.add(a, forKey: "reaction.\(key)")
+        }
+        func move(_ v: UIView, from f: CGRect) {
+            guard f != v.frame else { return }
+            add(v.layer, "bounds.size", NSValue(cgSize: f.size))
+            add(v.layer, "position", NSValue(cgPoint: CGPoint(x: f.midX, y: f.midY)))
+        }
+        let grow = nb.bubble.height - old.bubble.height
+        // Where the old bubble sat in THIS pass's coordinates. The list moved the row by the growth
+        // when it kept the bottom still, so the old box's top is that much lower here.
+        let oldRect = Self.growsFromBottom ? old.bubble.offsetBy(dx: 0, dy: grow) : old.bubble
+        if oldRect != nb.bubble {
+            add(bubbleBox.layer, "bounds.size", NSValue(cgSize: oldRect.size))
+            add(bubbleBox.layer, "position", NSValue(cgPoint: CGPoint(x: oldRect.midX, y: oldRect.midY)))
+            let oldLocal = CGRect(origin: .zero, size: old.bubble.size)
+            move(fill, from: oldLocal)
+            fill.animateGeometry(fromPath: old.fillPath, fromSize: old.bubble.size, duration: dur, timing: curve)
+            if let rp = old.rimPath {
+                move(rim, from: oldLocal); add(rim.shape, "path", rp)
+                move(highlight, from: oldLocal); add(highlight.shape, "path", rp)
+            }
+        }
+        // Everything else in the bubble (text, time, ticks, media) glides from where it was.
+        for v in bubbleBox.subviews where !v.isHidden {
+            if let f = old.frames[ObjectIdentifier(v)], v !== fill, v !== rim, v !== highlight { move(v, from: f) }
+        }
+        for (k, v) in zip(chipKeys, reactionViews) where !v.isHidden && !k.isEmpty {
+            if old.arriving.contains(k) {
+                add(v.layer, "transform.scale", 0.01)
+                add(v.layer, "opacity", 0, duration: 0.2, timing: CAMediaTimingFunction(name: .easeInEaseOut))
+            } else if let f = old.chipFrames[k] {
+                move(v, from: f)
+            }
+        }
+        for (snap, f) in old.leaving {
+            snap.frame = f
+            bubbleBox.addSubview(snap)
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
+                snap.transform = CGAffineTransform(scaleX: 0.01, y: 0.01)
+                snap.alpha = 0
+            } completion: { _ in snap.removeFromSuperview() }
+        }
+        pendingGrowth = grow
     }
 
     private func applyFailBadge(_ b: BubblePlan) {
