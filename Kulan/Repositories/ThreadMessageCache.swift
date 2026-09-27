@@ -87,8 +87,11 @@ final class ThreadMessageCache {
     /// on the disk queue and only hands the result to the main thread, which is all `byCid` needs.
     /// A chat already in memory is skipped, and a chat opened meanwhile keeps what it loaded itself.
     func prewarm(_ cids: [String]) {
-        let wanted = cids.filter { byCid[$0] == nil }
+        // Not a chat that is already queued: the list reorders on every live snapshot, and each
+        // reorder used to queue every not-yet-landed chat a second time (2026-09-27).
+        let wanted = cids.filter { byCid[$0] == nil && !prewarmQueued.contains($0) }
         guard !wanted.isEmpty else { return }
+        prewarmQueued.formUnion(wanted)
         let gen = generation
         // ⛔ ITS OWN HIGH-PRIORITY QUEUE, ONE CHAT AT A TIME — owner, 2026-09-27, the first open
         // after launch still slow. This ran on the `.utility` disk queue, behind every write the
@@ -100,8 +103,12 @@ final class ThreadMessageCache {
         warm.async { [weak self] in
             guard let self else { return }
             for cid in wanted {
-                guard let cold = self.loadFromDisk(cid), !cold.isEmpty else { continue }
+                guard let cold = self.loadFromDisk(cid), !cold.isEmpty else {
+                    DispatchQueue.main.async { self.prewarmQueued.remove(cid) }
+                    continue
+                }
                 DispatchQueue.main.async {
+                    self.prewarmQueued.remove(cid)
                     // ⚠️ A sign-out in between wiped this cache; these are the OLD account's
                     // decrypted messages and must not come back into memory.
                     guard self.generation == gen, self.byCid[cid] == nil else { return }
@@ -111,6 +118,8 @@ final class ThreadMessageCache {
         }
     }
     private let warm = DispatchQueue(label: "fariin.threadcache.warm", qos: .userInteractive)
+    /// Chats handed to the warm queue and not yet landed. Main thread only.
+    private var prewarmQueued = Set<String>()
 
     /// Memory only — never touches the disk. What a chat being opened may ask on the main thread.
     func memoryMessages(for cid: String) -> [Message]? { byCid[cid] }
@@ -118,9 +127,15 @@ final class ThreadMessageCache {
     /// The disk copy, read and decoded OFF the main thread, handed back on it (nil = none). The
     /// reference app's rule for opening a chat: the push never waits for message loading; the list
     /// stays hidden until what it shows has landed (`ThreadView`'s reveal veil does that here).
+    ///
+    /// ⛔ ITS OWN LANE, NOT THE PREWARM'S — owner, 2026-09-27, the first open after launch still late.
+    /// This shared the serial `warm` queue with `prewarm`, which decodes up to twelve chats one after
+    /// another and is queued again whenever the list reorders. The chat he TAPPED therefore waited
+    /// behind a dozen decodes of chats he had not asked for. A tap is the one read that must not queue.
+    /// The main-thread handoff below already settles a race with the prewarm.
     func loadAsync(_ cid: String, _ done: @escaping ([Message]?) -> Void) {
         let gen = generation
-        warm.async { [weak self] in
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             let cold = self?.loadFromDisk(cid)
             DispatchQueue.main.async {
                 guard let self, self.generation == gen else { done(nil); return }
@@ -159,7 +174,7 @@ final class ThreadMessageCache {
     /// Sign-out/delete: these are DECRYPTED messages — never let them survive into
     /// another account's session on this device.
     func removeAll() {
-        byCid = [:]; pendingByCid = [:]; lastPersisted = [:]
+        byCid = [:]; pendingByCid = [:]; lastPersisted = [:]; prewarmQueued = []
         generation += 1   // an in-flight `prewarm` must not land after this
         // ⚠️ AND THE DISK COPY. This used to be memory only, so signing out was enough on its own;
         // it is not any more, and a folder of decrypted conversations left behind would be the worst

@@ -1905,7 +1905,10 @@ struct ThreadView: View {
             // in here looking at its bubble — see chatOpened. One that is still playing is left alone.
             VoiceNotePlayer.shared.chatOpened(cid)
             NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
-            RecentsCache.prewarm()   // fetch + decode the media sheet's first thumbs NOW, before + is tapped
+            // The media sheet's first thumbs, before + is tapped. ⛔ AFTER THE OPEN, NOT DURING IT —
+            // 2026-09-27: the first call after launch connects to the Photos service on the main
+            // thread (`PHPhotoLibrary.shared()`), inside the push of the first chat opened.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { RecentsCache.prewarm() }
             Task {
                 // Only needed when this chat wasn't in the cached list (no sync count above).
                 if cachedConv == nil {

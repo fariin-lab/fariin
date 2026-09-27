@@ -45,8 +45,20 @@ final class ChatHistoryPreloader {
 
     /// Called whenever the conversation list changes. Cheap when nothing went stale, which is most of
     /// the time — the whole body is a sort over an already-filtered handful.
+    /// First touched at app start (the conversations listener is one of the first things running),
+    /// so this is close enough to launch time for a three-second hold.
+    private static let launchedAt = Date()
+
     func refresh(_ conversations: [Conversation], me: String) {
         guard !me.isEmpty else { return }
+        // ⛔ NOT WHILE A CHAT IS OPEN, AND NOT IN THE FIRST SECONDS AFTER LAUNCH — owner, 2026-09-27,
+        // the first chat opened after launch still late. At launch every chat reads as stale (nothing
+        // is stamped yet), so each list snapshot started three full chat loads (listeners, keys,
+        // decrypt, rebuild) exactly when he was tapping one, and they competed with it for the
+        // database queue and the main thread. The reference app does no such warming at all. The
+        // next list snapshot after he leaves the chat picks this up again.
+        guard AppRouter.shared.activeChatId == nil,
+              Date().timeIntervalSince(Self.launchedAt) > 3 else { return }
         let now = Date().timeIntervalSince1970
 
         let stale = conversations.filter { c in

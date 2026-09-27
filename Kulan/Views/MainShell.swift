@@ -2687,6 +2687,8 @@ struct ChatsView: View {
             .task(id: repo.conversations.prefix(12).map(\.id).joined(separator: ",")) {
                 ThreadMessageCache.shared.prewarm(repo.conversations.prefix(12).map(\.id))
             }
+            // 2026-09-27: the wallpaper blur's one-time setup, paid here and not in the first chat.
+            .task { WallpaperBlurWarmup.run() }
             // 2026-09-25 photo audit: repair my own photo entry in any chat whose copy is missing or
             // older than my profile (a skipped fan-out, a group I was added to). Newer-only.
             .task(id: "\(repo.conversations.count)|\(ProfileStore.shared.me?.photoUrl ?? "")|\(ProfileStore.shared.me?.posterUrl ?? "")") {

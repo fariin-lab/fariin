@@ -507,3 +507,18 @@ struct WallpaperAnchor: UIViewRepresentable {
 
 /// See `blurred`: built once, reused for every chat's wallpaper blur. Thread-safe per Core Image.
 private let wallpaperBlurContext = CIContext(options: nil)
+
+/// ⛔ WARMED AT LAUNCH, OFF THE MAIN THREAD — owner, 2026-09-27, the first chat opened after launch
+/// still late. A global is created on first use, so the context above, its Metal setup and the
+/// compiled blur kernels were all paid on the main thread inside the first chat's push. One tiny blur
+/// here pays them in the background while the chat list is on screen.
+enum WallpaperBlurWarmup {
+    nonisolated static func run() {
+        DispatchQueue.global(qos: .utility).async {
+            let box = CGRect(x: 0, y: 0, width: 8, height: 8)
+            let img = CIImage(color: .black).cropped(to: box).clampedToExtent()
+                .applyingGaussianBlur(sigma: 20).cropped(to: box)
+            _ = wallpaperBlurContext.createCGImage(img, from: box)
+        }
+    }
+}
