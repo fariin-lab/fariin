@@ -74,18 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            CHATS SEARCH, VIDEO CONTROLS, ALBUM CANCEL, SIGN OUT AND IN.
+            SIGNED-OUT PAGES, SIMPLER.
 
-            CHATS: the search field is Apple's own in the top bar again and folds away as you scroll. Swiping a row shows one rounded card every time. No-photo avatars are drawn flat.
+            SIGN IN: if this phone remembers your account, the first page shows its card; one tap and you are in. Add another account opens Apple / Google / Email, Back returns to the card.
 
-            SIGN OUT / IN: the chat list and its previews are there at once after signing back in.
+            CLEANER: no "Log in using Passkey" link (the passkey sheet still comes up by itself), one-line subtitle, no small icons on Add another account, terms line only on Sign up.
 
-            VIDEO: the viewer's controls are rebuilt: a time capsule with elapsed and remaining time, share / play / forward buttons, tap to show or hide them, drag the bar to seek.
-
-            MESSAGES: long-pressing a long message zooms it out whole. Sending two photos and cancelling one leaves a single photo.
-
-            SETTINGS: Hide From lists people A-Z like Block User, one tap hides. The contact page's avatar is larger; the Glowers/Glowing bar matches the search field.
-
-            PLEASE TEST: sign out and back in; scroll the chat list; open a video; send two photos and cancel one; long-press a long message.
+            PLEASE TEST: sign out, tap your card; sign out, Add another account then Back; hold the card and Remove from This Phone.
 
         run: fastlane beta
