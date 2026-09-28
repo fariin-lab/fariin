@@ -54,6 +54,15 @@ struct VideoPlayerScreen: View {
     @State private var endObserver: NSObjectProtocol?
     @State private var interruptObserver: NSObjectProtocol?
     @State private var readyObservation: NSKeyValueObservation?   // TEMPORARY, see OpenTrace
+    /// The player layer has drawn its first picture. Until then the poster is what is on screen.
+    @State private var firstFrameShown = false
+    /// The spinner waits a beat: a clip on this phone has its player well inside it, and a spinner
+    /// that flashes for a tenth of a second reads as loading when nothing was.
+    @State private var spinnerDue = false
+    @State private var lifetime = Lifetime()
+    /// Whether this viewer has closed. A reference, so the audio setup that finishes off the main
+    /// thread can still ask after the view's own storage is gone.
+    private final class Lifetime { var closed = false }
     @State private var dismissing = false          // dismiss in flight → live content hidden ONCE
     @State private var closeToken = 0              // bump → the button close flies home like the drag
     // Pinch-zoom + pan (video hosted in the same zoomable view as photos).
@@ -215,8 +224,23 @@ struct VideoPlayerScreen: View {
     //   · the clip stops on its last frame at the end; nothing loops
     //   · a 92pt round play button mid-screen while paused with the chrome away
     @ViewBuilder private var playerContent: some View {
+        // ⛔ THE POSTER STAYS UNTIL THE FIRST FRAME — owner, 2026-09-28: "a loading spinner and the
+        // screen completely black for a few seconds, every time, even reopening the same video".
+        // The still that flew in from the bubble was thrown away the moment the viewer was up, and
+        // what replaced it was a black background and a player layer with nothing drawn yet. The
+        // reference app keeps its still frame on screen until the player has a picture; so does
+        // this now. Hidden once the first frame is drawn, so it never shows behind a zoomed or
+        // panned video.
+        if !firstFrameShown, !unavailable, !loadFailed, let poster {
+            Image(uiImage: poster)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
         if let player {
-            PlayerLayerView(player: player)
+            PlayerLayerView(player: player, onFirstFrame: { firstFrameShown = true })
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + panDrag.width, y: pan.height + panDrag.height)
                 .ignoresSafeArea()
@@ -264,6 +288,12 @@ struct VideoPlayerScreen: View {
                 }
             }
             .frame(width: 50, height: 50)
+            // A real download (it knows its length) shows at once; anything else waits a beat.
+            .opacity(dlFraction != nil || spinnerDue ? 1 : 0)
+            .task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                spinnerDue = true
+            }
         }
     }
 
@@ -535,12 +565,28 @@ struct VideoPlayerScreen: View {
         // The broadcast that used to prevent this was removed on the reasoning that there is only one
         // player now. There are three: this, the gallery and the story player.
         VoiceNotePlayer.shared.pause()
-        OpenTrace.time("audio setup") {   // TEMPORARY timing, see OpenTrace
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-        }
+        // ⛔ THE PLAYER FIRST, THE AUDIO SESSION OFF THE MAIN THREAD — 2026-09-28. The category and
+        // `setActive(true)` ran here, on main, BEFORE the player existed: `setActive` renegotiates
+        // the audio hardware (100-300ms, the voice player's own note measured it) and nothing could
+        // be drawn meanwhile, which is the spinner he photographed. The player is built and on
+        // screen at once now, so its first frame decodes while the session comes up, and `play()`
+        // waits for the session exactly as the voice player's does.
         let p = AVPlayer(url: url)
         player = p
+        let life = lifetime
+        Task.detached(priority: .userInitiated) {
+            let started = CFAbsoluteTimeGetCurrent()
+            let session = AVAudioSession.sharedInstance()
+            if session.category != .playback { try? session.setCategory(.playback) }
+            try? session.setActive(true)
+            let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
+            await MainActor.run {
+                OpenTrace.mark(String(format: "audio ready (%.0fms, off the main thread)", ms))   // TEMPORARY
+                // Still open, still this viewer's clip, and nobody paused or started a scrub meanwhile.
+                guard !life.closed, player === p, isPlaying, !scrubbing else { return }
+                p.play()
+            }
+        }
         OpenTrace.mark("player created")   // TEMPORARY
         if OpenTrace.isActive {   // TEMPORARY: the moment the first frame can be drawn
             readyObservation = p.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
@@ -577,10 +623,12 @@ struct VideoPlayerScreen: View {
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             isPlaying = false; showChrome = true
         }
-        p.play(); isPlaying = true
+        // The state flips now so the button is right at once; `play()` itself is in the task above.
+        isPlaying = true
     }
 
     private func cleanup() {
+        lifetime.closed = true
         if let o = timeObserver { player?.removeTimeObserver(o) }
         if let e = endObserver { NotificationCenter.default.removeObserver(e) }
         if let i = interruptObserver { NotificationCenter.default.removeObserver(i) }
@@ -591,23 +639,32 @@ struct VideoPlayerScreen: View {
 // Plain AVPlayer layer (aspect-fit), no AVKit transport controls — a custom media-viewer surface.
 private struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
-    func makeUIView(context: Context) -> PlayerLayerUIView { PlayerLayerUIView(player: player) }
+    /// The layer has a picture: the poster underneath can go.
+    var onFirstFrame: () -> Void = {}
+    func makeUIView(context: Context) -> PlayerLayerUIView {
+        PlayerLayerUIView(player: player, onFirstFrame: onFirstFrame)
+    }
     func updateUIView(_ v: PlayerLayerUIView, context: Context) { v.setPlayer(player) }
 }
 
 private final class PlayerLayerUIView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    private var frameObservation: NSKeyValueObservation?   // TEMPORARY, see OpenTrace
-    init(player: AVPlayer) {
+    private var frameObservation: NSKeyValueObservation?
+    init(player: AVPlayer, onFirstFrame: @escaping () -> Void) {
         super.init(frame: .zero)
-        backgroundColor = .black
+        // CLEAR, not black (2026-09-28): the poster under this view is what shows until the first
+        // frame, and a black backing covered it with exactly the black screen he reported. The
+        // viewer's own background is still black around the picture.
+        backgroundColor = .clear
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspect
-        // TEMPORARY, see OpenTrace: when the first picture is really on screen, and how big this view is.
+        // When the first picture is really on screen: the poster goes, and (TEMPORARY, see
+        // OpenTrace) the timing box closes with how big this view is.
         frameObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
             guard layer.isReadyForDisplay else { return }
             Task { @MainActor in
+                onFirstFrame()
                 let size = self?.bounds.size ?? .zero
                 OpenTrace.finishInKeyWindow("first frame drawn (view \(Int(size.width))x\(Int(size.height)), in window: \(self?.window != nil))")
             }
