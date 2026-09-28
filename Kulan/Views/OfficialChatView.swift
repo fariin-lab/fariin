@@ -23,6 +23,14 @@ struct OfficialChatView: View {
     @State private var shareInvite = false
     @State private var barHeight: CGFloat = 0
     @State private var showInfo = false
+    // Long press and selection, the same as a normal chat (owner, 2026-09-28).
+    @State private var selecting = false
+    @State private var wasSelecting = false
+    @State private var selectedIds = Set<String>()
+    @State private var forwarding: [Message]?
+    @State private var morePickerId: String?
+    @State private var pendingDelete: [String]?
+    @State private var showClearConfirm = false
 
     private var dark: Bool { scheme == .dark }
 
@@ -42,13 +50,35 @@ struct OfficialChatView: View {
                     .overlay { WallpaperAnchor(cid: OfficialChannel.cid) }   // the slices' reference — see WallpaperBlur
                     .ignoresSafeArea()
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { cannotReplyBar }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if selecting { selectionBar } else { cannotReplyBar }
+            }
             // Tapping the header opens the info screen, the same as every other chat. It used to do
             // nothing at all — I left the closure empty when this screen was built, so the one chat
             // people are most likely to be suspicious of was the one that would not tell them
             // anything about itself. Owner caught it.
-            .background(ChatNavigationItem(model: headerModel, bar: .custom([bellButton]),
-                                           onTap: { showInfo = true }))
+            .background(ChatNavigationItem(model: headerModel, bar: navigationBar,
+                                           onTap: { if !selecting { showInfo = true } }))
+            .sheet(item: Binding(get: { forwarding.map(ForwardBatch.init) },
+                                 set: { if $0 == nil { forwarding = nil } })) { batch in
+                ForwardPicker(messages: batch.messages, sourceCid: OfficialChannel.cid,
+                              onSent: { endSelection() })
+            }
+            .sheet(item: Binding(get: { morePickerId.map(ZoomTarget.init) },
+                                 set: { morePickerId = $0?.url })) { target in
+                EmojiMorePicker { store.react(target.url, $0) }
+            }
+            .alert(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
+                                                    set: { if !$0 { pendingDelete = nil } })) {
+                Button("Delete for Me", role: .destructive) {
+                    store.hide(pendingDelete ?? []); pendingDelete = nil; endSelection()
+                }
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+            }
+            .alert("Clear this chat?", isPresented: $showClearConfirm) {
+                Button("Clear", role: .destructive) { store.clearHistory(); endSelection() }
+                Button("Cancel", role: .cancel) {}
+            }
             .navigationDestination(isPresented: $showInfo) { OfficialChatInfoView() }
             .toolbar(.hidden, for: .tabBar)
             // Belt and braces under the custom header: UIKit shows the plain string title only
@@ -110,18 +140,40 @@ struct OfficialChatView: View {
                 return AnyView(AnnouncementRow(
                     announcement: a,
                     dark: dark,
-                    onImageTap: { zoomedImage = $0 },
+                    onImageTap: { url in if selecting { toggle(a.id) } else { zoomedImage = url } },
                     onButtonTap: { tap($0) },
                     countsAsRead: true,
                     // This channel is a full-screen chat on the same list as any other, so its
                     // bubbles take the real slice. See `wallpaperBlur` on the row.
                     wallpaperBlur: WallpaperBlur.state(for: OfficialChannel.cid, dark: dark,
-                                                       frame: WallpaperBlur.windowFrame)
-                ).padding(.horizontal, 12))
+                                                       frame: WallpaperBlur.windowFrame),
+                    myReaction: store.state.reactions[a.id],
+                    menuId: a.id
+                )
+                .padding(.horizontal, 12)
+                .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
+                                        selected: selectedIds.contains(a.id),
+                                        tint: Color(hex: 0x0A84FF),
+                                        onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid),
+                                        onToggle: { toggle(a.id) })))
+            },
+            onToggleSelect: { toggle($0) },
+            customMenuActions: { id in menuActions(id) },
+            customReactConfig: { id in
+                guard !selecting, store.visible.contains(where: { $0.id == id }) else { return nil }
+                return (QuickReaction.bar, store.state.reactions[id])
+            },
+            onCustomReact: { id, choice in
+                switch choice {
+                case .more: morePickerId = id
+                case .emoji(let e): store.react(id, e)
+                }
             },
             // Nothing to page: the channel holds the most recent hundred announcements and that is the
             // whole history there is. The reference app trims the same way.
             onReachedTop: {},
+            selecting: selecting,
+            wasSelecting: wasSelecting,
             loadingOlder: false,
             composerBarHeight: barHeight,
             isAtBottom: $isAtBottom,
@@ -134,7 +186,7 @@ struct OfficialChatView: View {
     /// fixing a typo has to reach a phone that already has the old words on screen.
     private func signature(_ a: Announcement) -> String {
         // `hasAppStoreUrl`: the Update Link arriving shows the hidden "Update Now" (D-admin-update).
-        "\(a.title.count)|\(a.body.count)|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)"
+        "\(a.title.count)|\(a.body.count)|\(store.state.reactions[a.id] ?? "")|\(selecting)|\(wasSelecting)|\(selectedIds.contains(a.id))|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)"
     }
 
     private static let cal = Calendar.current
@@ -142,6 +194,82 @@ struct OfficialChatView: View {
         if Self.cal.isDateInToday(d) { return "Today" }
         if Self.cal.isDateInYesterday(d) { return "Yesterday" }
         return d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    // MARK: Long press and selection
+
+    /// ⛔ THE SAME MENU AS A CHAT MESSAGE — owner, 2026-09-28: "long press does not work, make it a
+    /// normal bubble like chats". Copy, Forward, Select and Delete (for me), with the reaction bar
+    /// above. There is no Reply or Edit: nobody can write in this chat. Delete only hides it from
+    /// this person; the announcement is the same shared document for everybody.
+    private func menuActions(_ id: String) -> [CMAction] {
+        guard !selecting, let a = store.visible.first(where: { $0.id == id }) else { return [] }
+        return [
+            CMAction(title: "Copy", icon: "doc.on.doc") { UIPasteboard.general.string = plainText(a) },
+            CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwarding = [forwardable(a)] },
+            CMAction(title: "Select", icon: "checkmark.circle") { startSelection(with: id) },
+            CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = [id] },
+        ]
+    }
+
+    /// The words as they read in the bubble: the title on its own line, then the body.
+    private func plainText(_ a: Announcement) -> String {
+        [a.title, a.body].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    /// An announcement forwards as its text, like a forwarded chat message.
+    private func forwardable(_ a: Announcement) -> Message {
+        var m = Message(localText: plainText(a), authorId: OfficialChannel.cid, clientId: a.id,
+                        replyTo: nil, sendState: .sending)
+        m.sendState = nil   // a finished message, not one of ours in flight
+        return m
+    }
+
+    private var navigationBar: ChatNavigationItem.Bar {
+        if selecting {
+            return .selection(deleteAll: { showClearConfirm = true }, deleteEnabled: true,
+                              cancel: { endSelection() })
+        }
+        return .custom([bellButton])
+    }
+
+    private var liveSelection: [Announcement] { store.visible.filter { selectedIds.contains($0.id) } }
+
+    private var deleteTitle: String {
+        let n = pendingDelete?.count ?? 0
+        return n == 1 ? "Delete this message?" : "Delete \(n) messages?"
+    }
+
+    /// The chat's own selection bar: Delete, "N Selected", Forward.
+    private var selectionBar: some View {
+        SelectionToolbar(count: liveSelection.count,
+                         deleteEnabled: !liveSelection.isEmpty,
+                         forwardEnabled: !liveSelection.isEmpty,
+                         onDelete: { pendingDelete = liveSelection.map(\.id) },
+                         onForward: { forwarding = liveSelection.map(forwardable) })
+            .frame(height: 44)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+    }
+
+    private func startSelection(with id: String) {
+        wasSelecting = false
+        selecting = true
+        selectedIds = [id]
+    }
+
+    private func toggle(_ id: String) {
+        guard selecting else { return }
+        if selectedIds.contains(id) { selectedIds.remove(id) } else { selectedIds.insert(id) }
+    }
+
+    /// The two-pass exit the chat uses: the circles slide out, then the lane goes.
+    private func endSelection() {
+        guard selecting else { return }
+        wasSelecting = true
+        selecting = false
+        selectedIds = []
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { wasSelecting = false }
     }
 
     // MARK: Header
@@ -226,6 +354,11 @@ struct OfficialChatView: View {
 private struct OfficialBarHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ForwardBatch: Identifiable {
+    let messages: [Message]
+    var id: String { messages.map(\.id).joined(separator: ",") }
 }
 
 private struct ZoomTarget: Identifiable {
@@ -394,6 +527,10 @@ struct AnnouncementRow: View {
     /// 2026-09-24 decision D-admin-preview: the compose preview's picked picture, drawn inside the
     /// bubble exactly where the uploaded one will be (it used to sit above it as a separate shape).
     var localImage: UIImage? = nil
+    /// This reader's own reaction, drawn as the badge under the bubble like a chat message's.
+    var myReaction: String? = nil
+    /// The real chat only: publishes the bubble's outline so the long press lifts THIS bubble.
+    var menuId: String? = nil
 
     /// Received-side cluster geometry, matching a normal chat bubble: 18pt outer corners, and the
     /// small 6pt corner is the one that fuses a run together. Every announcement stands alone, so
@@ -420,8 +557,9 @@ struct AnnouncementRow: View {
                                       height: announcement.mediaHeight)
                         .onTapGesture { onImageTap(url) }
                 }
+                // ⛔ NO KIND LABEL ("SECURITY", "UPDATE"...) — owner, 2026-09-28, circled: "remove these
+                // labels, make it a normal bubble". The title and body say what it is.
                 VStack(alignment: .leading, spacing: 6) {
-                    kindLabel
                     if !announcement.title.isEmpty {
                         Text(announcement.title)
                             .font(.system(size: 17, weight: .semibold))
@@ -461,21 +599,22 @@ struct AnnouncementRow: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if let myReaction {
+                    Text(myReaction)
+                        .font(.system(size: 15))
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(Color(.secondarySystemBackground)))
+                        .overlay(Capsule().strokeBorder(Color(.systemBackground), lineWidth: 2))
+                        .offset(x: 10, y: 14)
+                }
+            }
+            .modifier(OptionalRectReporter(id: menuId, overhang: myReaction == nil ? 0 : 16))
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
+        .padding(.bottom, myReaction == nil ? 0 : 14)
         .onAppear { if countsAsRead { AnnouncementStats.countRead(announcement) } }
-    }
-
-    private var kindLabel: some View {
-        HStack(spacing: 5) {
-            Image(systemName: announcement.kind.icon)
-                .font(.system(size: 11, weight: .semibold))
-            Text(announcement.kind.label.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.4)
-        }
-        .foregroundStyle(announcement.kind.isUrgent ? Color.red : Color.secondary)
     }
 
     private var timeRow: some View {
@@ -507,6 +646,19 @@ struct AnnouncementRow: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Color(hex: 0x0A84FF))
             }
+        }
+    }
+}
+
+/// The long-press outline, only where there is a menu (the previews have none).
+private struct OptionalRectReporter: ViewModifier {
+    let id: String?
+    let overhang: CGFloat
+    @ViewBuilder func body(content: Content) -> some View {
+        if let id {
+            content.modifier(CMBubbleRectReporter(id: id, radius: 18, bottomOverhang: overhang))
+        } else {
+            content
         }
     }
 }

@@ -415,6 +415,11 @@ struct OfficialChannelState: Equatable {
     var clearedAtMillis: Double = 0
     /// "Mark as Unread" from the chat list. Cleared by the next read.
     var markedUnread: Bool = false
+    /// Announcements this person deleted for themselves (long press > Delete, 2026-09-28).
+    var hiddenIds: Set<String> = []
+    /// This person's reaction per announcement id. Private to them: the announcement is a shared,
+    /// read-only document, so the reaction lives in their own state, like the reference app's.
+    var reactions: [String: String] = [:]
 
     init() {}
 
@@ -426,6 +431,8 @@ struct OfficialChannelState: Equatable {
         lastReadAtMillis = Self.millis(data["lastReadAt"])
         clearedAtMillis = Self.millis(data["clearedAt"])
         markedUnread = data["markedUnread"] as? Bool ?? false
+        hiddenIds = Set(data["hiddenIds"] as? [String] ?? [])
+        reactions = data["reactions"] as? [String: String] ?? [:]
     }
 
     /// Milliseconds from either shape a stored time can have: a plain number (what this app writes)
@@ -720,6 +727,7 @@ final class OfficialChannelStore {
             // blocking "does not stop us telling you if something happens to your account" would be a
             // sentence the app does not keep, which is worse than not offering the block at all.
             .filter { !state.blocked || $0.kind == .security }
+            .filter { !state.hiddenIds.contains($0.id) }
             .sorted { $0.sortAt == $1.sortAt ? $0.id < $1.id : $0.sortAt < $1.sortAt }
 
         scheduleNextBoundary(now: now)
@@ -887,6 +895,20 @@ final class OfficialChannelStore {
         state.clearedAtMillis = now
         stateRef?.setData(["clearedAt": now], merge: true)
         recompute()
+    }
+
+    /// Delete for me: these announcements leave this person's chat and stay for everybody else.
+    func hide(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        state.hiddenIds.formUnion(ids)
+        stateRef?.setData(["hiddenIds": FieldValue.arrayUnion(ids)], merge: true)
+        recompute()
+    }
+
+    /// One reaction per announcement, the same as a chat message; nil takes it back.
+    func react(_ id: String, _ emoji: String?) {
+        state.reactions[id] = emoji
+        stateRef?.setData(["reactions": [id: emoji.map { $0 as Any } ?? FieldValue.delete()]], merge: true)
     }
 }
 

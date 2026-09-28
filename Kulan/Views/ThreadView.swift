@@ -7670,7 +7670,7 @@ struct EmptyChatNotice: ViewModifier {
 ///
 /// The label is a disabled `UIBarButtonItem` with a custom view, exactly as theirs is, so the bar's
 /// own layout centres it between the two flexible spaces instead of a hand-tuned padding.
-private struct SelectionToolbar: UIViewRepresentable {
+struct SelectionToolbar: UIViewRepresentable {
     var count: Int
     var deleteEnabled: Bool
     var forwardEnabled: Bool
