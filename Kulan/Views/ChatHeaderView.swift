@@ -62,12 +62,21 @@ final class ChatHeaderView: UIView {
         return label
     }()
 
+    /// ⛔ SOLID, NOT `.secondaryLabel` — owner, 2026-09-27, a yellow wallpaper: "last seen" came out
+    /// yellow. `.secondaryLabel` is a 60%-opaque colour, so over a wallpaper the picture shows through
+    /// the letters and the line takes its hue, while the fully opaque name beside it stays white. The
+    /// same dimmer grey he asked for in August, made opaque: nothing behind it can tint it. Resolves
+    /// through `textRows`' light/dark like the labels, so it follows the backdrop decision.
+    static let subtitleColor = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(white: 0.82, alpha: 1) : UIColor(white: 0.32, alpha: 1)
+    }
+
     let subtitleLabel: UILabel = {
         let label = UILabel()
         // Secondary, not their full-opacity label: owner, 2026-08-25, with the header on his phone.
         // The one place this port departs from their numbers on purpose; everything else about the
         // line (13 medium, its slot, its spacing) is theirs.
-        label.textColor = .secondaryLabel
+        label.textColor = ChatHeaderView.subtitleColor
         label.lineBreakMode = .byTruncatingTail
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
@@ -157,11 +166,22 @@ final class ChatHeaderView: UIView {
             secondaryIconView.heightAnchor.constraint(equalToConstant: 16),
             secondaryIconView.widthAnchor.constraint(equalTo: secondaryIconView.heightAnchor),
 
-            rootStack.topAnchor.constraint(equalTo: topAnchor),
+            // ⛔ CENTRED AT ITS OWN HEIGHT, NOT PINNED TO THE BAR'S — owner, 2026-09-28, the
+            // official chat's header: "sometimes the space between the name and last seen is lost".
+            // The second report (08-26 fixed the stack's distribution). The row was pinned top and
+            // bottom to this view, whose height is whatever the navigation bar hands the title view
+            // at that moment; less its 4 + 4 margins that left 36pt for a name line (21) and a
+            // subtitle line (15.5) that need 36.5, beside a 40pt avatar, and less still whenever the
+            // bar offered under 44. The title row's height floor is required, so the SUBTITLE was
+            // the one squeezed, drawn up into the name. Centred and unpinned vertically, the row
+            // takes its natural height every time and the two lines keep their spacing; any excess
+            // over the bar's height spills evenly above and below, which nothing clips.
+            rootStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             rootStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             rootStack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        titleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        subtitleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         // Theirs, verbatim in intent: "Embed a small glass view behind the avatar so that it's never
         // visible to the user. Glass views react to content underneath and update appearance
@@ -210,7 +230,7 @@ final class ChatHeaderView: UIView {
         subtitleLabel.isHidden = model.subtitle == nil
         // Typing is the one state that colours the line; everything else is their full-opacity label.
         // `.tintColor` is UIKit's `Color.accentColor`, which is what the SwiftUI line used for typing.
-        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : .secondaryLabel
+        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : Self.subtitleColor
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
         // The measured answer is only the SEED for the first frame; once the glass probe has
@@ -221,7 +241,7 @@ final class ChatHeaderView: UIView {
         }
         // The timer glyph is a template so it re-resolves through `textRows`' style like the labels
         // do; a pre-tinted image would keep light-mode grey over a black wallpaper.
-        secondaryIconView.tintColor = .secondaryLabel
+        secondaryIconView.tintColor = Self.subtitleColor
         avatarView.configure(name: model.name, photoUrl: model.photoUrl, asset: model.avatarAsset)
         accessibilityLabel = model.name
     }

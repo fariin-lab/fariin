@@ -224,9 +224,31 @@ final class ChatComposerView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// ⛔ WHERE THE "+" IS, for the attach sheet to grow out of and shrink back into — owner,
+    /// 2026-09-28: "I want the attach sheet coming out of that button, and going back into it when I
+    /// close, Apple's native iOS 26 animation, not custom". The sheet's zoom is SwiftUI's
+    /// (`navigationTransition(.zoom)` in ThreadView), and its source has to be a SwiftUI view; this
+    /// bar is UIKit, so ThreadView places an invisible source over the button, at the rect this
+    /// answers. Asked at the moment of presenting, not at the tap: with the keyboard up the button
+    /// moves down before the sheet opens. Weak, so a closed chat's bar is not kept alive by it.
+    @MainActor enum AttachSource {
+        fileprivate static weak var button: UIView?
+        /// The "+" in window coordinates, or `.zero` when there is no bar on screen.
+        static var windowRect: CGRect {
+            guard let b = button, b.window != nil else { return .zero }
+            return b.convert(b.bounds, to: nil)
+        }
+        /// Hides the real "+" while the sheet's copy of it is the thing that grows and shrinks
+        /// (`AttachSheetController`). ⚠️ A MASK, NOT `alpha`: this bar animates the button's alpha,
+        /// transform and `isHidden` for its own states (recording, text-only), and a second writer
+        /// of the same property is how the "+" once stayed invisible. Nothing here touches `mask`.
+        static func setLifted(_ on: Bool) { button?.mask = on ? UIView() : nil }
+    }
+
     private func build() {
         addSubview(container)
         container.contentView.addSubview(plusButton)
+        AttachSource.button = plusButton
         container.contentView.addSubview(trashButton)
         container.contentView.addSubview(pill)
         container.contentView.addSubview(sendButton)

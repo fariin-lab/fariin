@@ -317,7 +317,11 @@ enum AnnouncementAdmin {
         // the edit instead of being undone by it.
         var copy = payload
         if !editing {
-            copy["createdAt"] = Timestamp(date: Date())
+            // ⛔ THE SERVER'S CLOCK, AS THIS PHONE KNOWS IT (2026-09-28). This stamp is part of when the
+            // copy ARRIVED for its reader (`Announcement.arrivedAt`, what unread is measured against),
+            // and the admin's raw clock ten minutes fast would have put every reader's read watermark
+            // ten minutes into the future, silently reading the next announcements for them.
+            copy["createdAt"] = Timestamp(date: ServerClock.now)
             copy["createdBy"] = uid
         }
 

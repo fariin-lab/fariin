@@ -1089,7 +1089,7 @@ struct AppearanceSettingsView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(ChatWallpapers.all) { g in
-                    let themeColor = ChatColorSpec(colors: [g.bubbleHex])
+                    let themeColor = g.autoColor   // the reference's pairing (see `WallpaperGradient.paired`)
                     // Selected only when BOTH halves of the theme are the active ones: this wallpaper,
                     // and its colour showing (Auto, or the same colour chosen outright).
                     let isSel = defaultWallpaper == .gradient(g.id)
@@ -1105,7 +1105,7 @@ struct AppearanceSettingsView: View {
                         VStack(spacing: 6) {
                             Capsule().fill(.white.opacity(0.9)).frame(width: 44, height: 12)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            Capsule().fill(themeColor.solid).frame(width: 44, height: 12)
+                            Capsule().fill(themeColor.fill).frame(width: 44, height: 12)   // a pairing may be a gradient
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         .padding(10)

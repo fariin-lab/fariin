@@ -10,7 +10,13 @@ import FirebaseStorage
 @Observable
 final class ProfileStore {
     static let shared = ProfileStore()
-    private init() {}
+    private init() {
+        // 2026-09-28: back in after a refusal (see `SessionRecovery`). Idempotent while the privacy
+        // listener is alive; attaches a fresh one if the refusal killed it.
+        NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+            ProfileStore.shared.startPrivacySync()
+        }
+    }
 
     private let db = Firestore.firestore()
     var me: UserProfile?
@@ -96,7 +102,20 @@ final class ProfileStore {
         if privacyListener != nil, privacyListenerUid == uid { return }
         privacyListener?.remove()
         privacyListenerUid = uid
-        privacyListener = db.collection("users").document(uid).addSnapshotListener { snap, _ in
+        privacyListener = db.collection("users").document(uid).addSnapshotListener { snap, error in
+            // 2026-09-28: an error ends this listener for good, and the guard at the top of this
+            // method would have kept the dead one for the rest of the process. Let go of it so the
+            // next `startPrivacySync()` (after `SessionRecovery`, or the next `loadMine`) attaches anew.
+            if snap == nil, error != nil {
+                Task { @MainActor in
+                    if self.privacyListenerUid == uid {
+                        self.privacyListener?.remove()
+                        self.privacyListener = nil
+                    }
+                    SessionRecovery.noteRefusal(error, "my profile")
+                }
+                return
+            }
             // Same account still signed in: a late snapshot must not write one account's choices
             // into the next account's prefs.
             guard let snap, snap.exists, Auth.auth().currentUser?.uid == uid,
@@ -172,7 +191,14 @@ final class ProfileStore {
             return Self.indexed(UserProfile(id: uid, data: data))
         } catch {
             print("profile fetch failed:", error)
-            return nil
+            await MainActor.run { SessionRecovery.noteRefusal(error, "profile read") }
+            // ⛔ A FAILED READ IS NOT A MISSING PERSON — 2026-09-28, owner: "every account looks like
+            // a deleted account". This returned nil for an error exactly as it does for a document
+            // that does not exist, so while the server was refusing this phone every profile page
+            // lost its @username, bio and links. The last copy this phone saw is the honest answer
+            // to "who is this" when the server will not say; a real deletion still comes back as a
+            // snapshot with no data above, which is the only thing that means gone.
+            return await cachedPeer(uid)
         }
     }
 

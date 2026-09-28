@@ -25,12 +25,57 @@ import UIKit
 /// position with a rect nowhere near the finger (the KeyboardSafeRects lesson, kept).
 @MainActor enum CMBubbleRects {
     private static var rects: [String: (rect: CGRect, radius: CGFloat)] = [:]
+    private static var probes: [String: [Weak]] = [:]
+    private struct Weak { weak var view: CMWindowProbeView? }
+
     static func capture(_ id: String, _ rect: CGRect, radius: CGFloat) {
         guard !rect.isEmpty, rect.intersects(UIScreen.main.bounds) else { return }
         rects[id] = (rect, radius)
     }
-    static func rect(_ id: String) -> CGRect? { rects[id]?.rect }
+
+    static func register(_ id: String, _ view: CMWindowProbeView) {
+        var list = (probes[id] ?? []).filter { $0.view != nil && $0.view !== view }
+        list.append(Weak(view: view))
+        probes[id] = list
+    }
+
+    /// ⛔ THE COPY THAT IS IN THE WINDOW, ASKED NOW — owner, 2026-09-28: the official chat's long
+    /// press sometimes did nothing and lifted a bubble cut to a sliver. The list measures every
+    /// SwiftUI row in an off-screen host, and that copy's `.global` frame starts at 0,0, which passes
+    /// the on-screen check above and overwrote the real bubble's rect. A probe outside a window is
+    /// never asked, and the one inside it answers with where the bubble is at the moment of the press.
+    static func rect(_ id: String) -> CGRect? {
+        for p in probes[id] ?? [] {
+            guard let v = p.view, v.window != nil else { continue }
+            var r = v.convert(v.bounds, to: nil)
+            guard !r.isEmpty else { continue }
+            r.size.height += v.bottomOverhang
+            return r
+        }
+        return rects[id]?.rect
+    }
     static func radius(_ id: String) -> CGFloat { rects[id]?.radius ?? 18 }
+}
+
+/// A plain view laid behind a bubble so its window frame can be read at press time.
+final class CMWindowProbeView: UIView {
+    var bottomOverhang: CGFloat = 0
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+}
+
+private struct CMWindowProbe: UIViewRepresentable {
+    let id: String
+    let bottomOverhang: CGFloat
+    func makeUIView(context: Context) -> CMWindowProbeView {
+        let v = CMWindowProbeView()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+    func updateUIView(_ v: CMWindowProbeView, context: Context) {
+        v.bottomOverhang = bottomOverhang
+        CMBubbleRects.register(id, v)
+    }
 }
 
 /// Publishes a bubble's window rect + corner radius for as long as it is on screen.
@@ -53,6 +98,7 @@ struct CMBubbleRectReporter: ViewModifier {
                     .onChange(of: bottomOverhang) { _, _ in publish(g.frame(in: .global)) }
             }
         )
+        .background(CMWindowProbe(id: id, bottomOverhang: bottomOverhang))
     }
 
     private func publish(_ f: CGRect) {
@@ -161,6 +207,13 @@ final class CMOverlay: UIView {
     private var initialFingerPoint: CGPoint?
     private var dismissing = false
     private var localPan: UIPanGestureRecognizer?
+    /// 2026-09-28: the reaction strip scrolls sideways now (`CMReactionBar`), and this overlay's own
+    /// pan would take that swipe and pick whatever emoji it ended on. A touch that STARTS on the
+    /// strip belongs to the strip; everywhere else the pan works as before.
+    private lazy var localPanGate = CMPanGate { [weak self] g in
+        guard let self, let bar = self.bar else { return true }
+        return !bar.stripContains(self.convert(g.location(in: self), to: bar))
+    }
     // ARMING: for a bottom message the menu RISES into the spot where the unmoved finger already is,
     // so a small wiggle + lift selected Reply or Pin the user never aimed at (his report). An
     // accessory the finger started inside stays dead until the finger has been seen OUTSIDE it once.
@@ -714,6 +767,7 @@ final class CMOverlay: UIView {
     private func installLocalPanIfNeeded() {
         guard localPan == nil else { return }
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panRecognized(_:)))
+        pan.delegate = localPanGate
         addGestureRecognizer(pan)
         localPan = pan
         // The dead zone and the arming only guard the ORIGINAL press — any later touch is deliberate.
@@ -946,6 +1000,13 @@ private final class CMActionRow: UIView {
     }
 }
 
+/// A gesture delegate that only answers "may this begin", from a closure. For the overlay's local pan.
+final class CMPanGate: NSObject, UIGestureRecognizerDelegate {
+    private let shouldBegin: (UIGestureRecognizer) -> Bool
+    init(_ shouldBegin: @escaping (UIGestureRecognizer) -> Bool) { self.shouldBegin = shouldBegin }
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool { shouldBegin(g) }
+}
+
 // MARK: - Reaction bar
 
 /// The floating quick-reaction capsule. Rebuilt from the removed ReactionBar.swift with its two
@@ -957,8 +1018,27 @@ final class CMReactionBar: UIView {
 
     private let config: CMReactConfig
     private let backdrop: UIVisualEffectView
+    /// ⛔ THE STRIP SCROLLS, THE BAR DOES NOT GROW — owner, 2026-09-28: "now it is 6 emoji; add more,
+    /// don't change the size, just let the user swipe for the others". The quick set is the first
+    /// six, where they always were; `extraEmojis` follow, reached by a sideways swipe inside the
+    /// same capsule. The "+" stays fixed at the right end and still opens the full picker.
+    ///
+    /// `clip` cuts the strip at the capsule's straight edges but leaves room ABOVE the bar, so the
+    /// lifted, enlarged emoji under a sliding finger still rises out of it as before.
+    private let clip = UIView()
+    private let scroll = UIScrollView()
     private let stack = UIStackView()
+    /// Every emoji in the strip, then the "+" LAST (so the last index is the "+", as before).
     private var holders: [UIView] = []
+    private let allEmojis: [String]
+    private static let liftRoom: CGFloat = 28
+    /// After the quick set, in the order a swipe reveals them. Any the quick set already holds is
+    /// left out, so no emoji appears twice.
+    private static let extraEmojis = [
+        "🥹", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "😢", "🎉", "🤩", "🙏", "👌", "😍", "💯", "🤣",
+        "😭", "😘", "🤗", "🫡", "🤝", "👀", "😇", "😅", "🙈", "💔", "😡", "🤬", "😴", "🤨",
+        "😐", "🤓", "👻", "🤡", "💩", "🥳", "😏", "🙄", "😬", "✅", "💪", "🌹", "⚡", "🏆", "🍾",
+    ]
 
     private var barHeight: CGFloat { UIScreen.main.bounds.width <= 375 ? 50 : 56 }
     private let padding: CGFloat = 6
@@ -983,6 +1063,11 @@ final class CMReactionBar: UIView {
 
     init(config: CMReactConfig) {
         self.config = config
+        // ⛔ THE QUICK SIX NEVER CHANGE — owner, 2026-09-28: "never change the default emojis, now
+        // every emoji I use comes first". My reaction from the swipe part used to take the sixth
+        // slot; it now stays highlighted in its own place in the strip, and the six stay as given.
+        let quick = config.emojis
+        self.allEmojis = quick + Self.extraEmojis.filter { !quick.contains($0) }
         // Liquid glass on iOS 26+, same as the card and same as the reference app's bar there.
         if #available(iOS 26.0, *) {
             backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
@@ -998,17 +1083,30 @@ final class CMReactionBar: UIView {
         stack.alignment = .fill          // NEVER .center: zero-height holders swallowed every tap
         stack.distribution = .fillEqually
         stack.isLayoutMarginsRelativeArrangement = true
-        stack.layoutMargins = UIEdgeInsets(top: padding, left: padding, bottom: padding, right: padding)
-        addSubview(stack)
+        stack.layoutMargins = UIEdgeInsets(top: padding, left: 0, bottom: padding, right: 0)
 
-        for emoji in config.emojis { holders.append(makeEmoji(emoji)) }
-        holders.append(makeMore())
-        holders.forEach { stack.addArrangedSubview($0) }
+        clip.clipsToBounds = true
+        scroll.clipsToBounds = false     // the clip does the cutting, so a lifted emoji can rise
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.showsVerticalScrollIndicator = false
+        scroll.alwaysBounceVertical = false
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.addSubview(stack)
+        clip.addSubview(scroll)
+        addSubview(clip)
 
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(pressRecognized(_:)))
-        press.minimumPressDuration = 0
-        press.cancelsTouchesInView = false
-        addGestureRecognizer(press)
+        for emoji in allEmojis { let h = makeEmoji(emoji); holders.append(h); stack.addArrangedSubview(h) }
+        let more = makeMore()
+        holders.append(more)
+        addSubview(more)
+
+        // A TAP picks; a swipe scrolls the strip. The old zero-duration press claimed every touch at
+        // touch-down, which is exactly what would stop the strip from ever scrolling. Sliding a
+        // finger across the bar to pick still works from the message's own long press, which the
+        // overlay streams in through `updateFocus` / `selectFocused`.
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -1016,23 +1114,48 @@ final class CMReactionBar: UIView {
         super.layoutSubviews()
         backdrop.frame = bounds
         backdrop.layer.cornerRadius = bounds.height / 2
-        stack.frame = bounds
+        let side = buttonSide
+        // The strip's window is the quick set's width, exactly the room those emoji had before.
+        let window = CGFloat(config.emojis.count) * side
+        clip.frame = CGRect(x: padding, y: -Self.liftRoom, width: window, height: bounds.height + Self.liftRoom)
+        scroll.frame = CGRect(x: 0, y: Self.liftRoom, width: window, height: bounds.height)
+        stack.frame = CGRect(x: 0, y: 0, width: CGFloat(allEmojis.count) * side, height: bounds.height)
+        scroll.contentSize = stack.frame.size
+        holders.last?.frame = CGRect(x: padding + window, y: padding, width: side, height: bounds.height - padding * 2)
+        // ⛔ MY REACTION IS IN VIEW WHEN THE BAR OPENS — owner, 2026-09-28: a reaction picked from the
+        // swipe part was highlighted out of sight, and he had to swipe to find it. Once, on the first
+        // real layout, the strip scrolls so that emoji is the last one showing.
+        if !revealedSelected, window > 0, let sel = config.selected,
+           let i = allEmojis.firstIndex(of: sel), i >= config.emojis.count {
+            revealedSelected = true
+            let maxX = max(0, scroll.contentSize.width - window)
+            scroll.contentOffset.x = min(maxX, CGFloat(i + 1) * side - window)
+        }
     }
+    private var revealedSelected = false
 
     private func makeEmoji(_ emoji: String) -> UIView {
         let holder = UIView()
         if emoji == config.selected {
             let disc = UIView()
-            disc.backgroundColor = UIColor.tintColor.withAlphaComponent(0.18)
-            disc.layer.cornerRadius = (barHeight - 4) / 2
+            // The reference app's neutral system fill, not the chat colour: tinted, the disc read as a
+            // heavy coloured blob a size too big (owner, 2026-09-28). The size is theirs already,
+            // the bar's height less 4.
+            disc.backgroundColor = .secondarySystemFill
+            // ⛔ THE EMOJI'S OWN SLOT, NOT 4pt PAST IT — owner, 2026-09-28, the first emoji's disc "cut"
+            // on the left. At the reference app's (bar height − 4) = 52 the disc overhangs its 44pt slot
+            // by 4 on each side, and the swipe strip's clip cuts whatever leaves the strip: the first
+            // and the last visible disc lost an edge. At the slot's own size it is never cut, and it
+            // is also the smaller disc he asked for ("the highlight looks big").
+            disc.layer.cornerRadius = buttonSide / 2
             disc.isUserInteractionEnabled = false
             holder.addSubview(disc)
             disc.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 disc.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
                 disc.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
-                disc.widthAnchor.constraint(equalToConstant: barHeight - 4),
-                disc.heightAnchor.constraint(equalToConstant: barHeight - 4),
+                disc.widthAnchor.constraint(equalToConstant: buttonSide),
+                disc.heightAnchor.constraint(equalToConstant: buttonSide),
             ])
         }
         let label = UILabel()
@@ -1057,7 +1180,9 @@ final class CMReactionBar: UIView {
         disc.backgroundColor = UIColor.label.withAlphaComponent(0.08)
         disc.layer.cornerRadius = buttonSide * 0.42
         disc.isUserInteractionEnabled = false
-        let glyph = UIImageView(image: UIImage(systemName: "ellipsis"))
+        // "+", not "…" — owner, 2026-09-28: "the react bar's three dots, change the icon to +".
+        let glyph = UIImageView(image: UIImage(systemName: "plus",
+                                               withConfiguration: UIImage.SymbolConfiguration(weight: .semibold)))
         glyph.tintColor = .label
         glyph.contentMode = .center
         disc.addSubview(glyph)
@@ -1084,11 +1209,20 @@ final class CMReactionBar: UIView {
         // floats above the message, fingers overshoot upward).
         let grace = bounds.insetBy(dx: 0, dy: -18)
         guard grace.contains(point) else { return nil }
-        let inStack = convert(point, to: stack)
-        for (i, holder) in holders.enumerated() where holder.frame.insetBy(dx: 0, dy: -18).contains(inStack) {
-            return i
-        }
+        // The "+" is fixed at the right end, outside the strip.
+        let last = holders.count - 1
+        if point.x >= holders[last].frame.minX { return last }
+        // Only what the strip is SHOWING can be picked: an emoji scrolled out of the window is not
+        // under the finger, whatever its frame says.
+        guard point.x >= clip.frame.minX, point.x < clip.frame.maxX else { return nil }
+        let x = convert(CGPoint(x: point.x, y: bounds.midY), to: stack).x
+        for i in 0..<last where holders[i].frame.minX <= x && x < holders[i].frame.maxX { return i }
         return nil
+    }
+
+    /// The scrolling emoji strip, in this bar's coordinates (the "+" is not part of it).
+    func stripContains(_ point: CGPoint) -> Bool {
+        CGRect(x: clip.frame.minX, y: 0, width: clip.frame.width, height: bounds.height).contains(point)
     }
 
     func updateFocus(at point: CGPoint) { focusedIndex = index(at: point) }
@@ -1103,27 +1237,25 @@ final class CMReactionBar: UIView {
         if i == holders.count - 1 {
             onSelect?(.more)
         } else {
-            let emoji = config.emojis[i]
+            let emoji = allEmojis[i]
             // Lifting on the already-selected emoji REMOVES the reaction — .emoji(nil).
             onSelect?(.emoji(emoji == config.selected ? nil : emoji))
         }
         return true
     }
 
-    @objc private func pressRecognized(_ g: UILongPressGestureRecognizer) {
-        let p = g.location(in: self)
-        switch g.state {
-        case .began, .changed: updateFocus(at: p)
-        case .ended: selectFocused(at: p)
-        default: clearFocus()
-        }
+    @objc private func tapped(_ g: UITapGestureRecognizer) {
+        selectFocused(at: g.location(in: self))
     }
 
     // MARK: presentation
 
     func playPresentation() {
         var delay: TimeInterval = 0
-        for holder in holders {
+        // The ripple covers what is on screen: the quick set and the "+". The emoji past the window
+        // are simply there, or the "+" would wait out forty-odd steps of delay behind them.
+        let onScreen = Array(holders.prefix(config.emojis.count)) + (holders.last.map { [$0] } ?? [])
+        for holder in onScreen {
             holder.alpha = 0
             holder.transform = CGAffineTransform(translationX: 0, y: 24)
             UIView.animate(withDuration: 0.2, delay: delay, options: .curveEaseIn) {

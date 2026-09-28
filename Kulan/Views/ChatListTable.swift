@@ -1156,7 +1156,15 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             // the top of this function, before any of this — so UIKit re-measures both sections here
             // without being told to reload either of them.
             if headerChanged { self.syncHeaderTitles() }
-            if !changes.deletes.isEmpty { self.tableView.deleteRows(at: changes.deletes, with: rowAnimation) }
+            // ⛔ A CHAT THAT LEAVES THE LIST FADES WHERE IT IS — owner, 2026-09-27, a screenshot of
+            // "Pinned" drawn across a chat he had just archived. `.automatic` resolves to a slide UP
+            // for a section's first row in this grouped table, so the leaving row travelled into the
+            // space of the section header above it, and that header is clear and drawn over cells.
+            // A re-sort (delete + insert of the same chat) keeps `.automatic`; a real removal —
+            // archive, delete, hide — fades in place and never enters the header's space.
+            let deleteAnimation: UITableView.RowAnimation =
+                rowAnimation == .none ? .none : (changes.removesRows ? .fade : rowAnimation)
+            if !changes.deletes.isEmpty { self.tableView.deleteRows(at: changes.deletes, with: deleteAnimation) }
             if !changes.inserts.isEmpty { self.tableView.insertRows(at: changes.inserts, with: rowAnimation) }
             // ⚠️ NO ANIMATION CONSTANT ON A MOVE, because `moveRow` does not take one. Its timing is
             // the block's, which is the other half of why the pin flight and the rows closing behind
@@ -2176,7 +2184,39 @@ private final class ChatListCell: UITableViewCell {
         // the one every stock list uses. The history of this method (09-05 remnant, 09-11 plate and
         // press fill, 09-26 card) is in git; the remnant it once fixed cannot come back, because
         // this still re-resolves on every state change.
-        backgroundConfiguration = UIBackgroundConfiguration.listPlainCell().updated(for: state)
+        // ⛔ TICKED ROWS JOIN INTO ONE BLOCK — owner, 2026-09-27, select mode with six rows ticked: "no
+        // lines" between them.
+        //
+        // ⚠️ THE FIRST FIX (zero insets, square corners on the list background) DID NOT REMOVE IT,
+        // and build 783's screenshot shows why: measured pixel by pixel, the line is one point of
+        // the grouped-background grey (#F2F2F7 light, black dark) drawn directly BELOW every ticked
+        // row, and below no unticked one. It is part of the system's selected-row styling, not a
+        // gap. So in select mode a ticked row now wears a plain fill in the same system colour that
+        // styling uses (`systemGray4`, measured 209,209,213), with nothing else: no inset, no corner,
+        // no stroke, no line. Every other state keeps Apple's list background untouched.
+        //
+        // ⛔ AND IT REACHES ONE POINT PAST ITS OWN BOTTOM — owner, 2026-09-28, build 785, light mode,
+        // five rows ticked: the line is STILL there, make it like the reference app. The plain fill proved
+        // the line is not in the background's styling; it is the one point where one ticked row's
+        // fill ends and the next one's has not begun, white on a white list at rest and so only
+        // visible once both sides are grey. The reference app's ticked rows are one block. A negative bottom
+        // inset lays this row's fill across that point, whatever puts it there (a seam on a
+        // fractional pixel or a real gap), so two ticked rows meet as one surface. Below the last
+        // ticked row it reaches one point into the next row, which draws its own opaque background
+        // over it or is the heading's white; neither shows a step.
+        let bg: UIBackgroundConfiguration
+        if state.isEditing && state.isSelected {
+            var plain = UIBackgroundConfiguration.clear()
+            plain.backgroundColor = .systemGray4
+            plain.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: -1, trailing: 0)
+            plain.edgesAddingLayoutMarginsToBackgroundInsets = []
+            plain.cornerRadius = 0
+            plain.strokeWidth = 0
+            bg = plain
+        } else {
+            bg = UIBackgroundConfiguration.listPlainCell().updated(for: state)
+        }
+        backgroundConfiguration = bg
     }
 }
 

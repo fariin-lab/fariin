@@ -212,7 +212,7 @@ enum ProfilePhotoIndex {
     static func reset() {
         lock.lock(); defer { lock.unlock() }
         store = [:]
-        UserDefaults.standard.removeObject(forKey: key)
+        diskQueue.async { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     // MARK: - Storage
@@ -232,7 +232,16 @@ enum ProfilePhotoIndex {
     /// ⚠️ `persist()` IS CALLED WITH THE LOCK HELD, deliberately. It encodes `store`, so it has to
     /// see the same value the write just made; the alternative is a second snapshot and a window
     /// where two writers persist in the wrong order.
+    ///
+    /// ⛔ BUT THE DISK WRITE ITSELF NEVER RUNS UNDER THE LOCK — owner's crash, build 779, 2026-09-27,
+    /// the app killed as "stuck (deadlock)". A defaults write posts a change notification, and
+    /// SwiftUI answers it by taking its own update lock. So a profile fetch on the pool held this
+    /// lock and waited for SwiftUI's, while the main thread, inside a view update (holding SwiftUI's),
+    /// drew an avatar, called `hasPicture` and waited for this one. Neither could move.
+    /// The encode stays under the lock; the write is queued from under it onto one serial queue,
+    /// so writes still land in the order the lock handed them out.
     private static let lock = NSLock()
+    private static let diskQueue = DispatchQueue(label: "profilePhotoIndex.disk", qos: .utility)
     private static var store: [String: Facts] = load()
 
     private static func load() -> [String: Facts] {
@@ -243,6 +252,6 @@ enum ProfilePhotoIndex {
 
     private static func persist() {
         guard let data = try? JSONEncoder().encode(store) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        diskQueue.async { UserDefaults.standard.set(data, forKey: key) }
     }
 }

@@ -172,7 +172,7 @@ import UIKit
             return hit
         }
         guard let source = renderWallpaper(cid: cid, dark: dark, size: frame.size),
-              let blurred = blurred(source, dark: dark) else { return nil }
+              let blurred = Self.blurred(source, dark: dark) else { return nil }
         let state = WallpaperBlurState(image: blurred, frame: frame, cid: cid)
         // One chat is open at a time and the official channel is the other; anything past a
         // handful is a theme flip or a rotation that will not come back soon.

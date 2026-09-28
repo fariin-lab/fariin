@@ -123,9 +123,11 @@ struct ThreadView: View {
     @State private var afterSendError: (() -> Void)?   // 2026-09-24 fix-all #149: runs when that alert is dismissed
     @State private var showCamera = false
     @State private var showAttachPanel = false
-    // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
-    static let attachOpenDetent: PresentationDetent = .fraction(0.62)
-    @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
+    // The attach sheet is `AttachSheetController` (grows out of the "+", 62% at rest, full on caption
+    // focus). Bumping this asks it for the full height.
+    @State private var attachExpandTick = 0
+    /// Runs once the attach sheet is fully gone (a tile's next screen), instead of a guessed delay.
+    @State private var attachAfterClose: (() -> Void)?
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
     /// The attach sheet showing its album LIST instead of the photo grid. It lives here rather than
     /// inside the strip because the button that flips it (`albumButton`) sits in this view's bottom
@@ -1123,9 +1125,17 @@ struct ThreadView: View {
         // whether content sits under it. A chat short enough that nothing reaches the bar stays
         // clear; the reference behaves the same.
         .navigationBarTitleDisplayMode(.inline)
-        // ⛔ NO `.toolbar` AND NO `.navigationBarBackButtonHidden` HERE ANY MORE — owner,
-        // 2026-08-25. Both are set on the navigationItem from UIKit by `ChatNavigationItem`, the way
-        // the reference app sets them; see `navigationBar` for what goes where.
+        // ⛔ NO `.toolbar` HERE — owner, 2026-08-25. The bar items are set on the navigationItem from
+        // UIKit by `ChatNavigationItem`, the way the reference app sets them; see `navigationBar`.
+        //
+        // ⛔ BUT THE BACK BUTTON IS ALSO HIDDEN FROM HERE IN SELECTION MODE — owner, 2026-09-27, the
+        // chevron ringed beside Delete All: "every time I tap to select, the back button appears for
+        // a second, then disappears". SwiftUI writes the navigationItem on each of its updates and
+        // puts `hidesBackButton` back to false; the bridge notices and hides it again, but only on
+        // the NEXT pass (its re-assert is deferred on purpose, see that file). Every tap in selection
+        // mode is a SwiftUI update, so every tap flashed the chevron. With SwiftUI asking for the
+        // same thing, its own write already hides it and there is nothing left to flash.
+        .navigationBarBackButtonHidden(selecting)
         // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
         // lingers over the chat list.
         .onDisappear {
@@ -1350,13 +1360,20 @@ struct ThreadView: View {
         }
         // `attachShowAlbums` and `attachInAlbum` are reset with the rest: the sheet reopens on the
         // photo grid, never on the album list or inside the album you happened to leave it in.
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false; attachDetent = ThreadView.attachOpenDetent }) {
+        // ⛔ OUR OWN CONTAINER — owner, 2026-09-28, build 789: "+ sometimes does not open, sometimes
+        // does not close, lags after many times; copy the reference app". `AttachSheetController`
+        // grows out of the "+" and shrinks back into it on the reference app's own springs, owns
+        // its 62%/full drag, and a tap mid-animation reverses it. Why `.sheet` + zoom had to go is
+        // at the top of that file. The solid system background and the 62% rest are unchanged.
+        // The panel covers (editor after Send etc.) are cleared here too: the container takes them
+        // down with it, and a stale item would re-present on the next open.
+        .attachSheet(isPresented: $showAttachPanel, expandTick: attachExpandTick, onDismiss: {
+            recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false
+            panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
+            if let next = attachAfterClose { attachAfterClose = nil; next() }
+        }) {
             attachPanel
-                .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
-                // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
-                // sheet showed the chat blurring through, which read as a broken half-empty panel.
-                .presentationBackground(Color(.systemBackground))
-                // ⛔ NO ZOOM TRANSITION, AND THAT IS NOW TWICE. Built again on his word 2026-08-24
+                // (History, the `.sheet` era.) NO ZOOM TRANSITION, AND THAT IS NOW TWICE. Built again on his word 2026-08-24
                 // and pulled the same day on his verdict: it "caused the bugs" in that build. The
                 // note below is from the FIRST removal, July, and it named the reason both times —
                 // the morph fights the detent snap, and the detents are the part he will not give
@@ -1551,8 +1568,19 @@ struct ThreadView: View {
         .sheet(item: $reactorsTarget) { m in
             // 2026-09-24 feature-audit: the live row, so a reaction added or taken back while the
             // sheet is open shows (the Edit History sheet below reads it the same way).
+            // ⛔ MY OWN ROW SAYS MY NAME — owner, 2026-09-28: "when I react it says You; make it my
+            // name". This list only: reply quotes and the rest keep "You" (`personName`).
             ReactorsSheet(reactions: (repo.items.first(where: { $0.id == m.id }) ?? m).reactions,
-                          nameFor: { personName($0) })
+                          nameFor: { uid in
+                              guard uid == me else { return personName(uid) }
+                              let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
+                              return mine.isEmpty ? "You" : mine
+                          },
+                          // The chat's own photo mirror, the one Message Info reads; my profile's
+                          // photo when the mirror has none of mine yet.
+                          photoFor: { uid in
+                              conversation?.photos[uid] ?? (uid == me ? ProfileStore.shared.me?.photoUrl : nil)
+                          })
         }
         // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.
         .sheet(item: $editHistoryTarget) { m in
@@ -3195,8 +3223,13 @@ struct ThreadView: View {
         // The list above is `canReact` — one predicate, asked here before the bar is offered and
         // again in `handleCustomReact` before anything is written. Two copies is how they drifted.
         guard canReact(m) else { return nil }
-        // 2026-09-24 feature-audit: recent reactions first, topped up with the defaults.
-        return (ReactionRecents.quickBar(count: 6), m.reactions[me])
+        // ⛔ A FIXED SET IN A FIXED ORDER — owner, 2026-09-28, "make it like the reference app": react
+        // with B in A B C, long-press again, and it must still read A B C with B highlighted, never
+        // B A C. The bar was recents first (2026-09-24 feature-audit), so every reaction moved the
+        // one just used to the front. Later the same day, with a picture: "never change the default
+        // emojis", so a reaction from the swipe part stays in its own place there too
+        // (`CMReactionBar.init`). Recents are still recorded, for the full picker.
+        return (QuickReaction.bar, m.reactions[me])
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
@@ -3431,6 +3464,14 @@ struct ThreadView: View {
                 // 2026-09-24 decision D14: the tap asks Resend / Delete; the automatic retries still
                 // call resend directly.
                 if let m = repo.items.first(where: { $0.rowId == id }) { failedActionTarget = m }
+            },
+            // The same question, presented by the list from the red badge itself (2026-09-27);
+            // `onTapRetry` above stays as the fallback. The message line is the dialog's own.
+            failedActions: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return nil }
+                let why: String? = SendQueue.isRefused(clientId: m.clientId ?? "") ? refusedReason
+                    : (!NetworkState.shared.isOnline ? "No internet connection. Check your connection and try again." : nil)
+                return FailedMessageActions(message: why, resend: { resend(m) }, delete: { deleteForMe(m) })
             },
             onCancelUpload: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { cancelMediaSend(m) }
@@ -3955,7 +3996,12 @@ struct ThreadView: View {
     private var selectionCanBeDeleted: Bool {
         let picked = liveSelection
         guard !picked.isEmpty else { return false }
-        return picked.allSatisfy { !$0.isSystem && !$0.isCall }
+        // ⛔ A CALL ROW CAN BE DELETED — owner, 2026-09-27: "when I select messages the delete
+        // button at the bottom does nothing". A call can be selected (its own menu has Select), so
+        // one call in a selection of 76 disabled the trash for all of them, and the bar kept it red,
+        // so it looked live. A single call already has Delete, and `bulkDelete` already sends calls
+        // to delete-for-me (`canDeleteForEveryone` excludes them).
+        return picked.allSatisfy { !$0.isSystem }
     }
 
     /// The chat's own colour for a filled tick, matching what the row builder hands the UIKit rows.
@@ -4238,7 +4284,7 @@ struct ThreadView: View {
                         panelMediaApprove = MediaWrap(items: items)
                     }
                 },
-                onCaptionFocused: { attachDetent = .large },
+                onCaptionFocused: { attachExpandTick &+= 1 },
                 hasSelection: $recentsHasSelection,
                 // Declared last on the strip, so it goes last here — Swift matches these by position
                 // as well as by name.
@@ -4554,9 +4600,10 @@ struct ThreadView: View {
     /// three actions read as three loose blobs. See the row above.
     private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
+            // The next picker opens once the sheet is really gone (its `onDismiss`), not after a
+            // guessed 0.35s: the sheet shrinks into the "+" on a spring, not the system's clock.
+            attachAfterClose = action
             showAttachPanel = false
-            // Let the sheet finish dismissing before presenting the next picker (avoids a clash).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
             // MEDIUM, HIS WORD (2026-08-14): the bar read thick beside the sheet it floats on. Not
             // thin either — these are the only three shortcuts on that screen and they have to stay
@@ -5830,6 +5877,7 @@ struct ThreadView: View {
     /// (message deleted meanwhile, server said no) used to vanish with nothing said. Same brief toast
     /// the forward and jump paths use.
     private func sendReaction(messageId: String, emoji: String?, toAuthor: String) {
+        RxTrace.begin("sendReaction \(emoji ?? "remove")")   // TEMPORARY, see RxTrace
         // 2026-09-24 feature-audit: every pick feeds the quick bar's recents (bar, picker and
         // double-tap alike); only the full picker used to record one.
         if let e = emoji { ReactionRecents.add(e) }
@@ -6998,6 +7046,8 @@ struct ThreadView: View {
             // `didHide` instead of a stopwatch. `onceHidden` fires straight away when the keyboard
             // was never up.
             inputFocused = false
+            // The sheet reads where the "+" is at the moment it opens (the keyboard has gone by
+            // then, so the bar is down), and hides and shows the button itself.
             keyboard.onceHidden { showAttachPanel = true }
         }
         a.gif = {
@@ -7633,7 +7683,7 @@ struct EmptyChatNotice: ViewModifier {
 ///
 /// The label is a disabled `UIBarButtonItem` with a custom view, exactly as theirs is, so the bar's
 /// own layout centres it between the two flexible spaces instead of a hand-tuned padding.
-private struct SelectionToolbar: UIViewRepresentable {
+struct SelectionToolbar: UIViewRepresentable {
     var count: Int
     var deleteEnabled: Bool
     var forwardEnabled: Bool
@@ -7691,6 +7741,8 @@ private struct SelectionToolbar: UIViewRepresentable {
         context.coordinator.label.text = "\(count) selected"
         context.coordinator.label.sizeToFit()
         bar.items?.first?.isEnabled = deleteEnabled
+        // A forced red kept a disabled trash looking live (2026-09-27); let the bar dim it when off.
+        bar.items?.first?.tintColor = deleteEnabled ? .systemRed : nil
         bar.items?.last?.isEnabled = forwardEnabled
     }
 }

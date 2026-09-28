@@ -150,6 +150,8 @@ final class VoiceBubbleView: UIView {
         // ⚠️ THE LABEL'S RECT IS NOT RE-MEASURED, and it does not need to be. The plan sizes it
         // against the TOTAL, and elapsed time is by definition never longer than the total — so
         // "0:04" always fits a box measured for "0:11", and "9:59" fits one measured for "10:00".
+        // ⚠️ THAT HOLDS ONLY WITH TABULAR DIGITS, which the plan's font sets. With the default
+        // proportional ones "0:04" is wider than "0:11" and drew as "0:..." (owner, 2026-09-28).
         // A label that re-measured itself would move the unread dot beside it on every tick.
         //
         // At rest it is the total again, which is what a voice note says before you play it.

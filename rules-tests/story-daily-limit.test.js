@@ -31,7 +31,7 @@ const EXPIRES = new Date(NOW.getTime() + 24 * 3600 * 1000).toISOString();
 
 const story = {
   authorUid: A,
-  createdAt: NOW.getTime(),
+  createdAt: NOW.toISOString(),   // 2026-09-28: the engine reads a timestamp only as an ISO string
   expiresAt: EXPIRES,
   recipientUids: ['uidBBB', 'uidCCC'],
   mediaPath: 'stories/' + SID + '/photo.jpg',
@@ -61,6 +61,9 @@ function mocks(o) {
     { function: 'exists', args: [{ exactValue: D + '/admins/' + A }], result: { value: false } },
     { function: 'exists', args: [{ exactValue: D + '/users/' + A }], result: { value: true } },
     { function: 'get', args: [{ exactValue: D + '/users/' + A }], result: { value: { data: user } } },
+    // 2026-09-28: the active-story ceiling (db928dcf) came 2.5 hours after this file and reads this
+    // counter; no counter yet is the ordinary state, and the ceiling has its own tests.
+    { function: 'exists', args: [{ exactValue: D + '/users/' + A + '/limits/storiesActive' }], result: { value: false } },
     { function: 'exists', args: [{ exactValue: D + '/users/' + A + '/limits/stories' }], result: { value: true } },
     { function: 'get', args: [{ exactValue: D + '/users/' + A + '/limits/stories' }], result: { value: { data: { count: hour } } } },
     { function: 'exists', args: [{ exactValue: D + '/users/' + A + '/limits/storiesDaily' }], result: { value: true } },

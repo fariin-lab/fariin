@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Observation
 import CryptoKit
 import FirebaseAuth
@@ -322,6 +323,14 @@ struct Announcement: Identifiable, Equatable {
     /// Display order key. The publish time, not the write time, so a scheduled announcement lands
     /// where its date says rather than where it happened to be typed.
     var sortAt: Date { publishAt > Date.distantPast ? publishAt : createdAt }
+
+    /// ⛔ WHEN IT REACHED THE READER, which is what unread is measured against (2026-09-28). The later
+    /// of the two server times: a scheduled announcement arrives when it is published, and one given a
+    /// publish date in the past arrives when it was written. Measured against `sortAt` alone, a
+    /// backdated announcement landed behind the read watermark and was born "read" by somebody who
+    /// had never seen it. The reference app's rule is the same in spirit: unread is about arrival
+    /// order, never about the date a sender put on a message. Both are server clocks, never a phone's.
+    var arrivedAt: Date { max(sortAt, createdAt) }
 }
 
 // MARK: - Who gets what, decided here
@@ -342,7 +351,12 @@ extension Announcement {
     /// Read the order: cheap and certain first (deleted, not yet due, expired), then the app build,
     /// then country, then the rollout dice. A personally-chosen announcement skips country and
     /// rollout entirely — somebody picked this person by hand and a dice roll must not overrule that.
-    func reaches(uid: String, build: Int, region: String?, now: Date = Date()) -> Bool {
+    /// ⛔ `now` IS THE SERVER'S (2026-09-28). `publishAt` and `expiresAt` are server times, and they
+    /// were compared with the phone's raw clock: ten minutes fast and a scheduled announcement showed
+    /// ten minutes early and an expiring one vanished ten minutes early; slow, the reverse. `ServerClock`
+    /// is the phone's measured error against Google's clock, and it falls back to the phone's own when
+    /// nothing has been measured, which is exactly the old behaviour and never worse.
+    func reaches(uid: String, build: Int, region: String?, now: Date = ServerClock.now) -> Bool {
         if deleted { return false }
         if publishAt > now { return false }
         if let expiresAt, expiresAt <= now { return false }
@@ -375,6 +389,22 @@ extension Announcement {
 /// `{ muted: Bool, blocked: Bool, pinned: Bool, archived: Bool, lastReadAt: ms, clearedAt: ms }`.
 /// Every setter writes ONE field with `merge: true` rather than the whole document, so two settings
 /// changed on two devices in the same second cannot overwrite each other.
+///
+/// ⛔ THE STATE MACHINE, 2026-09-28 (owner: "deterministic even when events arrive late, out of order,
+/// twice, or after a reconnect"; the reference app's rules, read from its source):
+///   · `lastReadAt` and `clearedAt` are WATERMARKS. They only ever move forward: a snapshot carrying
+///     an older value than this phone already holds is a stale echo, not news (`merged(with:)`), and
+///     the rules refuse a write that would move either one back.
+///   · "Mark as unread" is its own flag, `markedUnread`, exactly as a normal chat's is. It used to be
+///     done by pulling the read watermark back a millisecond, which is the one operation a monotonic
+///     watermark cannot allow.
+///   · Each switch (muted, blocked, pinned, archived) carries the moment it was CHOSEN (`<name>At`,
+///     server-corrected, see `ServerClock`), not the moment it reached the server. An offline phone's
+///     queued "unmute" must not undo the mute another of his phones made later, so the rules refuse a
+///     switch older than the one stored. Two phones changing two different switches never conflict:
+///     every write is one field and its time, merged.
+///   · Every time here is the SERVER's (server timestamps on the announcements, `ServerClock` for the
+///     moments this phone chooses). The phone's own clock decides nothing.
 struct OfficialChannelState: Equatable {
     var muted: Bool = true
     var blocked: Bool = false
@@ -383,6 +413,13 @@ struct OfficialChannelState: Equatable {
     var lastReadAtMillis: Double = 0
     /// Delete-for-me watermark, same idea as a normal chat's `clearedAt`.
     var clearedAtMillis: Double = 0
+    /// "Mark as Unread" from the chat list. Cleared by the next read.
+    var markedUnread: Bool = false
+    /// Announcements this person deleted for themselves (long press > Delete, 2026-09-28).
+    var hiddenIds: Set<String> = []
+    /// This person's reaction per announcement id. Private to them: the announcement is a shared,
+    /// read-only document, so the reaction lives in their own state, like the reference app's.
+    var reactions: [String: String] = [:]
 
     init() {}
 
@@ -391,8 +428,29 @@ struct OfficialChannelState: Equatable {
         blocked = data["blocked"] as? Bool ?? false
         pinned = data["pinned"] as? Bool ?? false
         archived = data["archived"] as? Bool ?? false
-        lastReadAtMillis = (data["lastReadAt"] as? NSNumber)?.doubleValue ?? 0
-        clearedAtMillis = (data["clearedAt"] as? NSNumber)?.doubleValue ?? 0
+        lastReadAtMillis = Self.millis(data["lastReadAt"])
+        clearedAtMillis = Self.millis(data["clearedAt"])
+        markedUnread = data["markedUnread"] as? Bool ?? false
+        hiddenIds = Set(data["hiddenIds"] as? [String] ?? [])
+        reactions = data["reactions"] as? [String: String] ?? [:]
+    }
+
+    /// Milliseconds from either shape a stored time can have: a plain number (what this app writes)
+    /// or a Firestore timestamp.
+    static func millis(_ value: Any?) -> Double {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let t = value as? Timestamp { return t.dateValue().timeIntervalSince1970 * 1000 }
+        return 0
+    }
+
+    /// A snapshot from the server, merged onto what this phone already holds. The switches and the
+    /// unread flag are the server's word; the two watermarks keep whichever is further forward, so a
+    /// late or reordered snapshot can never un-read or un-clear anything.
+    func merged(with incoming: OfficialChannelState) -> OfficialChannelState {
+        var next = incoming
+        next.lastReadAtMillis = max(lastReadAtMillis, incoming.lastReadAtMillis)
+        next.clearedAtMillis = max(clearedAtMillis, incoming.clearedAtMillis)
+        return next
     }
 }
 
@@ -401,13 +459,44 @@ struct OfficialChannelState: Equatable {
 @Observable
 final class OfficialChannelStore {
     static let shared = OfficialChannelStore()
-    private init() {}
+    private init() {
+        // 2026-09-28: back in after the server refused this phone (see `SessionRecovery`). Firestore
+        // ends a listener for good on an error, and the channel froze at its last good state until a
+        // restart. Only a store whose listener actually died starts again.
+        recoveredObserver = NotificationCenter.default.addObserver(
+            forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+                let store = OfficialChannelStore.shared
+                if store.listenerFailed { store.start() }
+            }
+        // Time passing is an event only the app can see: a scheduled announcement falls due or one
+        // expires while the app was in the background, where no timer fires. Coming back is the
+        // moment to look again.
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+                let store = OfficialChannelStore.shared
+                if store.broadcastListener != nil { store.recompute() }
+            }
+    }
 
     private let db = Firestore.firestore()
     private var broadcastListener: ListenerRegistration?
     private var personalListener: ListenerRegistration?
     private var stateListener: ListenerRegistration?
     private var dueTimer: Timer?
+    /// ⛔ LOADED MEANS ALL THREE HAVE ANSWERED (2026-09-28). `hasLoaded` used to go true on the first
+    /// callback from any of the three listeners, usually the one-document state listener, while the
+    /// two announcement queries had not answered: the chat list dropped its cached row for an empty
+    /// one, and `cacheEntry(nil)` then deleted the cached row from disk, so a kill at that moment left
+    /// the next cold launch with nothing to show. Each listener sets its own flag.
+    private var answered: Set<String> = []
+    private static let allSources: Set<String> = ["broadcast", "personal", "state"]
+    /// Listeners that ended in an error and have not answered since; `SessionRecovery.recovered`
+    /// restarts the store while any is here. Per listener, so one that is still healthy answering
+    /// cannot mark a dead one well.
+    private var failedSources: Set<String> = []
+    private var listenerFailed: Bool { !failedSources.isEmpty }
+    private var recoveredObserver: NSObjectProtocol?
+    private var foregroundObserver: NSObjectProtocol?
 
     /// Everything the server has that could ever be for me, unfiltered. Kept raw so the due-timer can
     /// re-filter without another read when a scheduled announcement's time arrives.
@@ -429,8 +518,10 @@ final class OfficialChannelStore {
     /// security alerts — so there is no separate blocked check here.
     var isVisible: Bool { !visible.isEmpty }
 
+    /// Everything that ARRIVED after the read watermark, plus the one a "Mark as Unread" asks for.
     var unreadCount: Int {
-        visible.filter { $0.sortAt.timeIntervalSince1970 * 1000 > state.lastReadAtMillis }.count
+        let n = visible.filter { $0.arrivedAt.timeIntervalSince1970 * 1000 > state.lastReadAtMillis }.count
+        return n == 0 && state.markedUnread && !visible.isEmpty ? 1 : n
     }
 
     var latest: Announcement? { visible.last }
@@ -476,6 +567,9 @@ final class OfficialChannelStore {
     func start() {
         guard let uid = AuthService.shared.uid else { return }
         stop()
+        // New listeners are not failed ones. `answered` is kept: a restart after a refusal keeps the
+        // channel loaded on screen while the fresh listeners catch up.
+        failedSources = []
 
         // The BROADCAST feed: one document per announcement, the same for everybody on earth.
         // No `where` on publishAt — a query filtered by a timestamp captured at attach time would
@@ -490,10 +584,9 @@ final class OfficialChannelStore {
             .limit(to: 100)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self else { return }
-                if let error { print("announcements listen error:", error); return }
-                guard let snap else { return }
+                guard let snap else { self.listenerDied("broadcast", error); return }
                 self.broadcast = snap.documents.map { Announcement(id: $0.documentID, data: $0.data()) }
-                self.recompute()
+                self.answer("broadcast")
             }
 
         // Announcements sent to THIS person by hand. A real copy, because the phone cannot filter on
@@ -501,25 +594,27 @@ final class OfficialChannelStore {
         personalListener = db.collection("users").document(uid).collection("announcements")
             .order(by: "publishAt", descending: true)
             .limit(to: 100)
-            .addSnapshotListener { [weak self] snap, _ in
-                guard let self, let snap else { return }
+            .addSnapshotListener { [weak self] snap, error in
+                guard let self else { return }
+                guard let snap else { self.listenerDied("personal", error); return }
                 self.personal = snap.documents.map {
                     Announcement(id: $0.documentID, data: $0.data(), personal: true)
                 }
-                self.recompute()
+                self.answer("personal")
             }
 
         stateListener = db.collection("users").document(uid)
             .collection("officialChannel").document("state")
-            .addSnapshotListener { [weak self] snap, _ in
+            .addSnapshotListener { [weak self] snap, error in
                 // An ERROR is not a missing document (audit 2026-09-24). A nil snapshot used to fall
                 // through as `[:]`, wiping the read watermark (every announcement unread again) and
                 // the bell for as long as the error lasted. Keep what we have instead.
-                guard let self, let snap else { return }
+                guard let self else { return }
+                guard let snap else { self.listenerDied("state", error); return }
                 // A missing document is the muted default, not an error. Nobody should have to pay a
-                // write to be left alone.
-                self.state = OfficialChannelState(data: snap.data() ?? [:])
-                self.recompute()
+                // write to be left alone. Merged, not replaced: the watermarks only move forward.
+                self.state = self.state.merged(with: OfficialChannelState(data: snap.data() ?? [:]))
+                self.answer("state")
                 // THE ONLY PLACE THAT DECIDES WHAT THIS PHONE HEARS. Put here rather than in
                 // `setMuted` because this fires for all three ways the answer can change: the app
                 // launching, this phone muting, and the account's OTHER phone muting. A mute made on
@@ -528,20 +623,42 @@ final class OfficialChannelStore {
                 OfficialPushTopics.sync(muted: self.state.muted)
             }
 
-        // A scheduled announcement becomes due while the app is open, and no snapshot fires for the
-        // passage of time. One minute is fine: this is a release note, not a message.
-        //
-        // Scheduled on the MAIN queue explicitly. A Timer attaches to the run loop of whatever thread
-        // creates it, and a background thread's run loop is not running — the timer would simply
-        // never fire, silently, and only for scheduled announcements, which is the hardest kind of
-        // bug to notice.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.broadcastListener != nil else { return }   // stopped before we landed
-            self.dueTimer?.invalidate()
-            self.dueTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-                self?.recompute()
-            }
-        }
+        // The passage of time is scheduled by `recompute` itself (`scheduleNextBoundary`): one timer
+        // for the exact moment the next announcement falls due or expires, rather than a poll.
+    }
+
+    /// One listener has answered. `hasLoaded` waits for all three (see `answered`).
+    private func answer(_ source: String) {
+        answered.insert(source)
+        failedSources.remove(source)
+        recompute()
+    }
+
+    /// Firestore has ended this listener for good. Keep what is on screen, and let `SessionRecovery`
+    /// decide whether the server refused the whole session; its `recovered` restarts us.
+    private func listenerDied(_ source: String, _ error: Error?) {
+        failedSources.insert(source)
+        Task { @MainActor in SessionRecovery.noteRefusal(error, "official \(source)") }
+        recompute()   // a failed listener still settles the first load (see `recompute`)
+    }
+
+    /// ⛔ TIME PASSING, SCHEDULED FOR THE MOMENT IT MATTERS (2026-09-28). A minute's poll showed a
+    /// scheduled announcement up to a minute late and kept an expired one a minute too long, and ran
+    /// sixty times an hour for nothing. The next moment anything changes is known exactly: the
+    /// earliest future `publishAt` or `expiresAt` among what the server has sent. One timer, set for
+    /// that moment on the server's clock, re-run whenever the data changes. Coming back to the app
+    /// looks again too (see `init`), because no timer fires in the background.
+    ///
+    /// On the MAIN run loop explicitly: a timer made on a background thread never fires.
+    private func scheduleNextBoundary(now: Date) {
+        dueTimer?.invalidate(); dueTimer = nil
+        let times = (broadcast + personal).flatMap { [$0.publishAt, $0.expiresAt].compactMap { $0 } }
+        guard broadcastListener != nil, let next = times.filter({ $0 > now }).min() else { return }
+        // A hair past the boundary, so the comparison in `reaches` is already on the far side.
+        let wait = max(0.25, next.timeIntervalSince(now) + 0.25)
+        let timer = Timer(timeInterval: wait, repeats: false) { [weak self] _ in self?.recompute() }
+        RunLoop.main.add(timer, forMode: .common)
+        dueTimer = timer
     }
 
     func stop() {
@@ -560,6 +677,8 @@ final class OfficialChannelStore {
         visible = []
         state = OfficialChannelState()
         hasLoaded = false
+        answered = []
+        failedSources = []
         // Topics outlive a sign-out: they are attached to the phone's FCM token, not to the account.
         // Left alone, the next person to sign in on this handset would inherit the last one's alerts.
         OfficialPushTopics.leaveAll()
@@ -572,6 +691,8 @@ final class OfficialChannelStore {
         let build = Self.currentBuild
         let region = Locale.current.region?.identifier
         let cleared = state.clearedAtMillis
+        // ONE "now" for the whole pass, and it is the server's (see `reaches`).
+        let now = ServerClock.now
 
         // A personal copy WINS over a broadcast of the same id: it means somebody picked this person
         // deliberately, and its `isPersonal` flag is what waives the rollout dice.
@@ -592,8 +713,9 @@ final class OfficialChannelStore {
         }
 
         let next = byId.values
-            .filter { $0.reaches(uid: uid, build: build, region: region) }
-            .filter { $0.sortAt.timeIntervalSince1970 * 1000 > cleared }   // delete-for-me
+            .filter { $0.reaches(uid: uid, build: build, region: region, now: now) }
+            // Delete-for-me: what had ARRIVED by the moment of clearing is gone (see `arrivedAt`).
+            .filter { $0.arrivedAt.timeIntervalSince1970 * 1000 > cleared }
             // BLOCKING STOPS THE NEWS, NOT THE ALARM. Read from another mainstream messenger's own block sheet, which
             // says so out loud: "You may still receive messages with important information about your
             // account". Somebody who blocks this chat is saying they do not want to hear about new
@@ -605,8 +727,14 @@ final class OfficialChannelStore {
             // blocking "does not stop us telling you if something happens to your account" would be a
             // sentence the app does not keep, which is worse than not offering the block at all.
             .filter { !state.blocked || $0.kind == .security }
+            .filter { !state.hiddenIds.contains($0.id) }
             .sorted { $0.sortAt == $1.sortAt ? $0.id < $1.id : $0.sortAt < $1.sortAt }
 
+        scheduleNextBoundary(now: now)
+        // Only once all three listeners have SETTLED, answered or failed (see `answered`). Before that
+        // the cached row stands and the disk copy is left alone. A failed one counts as settled, or a
+        // single refused query would hold the whole channel on its spinner for ever.
+        guard answered.union(failedSources).isSuperset(of: Self.allSources) else { return }
         hasLoaded = true
         if next != visible { visible = next }   // assign only on a real change: no needless re-render
         // ⚠️ THE CACHE IS REFRESHED EVEN WHEN THE ANNOUNCEMENTS DID NOT CHANGE, and that is the
@@ -620,6 +748,10 @@ final class OfficialChannelStore {
         // A cache that is only refreshed when part of its content changes is a cache that lies about
         // the rest of it.
         Self.cacheEntry(listEntry)
+        // The springboard badge counts this channel too (`NotificationCleaner.badgeTotal`), and the
+        // chat list's snapshots are what refresh it, which do not fire for a change in here. It skips
+        // itself when the total has not moved.
+        Task { @MainActor in NotificationCleaner.syncBadgeFromList() }
     }
 
     // MARK: The launch copy
@@ -689,19 +821,33 @@ final class OfficialChannelStore {
     }
 
     func markRead() {
-        guard let latest, !visible.isEmpty else { return }
-        let at = latest.sortAt.timeIntervalSince1970 * 1000
-        guard at > state.lastReadAtMillis else { return }
-        state.lastReadAtMillis = at          // optimistic, so the badge clears on the tap
-        stateRef?.setData(["lastReadAt": at], merge: true)
+        guard !visible.isEmpty else { return }
+        // The watermark is the latest ARRIVAL among what is on screen (see `arrivedAt`), which is not
+        // always the last row: a backdated announcement sits early in the list and arrived last.
+        let at = visible.map { $0.arrivedAt.timeIntervalSince1970 * 1000 }.max() ?? 0
+        var write: [String: Any] = [:]
+        if at > state.lastReadAtMillis {
+            state.lastReadAtMillis = at      // optimistic, so the badge clears on the tap
+            write["lastReadAt"] = at
+        }
+        if state.markedUnread {
+            state.markedUnread = false
+            write["markedUnread"] = false
+        }
+        guard !write.isEmpty else { return }
+        stateRef?.setData(write, merge: true)
         // The read COUNT is not bumped here. It is bumped by each bubble as it comes on screen, so
         // "opened by" means somebody actually looked at that announcement — and so that opening a
         // channel holding twenty of them does not fire twenty writes in one breath.
     }
 
+    /// When a switch was chosen, on the server's clock (see `OfficialChannelState`). Written with the
+    /// switch so the rules can refuse an older choice that reaches the server after a newer one.
+    private static var chosenAt: Double { ServerClock.now.timeIntervalSince1970 * 1000 }
+
     func setMuted(_ muted: Bool) {
         state.muted = muted
-        stateRef?.setData(["muted": muted], merge: true)
+        stateRef?.setData(["muted": muted, "mutedAt": Self.chosenAt], merge: true)
         // Locally too, not only through the listener above. The write has to reach Doha and come
         // back before that fires, and on a bad connection that is seconds in which the bell reads
         // OFF while an announcement could still knock. Both calls land on the same set, and the
@@ -709,37 +855,60 @@ final class OfficialChannelStore {
         OfficialPushTopics.sync(muted: muted)
     }
 
-    /// Mark Unread from the chat list: pull the watermark back behind the newest announcement so
-    /// exactly one comes back unread, which is what the badge on a normal chat does.
+    /// Mark Unread from the chat list: the badge shows one, which is what a normal chat does.
+    ///
+    /// ⛔ A FLAG, NOT A REWIND (2026-09-28). This used to pull the read watermark back behind the
+    /// newest announcement, and a watermark that can move back is one a late snapshot or another
+    /// device can move back too. The watermark only ever moves forward now; this is its own flag,
+    /// cleared by the next read.
     func markUnread() {
-        guard let latest else { return }
-        let at = latest.sortAt.timeIntervalSince1970 * 1000 - 1
-        state.lastReadAtMillis = at
-        stateRef?.setData(["lastReadAt": at], merge: true)
+        guard !visible.isEmpty else { return }
+        state.markedUnread = true
+        stateRef?.setData(["markedUnread": true], merge: true)
     }
 
     func setPinned(_ pinned: Bool) {
         state.pinned = pinned
-        stateRef?.setData(["pinned": pinned], merge: true)
+        stateRef?.setData(["pinned": pinned, "pinnedAt": Self.chosenAt], merge: true)
     }
 
     func setArchived(_ archived: Bool) {
         state.archived = archived
-        stateRef?.setData(["archived": archived], merge: true)
+        stateRef?.setData(["archived": archived, "archivedAt": Self.chosenAt], merge: true)
     }
 
     /// The way out the welcome message promises. Blocking hides the chat completely and stops the
     /// read counters; it does not delete anything, so unblocking brings the history back.
     func setBlocked(_ blocked: Bool) {
         state.blocked = blocked
-        stateRef?.setData(["blocked": blocked], merge: true)
+        stateRef?.setData(["blocked": blocked, "blockedAt": Self.chosenAt], merge: true)
     }
 
+    /// ⛔ THE MOMENT OF CLEARING IS THE SERVER'S, AND IT IS THE MOMENT HE CHOSE (2026-09-28). The
+    /// phone's clock stamped it, and the announcements it is compared with carry server times: a fast
+    /// phone hid announcements that arrived in the next few minutes for good, a slow one let the last
+    /// ones survive the clear. Not a server timestamp either: that is the moment the write reaches the
+    /// server, and a clear made offline at 10:00 and sent at noon would swallow two hours of news he
+    /// never saw. `ServerClock.now` is his moment on the server's clock. Never moved back.
     func clearHistory() {
-        let now = Date().timeIntervalSince1970 * 1000
+        let now = max(state.clearedAtMillis, ServerClock.now.timeIntervalSince1970 * 1000)
         state.clearedAtMillis = now
         stateRef?.setData(["clearedAt": now], merge: true)
         recompute()
+    }
+
+    /// Delete for me: these announcements leave this person's chat and stay for everybody else.
+    func hide(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        state.hiddenIds.formUnion(ids)
+        stateRef?.setData(["hiddenIds": FieldValue.arrayUnion(ids)], merge: true)
+        recompute()
+    }
+
+    /// One reaction per announcement, the same as a chat message; nil takes it back.
+    func react(_ id: String, _ emoji: String?) {
+        state.reactions[id] = emoji
+        stateRef?.setData(["reactions": [id: emoji.map { $0 as Any } ?? FieldValue.delete()]], merge: true)
     }
 }
 

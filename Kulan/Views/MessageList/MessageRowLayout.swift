@@ -233,6 +233,9 @@ struct BubblePlan {
     ///
     /// ⚠️ DEFAULTED so the three plans built without decorations keep their memberwise inits.
     var reactionsOnMyBubble: Bool = false
+    /// The pills sit OUTSIDE the bubble, under a picture, on the wallpaper (2026-09-27). They take a
+    /// dark see-through fill like the time capsule, since there is no bubble colour under them.
+    var reactionsFreeform: Bool = false
     /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
     var failBadge: CGRect?
 }
@@ -773,14 +776,15 @@ enum MessageRowLayout {
             let extra = b.reactions.count - shown.count
             var chips: [(NSAttributedString, Bool, ReactionFace?)] = shown.map { chip in
                 let s = NSMutableAttributedString(string: chip.emoji, attributes: [
-                    .font: UIFont.systemFont(ofSize: BubbleMetrics.reactionEmojiFont)])
+                    .font: UIFont.systemFont(ofSize: inside ? BubbleMetrics.reactionEmojiFont
+                                                            : BubbleMetrics.reactionEmojiFontSmall)])
                 // The count appears only where there is no single face to show — see `ReactionChip`.
                 if chip.count > 1 {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
                         .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
                         .foregroundColor: chip.mine ? BubblePalette.accent : UIColor.secondaryLabel]))
                 }
-                return (s, chip.mine, inside ? chip.face : nil)
+                return (s, chip.mine, chip.face)   // the face on pictures too (owner, 2026-09-27)
             }
             if extra > 0 {
                 chips.append((NSAttributedString(string: "+\(extra)", attributes: [
@@ -791,15 +795,18 @@ enum MessageRowLayout {
             // ⛔ A FIXED HEIGHT, THEIR NUMBER — see `BubbleMetrics.reactionChipHeight`. It used to be
             // derived from whichever was taller, the text or the face, which made an emoji-only pill
             // and a pill with a count two different heights in the same row.
-            let height: CGFloat = BubbleMetrics.reactionChipHeight
+            let height: CGFloat = inside ? BubbleMetrics.reactionChipHeight : BubbleMetrics.reactionChipHeightSmall
             for (attr, _, face) in chips {
                 let s = BubbleText.size(attr, width: .greatestFiniteMagnitude)
                 // A face: lead, emoji, gap, face, trail (see `BubbleMetrics.reactionFaceLead`).
                 if face == nil {
-                    widths.append(s.width + BubbleMetrics.reactionChipInset * 2)
-                } else {
+                    widths.append(s.width + (inside ? BubbleMetrics.reactionChipInset : BubbleMetrics.reactionFaceLeadSmall) * 2)
+                } else if inside {
                     widths.append(BubbleMetrics.reactionFaceLead + s.width + BubbleMetrics.reactionFaceGap
                                   + BubbleMetrics.reactionFace + BubbleMetrics.reactionFaceTrail)
+                } else {
+                    widths.append(BubbleMetrics.reactionFaceLeadSmall + s.width + BubbleMetrics.reactionFaceGapSmall
+                                  + BubbleMetrics.reactionFaceSmall + BubbleMetrics.reactionFaceTrailSmall)
                 }
             }
             let total = widths.reduce(0, +)
@@ -907,18 +914,26 @@ enum MessageRowLayout {
                 // path that draws reactions off a bubble passes `type: .freeform`, which picks a
                 // static fill chosen to read on a wallpaper rather than either side's palette. The
                 // white-at-alpha treatment would be nearly invisible out here.
-                var cx = b.isMe ? (bubbleRect.maxX - 10 - total) : (bubbleRect.minX + 10)
-                let cy = bubbleRect.maxY + BubbleMetrics.reactionOverhang - height
+                // ⛔ ON THE PICTURE'S BOTTOM-LEFT EDGE, SMALL — owner, 2026-09-27, two GIFs with their
+                // hearts ringed: "which image owns that reaction, no one can understand; make it left,
+                // small, overlapping the owner GIF". Earlier the same day it sat 4pt UNDER the picture,
+                // which put it in the gap between two pictures, belonging to neither (and before that
+                // it sat on the time). Now a smaller pill (26pt, 20pt face) straddles the picture's
+                // bottom edge on the LEFT, half on the picture and half below it: attached to the one it
+                // belongs to, and on the opposite side from the time capsule.
+                let inset: CGFloat = 8
+                var cx = bubbleRect.minX + inset
+                let cy = bubbleRect.maxY - height / 2
+                plan.reactionsFreeform = true
                 for (i, w) in widths.enumerated() {
                     plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
                     plan.reactionAttrs.append(chips[i].0)
                     plan.reactionMine.append(chips[i].1)
-                    plan.reactionFaces.append(nil)
+                    plan.reactionFaces.append(chips[i].2)
                     cx += w + BubbleMetrics.reactionChipGap
                 }
-                // Reserve the overhang so the badge cannot collide with the next bubble. Reserve less
-                // than it hangs and they touch; reserve more and there is a gap nothing draws into.
-                y += BubbleMetrics.reactionOverhang
+                // The row ends under the pills.
+                y = max(y, cy + height)
             }
         }
 
@@ -1388,8 +1403,15 @@ enum MessageRowLayout {
         let columnStart = hPad + disc + gap
         let columnW2 = max(1, contentW - disc - gap)
 
+        // ⛔ TABULAR DIGITS, NOT THE SYSTEM DEFAULT — owner, 2026-09-28, screenshot of "0:..." on a
+        // part-played note. The label's box is measured once, against the TOTAL, and the elapsed
+        // time is drawn into it. With the default proportional digits a "1" is narrower than a "0"
+        // or a "4", so "0:04" is WIDER than a box measured for "0:11" and truncates. Tabular digits
+        // make every string of the same shape the same width, which is the only thing that makes
+        // "elapsed never outgrows the total" true. The SwiftUI bubble always had `.monospacedDigit()`;
+        // the UIKit port dropped it.
         let durationAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 11),
+            .font: UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
             .foregroundColor: textColor.withAlphaComponent(0.8)]
         let durationAttr = NSAttributedString(string: v.durationText, attributes: durationAttrs)
         let durH = lineSizeOf(durationAttr).height
@@ -1953,12 +1975,16 @@ enum MessageRowLayout {
         // open; taking the height from the font closes it.
         let lineH = ceil(BubbleMetrics.metaFont.lineHeight)
         let hPad: CGFloat = 7, vPad: CGFloat = 3
-        let capsule = CGRect(x: rect.maxX - 7 - (size.width + hPad * 2),
+        // ⛔ THE SAME SPACE ON BOTH SIDES — owner, 2026-09-27, a close-up of "8:11 PM ✓" on a GIF with
+        // more room after the tick than before the time. `lineSize` adds a point of slack to the
+        // width so a label never clips, and the capsule was built around it, but the label draws
+        // from its left edge: that point always landed on the right. The capsule is now built
+        // around the ink (`size.width - 1`), and the label keeps its slack inside the right pad.
+        let ink = max(0, size.width - 1)
+        let capsule = CGRect(x: rect.maxX - 7 - (ink + hPad * 2),
                              y: rect.maxY - 7 - (lineH + vPad * 2),
-                             width: size.width + hPad * 2, height: lineH + vPad * 2)
-        // Centred on the capsule rather than offset from its corner, so the two cannot drift apart
-        // if either padding is ever changed on its own.
-        let text = CGRect(x: capsule.midX - size.width / 2,
+                             width: ink + hPad * 2, height: lineH + vPad * 2)
+        let text = CGRect(x: capsule.minX + hPad,
                           y: capsule.midY - lineH / 2,
                           width: size.width, height: lineH)
         return (capsule, text)

@@ -262,10 +262,19 @@ final class ThreadMessageCache {
 
     private func persist(_ cid: String, _ messages: [Message]) {
         let slice = messages.suffix(diskCap).map { $0 }
-        // Cheap identity for "is this the same screen as last time": how many, and which one is last.
-        // Edits and deletions both change the last id or the count in practice, and anything this
-        // misses is corrected by the next real change — a cache one snapshot behind is not a cost.
-        let stamp = "\(slice.count)|\(slice.last?.id ?? "")|\(slice.last?.text.count ?? 0)"
+        // Identity for "is this the same screen as last time".
+        // ⛔ EVERY MESSAGE'S MUTABLE FIELDS, NOT JUST THE LAST ONE'S — owner, 2026-09-27, reactions
+        // missing after coming back to a chat. The old stamp was the count, the last id and the last
+        // text's length, so a reaction added or removed on any message but the newest never reached
+        // the disk: after a relaunch the chat opened on the old copy and the reaction was missing
+        // until the live listener caught up. A hash of each message's reactions, text, edit and
+        // delete state costs microseconds for 60 messages and misses nothing the screen draws.
+        var h = Hasher()
+        for m in slice {
+            h.combine(m.id); h.combine(m.reactions); h.combine(m.text)
+            h.combine(m.edited); h.combine(m.deleted)
+        }
+        let stamp = "\(slice.count)|\(h.finalize())"
         guard lastPersisted[cid] != stamp else { return }
         lastPersisted[cid] = stamp
         // X1: capture the generation now, on the caller's thread, the same way `prewarm` and

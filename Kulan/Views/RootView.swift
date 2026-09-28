@@ -41,8 +41,13 @@ struct RootView: View {
             case .loading:
                 // Static branded launch screen (no spinner) — matches the native iOS launch
                 // screen so boot feels instant, like other chat apps. No "loading" UI.
-                Text("Fariin").font(.system(size: 40, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                // ⛔ HIS LOGO, NOT THE WORD — owner, 2026-09-28, who sent the two files: the black
+                // mark in light mode, the white one in dark (one asset, `LaunchLogo`, two appearances).
+                Image("LaunchLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 120, height: 120)
+                    .accessibilityLabel("Fariin")
             case .welcome:
                 // Signed out → the front door (Apple / Google / email). After any door
                 // succeeds, route() decides onboarding (new account) vs main (returning).
@@ -242,6 +247,22 @@ struct RootView: View {
         // as tapping Sign Out here, then back to the front door with a word about why.
         .onChange(of: devices.revoked) { _, revoked in
             guard revoked else { return }
+            Task {
+                await DeviceRegistry.shared.performRevokedSignOut()
+                await route()
+                showRevokedNotice = true
+            }
+        }
+        // 2026-09-28 (see `SessionRecovery`): the server refused this phone and a fresh token says
+        // this sign-in has not entered the two-step password. The same door a new sign-in stops at,
+        // instead of an app whose every read is refused.
+        .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.needsTwoStep)) { _ in
+            if phase == .main || phase == .notifications { phase = .twoStep }
+        }
+        // …and when there is no session left at all (Firebase signs out by itself when it was
+        // revoked or the account disabled): the teardown of a sign-out from another device, then
+        // the front door, instead of a signed-in-looking app that can do nothing.
+        .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.sessionEnded)) { _ in
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()

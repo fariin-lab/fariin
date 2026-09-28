@@ -27,10 +27,14 @@ struct AgreementView: View {
             AuthPalette.page.ignoresSafeArea()
             VStack(spacing: 0) {
                 Spacer()
-                // ARTWORK: owner to supply
-                ShiningLogo()
-                    .frame(width: 108, height: 108)
-                    .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                // ⛔ HIS LOGO — owner, 2026-09-28, the artwork this spot was waiting for: the same
+                // mark as the launch screen and the sign-in page (`LaunchLogo`, black on a light
+                // phone, white on a dark one).
+                Image("LaunchLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 120, height: 120)
+                    .accessibilityLabel("Fariin")
                 Text("Welcome to Fariin")
                     .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(.primary)

@@ -40,6 +40,13 @@ enum BubbleMetrics {
     static let reactionFaceLead: CGFloat = 10
     static let reactionFaceGap: CGFloat = 6
     static let reactionFaceTrail: CGFloat = 6
+    /// The smaller pill that sits on a picture's bottom-left edge (owner, 2026-09-27, "small").
+    static let reactionChipHeightSmall: CGFloat = 26
+    static let reactionFaceSmall: CGFloat = 20
+    static let reactionFaceLeadSmall: CGFloat = 8
+    static let reactionFaceGapSmall: CGFloat = 4
+    static let reactionFaceTrailSmall: CGFloat = 3
+    static let reactionEmojiFontSmall: CGFloat = 15
     /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
     /// [the reference] react badge then make it like it, size and color".
     ///
@@ -399,6 +406,10 @@ enum BubbleTicks {
     /// glyph at the same size and colour, which is why an arriving read receipt looked identical to
     /// a plain delivered tick.
     private static var doubleCheckCache: [CGFloat: UIImage] = [:]
+    /// The layout now runs on a background queue for a chat's first open (see
+    /// `MessageListController.planFirstLandOffMain`) while the main thread may be laying out
+    /// another row, so the one piece of shared state it touches is locked.
+    private static let doubleCheckLock = NSLock()
 
     static func image(_ kind: Kind) -> UIImage? {
         let cfg = UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
@@ -426,6 +437,7 @@ enum BubbleTicks {
     /// height the old drawn ticks had, so the footer's measured width barely moves.
     private static func drawnChecks(_ count: Int) -> UIImage? {
         let key = CGFloat(count)
+        doubleCheckLock.lock(); defer { doubleCheckLock.unlock() }
         if let hit = doubleCheckCache[key] { return hit }
         let strokes: [[CGPoint]] = count == 1
             ? [[CGPoint(x: 6.5, y: 17), CGPoint(x: 12.5, y: 23), CGPoint(x: 25.5, y: 10)]]
@@ -479,6 +491,63 @@ final class BubbleFillView: UIView {
     private let blurMask = CAShapeLayer()
     private var current: BubbleFill?
 
+    // ⛔ A GRADIENT BELONGS TO THE SCREEN, NOT TO THE BUBBLE — owner, 2026-09-27, two screenshots on
+    // the same wallpaper: ours drew the whole orange-to-red run inside every bubble; the reference
+    // app's bubbles are orange near the top of the screen and dark red near the bottom, each almost
+    // one colour. Its `CVColorOrGradientView` spans the gradient over the conversation controller's
+    // view (`referenceView`) and gives each bubble its slice, redone on every scroll
+    // (`updateScrollingContent`). Same here: the start and end points are that math, verbatim,
+    // against the message list's own view, re-cut per scroll tick by `repositionGradients`.
+    private static let liveGradients = NSHashTable<BubbleFillView>.weakObjects()
+    private var gradientAngle: Double = 180
+
+    /// Called per scroll tick by the message list, beside `WallpaperBlurSliceView.repositionAll`.
+    static func repositionGradients() {
+        for v in liveGradients.allObjects { v.positionGradient() }
+    }
+
+    /// The view the whole gradient spans: the message list's own view, which fills the screen and
+    /// slides with the chat, as theirs is the conversation controller's view. Off the list (a preview,
+    /// a sheet), the window.
+    private var gradientReference: UIView? {
+        var v = superview
+        while let s = v, !(s is UICollectionView) { v = s.superview }
+        return v?.superview ?? window
+    }
+
+    private func positionGradient() {
+        guard !gradient.isHidden, bounds.width > 0, bounds.height > 0, window != nil,
+              let ref = gradientReference, ref.window === window else { return }
+        // Their numbers: 180° spec is 0 rad with the first colour north; the control points sit on
+        // the edge of the unit square along that direction, then map from the reference frame's
+        // units into this view's.
+        let a = (gradientAngle - 180) / 180 * Double.pi
+        let v = CGPoint(x: sin(a), y: -cos(a))
+        let scale = 0.5 / max(abs(v.x), abs(v.y))
+        let start = CGPoint(x: 0.5 + v.x * scale, y: 0.5 + v.y * scale)
+        let end = CGPoint(x: 0.5 - v.x * scale, y: 0.5 - v.y * scale)
+        let r = convert(ref.bounds, from: ref)
+        func local(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: (r.minX + p.x * r.width - bounds.minX) / bounds.width,
+                    y: (r.minY + p.y * r.height - bounds.minY) / bounds.height)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.startPoint = local(start)
+        gradient.endPoint = local(end)
+        CATransaction.commit()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        positionGradient()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        positionGradient()
+    }
+
     private(set) var path = UIBezierPath()
 
     override init(frame: CGRect) {
@@ -518,6 +587,7 @@ final class BubbleFillView: UIView {
         gradient.isHidden = true
         sliceView?.isHidden = true
         blurView?.isHidden = true
+        Self.liveGradients.remove(self)
 
         switch fill {
         case .solid(let hex):
@@ -526,6 +596,9 @@ final class BubbleFillView: UIView {
             shape.fillColor = UIColor.clear.cgColor
             gradient.colors = hexes.map { BubblePalette.hex(UInt32(truncatingIfNeeded: $0)).cgColor }
             gradient.isHidden = false
+            gradientAngle = ChatColorSpec.angleDegrees(forStops: hexes)
+            Self.liveGradients.add(self)
+            positionGradient()
         case .received:
             shape.fillColor = BubblePalette.receivedFill.cgColor
         case .background:

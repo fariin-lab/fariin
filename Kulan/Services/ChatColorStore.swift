@@ -18,6 +18,20 @@ struct ChatColorSpec: Equatable, Identifiable {
     // A representative swatch colour (for the picker circle / button tint).
     var swatch: Color { solid }
 
+    /// The direction a gradient runs, in the reference app's spec degrees: 180 puts the first colour
+    /// at the top, 168 tilts it 12° one way, 192 the other. Its nine gradients carry these numbers in
+    /// `PaletteChatColor+Constants`; ours stored none, so all nine drew at 180. Keyed by the exact
+    /// stops (see `ChatColors.presets`); anything else, a gradient made by hand, runs at 180.
+    static func angleDegrees(forStops stops: [UInt]) -> Double {
+        switch stops {
+        case [0xE57C00, 0x5E0000]: return 168                    // Ember
+        case [0xF65560, 0x442CED],                                // Infrared
+             [0xEC13DD, 0x1B36C6],                                // Fluorescent
+             [0xDB7133, 0x911231]: return 192                    // Tangerine
+        default: return 180
+        }
+    }
+
     var stored: String { (isGradient ? "g:" : "s:") + colors.map { String(format: "%06X", $0) }.joined(separator: ",") }
 
     init(colors: [UInt]) { self.colors = colors }
@@ -96,6 +110,31 @@ enum ChatColors {
     private init() {
         let stored = UserDefaults.standard.stringArray(forKey: "chatColor.customLibrary.v1") ?? []
         customColors = stored.compactMap { ChatColorSpec(stored: $0) }
+        Self.migrateThemeCopiesToAuto()
+    }
+
+    /// ⛔ ONE-TIME: COLOURS THE APP WROTE, NOT THE PERSON, GO BACK TO AUTO — owner, 2026-09-27, "auto
+    /// chat colour works in Settings but not in the chat's sheet". Before Auto existed, the chat sheet
+    /// opened on the chat's RESOLVED colour and Apply saved it as that chat's own, and a Settings theme
+    /// card saved its colour as the Settings colour. Both wrote a theme's `bubbleHex` as a fixed pick,
+    /// and a fixed pick beats Auto, so those chats never followed a wallpaper again.
+    ///
+    /// ⚠️ SAFE TO TELL APART: a theme's `bubbleHex` as a single solid colour is not in the colour
+    /// picker (`ChatColors.presets` is the reference palette), so nobody could have chosen one by hand;
+    /// only the app ever stored it. Custom colours are left alone even if they happen to match.
+    private static func migrateThemeCopiesToAuto() {
+        let d = UserDefaults.standard
+        let flag = "chatColor.migratedThemeCopies.v1"
+        guard !d.bool(forKey: flag) else { return }
+        let themeCopies = Set(ChatWallpapers.all.map { ChatColorSpec(colors: [$0.bubbleHex]).stored })
+            .subtracting(ChatColors.presets.map(\.stored))
+        let custom = Set(d.stringArray(forKey: "chatColor.customLibrary.v1") ?? [])
+        for (k, v) in d.dictionaryRepresentation()
+            where k.hasPrefix("chatColor.") && k != "chatColor.customLibrary.v1" && k != flag {
+            guard let s = v as? String, themeCopies.contains(s), !custom.contains(s) else { continue }
+            d.removeObject(forKey: k)
+        }
+        d.set(true, forKey: flag)
     }
 
     func addCustom(_ spec: ChatColorSpec) {
@@ -162,7 +201,16 @@ enum ChatColors {
     /// pairing is what this answers while it is being tried — their `previewWallpaper`.
     func autoColor(for cid: String) -> ChatColorSpec? {
         let walls = WallpaperStore.shared
-        if walls.hasOverride(for: cid), let c = walls.wallpaper(for: cid).pairedColor { return c }
+        if walls.hasOverride(for: cid) {
+            // ⛔ THE CHAT'S OWN PHOTO OR PLAIN WALLPAPER IS BLUE ON AUTO — owner, 2026-09-28: "chat
+            // colour on Auto, then a wallpaper from Photos: use the blue bubble; don't touch a custom
+            // colour". A wallpaper with no paired colour used to fall through to the SETTINGS
+            // wallpaper's pairing, so a photo in this chat drew the bubbles in the colour of a theme
+            // the chat was not even showing (pink, his screenshot). It stops at a colour he chose in
+            // Settings, or the app's blue. A colour chosen for this chat never reaches here.
+            if let c = walls.wallpaper(for: cid).pairedColor { return c }
+            return globalChosenColor
+        }
         return globalColor
     }
 

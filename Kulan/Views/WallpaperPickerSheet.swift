@@ -317,8 +317,13 @@ struct WallpaperPickerSheet: View {
 
     // Something of this chat's own is in use or being tried → offer Reset. Each reset in the menu
     // appears only when there is something of that kind to reset.
-    private var canResetColor: Bool { originalColor != nil || selectedColor != nil }
-    private var canResetWallpaper: Bool { hadOwnWallpaper || selected != original }
+    // Nothing to reset once a chat is already on the defaults the resets give (2026-09-28): the
+    // default blue, and its own plain wallpaper.
+    private var canResetColor: Bool {
+        let blue = ChatColors.presets.first
+        return (originalColor != nil && originalColor != blue) || (selectedColor != nil && selectedColor != blue)
+    }
+    private var canResetWallpaper: Bool { (hadOwnWallpaper && original != .none) || selected != original }
     private var hasCustom: Bool { canResetColor || canResetWallpaper }
 
     private var header: some View {
@@ -399,20 +404,29 @@ struct WallpaperPickerSheet: View {
         dismiss()
     }
 
-    /// "Reset Chat Color": this chat back to Auto. A wallpaper being tried is dropped, and the one
-    /// the chat had is put back as it was (its own, or following Settings).
+    /// "Reset Chat Color": this chat's bubbles go back to the app's default BLUE. A wallpaper being
+    /// tried is dropped, and the one the chat had is put back as it was (its own, or following Settings).
+    ///
+    /// ⛔ BLUE, NOT AUTO — owner, 2026-09-28: "when the user resets the chat colour, use blue, the
+    /// default colour". Auto on a themed wallpaper is that theme's colour, so a reset to Auto came
+    /// back pink on the pink theme (his screenshot). The default blue is the palette's first entry.
     private func resetColorOnly() {
         committed = true
-        colorStore.resetChatColor(for: cid)
+        colorStore.set(ChatColors.presets.first, for: cid)
         if hadOwnWallpaper { store.set(original, for: cid) } else { store.clearOverride(for: cid) }
         dismiss()
     }
 
-    /// "Reset Wallpaper": this chat follows the Settings wallpaper again (their per-chat reset removes
-    /// the chat's own). A colour being tried is dropped; the chat's chosen colour, or Auto, stays.
+    /// "Reset Wallpaper": this chat's background goes PLAIN — the app's own white in light mode and
+    /// black in dark (`ChatWallpaper.none`, which draws `Theme.bg`). A colour being tried is dropped;
+    /// the chat's chosen colour, or Auto, stays (Auto on plain is blue, see `autoColor`).
+    ///
+    /// ⛔ PLAIN, NOT "FOLLOW SETTINGS" — owner, 2026-09-28: "when the user resets the wallpaper use
+    /// the default: white in light mode, black in dark". It used to clear the chat's own pick, which
+    /// put back whatever theme Settings had (the pink pattern, his screenshot).
     private func resetWallpaperOnly() {
         committed = true
-        store.clearOverride(for: cid)
+        store.set(.none, for: cid)
         colorStore.set(originalColor, for: cid)
         dismiss()
     }
@@ -587,6 +601,12 @@ struct WallpaperPickerSheet: View {
 
     private func tileFrame<Content: View>(isSelected: Bool,
                                           @ViewBuilder _ content: () -> Content) -> some View {
+        // ⛔ THE RING MOVES THE MOMENT THE TILE IS TAPPED — owner, 2026-09-27, a frame where the chat
+        // behind was already on the new wallpaper and the ring was still on the old tile: "it changes
+        // the colour, but it still is not going to the wallpaper I click". The ring and tick were
+        // inside the tile's spring and faded across over ~0.3s while the preview applied at once, so
+        // the sheet disagreed with the chat for that long. The ring and tick now appear and leave with
+        // no animation at all; only the tile's small pop keeps its spring.
         content()
             .frame(width: 76, height: 108)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -594,6 +614,7 @@ struct WallpaperPickerSheet: View {
                 if isSelected {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(Theme.accent(dark), lineWidth: 3)
+                        .transition(.identity)   // in and out at once, never a fade
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -603,7 +624,7 @@ struct WallpaperPickerSheet: View {
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, Theme.accent(dark))
                         .padding(6)
-                        .transition(.scale.combined(with: .opacity))
+                        .transition(.identity)   // in and out at once, never a fade
                 }
             }
             .scaleEffect(isSelected ? 1.04 : 1.0)   // gentle pop on the selected swatch
@@ -613,7 +634,9 @@ struct WallpaperPickerSheet: View {
     // Select + LIVE-PREVIEW on the chat behind (store is observed). Not persisted until Apply — the
     // onDisappear revert restores the original if the user closes without applying.
     private func preview(_ w: ChatWallpaper) {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { selected = w }
+        // No animation on the selection itself: the ring must land in the same frame the chat behind
+        // changes (see `tileFrame`). The tile's pop has its own spring.
+        selected = w
         store.set(w, for: cid)   // live preview only — Apply commits it, close reverts it
     }
 

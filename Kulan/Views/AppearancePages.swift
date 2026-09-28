@@ -96,6 +96,66 @@ struct AppearanceDiagonalHalf: Shape {
 
 // MARK: - Set Wallpaper (page: Choose from Photos + Presets grid)
 
+/// ⛔ THE "⋯" RESET MENU ON SET WALLPAPER AND CHAT COLOR — owner, 2026-09-27: "top right add a
+/// button like three dots; a context menu with Reset Wallpaper or Reset Chat Color; there is no way
+/// to put things back to default". The reference's settings page has the same four resets:
+///   · Reset Wallpaper — the Settings wallpaper back to none; chats with their own keep it;
+///   · Reset All Wallpapers — that, and every chat's own wallpaper;
+///   · Reset Chat Color — the Settings colour back to Auto; chats with their own keep it;
+///   · Reset All Chat Colors — that, and every chat's own colour (the custom library stays).
+/// The two "All" resets ask first.
+struct AppearanceResetMenu: ViewModifier {
+    private enum Confirm: Identifiable { case allWallpapers, allColors; var id: Self { self } }
+    @State private var confirm: Confirm?
+
+    func body(content: Content) -> some View {
+        content
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Section {
+                            Button { WallpaperStore.shared.applyToAllChats(.none) } label: {
+                                Label("Reset Wallpaper", systemImage: "photo")
+                            }
+                            Button(role: .destructive) { confirm = .allWallpapers } label: {
+                                Label("Reset All Wallpapers", systemImage: "photo.stack")
+                            }
+                        }
+                        Section {
+                            Button { ChatColorStore.shared.applyToAllChats(nil) } label: {
+                                Label("Reset Chat Color", systemImage: "paintpalette")
+                            }
+                            Button(role: .destructive) { confirm = .allColors } label: {
+                                Label("Reset All Chat Colors", systemImage: "paintpalette.fill")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    .accessibilityLabel("Reset options")
+                }
+            }
+            .confirmationDialog(confirm == .allWallpapers ? "Reset all wallpapers?" : "Reset all chat colors?",
+                                isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+                                titleVisibility: .visible, presenting: confirm) { which in
+                switch which {
+                case .allWallpapers:
+                    Button("Reset All Wallpapers", role: .destructive) {
+                        WallpaperStore.shared.applyToAllChats(.none, clearingChatPicks: true)
+                    }
+                case .allColors:
+                    Button("Reset All Chat Colors", role: .destructive) { ChatColorStore.shared.resetAllColors() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { which in
+                switch which {
+                case .allWallpapers: Text("Every chat goes back to no wallpaper, including chats with their own.")
+                case .allColors: Text("Every chat goes back to Auto and follows its wallpaper's color.")
+                }
+            }
+    }
+}
+
 struct ChatWallpaperPage: View {
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
@@ -167,6 +227,7 @@ struct ChatWallpaperPage: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Set Wallpaper")
         .navigationBarTitleDisplayMode(.inline)
+        .modifier(AppearanceResetMenu())   // the resets live in the "⋯" menu (2026-09-27)
         // Pushed page, so the shell's tab bar has no business here — the same miss as the archive
         // page, caught in the same screenshot batch (owner 2026-08-19).
         .toolbar(.hidden, for: .tabBar)
@@ -564,7 +625,6 @@ struct ChatColorPage: View {
 
     /// The colour chosen here; nil = Auto (2026-09-27, see `ChatColorStore.autoColor`).
     private var selected: ChatColorSpec? { colorStore.globalChosenColor }
-    @State private var confirmResetAll = false
 
     var body: some View {
         let _ = colorStore.version
@@ -609,26 +669,10 @@ struct ChatColorPage: View {
                 .padding(18)
                 .background(Color(.secondarySystemGroupedBackground),
                             in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-
-                // ⛔ RESET ALL CHAT COLORS — owner, 2026-09-27, the reference's global reset: every
-                // chat, and this page, back to Auto. Custom colours stay in the picker.
-                Button { confirmResetAll = true } label: {
-                    Text("Reset All Chat Colors")
-                        .font(.body).foregroundStyle(.red)
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .background(Color(.secondarySystemGroupedBackground),
-                                    in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                }
-                .buttonStyle(.plain)
             }
             .padding(16)
         }
-        .confirmationDialog("Reset all chat colors?", isPresented: $confirmResetAll, titleVisibility: .visible) {
-            Button("Reset All Chat Colors", role: .destructive) { colorStore.resetAllColors() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Every chat goes back to Auto and follows its wallpaper's color.")
-        }
+        .modifier(AppearanceResetMenu())   // the resets live in the "⋯" menu (2026-09-27)
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Chat Color")
         .navigationBarTitleDisplayMode(.inline)
@@ -816,6 +860,9 @@ enum QuickReaction {
     }
     /// Offered in the picker. The common reaction set, so a choice is one tap rather than a keyboard.
     static let choices = ["❤️", "👍", "👎", "😂", "😮", "😢", "🙏", "🔥", "🎉", "💯"]
+    /// ⛔ The long-press reaction bar's six, in this order, ALWAYS — owner, 2026-09-28, with a picture
+    /// of this exact row: "never change the default emojis". Using an emoji never moves or replaces one.
+    static let bar = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 }
 
 struct QuickReactionPage: View {

@@ -23,7 +23,13 @@ import FirebaseFirestore
 @Observable
 final class BlockList {
     static let shared = BlockList()
-    private init() {}
+    private init() {
+        // 2026-09-28: back in after a refusal (see `SessionRecovery`). Idempotent while both
+        // listeners are alive.
+        NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+            BlockList.shared.start()
+        }
+    }
 
     /// uid → when I blocked them, in ms. A block still on its way to the server carries the local
     /// estimate, so hiding starts the moment Block is tapped, online or not.
@@ -98,7 +104,8 @@ final class BlockList {
     /// Idempotent: a second call for the same account keeps the running listeners.
     func start() {
         guard let uid = Auth.auth().currentUser?.uid, !uid.isEmpty else { return }
-        if listListener != nil, listenerUid == uid { return }
+        // Both, since 2026-09-28: either one can be the one an error ended (`dropDeadListener`).
+        if listListener != nil, historyListener != nil, listenerUid == uid { return }
         stopListeners()
         // A different account: the previous one's list goes NOW, not when the new snapshot lands.
         if listenerUid != uid { publish(entries: [:], spans: [:], loadedFor: nil) }
@@ -119,7 +126,10 @@ final class BlockList {
             guard let snap else {
                 // ⚠️ A LIST THAT CANNOT LOAD MUST NOT HOLD THE CHAT LIST BACK FOR EVER (it waits on
                 // `isLoaded`). Count it as answered with what we have (the saved copy, or none).
-                if error != nil { self?.answeredWithoutData(uid, list: true) }
+                if error != nil {
+                    self?.answeredWithoutData(uid, list: true)
+                    self?.dropDeadListener(uid, list: true, error: error)
+                }
                 return
             }
             var m: [String: Double] = [:]
@@ -137,7 +147,10 @@ final class BlockList {
         historyListener = me.collection("blockHistory").addSnapshotListener { [weak self] snap, error in
             guard Auth.auth().currentUser?.uid == uid else { return }
             guard let snap else {
-                if error != nil { self?.answeredWithoutData(uid, list: false) }
+                if error != nil {
+                    self?.answeredWithoutData(uid, list: false)
+                    self?.dropDeadListener(uid, list: false, error: error)
+                }
                 return
             }
             var s: [String: [ClosedRange<Double>]] = [:]
@@ -197,6 +210,19 @@ final class BlockList {
             let both = (self.listLoaded && self.historyLoaded) || self.restored
             self.publish(entries: self.entries, spans: self.spans, loadedFor: both ? uid : nil)
         }
+    }
+
+    /// 2026-09-28: Firestore ends a listener for good on an error, and `start()`'s guard kept the dead
+    /// handle, so after one refused moment a block or unblock made on another device never arrived
+    /// until a restart. Let go of it so the next `start()` (after `SessionRecovery`, or the chat
+    /// list's own start) attaches both again.
+    private func dropDeadListener(_ uid: String, list: Bool, error: Error?) {
+        DispatchQueue.main.async {
+            guard self.listenerUid == uid else { return }
+            if list { self.listListener?.remove(); self.listListener = nil }
+            else { self.historyListener?.remove(); self.historyListener = nil }
+        }
+        Task { @MainActor in SessionRecovery.noteRefusal(error, "block list") }
     }
 
     private func stopListeners() {

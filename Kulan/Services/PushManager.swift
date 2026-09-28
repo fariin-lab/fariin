@@ -209,6 +209,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// opens, because a real chat the list has not loaded yet must not become a dead tap.
     private static func mayOpenFromPush(_ cid: String) async -> Bool {
         guard let me = Auth.auth().currentUser?.uid else { return false }
+        // ⛔ THE OFFICIAL CHAT HAS NO CONVERSATION DOCUMENT (2026-09-28). It is built on the phone
+        // from the announcements, so it is never in the chat list's repository and never at
+        // `conversations/official-fariin`, and the checks below dropped every tap on its banner.
+        // Every signed-in account has it; there is no one it could be the wrong chat for.
+        if cid == OfficialChannel.cid { return true }
         let known = await MainActor.run { ConversationsRepository.shared.conversations.contains { $0.id == cid } }
         if known { return true }
         do {
@@ -272,7 +277,11 @@ enum NotificationCleaner {
     private static func badgeTotal(excluding cid: String?) -> Int {
         let me = Auth.auth().currentUser?.uid ?? ""
         guard !me.isEmpty else { return 0 }
-        let total = ConversationsRepository.shared.conversations
+        // ⛔ THE OFFICIAL CHAT COUNTS HERE TOO (2026-09-28), as it already does on the Chats tab
+        // (`ChatsView.unreadChatsBadge`, which says why a muted channel still counts). The springboard
+        // summed the repository only, and the official row is not in it, so the two badges disagreed.
+        let official = [OfficialChannelStore.shared.listEntry].compactMap { $0 }
+        let total = (ConversationsRepository.shared.conversations + official)
             .filter { $0.id != cid && !$0.isCleared(me) && !$0.isArchived(me) && !$0.isBlockedByMe(me)
                       && (Flags.groupsEnabled || !$0.isGroup) }
             .reduce(0) { $0 + $1.unread(me) }

@@ -118,6 +118,7 @@ final class ReactionChipView: UIView {
     /// the media path never does, and a view per chip that is never shown is a view per chip wasted.
     private var faceView: RowAvatarView?
     private var hasFace = false
+    private var isFreeform = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -149,9 +150,15 @@ final class ReactionChipView: UIView {
     /// stroke at all; ours drew a `.label` outline, which on a wallpapered chat (forced dark, so
     /// `.label` is white) is the bright hoop around the pill in his screenshot. Selected is now the
     /// heavier of the two fills on each side, which is their rule and one less thing on screen.
-    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?) {
+    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?,
+                   freeform: Bool = false) {
         label.attributedText = attr
-        if onMyBubble {
+        isFreeform = freeform
+        if freeform {
+            // Under a picture, on the wallpaper: the time capsule's own dark glass, so it reads on
+            // any background; heavier when it is mine, as on a bubble.
+            backgroundColor = UIColor.black.withAlphaComponent(mine ? 0.5 : 0.35)
+        } else if onMyBubble {
             backgroundColor = UIColor.white.withAlphaComponent(mine ? 0.45 : 0.22)
         } else {
             backgroundColor = BubblePalette.accent.withAlphaComponent(mine ? 0.18 : 0.08)
@@ -176,12 +183,15 @@ final class ReactionChipView: UIView {
         // The emoji keeps the left of the pill and the face sits at its trailing end, which is the
         // order in his screenshot. With no face the label owns the whole pill, as it always did.
         if hasFace, let faceView {
-            let d = BubbleMetrics.reactionFace
-            faceView.frame = CGRect(x: bounds.width - BubbleMetrics.reactionFaceTrail - d,
+            // The small pill on a picture's edge uses the small set (see `MessageRowLayout.decorations`).
+            let d = isFreeform ? BubbleMetrics.reactionFaceSmall : BubbleMetrics.reactionFace
+            let trail = isFreeform ? BubbleMetrics.reactionFaceTrailSmall : BubbleMetrics.reactionFaceTrail
+            let gap = isFreeform ? BubbleMetrics.reactionFaceGapSmall : BubbleMetrics.reactionFaceGap
+            let lead = isFreeform ? BubbleMetrics.reactionFaceLeadSmall : BubbleMetrics.reactionFaceLead
+            faceView.frame = CGRect(x: bounds.width - trail - d,
                                     y: (bounds.height - d) / 2, width: d, height: d)
-            let lead = BubbleMetrics.reactionFaceLead
             label.frame = CGRect(x: lead, y: 0,
-                                 width: max(0, faceView.frame.minX - BubbleMetrics.reactionFaceGap - lead),
+                                 width: max(0, faceView.frame.minX - gap - lead),
                                  height: bounds.height)
         } else {
             label.frame = bounds
@@ -740,7 +750,21 @@ final class MessageRowView: UIView {
             a.toValue = travel
             a.fillMode = .forwards
             a.isRemovedOnCompletion = false
+            // ⛔ THE CIRCLE TAKES ITSELF AWAY WHEN IT HAS SLID OUT — owner, 2026-09-27, a screenshot of
+            // six empty circles left after X. The forwards fill was the only thing hiding it until the
+            // second pass rebuilt the row, and Core Animation drops such a fill whenever the layer
+            // leaves its window (a pre-rendered cell, the app going to the background): the circle
+            // then came back at its real place on any cell the second pass had not reached. Now the
+            // slide's own completion removes it, unless the row has gone back into selection.
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { [weak self, weak box] in
+                guard let self, let box, self.checkbox === box, self.model?.selecting != true else { return }
+                box.layer.removeAllAnimations()
+                box.removeFromSuperview()
+                self.checkbox = nil
+            }
             box.layer.add(a, forKey: "remove")
+            CATransaction.commit()
         }
     }
 
@@ -776,7 +800,9 @@ final class MessageRowView: UIView {
 
         bodyLabel.attributedText = b.bodyAttr
         bodyLabel.frame = b.text
-        metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor)
+        metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor,
+                                                   solidTicks: b.mediaPlan?.metaCapsule != nil
+                                                       || b.albumPlan?.metaCapsule != nil)
         // Theirs SPINS while a message is in flight (`isAnimated: true` on the sending indicator,
         // a full turn a second, repeating). A still clock reads as a stuck message.
         setSendingSpin(metaChrome(m).tick == .sending, over: b)
@@ -1198,7 +1224,11 @@ final class MessageRowView: UIView {
             v.frame = b.reactions[i].offsetBy(dx: -b.bubble.minX, dy: -b.bubble.minY)
             v.configure(b.reactionAttrs[i], mine: b.reactionMine[i],
                         onMyBubble: b.reactionsOnMyBubble,
-                        face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil)
+                        face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil,
+                        freeform: b.reactionsFreeform)
+            // Half of a picture's pill lies ON the picture, and the picture view can be created after
+            // the pill in a recycled cell, which would draw it over the pill's top half.
+            bubbleBox.bringSubviewToFront(v)
         }
     }
 
@@ -1233,6 +1263,7 @@ final class MessageRowView: UIView {
 
     private struct ReactionBefore {
         var bubble: CGRect
+        var rowHeight: CGFloat
         var fillPath: UIBezierPath
         var rimPath: CGPath?
         var frames: [ObjectIdentifier: CGRect]      // bubble-box children, by view
@@ -1261,7 +1292,8 @@ final class MessageRowView: UIView {
                 leaving.append((snap, v.frame))
             }
         }
-        return ReactionBefore(bubble: ob.bubble, fillPath: fill.path, rimPath: rim.shape.path,
+        return ReactionBefore(bubble: ob.bubble, rowHeight: plan?.height ?? 0,
+                              fillPath: fill.path, rimPath: rim.shape.path,
                               frames: frames, chipFrames: chipFrames, leaving: leaving,
                               arriving: Set(newKeys).subtracting(oldKeys))
     }
@@ -1281,9 +1313,15 @@ final class MessageRowView: UIView {
             add(v.layer, "bounds.size", NSValue(cgSize: f.size))
             add(v.layer, "position", NSValue(cgPoint: CGPoint(x: f.midX, y: f.midY)))
         }
-        let grow = nb.bubble.height - old.bubble.height
-        // Where the old bubble sat in THIS pass's coordinates. The list moved the row by the growth
-        // when it kept the bottom still, so the old box's top is that much lower here.
+        // ⛔ THE ROW'S GROWTH, NOT THE BUBBLE'S — owner, 2026-09-27, a photo reacted to: "the other
+        // messages flash for a second". The list moves its neighbours by how much the whole ROW changed.
+        // On a text message that equals the bubble's change; on a photo or GIF the pill hangs below
+        // the picture, the row grows by the overhang and the bubble box by nothing at all, so this
+        // used to report zero and the neighbours the list had already moved got no animation back —
+        // they snapped. The row's height is the number the list actually moved everything by.
+        let grow = (plan?.height ?? old.rowHeight) - old.rowHeight
+        // Where the old bubble sat in THIS pass's coordinates. The list moved the row by the row's
+        // growth when it kept the bottom still, so everything in it is that much lower here.
         let oldRect = growsFromBottom ? old.bubble.offsetBy(dx: 0, dy: grow) : old.bubble
         if oldRect != nb.bubble {
             add(bubbleBox.layer, "bounds.size", NSValue(cgSize: oldRect.size))
@@ -1310,10 +1348,16 @@ final class MessageRowView: UIView {
         for v in bubbleBox.subviews where !v.isHidden {
             if let f = old.frames[ObjectIdentifier(v)], v !== fill, v !== rim, v !== highlight { move(v, from: f) }
         }
+        // How far the bubble box starts from where it ends (its top-left, in row coordinates). A new
+        // pill is a subview of the box, so it would ride that slide and start `grow` too low: owner,
+        // 2026-09-27, a new heart drawn over the message below. It is held at its final place instead.
+        let boxDX = oldRect.minX - nb.bubble.minX, boxDY = oldRect.minY - nb.bubble.minY
         for (k, v) in zip(chipKeys, reactionViews) where !v.isHidden && !k.isEmpty {
             if old.arriving.contains(k) {
                 add(v.layer, "transform.scale", 0.01)
                 add(v.layer, "opacity", 0, duration: 0.2, timing: CAMediaTimingFunction(name: .easeInEaseOut))
+                if abs(boxDY) > 0.5 { add(v.layer, "transform.translation.y", -boxDY) }
+                if abs(boxDX) > 0.5 { add(v.layer, "transform.translation.x", -boxDX) }
             } else if let f = old.chipFrames[k] {
                 move(v, from: f)
             }
@@ -1652,6 +1696,7 @@ private extension BubbleText {
     /// `MessageRowView` from restating the colour and the isMe test.
     static func meta(b: BubblePlan, m: MessageRowModel) -> NSAttributedString {
         guard case .bubble(let row) = m.content else { return NSAttributedString() }
-        return meta(row.meta, isMe: row.isMe, color: b.metaColor)
+        return meta(row.meta, isMe: row.isMe, color: b.metaColor,
+                    solidTicks: b.mediaPlan?.metaCapsule != nil || b.albumPlan?.metaCapsule != nil)
     }
 }

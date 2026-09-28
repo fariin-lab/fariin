@@ -45,6 +45,10 @@ struct MediaDismissHost: UIViewRepresentable {
     /// the drag). the reference app's model too — their X runs the same dismiss animator the pan drives.
     var closeToken: Int = 0
     var onDismiss: () -> Void
+    /// A drag that sprang back instead of closing, once the viewer is fully back. Separate from
+    /// `onHideContent(false)`, which also runs on the way OUT (a close with no copy, the dropped-
+    /// dismiss recovery): the video resumes its clip here and only here (2026-09-28).
+    var onCancel: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -94,14 +98,35 @@ struct MediaDismissHost: UIViewRepresentable {
 
         /// Remove any flying copy left in the window by an earlier flight. Cheap: the window has a
         /// handful of direct subviews and this only walks those.
+        ///
+        /// ⛔ ONLY AN ORPHAN — owner, 2026-09-28: "when I drag the image down to close it, it closes
+        /// by itself before I release my finger". The delayed sweep a viewer schedules as it goes away
+        /// (`scheduleOrphanSweep`, one second later) removed EVERY tagged copy in the window, and a
+        /// copy is exactly what a live drag is holding under the finger. Close a photo and start
+        /// dragging the next within that second, and the sweep pulled the picture out from under the
+        /// finger while the root was already scrubbed toward clear: the viewer vanished mid-drag.
+        /// A copy whose owner is still dragging or flying it is not an orphan; one whose owner is
+        /// gone (released) or idle is, exactly as before.
         static func sweepOrphanedFlights(in window: UIWindow) {
             var swept = 0
             for v in window.subviews where v.tag == flightTag {
+                if let owner = owners.object(forKey: v), owner.isStillFlying(v) { continue }
                 v.layer.removeAllAnimations()
                 v.removeFromSuperview()
                 swept += 1
             }
             imageCloseLog.info("sweep ran, removed \(swept) flight view(s)")
+        }
+
+        /// Which coordinator each flying copy belongs to. Weak both ways: a copy that leaves the window
+        /// drops out, and a copy whose coordinator is gone reads as ownerless, which is an orphan.
+        private static let owners = NSMapTable<UIView, Coordinator>(keyOptions: .weakMemory,
+                                                                    valueOptions: .weakMemory)
+
+        /// Is this copy still in use by this coordinator: a finger on it, or a landing, drift or
+        /// cancel spring still running.
+        fileprivate func isStillFlying(_ v: UIView) -> Bool {
+            (active || flying) && (container === v || clipWrap === v)
         }
 
         /// The case a sweep cannot reach: this coordinator goes away mid-flight, so there is no
@@ -247,6 +272,7 @@ struct MediaDismissHost: UIViewRepresentable {
             // Shadow container (plain UIView so it can carry both corners and shadow).
             let c = UIView(frame: fromFrame)
             c.tag = Self.flightTag
+            Self.owners.setObject(self, forKey: c)   // so a sweep can tell this live copy from an orphan
             c.layer.shadowColor = UIColor.black.withAlphaComponent(0.2).cgColor   // ows_blackAlpha20
             c.layer.shadowOffset = CGSize(width: 0, height: 32)
             c.layer.shadowRadius = 48
@@ -481,6 +507,7 @@ struct MediaDismissHost: UIViewRepresentable {
                    clip.width > 1, clip.height > 1, clip != rootView.bounds {
                     let wrap = UIView(frame: rootView.bounds)
                     wrap.tag = Self.flightTag   // the copy moves inside this, so the sweep must see IT
+                    Self.owners.setObject(self, forKey: wrap)   // …and know it is a live landing
                     wrap.clipsToBounds = true
                     rootView.addSubview(wrap)
                     wrap.addSubview(c)         // wrap sits at the root's origin → same on-screen frame
@@ -613,6 +640,15 @@ struct MediaDismissHost: UIViewRepresentable {
             animator.addCompletion { position in
                 imageCloseLog.info("cancel completion, finished \(position == .end)")
                 self.parent.onHideContent(false)
+                if !self.active {
+                    // ⚠️ AN INTERRUPTED SPRING STOPS WHERE IT IS, and the root's alpha with it: the
+                    // viewer stayed see-through over the chat, chrome drawn, the video gone (owner's
+                    // screenshot, 2026-09-28). The viewer is staying, so it is fully back. Not while a
+                    // new drag owns the root: its own scrub decides then.
+                    self.root?.alpha = 1
+                    // Not when a held button close is about to run: that exit is on its way out.
+                    if !self.closeAfterCancel { self.parent.onCancel() }
+                }
                 // Un-hide the source bubble. The drag's .began hid it, and only finish() ever revealed
                 // it — a CANCELLED drag left the bubble invisible in the chat, which showed the moment
                 // the viewer was later closed with the X instead of another drag.

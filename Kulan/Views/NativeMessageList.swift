@@ -86,6 +86,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
+    var failedActions: (String) -> FailedMessageActions? = { _ in nil }
     var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
@@ -93,6 +95,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapPinNotice: (String) -> Void = { _ in }
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
+    /// Rows drawn in SwiftUI that still take the double-tap reaction (the official channel, whose
+    /// every bubble is SwiftUI). Off for everything else, so the chat's hosted rows are unchanged.
+    var hostedDoubleTap: (String) -> Bool = { _ in false }
     // CUSTOM LONG-PRESS MENU (experiment — see CMContextMenu.swift). ThreadView supplies the row's
     // actions and reaction config; the controller owns the press, the snapshot and the overlay.
     var customMenuActions: (String) -> [CMAction] = { _ in [] }
@@ -242,6 +247,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.cid = cid
         vc.uikitMenu = uikitMenu
         vc.onUikitDoubleTap = onUikitDoubleTap
+        vc.hostedDoubleTap = hostedDoubleTap
         vc.onTapLink = onTapLink
         vc.onTapQuote = onTapQuote
         vc.onTapStoryQuote = onTapStoryQuote
@@ -258,6 +264,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
+        vc.failedActions = failedActions
         vc.onCancelUpload = onCancelUpload
         vc.onToggleSelect = onToggleSelect
         vc.onTapSender = onTapSender
@@ -645,10 +652,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var rowModels: [String: MessageRowModel] = [:]   // frozen routing snapshot (set before every apply)
     /// The plans behind those models. One per (row, width), so the height pass and the cell's own
     /// layout are literally the same value object — see RowPlanStore.
-    let planStore = RowPlanStore()
-    var cid: String = ""                              // the conversation, for the rows' own image loads
+    /// This chat's store, kept between opens (`RowPlanStore.forChat`), so a reopen does not lay every
+    /// row out again before the push can start. Swapped in when the chat id arrives, which is before
+    /// the first apply.
+    private(set) var planStore = RowPlanStore()
+    var cid: String = "" {                            // the conversation, for the rows' own image loads
+        didSet { if cid != oldValue, !cid.isEmpty { planStore = RowPlanStore.forChat(cid) } }
+    }
     var uikitMenu: (String) -> UIMenu? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }
+    var hostedDoubleTap: (String) -> Bool = { _ in false }
     var onTapLink: (URL) -> Void = { _ in }
     var onTapQuote: (String) -> Void = { _ in }
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
@@ -665,6 +678,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    /// The failed-send question, anchored to the red badge (2026-09-27). nil = fall back to onTapRetry.
+    var failedActions: (String) -> FailedMessageActions? = { _ in nil }
     var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
@@ -1225,11 +1240,98 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     // Ensure every id in `ids` has a cached height (measured at the current width). No-op once cached.
-    private func measureMissing(_ ids: [String], width: CGFloat) {
+    //
+    // ⛔ THE FIRST OPEN MEASURES ONE SCREEN, NOT THE WHOLE WINDOW — owner, 2026-09-28: "I want the chat
+    // to open immediately when I tap it, like the reference app… do not measure 60–200 messages before
+    // the chat can open". This runs inside the SwiftUI update that starts the push, so every row it
+    // lays out is time the slide waits for. The reference app's first load is one screen of rows
+    // (`initialLoadCount`, screen height / 35pt, about 24). `landingOnly` does the same: it measures the
+    // landing row and outwards from it until a screen and a half is covered on each side, and gives
+    // every other row an ESTIMATE, recorded in `estimatedIds`. Those rows are off screen by
+    // construction; `settleEstimatedHeights` measures them after the slide, holding the reader still
+    // with the same continuity anchor every off-screen re-measure uses, and a row scrolled into view
+    // before then corrects itself at dequeue (`adoptHeight`, the cell registration's safety net).
+    private func measureMissing(_ ids: [String], width: CGFloat, landingOnly: Bool = false) {
         guard width > 0 else { return }
         seedRenderedHeights(width: width)
-        for id in ids where heights[id] == nil { heights[id] = measure(id, width: width) }
+        guard landingOnly, !ids.isEmpty else {
+            for id in ids where heights[id] == nil { heights[id] = measure(id, width: width) }
+            measuredWidth = width
+            return
+        }
+        let center = initialScrollId.flatMap { ids.firstIndex(of: $0) } ?? ids.count - 1
+        let screen = collectionView.bounds.height > 0 ? collectionView.bounds.height : UIScreen.main.bounds.height
+        let budget = screen * 1.5
+        func exact(_ i: Int) -> CGFloat {
+            let id = ids[i]
+            if let h = heights[id], !estimatedIds.contains(id) { return h }
+            let h = measure(id, width: width)
+            heights[id] = h
+            estimatedIds.remove(id)
+            return h
+        }
+        _ = exact(center)
+        var below: CGFloat = 0
+        var i = center + 1
+        while i < ids.count, below < budget { below += exact(i); i += 1 }
+        var above: CGFloat = 0
+        var j = center - 1
+        while j >= 0, above < budget { above += exact(j); j -= 1 }
+        for id in ids where heights[id] == nil {
+            // What this row rendered at last time is the best guess there is; a plain bubble otherwise.
+            heights[id] = renderedHeights[id] ?? Self.estimatedRowHeight
+            estimatedIds.insert(id)
+        }
         measuredWidth = width
+    }
+
+    /// Rows whose height is a guess, waiting for `settleEstimatedHeights`. Never on screen at the land.
+    private var estimatedIds = Set<String>()
+    private static let estimatedRowHeight: CGFloat = 60
+    private var settlingEstimates = false
+
+    /// ⛔ THE REST OF THE WINDOW, AFTER THE SLIDE. The rows `measureMissing(landingOnly:)` guessed,
+    /// measured a dozen at a time, newest first (the ones a reader reaches first scrolling up), one
+    /// batch per runloop turn so no single frame carries them. Never under a finger, never inside an
+    /// inset pass or a blocked land: those retry shortly. The reader is held still by the
+    /// bottom-biased continuity anchor, exactly as `remeasureOffscreenChanged` does it, so a guessed
+    /// row above them taking its real height moves nothing they can see.
+    private func settleEstimatedHeights() {
+        let width = collectionView.bounds.width
+        estimatedIds.formIntersection(currentIds)
+        guard !estimatedIds.isEmpty, width > 0 else { settlingEstimates = false; return }
+        settlingEstimates = true
+        let moving = collectionView.isTracking || collectionView.isDragging || collectionView.isDecelerating
+        if moving || isUpdatingInsets || !canLandLoad {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.settleEstimatedHeights() }
+            return
+        }
+        let batch = currentIds.reversed().filter { estimatedIds.contains($0) }.prefix(12)
+        collectionView.layoutIfNeeded()
+        let anchors = continuityAnchors(relativeToTop: false)
+        let before = frameMinY(for: currentIds)
+        var moved = false
+        for id in batch {
+            estimatedIds.remove(id)
+            let h = measure(id, width: width)
+            if abs((heights[id] ?? h) - h) > 0.5 { moved = true }
+            heights[id] = h
+        }
+        if moved {
+            let after = frameMinY(for: currentIds)
+            layout.generation += 1
+            layout.invalidateLayout()
+            if let landed = continuityDelta(anchors, before: before, after: after), abs(landed.delta) > 0.5 {
+                collectionView.layoutIfNeeded()
+                let y = clampOffset(collectionView.contentOffset.y + landed.delta)
+                if abs(collectionView.contentOffset.y - y) > 0.5 {
+                    UIView.performWithoutAnimation {
+                        collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                    }
+                }
+            }
+        }
+        DispatchQueue.main.async { [weak self] in self?.settleEstimatedHeights() }
     }
 
     /// ⛔ START FROM WHAT THIS CHAT ALREADY PROVED, instead of re-learning it with a visible jump.
@@ -1331,6 +1433,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
         }
+    }
+
+    /// ⛔ A CHANGED ROW JUST OFF SCREEN IS STILL A LIVE CELL — owner, 2026-09-27, a screenshot after
+    /// picking a wallpaper on Auto: the new bubble colour on the rows at the bottom, the OLD colour on
+    /// the row just above them.
+    ///
+    /// With prefetching on, UIKit builds cells before they scroll in and keeps cells that just scrolled
+    /// out, and neither kind is in `indexPathsForVisibleItems`. Every path here reconfigured the
+    /// visible rows only, so a prefetched cell kept the content it was built with and was shown as-is
+    /// when the reader scrolled to it. reconfigureItems is the call made for this: it re-runs the
+    /// registration on a prefetched cell, and does nothing for a row that has no cell. Heights are
+    /// `remeasureOffscreenChanged`'s job and are already settled by the time this runs.
+    private func reconfigureOffscreenChanged(_ changed: [String], visible: Set<String>) {
+        let offscreen = changed.filter { !visible.contains($0) }
+        guard !offscreen.isEmpty else { return }
+        var snapshot = dataSource.snapshot()
+        // Against the snapshot, never `currentIds`: reconfigureItems aborts on an id it does not hold.
+        let present = Set(snapshot.itemIdentifiers)
+        let split = splitByRouteFlip(offscreen.filter(present.contains))
+        guard !split.reconfigure.isEmpty || !split.reload.isEmpty else { return }
+        if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
+        queueReload(split.reload, into: &snapshot)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func frameMinY(for ids: [String]) -> [String: CGFloat] {
@@ -1436,6 +1561,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // layout transaction as the frame change, never a frame late. The delta is zero unless the changed row
     // lies ABOVE the reader's anchor; a row below the viewport moves nothing they can see.
     private func adoptHeight(_ h: CGFloat, for id: String) {
+        RxTrace.log("adoptHeight id=\(id.suffix(5)) h=\(h) cached=\(heights[id] ?? -1)")
         guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 2 else { return }
         guard canLandLoad else {
             pendingSettleHeights.insert(id)
@@ -1610,6 +1736,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let attr = layout.layoutAttributesForItem(at: ip) else { return }
         let want = clampOffset(attr.frame.minY - anchor.distanceFromOrigin)
         if abs(collectionView.contentOffset.y - want) > 2 {
+            RxTrace.log("verifyAnchor WRITE \(collectionView.contentOffset.y) -> \(want)")
             collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
             lastStableOffset = want
         }
@@ -1916,6 +2043,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let allChanged = currentIds.filter { rowSignatures[$0] != lastRowSigs[$0] }   // content changes
         lastRowSigs = rowSignatures
         remeasureOffscreenChanged(allChanged, visible: visibleSet)              // heights are not about cells
+        reconfigureOffscreenChanged(allChanged, visible: visibleSet)            // ready-made cells off screen
         let changed = allChanged.filter { visibleSet.contains($0) }
         let heightIds = pendingSettleHeights                                    // late height reports
         pendingSettleHeights.removeAll()
@@ -2055,9 +2183,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             layout.generation += 1
             let afterY = frameMinY(for: currentIds)
             if pinBottom {
-                // Never past the new bound nor above the top: a chat shorter than the screen has no
-                // offset to take.
-                let newBound = max(minContentOffsetY, safeContentHeight + grown
+                // ⛔ A SHORT CHAT HANGS FROM THE COMPOSER BY ITS TOP INSET — owner, 2026-09-27, a chat
+                // of four messages: react and remove, and a gap the reaction's height opened under the
+                // last bubble. The inset (`bottomAlignShortfall`) is written only by `updateInsets`,
+                // which a row changing height never reaches, so the thread kept the old inset while it
+                // shrank. It is recomputed here for the new height, in the same pass, so the bottom of
+                // the thread stays against the composer — the same "bottom still" as a long chat.
+                let newContent = safeContentHeight + grown
+                let room = collectionView.bounds.height
+                    - (collectionView.safeAreaInsets.top + topOverlayHeight) - bottomClearance
+                let newTop = topOverlayHeight + (room > 0 ? max(0, room - newContent) : 0)
+                if abs(collectionView.contentInset.top - newTop) > 0.5 {
+                    let before = collectionView.contentOffset.y
+                    collectionView.contentInset.top = newTop
+                    RxTrace.log("pinBottom insetTop -> \(newTop) y \(before) -> \(collectionView.contentOffset.y)")
+                    // Not a nav-bar inset arriving: the one-time landing repin must not read it as one.
+                    if landedTopInset != nil { landedTopInset = collectionView.adjustedContentInset.top }
+                }
+                // Never past the new bound nor above the top.
+                let newBound = max(minContentOffsetY, newContent
                                    + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
                 delta = newBound - collectionView.contentOffset.y
             } else if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
@@ -2069,11 +2213,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Which way a row that grows from a reaction is drawn growing: up from its bottom when the
         // offset just took the whole growth (reader at the newest), else down from its top.
         reactionGrowsFromBottom = pinBottom && abs(delta - grown) < 1
+        if heightChanged {
+            RxTrace.begin("refreshVisible grown=\(grown) pinBottom=\(pinBottom) delta=\(delta) y=\(collectionView.contentOffset.y) insetTop=\(collectionView.contentInset.top) moving=\(listIsMoving)")
+        }
+        let expectedY = collectionView.contentOffset.y + delta
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
+            if heightChanged { RxTrace.log("refreshVisible applied y=\(self.collectionView.contentOffset.y)") }
             self.layout.pendingContentOffsetAdjustment = 0
             if delta != 0 { self.verifyAnchor(landedAnchor) }
-            if !listIsMoving { self.moveNeighboursWithReactionGrowth(target) }
             // ⛔ A ROW THAT GREW UNDER A READER AT THE NEWEST MESSAGE GROWS UPWARD — owner,
             // 2026-09-26, two screenshots: reacting to the last message put its reaction row under
             // the composer. The anchor above is top-biased, so the grown row's extra height went
@@ -2082,6 +2230,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // layout pass, which a collection view re-laying out its cells does not trigger. The
             // reference app keeps the bottom edge still when the last message changes size.
             if heightChanged { self.restoreReaderPosition() }
+        }
+        // ⛔ THE LIST TAKES ITS NEW PLACE IN THIS TURN, NOT A FRAME LATER — owner, 2026-09-27, a
+        // screenshot taken mid-reaction: the last message pushed down behind the composer, "the chat
+        // jumps down and comes back a second later". The shift was handed to UIKit as the layout's
+        // `targetContentOffset` adjustment, and a reconfigure-only snapshot does not always consult
+        // it. So the rows grew downward on screen, and the completion's `restoreReaderPosition` put
+        // them back afterwards: two moves. Here the offset is checked right after the apply and, if
+        // UIKit did not take the shift, written before the screen draws; the pending adjustment is
+        // cleared so a late batch cannot add it a second time.
+        if heightChanged && delta != 0 {
+            collectionView.layoutIfNeeded()
+            let target = clampOffset(expectedY)
+            layout.pendingContentOffsetAdjustment = 0
+            if abs(collectionView.contentOffset.y - target) > 0.5 {
+                RxTrace.log("refreshVisible CORRECT \(collectionView.contentOffset.y) -> \(target)")
+                UIView.performWithoutAnimation {
+                    collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                }
+                lastStableOffset = target
+            }
+        }
+        // ⛔ THE NEIGHBOURS' SLIDE STARTS IN THIS TURN TOO — owner, 2026-09-27, after the fix above:
+        // "the chat jumps and goes back to the correct position, like 0.020 seconds". This used to
+        // run in the apply's completion, and that completion runs after the screen has drawn: the
+        // same lateness that made `restoreReaderPosition` a visible second move. So one frame showed
+        // the rows around the reacted bubble already at their new place, and the next frame put
+        // them back at `fromValue` to start the slide. Here it is added with the new layout, so the
+        // first frame drawn is the first frame of the slide. The cells were reconfigured inside
+        // `apply` (visible cells are reconfigured at once), so the growth is already recorded.
+        if !listIsMoving {
+            collectionView.layoutIfNeeded()
+            moveNeighboursWithReactionGrowth(target)
         }
     }
 
@@ -2143,6 +2323,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             self.apply(rowIds: pending, scrollTarget: nil)   // re-parks itself if it still cannot land
         }
     }
+
+    // ⛔ NO OFF-MAIN FIRST LAND — 2026-09-28, reversing 19139911's third part. It laid the first
+    // window out on a background queue and RETURNED, so the push began with the list still hidden
+    // and the messages arrived into it mid-slide: the exact "REVEAL IN THIS TURN" bug the note in
+    // `performFirstLandIfReady` records from 2026-08-27, and the reason the header had nothing to
+    // blur for the first part of the slide (he reported both the same day). The 43ms it saved is
+    // spent before the first frame again, which is what the reference apps do too: they start the
+    // load before the push and slide in a screen that is already drawn. The other two parts of that
+    // commit (the snapshot work off main, no republish of an unchanged window) stay.
 
     func apply(rowIds rawIds: [String], scrollTarget: String? = nil) {
         // LAST LINE OF DEFENCE, AND IT IS NOT OPTIONAL. `appendItemsWithIdentifiers:` throws on a repeated
@@ -2225,6 +2414,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // The unread divider arrives on exactly this path: the chat opens at the newest message
             // and `anchorUnread` then marks a row well above the reader.
             remeasureOffscreenChanged(allChanged, visible: visible)
+            reconfigureOffscreenChanged(allChanged, visible: visible)
             let changed = allChanged.filter { visible.contains($0) }
             guard !changed.isEmpty else { return }
             refreshVisible(changed)
@@ -2265,9 +2455,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // flip that arrived in the same turn as a delete fell down here and was left to the
         // signature diff. That is exactly what a bulk delete does: it removes the rows and calls
         // `exitSelection()` in the same turn. Any row the diff missed kept its circle.
+        // Off-screen rows that existed before are included too: see `reconfigureOffscreenChanged`.
+        // A row with no cell makes reconfigureItems a no-op, so this costs nothing for them.
         let contentChanged = selectionAnimationState == .willAnimate
             ? ids.filter { liveSet.contains($0) }
-            : sigChanged.filter { liveSet.contains($0) }
+            : sigChanged.filter { liveSet.contains($0) || oldSet.contains($0) }
         lastRowSigs = rowSignatures
 
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids â€” a
@@ -2299,7 +2491,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // one case the anchor cascade cannot answer at all.
         recordDistanceFromBottom()
 
-        measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
+        // Exact heights BEFORE the layout prepares (no self-size correction). Before the first land,
+        // only the landing screen; the rest are estimated and settled after the slide.
+        measureMissing(ids, width: width, landingOnly: !didFirstLand)
         // Every row whose content changed, on screen or not — this whole block is already bracketed
         // by `beforeY` / `afterY`, so a row above the reader growing is compensated like any other.
         for id in sigChanged {
@@ -2479,11 +2673,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private func beginSelectionAnimationWindow() {
         selectionAnimationState = .animating
+        // ⛔ ONLY THE LATEST WINDOW MAY CLOSE ITSELF (2026-09-27, circles left after X). Leaving
+        // selection is two flips 0.2s apart; the first flip's 0.35s timer used to fire after the second
+        // flip had set `.willAnimate` and was waiting behind another gate, and put it back to `.idle`,
+        // so the second flip was flushed as a plain signature diff that can miss cells.
+        selectionWindowSeq &+= 1
+        let seq = selectionWindowSeq
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.selectionAnimationState = .idle
-            self?.settleFlush()
+            guard let self, seq == self.selectionWindowSeq, self.selectionAnimationState == .animating else {
+                self?.settleFlush()
+                return
+            }
+            self.selectionAnimationState = .idle
+            self.settleFlush()
         }
     }
+    private var selectionWindowSeq = 0
 
     private func performScrollTarget(_ target: String) {
         // Sentinel: the scroll-to-latest button and an own send while scrolled up route here.
@@ -2576,7 +2781,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
         let rowCount = currentIds.count
         let seeded = renderedHeights.count
-        measureMissing(currentIds, width: collectionView.bounds.width)
+        measureMissing(currentIds, width: collectionView.bounds.width, landingOnly: true)
         layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
@@ -2600,6 +2805,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         landedTopInset = collectionView.adjustedContentInset.top
         awaitingInitialRepin = initialScrollId != nil && initialScrollOffset != nil
         reveal()
+        // The guessed rows, once the push has finished sliding (about 0.35s), so the slide is not
+        // sharing its frames with them. See `settleEstimatedHeights`.
+        if !estimatedIds.isEmpty, !settlingEstimates {
+            settlingEstimates = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.settleEstimatedHeights() }
+        }
     }
 
     /// ⛔ THE NAV BAR'S INSET ARRIVES AFTER THE LANDING, AND THE LANDING IS WRONG BY EXACTLY IT.
@@ -2805,6 +3016,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // animates the reader on whichever of those curves happens to be running, which is a bug this
         // file has already recorded once. On the keyboard's own pass `updateInsets` has normally
         // corrected the reader already, so there is nothing here to strip.
+        RxTrace.log("restoreReaderPosition WRITE \(y) -> \(want)")
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
         }
@@ -3424,6 +3636,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.performWithoutAnimation {
             if didChangeInsets {
                 let keep = collectionView.contentOffset
+                RxTrace.log("updateInsets top \(oldInsets.top)->\(newInsets.top) bottom \(oldInsets.bottom)->\(newInsets.bottom) y=\(keep.y)")
                 collectionView.contentInset = newInsets
                 if collectionView.contentOffset != keep { collectionView.setContentOffset(keep, animated: false) }
             }
@@ -3662,6 +3875,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        // A push that was cancelled never reached viewDidAppear; the bar is shared with the chat list.
+        detachHeaderEdgeEffectForTransition()
         // Only once we are REALLY gone: an interactive pop that the user cancels runs
         // willDisappear then appears again, and viewDidAppear re-hooks on the way back in.
         unhookPopGesture()
@@ -3708,12 +3923,43 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// frame yet. Only on the way in, so a pop never makes the bar re-decide mid-animation.
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
+        attachHeaderEdgeEffectForTransition()
         if isMovingToParent || !didRegisterOnAppearing {
             didRegisterOnAppearing = true
             registerAsContentScrollView()
         }
     }
     private var didRegisterOnAppearing = false
+
+    /// ⛔ THE HEADER BLUR FROM THE FIRST FRAME OF THE PUSH — owner, 2026-09-27, twice: "the blur
+    /// comes only when the page is 100% open". The navigation bar links itself to a page's list only
+    /// when the push has finished: the reference app's list is its controller's own first subview,
+    /// so the bar has it before the push starts, while ours is built inside a SwiftUI page during it.
+    ///
+    /// ⚠️ THE FIRST TRY AT THIS WAS INERT, AND APPLE'S DOCUMENTATION SAYS WHY. It put the
+    /// interaction on an empty, clear view laid over the header. The edge effect's shape is made by
+    /// the container's DESCENDANTS ("labels, images, glass views, and controls"), and that view had
+    /// none, so it drew nothing. The container that does hold the header's elements, the back
+    /// button, the title view and the call buttons, is the navigation bar itself. The interaction
+    /// goes on the bar from `viewIsAppearing` (before the push draws its first frame) and comes off
+    /// in `viewDidAppear`, when the bar's own link to this list has taken over.
+    private var pushEdgeInteraction: UIScrollEdgeElementContainerInteraction?
+
+    private func attachHeaderEdgeEffectForTransition() {
+        guard pushEdgeInteraction == nil, let bar = navigationController?.navigationBar,
+              let list = collectionView else { return }
+        let interaction = UIScrollEdgeElementContainerInteraction()
+        interaction.scrollView = list
+        interaction.edge = .top
+        bar.addInteraction(interaction)
+        pushEdgeInteraction = interaction
+    }
+
+    private func detachHeaderEdgeEffectForTransition() {
+        guard let interaction = pushEdgeInteraction else { return }
+        interaction.view?.removeInteraction(interaction)
+        pushEdgeInteraction = nil
+    }
 
     private func registerAsContentScrollView() {
         guard isViewLoaded, let list = collectionView else { return }
@@ -3746,6 +3992,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        detachHeaderEdgeEffectForTransition()   // the bar's own link has the list now
         isDisappearing = false
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
@@ -3900,6 +4147,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A plan is only true at the width it was planned at, for the same reason.
         planStore.invalidateAll()
         for id in currentIds { heights[id] = measure(id, width: w) }
+        estimatedIds.removeAll()   // every row was just measured for real
         measuredWidth = w
         layout.generation += 1
         layout.invalidateLayout()
@@ -4016,7 +4264,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if g === doubleTapGesture {
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
-                  let id = dataSource.itemIdentifier(for: ip), rowModels[id] != nil else { return false }
+                  let id = dataSource.itemIdentifier(for: ip) else { return false }
+            // A SwiftUI row the screen opted in: ON its bubble only, the same rule as a UIKit one.
+            if rowModels[id] == nil {
+                guard !isSelecting, hostedDoubleTap(id), let rect = CMBubbleRects.rect(id) else { return false }
+                return rect.contains(g.location(in: nil))
+            }
             // The BUBBLE only, not the full-width row: double-tapping the empty area beside a uikit bubble
             // hearted it, while SwiftUI rows react on the bubble content only.
             guard let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return false }
@@ -4241,7 +4494,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard g.state == .ended else { return }
         let loc = g.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc),
-              let id = dataSource.itemIdentifier(for: ip), rowModels[id] != nil else { return }
+              let id = dataSource.itemIdentifier(for: ip),
+              rowModels[id] != nil || hostedDoubleTap(id) else { return }
         // A tap meant for Play, Pause, the scrubber or the speed pill is not a reaction. See
         // `VoiceBubbleView.controlTookTouchRecently` — the control stamps itself in `hitTest`, which
         // happens while the touch is being delivered and therefore strictly before this recogniser
@@ -4470,6 +4724,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private func customMenuDidEnd(restoringKeyboard: Bool = true) {
         guard let menu = activeMenu else { return }
+        RxTrace.begin("menu ended y=\(collectionView.contentOffset.y) keyboardWasUp=\(menu.keyboardWasUp)")
         menu.sourceView.isHidden = false
         menu.sourceView.transform = .identity
         activeMenuCell?.isUserInteractionEnabled = true
@@ -4557,6 +4812,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        RxTrace.log("scroll y=\(scrollView.contentOffset.y) insetTop=\(scrollView.contentInset.top) h=\(scrollView.contentSize.height)")
         // A finger on the list ends the one-shot re-pin: whatever the insets do from here, this
         // reader has chosen where they are. See `repinIfTopInsetArrived`.
         if scrollView.isDragging || scrollView.isTracking { awaitingInitialRepin = false }
@@ -4568,6 +4824,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // read-tracking below deliberately ignore: a programmatic scroll and a capture freeze both
         // still move the bubbles across the picture.
         WallpaperBlurSliceView.repositionAll()
+        BubbleFillView.repositionGradients()   // a gradient chat colour is cut from the screen, like the slices
         guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
         // A finger dragging the keyboard down moves the guide, and the bar with it, on this event.
         followKeyboardUnderFinger()
@@ -4997,7 +5254,20 @@ extension MessageListController: MessageRowCellDelegate {
 
     func rowCellDidTapRetry(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
-        onTapRetry(id)
+        // ⛔ THE QUESTION POINTS AT THE BADGE YOU TAPPED — owner, 2026-09-27, the "Message not sent"
+        // box pointing at the header. It was a SwiftUI confirmationDialog attached to the whole chat,
+        // and iOS 26 draws that as a popover anchored to the view it hangs from: the screen's top.
+        // Presented here instead, with the red (!) as its source, as the system's own menus anchor.
+        guard let a = failedActions(id), let badge = cell.failBadgeRect else { onTapRetry(id); return }
+        let sheet = UIAlertController(title: "Message not sent", message: a.message, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Resend", style: .default) { _ in a.resend() })
+        sheet.addAction(UIAlertAction(title: "Delete", style: .destructive) { _ in a.delete() })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = cell.contentView
+            pop.sourceRect = badge
+        }
+        present(sheet, animated: true)
     }
 
     func rowCellDidTapCancelUpload(_ cell: MessageRowCell) {
@@ -5133,6 +5403,7 @@ final class MessageLayout: UICollectionViewLayout {
     var pendingContentOffsetAdjustment: CGFloat = 0
 
     override func targetContentOffset(forProposedContentOffset proposed: CGPoint) -> CGPoint {
+        RxTrace.log("targetContentOffset proposed=\(proposed.y) adj=\(pendingContentOffsetAdjustment)")
         guard pendingContentOffsetAdjustment != 0 else { return proposed }
         return CGPoint(x: proposed.x, y: proposed.y + pendingContentOffsetAdjustment)
     }
@@ -5143,3 +5414,27 @@ final class MessageLayout: UICollectionViewLayout {
     }
 }
 
+
+/// TEMPORARY DIAGNOSTIC — 2026-09-27, the reaction "double jump" and the short-chat gap. Owner:
+/// "before you fix, get the real bug, no guessing". Every step that can move the list logs its
+/// numbers, with milliseconds since the event, for two seconds after a reaction lands or the message
+/// menu closes, and is silent the rest of the time. Read in the Appetize preview's log. REMOVE once
+/// the cause is proven.
+enum RxTrace {
+    private static var start: Date?
+    static func begin(_ what: String) {
+        if start == nil || Date().timeIntervalSince(start!) > 2 { start = Date() }
+        log("BEGIN " + what)
+    }
+    static func log(_ what: String) {
+        guard let s = start, Date().timeIntervalSince(s) <= 2 else { return }
+        NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what)
+    }
+}
+
+/// What the failed-send question offers for one message (see `rowCellDidTapRetry`).
+struct FailedMessageActions {
+    var message: String?
+    var resend: () -> Void
+    var delete: () -> Void
+}

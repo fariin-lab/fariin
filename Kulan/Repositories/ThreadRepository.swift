@@ -539,6 +539,17 @@ final class ThreadRepository {
                     self?.blockStateChanged()
                 }
         }
+        // 2026-09-28: the server let this phone back in after refusing it (see `SessionRecovery`).
+        // Only a chat whose message listener actually died re-attaches; a healthy one is left alone.
+        // `start()` re-attaches all four listeners together, so the header and presence come back too.
+        if recoveredObserver == nil {
+            recoveredObserver = NotificationCenter.default.addObserver(
+                forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
+                    guard let self, self.listenerFailed else { return }
+                    self.listenerRetries = 0
+                    self.start()
+                }
+        }
         // (`stop()` moved to the top of this function; see the note there.)
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
@@ -682,17 +693,23 @@ final class ThreadRepository {
         listener = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
             .limit(to: pageSize)
-            .addSnapshotListener { [weak self] snap, _ in
+            .addSnapshotListener { [weak self] snap, error in
                 guard let self else { return }
                 guard let snap else {
                     // Listener ERROR (seen in the wild: a brand-new chat opened from search sat on
                     // the skeleton FOREVER). A dead listener must never freeze the screen — reveal
                     // the (empty) chat and re-attach after a beat.
                     self.didInitialLoad = true
+                    self.listenerFailed = true
+                    // 2026-09-28: and if it was the SERVER refusing, the backoff retries below
+                    // will be refused too. `SessionRecovery` gets back in and posts `recovered`,
+                    // which re-attaches this chat at once instead of waiting out the backoff.
+                    Task { @MainActor in SessionRecovery.noteRefusal(error, "chat") }
                     self.retryStartSoon()
                     return
                 }
                 self.listenerRetries = 0   // a live snapshot landed: the next error starts backoff over
+                self.listenerFailed = false
                 // Don't blank an open thread on an empty offline snapshot.
                 if snap.metadata.isFromCache && snap.documents.isEmpty && !self.messages.isEmpty { return }
                 // Pass whether this is a cache/local snapshot — deletes are only trusted from the SERVER
@@ -747,7 +764,8 @@ final class ThreadRepository {
     // (EDITS — the old reactions-only gate meant an edited message never re-rendered), the edited
     // flag, the album array, and the deleted flag + type (tombstones, see below).
     // Reaction keys are sorted so the signature is deterministic.
-    private func changeSig(_ data: [String: Any]) -> String {
+    // Static: it reads only the doc, so the live snapshot can compute it off the main thread.
+    private static func changeSig(_ data: [String: Any]) -> String {
         let raw = (data["reactions"] as? [String: String]) ?? [:]
         let reactions = raw.keys.sorted().map { "\($0)=\(raw[$0] ?? "")" }.joined(separator: ",")
         // The ALBUM ARRAY is mutable too: deleteAlbumItem rewrites it for everyone, but the signature
@@ -806,7 +824,7 @@ final class ThreadRepository {
     @discardableResult
     private func buildCached(_ doc: QueryDocumentSnapshot) -> Message {
         let id = doc.documentID, data = doc.data()
-        let sig = changeSig(data)
+        let sig = Self.changeSig(data)
         if let cached = byId[id], rawReactions[id] == sig { return cached }
         let m = Message(id: id, data: data, cid: cid, crypto: Crypto.shared)
         byId[id] = m
@@ -820,6 +838,9 @@ final class ThreadRepository {
     // at 60s — means a listener that keeps failing settles into a slow, harmless poll rather than
     // stopping, and `listenerRetries` resets to 0 the moment a live snapshot actually lands.
     private var listenerRetries = 0
+    /// The message listener ended in an error and no snapshot has arrived since.
+    private var listenerFailed = false
+    private var recoveredObserver: NSObjectProtocol?
     private func retryStartSoon() {
         listenerRetries += 1
         let delay = min(pow(2.0, Double(listenerRetries)), 60)
@@ -845,13 +866,22 @@ final class ThreadRepository {
         // thread froze the UI during the navigation transition (the tester's "tap → gray →
         // hang"). Only NEW or reaction-changed docs are decrypted; the rest are reused.
         // (box.open is a thread-safe pure op, and my keys are set before any chat can open.)
-        let sigs = Dictionary(uniqueKeysWithValues: docs.map { ($0.documentID, changeSig($0.data())) })
-        let needBuild = docs.filter { doc in
-            byId[doc.documentID] == nil || rawReactions[doc.documentID] != sigs[doc.documentID]
-        }
-        guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq, fromCache: fromCache); return }
+        //
+        // ⛔ AND THE FINGERPRINTS TOO — owner, 2026-09-28, the timing box: the app froze for 73ms
+        // three milliseconds after the first snapshot landed, in the middle of the open's slide. The
+        // decrypt was already off the main thread; working out WHICH docs needed it was not: a
+        // `data()` conversion and a signature string for every doc in the window, on main. Both are
+        // pure reads of an immutable snapshot, so they go with the decrypt, against a copy of what
+        // is known now. The out-of-order guard below covers the extra hop exactly as it did before.
+        let knownSigs = rawReactions
+        let knownIds = Set(byId.keys)
         let cidLocal = cid
         Task.detached(priority: .userInitiated) { [weak self] in
+            let sigs = Dictionary(docs.map { ($0.documentID, Self.changeSig($0.data())) },
+                                  uniquingKeysWith: { a, _ in a })
+            let needBuild = docs.filter { doc in
+                !knownIds.contains(doc.documentID) || knownSigs[doc.documentID] != sigs[doc.documentID]
+            }
             let built: [(String, Message)] = needBuild.map { doc in
                 (doc.documentID, Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
             }
@@ -1131,6 +1161,14 @@ final class ThreadRepository {
             guard let c = m.clientId else { return false }
             return !seenClientIds.insert(c).inserted
         }
+        // ⛔ NOTHING CHANGED, NOTHING PUBLISHED — owner, 2026-09-28, the timing box: a freeze in the
+        // middle of the open's slide when the first snapshot landed. A chat opens on the messages it
+        // already had, and the first snapshot is usually those same messages; publishing them anyway
+        // bumped `itemsVersion`, which re-ran the whole chat screen's body and a list update for a
+        // result identical to what was on screen. The reference app lands a load only when its
+        // render state actually differs. Every other input to `items` (pending sends, hidden
+        // messages) publishes through its own call to `refreshItems`, so skipping here loses nothing.
+        guard sorted != messages else { scheduleNextBurn(); return }
         messages = sorted
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems()
@@ -1191,7 +1229,7 @@ final class ThreadRepository {
                 // `applyLiveSnapshot` does. A 40-message page (group unwraps included) was opened on
                 // main in the scroll-to-top callback and hitched the scroll. Only docs the cache does
                 // not already hold (or whose signature moved) are built; the merge is on main.
-                let sigs = Dictionary(docs.map { ($0.documentID, self.changeSig($0.data())) },
+                let sigs = Dictionary(docs.map { ($0.documentID, Self.changeSig($0.data())) },
                                       uniquingKeysWith: { a, _ in a })
                 let needBuild = docs.filter { doc in
                     self.byId[doc.documentID] == nil || self.rawReactions[doc.documentID] != sigs[doc.documentID]
@@ -1240,6 +1278,8 @@ final class ThreadRepository {
         outboxAddObserver = nil
         if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
         blockObserver = nil
+        if let recoveredObserver { NotificationCenter.default.removeObserver(recoveredObserver) }
+        recoveredObserver = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil
