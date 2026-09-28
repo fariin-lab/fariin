@@ -1088,15 +1088,20 @@ final class CMReactionBar: UIView {
             // heavy coloured blob a size too big (owner, 2026-09-28). The size is theirs already,
             // the bar's height less 4.
             disc.backgroundColor = .secondarySystemFill
-            disc.layer.cornerRadius = (barHeight - 4) / 2
+            // ⛔ THE EMOJI'S OWN SLOT, NOT 4pt PAST IT — owner, 2026-09-28, the first emoji's disc "cut"
+            // on the left. At the reference app's (bar height − 4) = 52 the disc overhangs its 44pt slot
+            // by 4 on each side, and the swipe strip's clip cuts whatever leaves the strip: the first
+            // and the last visible disc lost an edge. At the slot's own size it is never cut, and it
+            // is also the smaller disc he asked for ("the highlight looks big").
+            disc.layer.cornerRadius = buttonSide / 2
             disc.isUserInteractionEnabled = false
             holder.addSubview(disc)
             disc.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 disc.centerXAnchor.constraint(equalTo: holder.centerXAnchor),
                 disc.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
-                disc.widthAnchor.constraint(equalToConstant: barHeight - 4),
-                disc.heightAnchor.constraint(equalToConstant: barHeight - 4),
+                disc.widthAnchor.constraint(equalToConstant: buttonSide),
+                disc.heightAnchor.constraint(equalToConstant: buttonSide),
             ])
         }
         let label = UILabel()

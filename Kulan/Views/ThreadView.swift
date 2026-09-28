@@ -3210,8 +3210,13 @@ struct ThreadView: View {
         // The list above is `canReact` — one predicate, asked here before the bar is offered and
         // again in `handleCustomReact` before anything is written. Two copies is how they drifted.
         guard canReact(m) else { return nil }
-        // 2026-09-24 feature-audit: recent reactions first, topped up with the defaults.
-        return (ReactionRecents.quickBar(count: 6), m.reactions[me])
+        // ⛔ A FIXED SET IN A FIXED ORDER — owner, 2026-09-28, "make it like the reference app": react
+        // with B in A B C, long-press again, and it must still read A B C with B highlighted, never
+        // B A C. The bar was recents first (2026-09-24 feature-audit), so every reaction moved the
+        // one just used to the front. The reference app's bar is its saved set, in its order, and a
+        // reaction outside it shows at the right end (`CMReactionBar.init`); its default set is
+        // these six, the first six of ours. Recents are still recorded, for the full picker.
+        return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
