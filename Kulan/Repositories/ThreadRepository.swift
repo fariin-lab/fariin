@@ -525,6 +525,17 @@ final class ThreadRepository {
                     self?.blockStateChanged()
                 }
         }
+        // 2026-09-28: the server let this phone back in after refusing it (see `SessionRecovery`).
+        // Only a chat whose message listener actually died re-attaches; a healthy one is left alone.
+        // `start()` re-attaches all four listeners together, so the header and presence come back too.
+        if recoveredObserver == nil {
+            recoveredObserver = NotificationCenter.default.addObserver(
+                forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
+                    guard let self, self.listenerFailed else { return }
+                    self.listenerRetries = 0
+                    self.start()
+                }
+        }
         // (`stop()` moved to the top of this function; see the note there.)
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
@@ -668,16 +679,22 @@ final class ThreadRepository {
         listener = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
             .limit(to: pageSize)
-            .addSnapshotListener { [weak self] snap, _ in
+            .addSnapshotListener { [weak self] snap, error in
                 guard let self else { return }
                 guard let snap else {
                     // Listener ERROR (seen in the wild: a brand-new chat opened from search sat on
                     // the skeleton FOREVER). A dead listener must never freeze the screen — reveal
                     // the (empty) chat and re-attach after a beat.
                     self.didInitialLoad = true
+                    self.listenerFailed = true
+                    // 2026-09-28: and if it was the SERVER refusing, the three quick retries below
+                    // will be refused too. `SessionRecovery` gets back in and posts `recovered`,
+                    // which is what re-attaches this chat after they have run out.
+                    Task { @MainActor in SessionRecovery.noteRefusal(error, "chat") }
                     self.retryStartSoon()
                     return
                 }
+                self.listenerFailed = false
                 // Don't blank an open thread on an empty offline snapshot.
                 if snap.metadata.isFromCache && snap.documents.isEmpty && !self.messages.isEmpty { return }
                 // Pass whether this is a cache/local snapshot — deletes are only trusted from the SERVER
@@ -796,6 +813,9 @@ final class ThreadRepository {
 
     // Re-attach the whole listener set after a listener error (bounded — never an error loop).
     private var listenerRetries = 0
+    /// The message listener ended in an error and no snapshot has arrived since.
+    private var listenerFailed = false
+    private var recoveredObserver: NSObjectProtocol?
     private func retryStartSoon() {
         guard listenerRetries < 3 else { return }
         listenerRetries += 1
@@ -1227,6 +1247,8 @@ final class ThreadRepository {
         outboxAddObserver = nil
         if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
         blockObserver = nil
+        if let recoveredObserver { NotificationCenter.default.removeObserver(recoveredObserver) }
+        recoveredObserver = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil

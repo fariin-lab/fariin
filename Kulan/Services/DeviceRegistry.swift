@@ -22,7 +22,19 @@ import FirebaseMessaging
 @MainActor
 final class DeviceRegistry: ObservableObject {
     static let shared = DeviceRegistry()
-    private init() {}
+    private init() {
+        // 2026-09-28: back in after a refusal (see `SessionRecovery`). A registration write the
+        // server refused left `registered` false and nothing watching; a watcher an error ended is
+        // nil now. Either way, pick up where it stopped.
+        recoveredObserver = NotificationCenter.default.addObserver(
+            forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    let registry = DeviceRegistry.shared
+                    if !registry.registered { registry.start() } else { registry.watchThisDevice() }
+                }
+            }
+    }
+    private var recoveredObserver: NSObjectProtocol?
 
     /// Set when the server says this device's record is gone: someone signed us out from
     /// another phone. RootView watches this and performs the sign-out.
@@ -193,8 +205,19 @@ final class DeviceRegistry: ObservableObject {
     /// Watch our own record. If it stops existing, another device signed us out.
     private func watchThisDevice() {
         guard let uid, watcher == nil, !Self.thisDeviceId.isEmpty else { return }
-        watcher = devices(uid).document(Self.thisDeviceId).addSnapshotListener { [weak self] snap, _ in
+        watcher = devices(uid).document(Self.thisDeviceId).addSnapshotListener { [weak self] snap, error in
             guard let self, self.registered else { return }
+            // 2026-09-28: an error ends the watcher for good, and `watcher == nil` above kept the dead
+            // one, so a sign-out from another phone went unnoticed until a restart. Let it go; the
+            // `recovered` observer in `init` watches again.
+            if snap == nil, error != nil {
+                Task { @MainActor in
+                    self.watcher?.remove()
+                    self.watcher = nil
+                    SessionRecovery.noteRefusal(error, "this device")
+                }
+                return
+            }
             // `isFromCache` matters: offline, Firestore reports a document it has never seen as
             // missing. Only the SERVER's word that it is gone counts as a sign-out.
             guard let snap, !snap.metadata.isFromCache, !snap.exists else { return }

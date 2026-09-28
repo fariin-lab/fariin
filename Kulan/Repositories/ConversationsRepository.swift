@@ -23,6 +23,15 @@ final class ConversationsRepository {
         NotificationCenter.default.addObserver(forName: .cryptoIdentityReady, object: nil, queue: nil) { _ in
             MainActor.assumeIsolated { ConversationsRepository.shared.republishForKeys() }
         }
+        // 2026-09-28: the server let this phone back in (see `SessionRecovery`). A refused listener
+        // is dead for good, and `loadFailed` is exactly "the last one was refused", so this is the
+        // same fresh `start()` the Try Again button runs, only without anyone having to press it.
+        NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let repo = ConversationsRepository.shared
+                if repo.loadFailed { repo.start() }
+            }
+        }
     }
 
     private let db = Firestore.firestore()
@@ -189,7 +198,7 @@ final class ConversationsRepository {
                 guard let self, let snap else {
                     if let error {
                         print("conversations listen error:", error)
-                        Task { @MainActor in RefusalTrace.note(error, "chat list") }   // TEMPORARY
+                        Task { @MainActor in SessionRecovery.noteRefusal(error, "chat list") }
                         // 2026-09-24 audit: see `loadFailed`. `hasLoaded` too, because we HAVE heard
                         // back, and it is what takes the skeleton down so the error can show.
                         self?.loadFailed = true
@@ -497,8 +506,18 @@ final class ConversationsRepository {
         }
         for id in outside where pinnedExtraListeners[id] == nil {
             pinnedExtraListeners[id] = db.collection("conversations").document(id)
-                .addSnapshotListener { [weak self] snap, _ in
+                .addSnapshotListener { [weak self] snap, error in
                     guard let self else { return }
+                    // ⛔ AN ERROR IS NOT "THE CHAT IS GONE" — 2026-09-28. With no snapshot this fell
+                    // into the branch below and FORGOT the pin, so one refused moment took a pinned
+                    // chat off the list until it next reached the top on its own. The listener is
+                    // dead either way; drop only the handle, keep the pin and the last copy, and the
+                    // next window snapshot (after `SessionRecovery`) attaches a fresh one.
+                    if snap == nil {
+                        self.pinnedExtraListeners.removeValue(forKey: id)?.remove()
+                        Task { @MainActor in SessionRecovery.noteRefusal(error, "pinned chat") }
+                        return
+                    }
                     // Offline and not cached yet says nothing about the chat; wait for the server.
                     if let snap, snap.metadata.isFromCache, !snap.exists { return }
                     guard let snap, snap.exists, let data = snap.data(with: .estimate),

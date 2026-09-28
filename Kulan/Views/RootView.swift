@@ -248,6 +248,22 @@ struct RootView: View {
                 showRevokedNotice = true
             }
         }
+        // 2026-09-28 (see `SessionRecovery`): the server refused this phone and a fresh token says
+        // this sign-in has not entered the two-step password. The same door a new sign-in stops at,
+        // instead of an app whose every read is refused.
+        .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.needsTwoStep)) { _ in
+            if phase == .main || phase == .notifications { phase = .twoStep }
+        }
+        // …and when there is no session left at all (Firebase signs out by itself when it was
+        // revoked or the account disabled): the teardown of a sign-out from another device, then
+        // the front door, instead of a signed-in-looking app that can do nothing.
+        .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.sessionEnded)) { _ in
+            Task {
+                await DeviceRegistry.shared.performRevokedSignOut()
+                await route()
+                showRevokedNotice = true
+            }
+        }
         .alert("Signed out", isPresented: $showRevokedNotice) {
             Button("OK", role: .cancel) {}
         } message: {
