@@ -534,8 +534,8 @@ final class MessageRowView: UIView {
     private var noticeView: RowNoticePillView?
     private var callView: CallBubbleView?
     private var checkbox: SelectionCheckboxView?
-    /// The disappearing-message countdown, drawn over the footer. See `setExpiryTimer`.
-    private var expiryRing: ExpiryRingView?
+    /// The disappearing-message icon, drawn over the footer. See `setExpiryTimer`.
+    private var expiryRing: UIImageView?
 
     private(set) var plan: RowPlan?
     private(set) var model: MessageRowModel?
@@ -1422,24 +1422,26 @@ final class MessageRowView: UIView {
     /// configured or repainted — which already happens on every land, tick and scroll — and the
     /// remaining time is coarse enough that a second's lag is invisible.
     private func setExpiryTimer(_ expiresAt: Date?, bornAt: Date?, over b: BubblePlan) {
-        guard let expiresAt, b.meta != .zero else {
+        guard expiresAt != nil, b.meta != .zero else {
             expiryRing?.isHidden = true
             return
         }
+        // ⛔ THE DISAPPEARING-MESSAGE ICON, NOT A RING — owner, 2026-09-28: "keep it, but use the
+        // disappearing-message icon". A ring for a one-week timer is an almost full, empty circle
+        // and read as a stray mark. It is now the same `timer` glyph the chat header and the
+        // "You set disappearing message time…" notice show, same place, same size, same colour
+        // as the time. (`bornAt` and the proportion it fed are no longer drawn.)
         let v = expiryRing ?? {
-            let x = ExpiryRingView(frame: .zero)
+            let x = UIImageView(image: UIImage(systemName: "timer",
+                                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)))
+            x.contentMode = .center
             bubbleBox.addSubview(x)
             expiryRing = x
             return x
         }()
-        // The full span this message was given, so the ring can show a PROPORTION rather than an
-        // absolute time — a five-minute timer half gone and a one-day timer half gone should look
-        // the same, which is what makes the glyph readable at a glance.
-        let total = bornAt.map { expiresAt.timeIntervalSince($0) } ?? 0
-        let left = expiresAt.timeIntervalSinceNow
+        _ = bornAt
         v.isHidden = false
         v.tintColor = b.metaColor
-        v.fraction = total > 0 ? max(0, min(1, left / total)) : 0
         // Leading of the footer, so it reads before the time rather than colliding with the tick's
         // reserved slot at the trailing edge.
         let side: CGFloat = 9

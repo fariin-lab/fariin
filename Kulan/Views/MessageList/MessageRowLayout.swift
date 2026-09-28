@@ -847,7 +847,12 @@ enum MessageRowLayout {
                 // row. An inline footer and a voice footer are overlays and just move. A text
                 // footer on a row of its own gives that row back, so no empty band is left above
                 // the pills. When it does not fit, it stays where it was.
-                let metaW = BubbleMetrics.metaInlineGap + plan.meta.width
+                // ⛔ PLUS THE TIMER ICON'S ROOM — owner, 2026-09-28, a heart chip running into the
+                // disappearing-message icon. The icon is drawn just left of the time
+                // (`MessageRowView.setExpiryTimer`, 12pt with its gap) and `footerWidth` reserves that
+                // for a text line, but this row counted only the time, so the chips ran under it.
+                let timerRoom: CGFloat = b.meta.expiresAt == nil ? 0 : 12
+                let metaW = BubbleMetrics.metaInlineGap + timerRoom + plan.meta.width
                 let fitsOnRow = padH + total + metaW + padH <= columnW
                 let ownTextRow = plan.metaOnOwnLine && plan.text != .zero
                 let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
