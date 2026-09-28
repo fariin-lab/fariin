@@ -4297,7 +4297,18 @@ struct ThreadView: View {
                 // Source row (Camera/GIF/Files/Location + Album) — HIDDEN while items are selected
                 // (the caption + Send bar inside the strip takes its place, and two bottom bars is
                 // one too many).
-                .safeAreaInset(edge: .bottom, spacing: 0) { sourceBar }
+                // ⛔ A PINNED LAYER, NOT A SAFE-AREA INSET — owner, 2026-09-28, twice: "when I tap the
+                // Album button the attach bar starts disappearing and comes back seconds later; don't
+                // hide it, and the same on the back button". The row rode `safeAreaInset`, which is
+                // re-derived whenever the strip swaps its scroll view (grid ↔ album list), and the
+                // whole row (bar AND Album button) went with each swap. It is an overlay on the
+                // strip's bottom edge now, drawn all the time, and the photos keep the same room
+                // under it as a content margin (the bar less its dip into the edge, as the inset
+                // gave them). With a selection the row is hidden and the margin is 0: the caption
+                // bar inside the strip takes that place, as before.
+                .contentMargins(.bottom, recentsHasSelection ? 0 : Self.attachBarHeight - Self.composerRestDip,
+                                for: .scrollContent)
+                .overlay(alignment: .bottom) { sourceBar }
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
