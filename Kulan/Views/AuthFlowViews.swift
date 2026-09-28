@@ -47,9 +47,15 @@ struct WelcomeView: View {
                 AuthPalette.page.ignoresSafeArea()
                 VStack(spacing: 0) {
                     Spacer()
-                    ShiningLogo()
-                        .frame(width: 108, height: 108)
-                        .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                    // ⛔ HIS BLACK LOGO — owner, 2026-09-28: "change the logo, use the black logo I sent".
+                    // The launch screen's mark (`LaunchLogo`): black on this white page, and his white
+                    // one when the phone is dark (this flow follows the phone, see the file's head).
+                    // It replaced the blue app-icon tile.
+                    Image("LaunchLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 120, height: 120)
+                        .accessibilityLabel("Fariin")
                     // "Sign in", not "Welcome": the first-run agreement screen right before this one
                     // already says "Welcome to Fariin", and the same title twice in a row read as a
                     // loop (2026-09-24).
@@ -70,15 +76,19 @@ struct WelcomeView: View {
                     Spacer()
                     VStack(spacing: 12) {
                         // ⛔ LIQUID GLASS — owner, 2026-09-26: "Create Account and Log In buttons make
-                        // liquid glass". iOS 26's own pair: the main action is glass tinted blue with
-                        // white words, the other is plain glass. Only these two; the other sign-in
-                        // pages keep their pills.
+                        // liquid glass". iOS 26's own pair: the main action is tinted glass with white
+                        // words, the other is plain glass. Only these two; the other sign-in pages keep
+                        // their pills.
+                        // ⛔ BLACK, NOT BLUE — owner, 2026-09-28: "create account button make black".
+                        // Still the tinted glass above, tinted `.primary`: black with white words on a
+                        // light phone, and the inverse on a dark one, where a black button would vanish
+                        // into the black page (the same rule as `authPrimaryPill`).
                         NavigationLink { AuthMethodView(mode: .create, onAuthed: onAuthed) } label: {
                             Text("Create Account")
                                 .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(AuthPalette.page)
                                 .frame(maxWidth: .infinity).frame(height: 50)
-                                .liquidGlass(Capsule(), interactive: true, tint: Color.blue)
+                                .liquidGlass(Capsule(), interactive: true, tint: Color.primary)
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
