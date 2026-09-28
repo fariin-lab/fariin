@@ -29,19 +29,22 @@ import FirebaseFirestore
 /// open chat's messages, anyone's profile document (`allow get: if signedIn()`). Presence and the
 /// other audience-gated reads are refused ON PURPOSE for some people; reporting those would treat a
 /// privacy setting as a broken session.
-@MainActor enum SessionRecovery {
+///
+/// The TYPE is not main-actor, only its state and its functions are: the notification names are
+/// read by repositories that are not main-actor types, and a constant needs no actor.
+enum SessionRecovery {
     static let recovered = Notification.Name("SessionRecovery.recovered")
     static let needsTwoStep = Notification.Name("SessionRecovery.needsTwoStep")
     static let sessionEnded = Notification.Name("SessionRecovery.sessionEnded")
 
     private static let delays: [Double] = [1, 3, 10, 30, 60, 60]
-    private static var attempt = 0
-    private static var scheduled = false
-    private static var unrecovered = false
-    private static var lastRecoveredAt = Date.distantPast
-    private static var foregroundObserver: NSObjectProtocol?
+    @MainActor private static var attempt = 0
+    @MainActor private static var scheduled = false
+    @MainActor private static var unrecovered = false
+    @MainActor private static var lastRecoveredAt = Date.distantPast
+    @MainActor private static var foregroundObserver: NSObjectProtocol?
 
-    static func noteRefusal(_ error: Error?, _ from: String) {
+    @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
         guard let error else { return }
         let ns = error as NSError
         // 7 = permission denied, 16 = unauthenticated (the numbers SendQueue and PushManager test too).
@@ -55,7 +58,7 @@ import FirebaseFirestore
         schedule()
     }
 
-    private static func schedule() {
+    @MainActor private static func schedule() {
         guard !scheduled, attempt < delays.count else { return }
         scheduled = true
         let delay = delays[attempt]
@@ -66,7 +69,7 @@ import FirebaseFirestore
         }
     }
 
-    private static func recover() async {
+    @MainActor private static func recover() async {
         scheduled = false
         guard unrecovered, let user = Auth.auth().currentUser else { return }
         let uid = user.uid
@@ -96,7 +99,7 @@ import FirebaseFirestore
         }
     }
 
-    private static func watchForeground() {
+    @MainActor private static func watchForeground() {
         guard foregroundObserver == nil else { return }
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
