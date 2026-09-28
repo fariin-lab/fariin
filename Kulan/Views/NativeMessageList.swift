@@ -4330,7 +4330,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // "you feel scroll jump") — exclusivity makes UIKit prevent the pan the moment the press
         // recognizes, which is exactly the reference app's behaviour.
         if g === customPress || other === customPress {
-            return g === holdPress || other === holdPress
+            let o = g === customPress ? other : g
+            if o === holdPress { return true }
+            // ⛔ AND WITH A HOSTED ROW'S OWN SWIFTUI GESTURES — owner, 2026-09-28: "when a message
+            // has a link button, long press does not work". A SwiftUI `Button` inside a hosted row
+            // installs SwiftUI's recogniser over that row's whole hosting view, and with exclusivity
+            // it won every touch on the bubble, so the press never began; a text-only row has no
+            // such recogniser, which is why those worked. Running alongside is safe: the pressed
+            // cell goes touch-dead when the menu opens, which cancels the SwiftUI tap (see
+            // `presentCustomMenu`). Not the list's own pans, which stay exclusive.
+            if let v = o.view, v !== collectionView, v.isDescendant(of: collectionView),
+               o !== swipePan, o !== collectionView.panGestureRecognizer {
+                return true
+            }
+            return false
         }
         return g === swipePan || g === holdPress
     }
