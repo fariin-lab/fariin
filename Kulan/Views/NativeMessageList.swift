@@ -648,8 +648,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var rowModels: [String: MessageRowModel] = [:]   // frozen routing snapshot (set before every apply)
     /// The plans behind those models. One per (row, width), so the height pass and the cell's own
     /// layout are literally the same value object — see RowPlanStore.
-    let planStore = RowPlanStore()
-    var cid: String = ""                              // the conversation, for the rows' own image loads
+    /// This chat's store, kept between opens (`RowPlanStore.forChat`), so a reopen does not lay every
+    /// row out again before the push can start. Swapped in when the chat id arrives, which is before
+    /// the first apply.
+    private(set) var planStore = RowPlanStore()
+    var cid: String = "" {                            // the conversation, for the rows' own image loads
+        didSet { if cid != oldValue, !cid.isEmpty { planStore = RowPlanStore.forChat(cid) } }
+    }
     var uikitMenu: (String) -> UIMenu? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }
     var onTapLink: (URL) -> Void = { _ in }

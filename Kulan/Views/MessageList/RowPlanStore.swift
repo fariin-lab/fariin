@@ -24,6 +24,34 @@ final class RowPlanStore {
 
     init(capacity: Int = 400) { self.capacity = capacity }
 
+    /// ⛔ ONE STORE PER CHAT, KEPT BETWEEN OPENS — owner, 2026-09-28: "opening a chat takes too
+    /// long… the reference app opens almost immediately". Each list controller made its own store,
+    /// so leaving a chat threw every plan away and the next open laid out every loaded row again
+    /// (TextKit, on the main thread) inside the SwiftUI update that starts the push: up to 200 rows
+    /// before the slide could begin. The reference app measures its first window off the main
+    /// thread and only one screen of it. Here the cheapest correct half of that: a reopen finds its
+    /// plans. Reuse is exact, not a guess, because `plan(for:)` only returns an entry whose MODEL
+    /// and width are equal to the one asked for; anything that changed is laid out again.
+    /// Twelve chats, least recently opened dropped first, the same bound as `RenderedHeightStore`.
+    static func forChat(_ cid: String) -> RowPlanStore { ChatStores.shared.store(cid) }
+
+    private final class ChatStores {
+        static let shared = ChatStores()
+        private var byCid: [String: RowPlanStore] = [:]
+        private var order: [String] = []
+        private let maxChats = 12
+
+        func store(_ cid: String) -> RowPlanStore {
+            order.removeAll { $0 == cid }
+            order.append(cid)
+            if let s = byCid[cid] { return s }
+            let s = RowPlanStore()
+            byCid[cid] = s
+            if order.count > maxChats { byCid.removeValue(forKey: order.removeFirst()) }
+            return s
+        }
+    }
+
     func plan(for model: MessageRowModel, width: CGFloat) -> RowPlan {
         if let hit = entries[model.id], hit.width == width, hit.model == model {
             return hit.plan
