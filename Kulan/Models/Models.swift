@@ -298,6 +298,8 @@ struct Message: Identifiable, Equatable, Codable {
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
     var callOutcome: String? = nil          // answered | missed | ringing/ongoing (live row) | declined (legacy, renders missed)
     var callVideo: Bool = false             // placed as a video call (older records default to voice)
+    /// A notice that exists only on this phone (`init(localNotice:)`): the pill's leading symbol.
+    var localNoticeSymbol: String? = nil
     var callDuration: Int? = nil            // seconds (0 if not answered)
     /// A disappearing-timer system notice carries the value it set (0 = turned off), so each phone
     /// can word the line for its own reader ("You set…" / "<name> set…") instead of showing the
@@ -552,6 +554,20 @@ struct Message: Identifiable, Equatable, Codable {
 
     /// Local optimistic message shown instantly before the server confirms it.
     /// `id` = clientId until the server echo (matched by clientId) replaces it.
+    /// A centred notice that is never written anywhere and never leaves this phone — "You blocked
+    /// this person." and its unblock twin (owner, 2026-09-28: "show only me, don't show the user I
+    /// blocked"). A system row with no author, so every rule that skips system rows (menus, reply,
+    /// forward, search counts, voice queue) skips it too.
+    init(localNotice text: String, symbol: String, id: String, at: Date) {
+        self.id = id
+        self.authorId = ""
+        self.text = text
+        self.type = "system"
+        self.reactions = [:]
+        self.createdAt = at
+        self.localNoticeSymbol = symbol
+    }
+
     init(localText: String, authorId: String, clientId: String, replyTo: ReplyRef?, sendState: MessageSendState,
          linkPreview: LinkPreviewData? = nil) {
         self.id = clientId

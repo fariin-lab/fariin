@@ -622,6 +622,12 @@ enum MessageRowModelBuilder {
         // attached: "You" when I set it, the person's name when they did. The stored sentence (with
         // the writer's name baked in) is still what the chat list shows.
         guard let secs = m.disappearSeconds else {
+            // A local notice (the block ones) carries its own symbol; the leading space matches the
+            // timer line's, which is how the pill spaces a symbol from its words.
+            if let symbol = m.localNoticeSymbol {
+                return NoticeRow(text: " " + m.text, symbol: symbol, style: .pill, tapTargetId: nil,
+                                 onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
+            }
             return NoticeRow(text: m.text, symbol: nil, style: .pill, tapTargetId: nil,
                              onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
         }

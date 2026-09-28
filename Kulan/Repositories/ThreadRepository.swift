@@ -399,7 +399,8 @@ final class ThreadRepository {
         let echoed = Set(visible.compactMap { $0.clientId })
         // Pending sends are MERGED by key, not appended: an uploading photo stays exactly where
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
-        var merged = sortedOneTimeline(visible + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+        var merged = sortedOneTimeline(visible + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) }
+                                       + blockNotices(after: visible.first?.createdAt))
         merged.removeAll { HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
@@ -1176,6 +1177,32 @@ final class ThreadRepository {
         scheduleNextBurn()
     }
 
+    /// ⛔ "YOU BLOCKED / UNBLOCKED THIS PERSON", FOR MY EYES ONLY — owner, 2026-09-28, with the
+    /// reference app's two pills: "show this when I block and unblock, show only me, don't show the
+    /// user I blocked". Built from my own owner-only block list (`BlockList`: the block running now
+    /// and every one that ended), never written to the shared chat, so the person blocked has
+    /// nothing to read — the block stays silent (2026-09-26 rebuild).
+    ///
+    /// Only inside the history that is loaded (`oldest`, unless there is nothing older to page in),
+    /// or an old block would sit on top of the loaded page instead of where it happened. 1:1 only.
+    private func blockNotices(after oldest: Date?) -> [Message] {
+        guard cid.contains("_"), !otherUid.isEmpty else { return [] }
+        let snap = BlockList.snapshot
+        var events: [(ms: Double, blocked: Bool)] = []
+        for span in snap.spans[otherUid] ?? [] {
+            events.append((span.lowerBound, true))
+            events.append((span.upperBound, false))
+        }
+        if let since = snap.entries[otherUid] { events.append((since, true)) }
+        let floor = canLoadOlder ? (oldest?.timeIntervalSince1970 ?? .infinity) * 1000 : -.infinity
+        return events.filter { $0.ms > 0 && $0.ms >= floor }.map { e in
+            Message(localNotice: e.blocked ? "You blocked this person." : "You unblocked this person.",
+                    symbol: e.blocked ? "nosign" : "bubble.left.and.bubble.right",
+                    id: "local-block-\(e.blocked ? "on" : "off")-\(Int64(e.ms))",
+                    at: Date(timeIntervalSince1970: e.ms / 1000))
+        }
+    }
+
     // Silent block: hide what anybody I block sent while I had them blocked. While blocked → hide
     // everything after I blocked. After unblock → keep hiding the block window so the backlog never
     // arrives. 2026-09-26 block rebuild: `BlockList` answers (my private list and its history), for
@@ -1193,6 +1220,10 @@ final class ThreadRepository {
     private func blockStateChanged() {
         iBlocked = legacyBlocked || (cid.contains("_") && BlockList.snapshot.contains(otherUid))
         rebuild()
+        // `rebuild` skips publishing when the MESSAGES did not change, and a block changes none:
+        // the "You blocked / unblocked this person" notices (`blockNotices`) would wait for the
+        // next message to appear.
+        refreshItems()
     }
 
     /// Page in the next older window (called on scroll-to-top). `completion` runs after
