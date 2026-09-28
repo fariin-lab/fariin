@@ -74,59 +74,27 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE APP HEALS ITSELF WHEN THE SERVER REFUSES IT, VIDEO WITHOUT THE BLACK SCREEN, CHAT OPENS DRAWN, VOICE TIME.
+            NO MORE DEBUG BOXES, VIDEO NO LONGER FREEZES, LIGHT-MODE CHATS BAR.
 
-            SERVER REFUSED: when the server refuses the phone for a moment (the "everyone looks deleted, nothing sends" problem), the app now gets a fresh sign-in and reconnects the chat list, open chats, your settings, the block list and the device check by itself, within about a minute. No restart needed. Profiles keep their last copy instead of going blank. If two-step is not finished you get the two-step screen; if the session was really ended you are signed out properly.
+            DEBUG BOXES: the red server box and the black timing box are gone. Nothing about sign-in, tokens or timing shows in the app any more.
 
-            VIDEO: the picture that flies in stays on screen until the video's first frame, so there is no black screen. The sound setup no longer holds the player back, and the spinner only appears if loading really takes a while.
+            VIDEO: pulling a video down and letting it spring back keeps it playing (it used to freeze on one frame), and the viewer comes back fully, never see-through over the chat.
 
-            CHAT OPEN: the chat slides in with its messages already drawn, which also gives the header its blur from the start of the slide.
+            LIGHT MODE: after you open a chat and go back, the Chats bar (Edit, the buttons on the right, the search field) is light again instead of dark.
+
+            PLEASE TEST: in light mode, open a chat with a wallpaper and go back to Chats. Open a video, pull it down a little, let go so it springs back. Use the app normally and check that no box appears.
+
+            EARLIER IN THIS ROUND: THE APP HEALS ITSELF WHEN THE SERVER REFUSES IT, VIDEO WITHOUT THE BLACK SCREEN, CHAT OPENS DRAWN, VOICE TIME.
+
+            SERVER REFUSED: when the server refuses the phone for a moment (the "everyone looks deleted, nothing sends" problem), the app gets a fresh sign-in and reconnects by itself within about a minute. Profiles keep their last copy instead of going blank.
+
+            VIDEO: the picture that flies in stays on screen until the video's first frame, so there is no black screen.
+
+            CHAT OPEN: the chat slides in with its messages already drawn.
 
             VOICE: the time on a voice message counts while it plays and no longer shows "0:...".
 
-            PLEASE TEST: force-close the app, open it, tap a chat and screenshot the black box; open a video and screenshot its box. If the app breaks again, screenshot the red box and wait a minute. Play a voice message. Select three chats in a row.
-
-            EARLIER IN THIS ROUND: FASTER CHAT OPEN, SELECT-MODE LINES, HEADER TEXT COLOUR.
-
-            CHAT OPEN: like the reference app, the messages are laid out off the main thread while the chat slides in, and the chat no longer redoes its work mid-slide when the server copy arrives. The slide should start sooner and run smoothly.
-
-            SELECT MODE: a ticked chat is now a plain grey fill, so ticked chats next to each other join with no thin line.
-
-            HEADER: "last seen" is a solid grey and no longer takes the wallpaper's colour.
-
-            PLEASE TEST: force-close the app, open it, tap a chat and screenshot the black box. Select three chats in a row in Edit. Open a chat with a wallpaper and look at "last seen".
-
-            EARLIER IN THIS ROUND: RED SERVER BOX, FINER TIMING, SELECT-MODE LINES.
-
-            SELECT MODE: ticked chats join into one grey block, no dark lines between them.
-
-            RED BOX (temporary): if the server ever refuses the app (the "everything breaks, accounts look deleted" problem), a red box shows the sign-in state for 20 seconds. Please screenshot it.
-
-            TIMING BOX (temporary): the chat-open box now shows the header, the message list and the push separately, and when the app was too busy to draw.
-
-            PLEASE TEST: force-close the app, open it, tap a chat and screenshot the black box. If the app breaks again, screenshot the red box.
-
-            EARLIER IN THIS ROUND: GRADIENT BUBBLES AND MORE TIMING.
-
-            GRADIENT CHAT COLOUR: one gradient now runs across the whole screen, as in the reference app. Bubbles near the top take the first colour, bubbles lower down the second, and each bubble is its slice. It moves with scrolling. The nine palette gradients also use the reference app's angles.
-
-            TIMING BOX (temporary): now also shows when your finger touched the chat, every freeze in the first minute after launch, and for a video the moment its first picture appears.
-
-            PLEASE TEST: open a chat with a gradient colour (for example Auto on the yellow-red wallpaper) and scroll. Force-close the app, open it, tap a chat right away and screenshot the box. Open a video, close it, open it again, and screenshot each box.
-
-            EARLIER IN THIS ROUND: FREEZE FIX, COLOURS, REACTIONS, HEADER BLUR, AND A TIMING BOX.
-
-            FREEZE: opening a chat could freeze the app until iOS closed it. Fixed.
-
-            BUBBLE COLOUR: after changing the wallpaper, bubbles just off screen no longer keep the old colour.
-
-            AUTO COLOUR: on the 9 gradient wallpapers, Auto uses the exact matching colour of the reference app (a gradient).
-
-            REACTIONS: the one-frame jump when you react is gone. After restarting the app, reactions on older messages no longer go missing for a moment.
-
-            HEADER: the blur under the chat header is there while the chat slides open.
-
-            TIMING BOX (temporary): the first 3 chats and the first 3 videos you open after launching show a black box with numbers for 8 seconds. Please screenshot it: force-close the app, open it, tap a chat; then open a video, close it and open it again.
+            EARLIER: select-mode lines, header text colour, gradient bubbles, a freeze when opening a chat, bubble colour after a wallpaper change, reaction jumps.
 
             EARLIER IN THIS ROUND: PHOTO AND GIF REACTIONS AND TIME.
 
