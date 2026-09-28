@@ -29,6 +29,14 @@ final class RowPlanStore {
             return hit.plan
         }
         let plan = MessageRowLayout.plan(model, width: width)
+        seed(model, width: width, plan: plan)
+        return plan
+    }
+
+    /// A plan computed somewhere else, for this exact model and width: the first open lays its
+    /// window out on a background queue and hands the results in here, so the main thread's own
+    /// `plan(for:)` finds them instead of laying the rows out again.
+    func seed(_ model: MessageRowModel, width: CGFloat, plan: RowPlan) {
         if entries[model.id] == nil {
             order.append(model.id)
             if order.count > capacity {
@@ -37,7 +45,6 @@ final class RowPlanStore {
             }
         }
         entries[model.id] = Entry(model: model, width: width, plan: plan)
-        return plan
     }
 
     /// The cached plan without computing one — for the paths that only want to know where a bubble

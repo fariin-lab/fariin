@@ -726,7 +726,8 @@ final class ThreadRepository {
     // (EDITS — the old reactions-only gate meant an edited message never re-rendered), the edited
     // flag, the album array, and the deleted flag + type (tombstones, see below).
     // Reaction keys are sorted so the signature is deterministic.
-    private func changeSig(_ data: [String: Any]) -> String {
+    // Static: it reads only the doc, so the live snapshot can compute it off the main thread.
+    private static func changeSig(_ data: [String: Any]) -> String {
         let raw = (data["reactions"] as? [String: String]) ?? [:]
         let reactions = raw.keys.sorted().map { "\($0)=\(raw[$0] ?? "")" }.joined(separator: ",")
         // The ALBUM ARRAY is mutable too: deleteAlbumItem rewrites it for everyone, but the signature
@@ -785,7 +786,7 @@ final class ThreadRepository {
     @discardableResult
     private func buildCached(_ doc: QueryDocumentSnapshot) -> Message {
         let id = doc.documentID, data = doc.data()
-        let sig = changeSig(data)
+        let sig = Self.changeSig(data)
         if let cached = byId[id], rawReactions[id] == sig { return cached }
         let m = Message(id: id, data: data, cid: cid, crypto: Crypto.shared)
         byId[id] = m
@@ -821,13 +822,22 @@ final class ThreadRepository {
         // thread froze the UI during the navigation transition (the tester's "tap → gray →
         // hang"). Only NEW or reaction-changed docs are decrypted; the rest are reused.
         // (box.open is a thread-safe pure op, and my keys are set before any chat can open.)
-        let sigs = Dictionary(uniqueKeysWithValues: docs.map { ($0.documentID, changeSig($0.data())) })
-        let needBuild = docs.filter { doc in
-            byId[doc.documentID] == nil || rawReactions[doc.documentID] != sigs[doc.documentID]
-        }
-        guard !needBuild.isEmpty else { commitSnapshot(docs, seq: seq, fromCache: fromCache); return }
+        //
+        // ⛔ AND THE FINGERPRINTS TOO — owner, 2026-09-28, the timing box: the app froze for 73ms
+        // three milliseconds after the first snapshot landed, in the middle of the open's slide. The
+        // decrypt was already off the main thread; working out WHICH docs needed it was not: a
+        // `data()` conversion and a signature string for every doc in the window, on main. Both are
+        // pure reads of an immutable snapshot, so they go with the decrypt, against a copy of what
+        // is known now. The out-of-order guard below covers the extra hop exactly as it did before.
+        let knownSigs = rawReactions
+        let knownIds = Set(byId.keys)
         let cidLocal = cid
         Task.detached(priority: .userInitiated) { [weak self] in
+            let sigs = Dictionary(docs.map { ($0.documentID, Self.changeSig($0.data())) },
+                                  uniquingKeysWith: { a, _ in a })
+            let needBuild = docs.filter { doc in
+                !knownIds.contains(doc.documentID) || knownSigs[doc.documentID] != sigs[doc.documentID]
+            }
             let built: [(String, Message)] = needBuild.map { doc in
                 (doc.documentID, Message(id: doc.documentID, data: doc.data(), cid: cidLocal, crypto: Crypto.shared))
             }
@@ -1107,6 +1117,14 @@ final class ThreadRepository {
             guard let c = m.clientId else { return false }
             return !seenClientIds.insert(c).inserted
         }
+        // ⛔ NOTHING CHANGED, NOTHING PUBLISHED — owner, 2026-09-28, the timing box: a freeze in the
+        // middle of the open's slide when the first snapshot landed. A chat opens on the messages it
+        // already had, and the first snapshot is usually those same messages; publishing them anyway
+        // bumped `itemsVersion`, which re-ran the whole chat screen's body and a list update for a
+        // result identical to what was on screen. The reference app lands a load only when its
+        // render state actually differs. Every other input to `items` (pending sends, hidden
+        // messages) publishes through its own call to `refreshItems`, so skipping here loses nothing.
+        guard sorted != messages else { scheduleNextBurn(); return }
         messages = sorted
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems()
@@ -1163,7 +1181,7 @@ final class ThreadRepository {
                 // `applyLiveSnapshot` does. A 40-message page (group unwraps included) was opened on
                 // main in the scroll-to-top callback and hitched the scroll. Only docs the cache does
                 // not already hold (or whose signature moved) are built; the merge is on main.
-                let sigs = Dictionary(docs.map { ($0.documentID, self.changeSig($0.data())) },
+                let sigs = Dictionary(docs.map { ($0.documentID, Self.changeSig($0.data())) },
                                       uniquingKeysWith: { a, _ in a })
                 let needBuild = docs.filter { doc in
                     self.byId[doc.documentID] == nil || self.rawReactions[doc.documentID] != sigs[doc.documentID]

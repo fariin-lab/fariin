@@ -375,6 +375,10 @@ enum BubbleTicks {
     /// glyph at the same size and colour, which is why an arriving read receipt looked identical to
     /// a plain delivered tick.
     private static var doubleCheckCache: [CGFloat: UIImage] = [:]
+    /// The layout now runs on a background queue for a chat's first open (see
+    /// `MessageListController.planFirstLandOffMain`) while the main thread may be laying out
+    /// another row, so the one piece of shared state it touches is locked.
+    private static let doubleCheckLock = NSLock()
 
     static func image(_ kind: Kind) -> UIImage? {
         let cfg = UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
@@ -402,6 +406,7 @@ enum BubbleTicks {
     /// height the old drawn ticks had, so the footer's measured width barely moves.
     private static func drawnChecks(_ count: Int) -> UIImage? {
         let key = CGFloat(count)
+        doubleCheckLock.lock(); defer { doubleCheckLock.unlock() }
         if let hit = doubleCheckCache[key] { return hit }
         let strokes: [[CGPoint]] = count == 1
             ? [[CGPoint(x: 6.5, y: 17), CGPoint(x: 12.5, y: 23), CGPoint(x: 25.5, y: 10)]]
