@@ -86,7 +86,7 @@ jobs:
 
             BLOCK: "You blocked this person." and "You unblocked this person." show in the chat, only to you.
 
-            ALSO: the time on photos and GIFs is centred in its pill; the disappearing-message notice is no longer cut; All Media is light in light mode; the pin bar has the new pin icon.
+            ALSO: the time on photos and GIFs is centred in its pill; the disappearing-message notice is no longer cut; All Media, Chat Key, Message Requests and Archive have a light top bar in light mode; the pin bar has the new pin icon.
 
             PLEASE TEST: open and close the attach sheet many times, pull it up and down; with the keyboard up, long-press and react; block and unblock someone; search in the Fariin chat.
 

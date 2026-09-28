@@ -2268,7 +2268,11 @@ struct ChatsView: View {
             // dark stayed on the chat list after Back. This names the phone's own appearance, which
             // is what "stock" means here; it is not an appearance object and changes nothing in dark
             // mode.
-            .toolbarColorScheme(scheme, for: .navigationBar)
+            // ⚠️ 2026-09-28, evening: asked of the PHONE (`PhoneScheme`), not of `scheme`, which is
+            // inherited and can be an override; and only while the chat list itself is on top. A
+            // bar scheme set here stays in force for pages pushed over it (the same lesson as the
+            // profile over All Media), and the filter pages came up dark.
+            .toolbarColorScheme(path.isEmpty ? PhoneScheme.current : nil, for: .navigationBar)
             // ⛔ THE BAR IS STOCK — owner, 2026-09-24: the header is the reference app's on iOS 26,
             // and theirs sets nothing on the bar. No `toolbarBackground`, no
             // `UINavigationBarAppearance` on this page's item (see `ChatListTableController
@@ -2417,8 +2421,11 @@ struct ChatsView: View {
             // like a sub page"). It rides the same path as a chat, so the back chevron is the system's
             // and a chat opened from inside the archive lands on top of it — back returns to the
             // archive, which is what both references do and what a sheet could never do.
+            // The three pages behind the filter menu name the phone's appearance for their bar
+            // (`barFollowsPhone`): owner, 2026-09-28, all three came up with a dark bar in light mode.
             .navigationDestination(for: ArchiveRoute.self) { _ in
                 ArchivedChatsView(pushed: true, onOpenChat: { t in path.append(t) })
+                    .barFollowsPhone()
             }
             // MESSAGE REQUESTS rides that same path, for the same reason (owner, 2026-09-09). A chat
             // opened from inside it lands ON TOP of it, so Back returns to the requests page instead
@@ -2429,9 +2436,11 @@ struct ChatsView: View {
             // answers for `ChatTarget`; the page hands the tap back up here through `onOpenChat`.
             .navigationDestination(for: RequestsRoute.self) { _ in
                 MessageRequestsView(onOpenChat: { t in path.append(t) })
+                    .barFollowsPhone()
             }
             .navigationDestination(for: ChatPinRoute.self) { _ in
                 ChatPinPage()
+                    .barFollowsPhone()
             }
             .navigationDestination(for: ChatTarget.self) { t in
                 // The official channel gets its own screen. ThreadView is built around a composer and
