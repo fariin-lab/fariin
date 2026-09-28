@@ -82,6 +82,8 @@ jobs:
 
             REACT WITH THE KEYBOARD UP: long-pressing a message keeps the keyboard open and the menu opens above it.
 
+            REACTION BAR: the swipe row holds 15 emojis; tap + for all the others.
+
             BLOCK: "You blocked this person." and "You unblocked this person." show in the chat, only to you.
 
             ALSO: the time on photos and GIFs is centred in its pill; the disappearing-message notice is no longer cut; All Media is light in light mode; the pin bar has the new pin icon.
