@@ -1032,6 +1032,8 @@ final class CMReactionBar: UIView {
     private var holders: [UIView] = []
     private let allEmojis: [String]
     private static let liftRoom: CGFloat = 28
+    /// How many emojis the strip holds, the quick six included (owner, 2026-09-28).
+    private static let stripCount = 15
     /// After the quick set, in the order a swipe reveals them. Any the quick set already holds is
     /// left out, so no emoji appears twice.
     private static let extraEmojis = [
@@ -1067,7 +1069,13 @@ final class CMReactionBar: UIView {
         // every emoji I use comes first". My reaction from the swipe part used to take the sixth
         // slot; it now stays highlighted in its own place in the strip, and the six stay as given.
         let quick = config.emojis
-        self.allEmojis = quick + Self.extraEmojis.filter { !quick.contains($0) }
+        // ⛔ FIFTEEN IN THE STRIP — owner, 2026-09-28: "there are too many emojis in the bar now,
+        // make it 15; if somebody needs more they tap +". The quick six and the next nine; the
+        // full picker behind "+" has the rest. My own reaction, if it is none of the fifteen, is
+        // added at the end so it can still be seen and taken off here.
+        var strip = Array((quick + Self.extraEmojis.filter { !quick.contains($0) }).prefix(Self.stripCount))
+        if let mine = config.selected, !strip.contains(mine) { strip.append(mine) }
+        self.allEmojis = strip
         // Liquid glass on iOS 26+, same as the card and same as the reference app's bar there.
         if #available(iOS 26.0, *) {
             backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
