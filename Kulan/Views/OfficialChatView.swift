@@ -31,8 +31,20 @@ struct OfficialChatView: View {
     @State private var morePickerId: String?
     @State private var pendingDelete: [String]?
     @State private var showClearConfirm = false
+    // Search in the chat itself, the normal chat's way (owner, 2026-09-28): top field, ↑/↓ and
+    // "n of N" at the bottom, each step scrolls to the match.
+    @State private var searching = false
+    @State private var searchQuery = ""
+    @State private var searchMatches: [String] = []   // announcement ids, oldest → newest
+    @State private var searchIndex = 0
+    @FocusState private var searchFocused: Bool
 
     private var dark: Bool { scheme == .dark }
+
+    /// The window's home-indicator band (the bottom safe area).
+    private static var homeBand: CGFloat {
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom ?? 0
+    }
 
     var body: some View {
         list
@@ -56,12 +68,28 @@ struct OfficialChatView: View {
                     .ignoresSafeArea()
             }
             .floatingBottomBar {
-                Group { if selecting { selectionBar } else { cannotReplyBar } }
+                // ⛔ FROM THE BAR'S TOP TO THE SCREEN'S BOTTOM, not the bar's own height — owner,
+                // 2026-09-28: "official messages go under the bottom bar". The list runs to the
+                // screen's edge and counts its clearance from there (`bottomClearance`, the no-
+                // composer path), so the home-indicator band under the bar was missing from it and
+                // the newest bubble ended that far under the glass. ⚠️ The gap under the bar is
+                // capped at the home-indicator band: with the search keyboard up it would include
+                // the keyboard, which the list already adds on its own.
+                Group {
+                    if selecting { selectionBar } else if searching { searchNavBar } else { cannotReplyBar }
+                }
                     .background(GeometryReader { g in
-                        Color.clear.preference(key: OfficialBarHeightKey.self, value: g.size.height)
+                        let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
+                        Color.clear.preference(key: OfficialBarHeightKey.self,
+                                               value: g.size.height + max(0, min(under, Self.homeBand)))
                     })
                     .onPreferenceChange(OfficialBarHeightKey.self) { barHeight = $0 }
             }
+            // Search owns the top while it is open, as in a normal chat (`ThreadView.searchBar`).
+            .safeAreaInset(edge: .top) { if searching { searchBar } }
+            .toolbar(searching ? .hidden : .automatic, for: .navigationBar)
+            .onChange(of: searchQuery) { updateSearchMatches() }
+            .onChange(of: store.visible.map(\.id)) { if searching { updateSearchMatches() } }
             // Tapping the header opens the info screen, the same as every other chat. It used to do
             // nothing at all — I left the closure empty when this screen was built, so the one chat
             // people are most likely to be suspicious of was the one that would not tell them
@@ -89,10 +117,11 @@ struct OfficialChatView: View {
                 Button("Cancel", role: .cancel) {}
             }
             .navigationDestination(isPresented: $showInfo) {
-                OfficialChatInfoView { id in
+                // Search pops back to the chat and opens its search there, as a normal chat's
+                // profile does (`ContactInfoView.onSearch`), a beat later so the pop has finished.
+                OfficialChatInfoView {
                     showInfo = false
-                    // Once the pop has finished, so the list is on screen to scroll to it.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { scrollTarget = id }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { startSearch() }
                 }
             }
             .toolbar(.hidden, for: .tabBar)
@@ -355,6 +384,102 @@ struct OfficialChatView: View {
             .systemBarChrome()
     }
 
+    // MARK: Search
+
+    private func startSearch() {
+        searchQuery = ""; searchMatches = []; searchIndex = 0
+        searching = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { searchFocused = true }
+    }
+
+    private func closeSearch() {
+        searchFocused = false
+        searching = false
+        searchQuery = ""; searchMatches = []
+    }
+
+    /// The normal chat's rules (`ThreadView.updateSearchMatches`): two characters and up, every
+    /// word a prefix of some word in the announcement, case and accents ignored; the position is
+    /// kept counted from the newest end as the query is refined.
+    private func updateSearchMatches() {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        let terms = q.count >= 2 ? ChatSearch.queryTerms(q) : []
+        guard !terms.isEmpty else { searchMatches = []; return }
+        let fromNewest = searchMatches.isEmpty ? 0 : max(0, searchMatches.count - 1 - searchIndex)
+        searchMatches = store.visible
+            .filter { ChatSearch.matches(tokens: ChatSearch.tokens($0.title + " " + $0.body), terms: terms) }
+            .sorted { $0.sortAt < $1.sortAt }
+            .map(\.id)
+        guard !searchMatches.isEmpty else { return }
+        searchIndex = max(0, searchMatches.count - 1 - min(fromNewest, searchMatches.count - 1))
+        scrollTarget = searchMatches[searchIndex]
+    }
+
+    private func stepSearch(_ delta: Int) {
+        guard !searchMatches.isEmpty else { return }
+        searchIndex = min(max(0, searchIndex + delta), searchMatches.count - 1)
+        scrollTarget = searchMatches[searchIndex]
+    }
+
+    /// The normal chat's search field and close button (`ThreadView.searchBar`).
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
+                TextField("Search", text: $searchQuery)
+                    .font(.system(size: 17))
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit {
+                        searchFocused = false
+                        if !searchMatches.isEmpty { stepSearch(1) }
+                    }
+                    .autocorrectionDisabled()
+                if !searchQuery.isEmpty {
+                    Button { searchQuery = "" } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear")
+                }
+            }
+            .padding(.horizontal, 12).frame(height: 44)
+            .liquidGlass(Capsule(), interactive: false)
+            Button { closeSearch() } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close search")
+        }
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
+    }
+
+    /// The normal chat's ↑/↓ and "n of N" (`ThreadView.searchNavBar`).
+    private var searchNavBar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 24) {
+                Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 16, weight: .semibold)) }
+                    .disabled(searchIndex <= 0 || searchMatches.isEmpty)
+                Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 16, weight: .semibold)) }
+                    .disabled(searchIndex >= searchMatches.count - 1 || searchMatches.isEmpty)
+            }
+            .tint(.primary)
+            .padding(.horizontal, 18).frame(height: 44)
+            .liquidGlass(Capsule(), interactive: true)
+            Spacer()
+            if !searchMatches.isEmpty || searchQuery.trimmingCharacters(in: .whitespaces).count >= 2 {
+                Text(searchMatches.isEmpty ? "No results" : "\(searchIndex + 1) of \(searchMatches.count)")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.horizontal, 18).frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: false)
+            }
+        }
+        .padding(.horizontal, 16).padding(.bottom, 6)
+    }
+
     // MARK: Buttons
 
     private func tap(_ button: AnnouncementButton) {
@@ -400,17 +525,17 @@ private struct ZoomTarget: Identifiable {
 /// All Media, Help Center, and Clear Chat / Block in red with the block note under them. The words
 /// in About are the ones this screen already carried; only the layout is new.
 struct OfficialChatInfoView: View {
-    /// Search picks an announcement: the chat scrolls to it once this screen is gone.
-    private let onJump: (String) -> Void
+    /// Search: the chat closes this page and searches in place (owner, 2026-09-28: "search is not
+    /// working like a normal chat"). It used to push a separate results list.
+    private let onSearch: () -> Void
     private var store = OfficialChannelStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var confirmBlock = false
     @State private var confirmClear = false
-    @State private var showSearch = false
     @State private var showAllMedia = false
     @State private var zoomed: String?
 
-    init(onJump: @escaping (String) -> Void = { _ in }) { self.onJump = onJump }
+    init(onSearch: @escaping () -> Void = {}) { self.onSearch = onSearch }
 
     /// The announcements that carry a picture, newest first.
     private var media: [Announcement] { Array(store.visible.filter { $0.mediaUrl != nil }.reversed()) }
@@ -431,13 +556,6 @@ struct OfficialChatInfoView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(isPresented: $showSearch) {
-            OfficialSearchView { id in
-                showSearch = false
-                dismiss()
-                onJump(id)
-            }
-        }
         .navigationDestination(isPresented: $showAllMedia) {
             OfficialMediaGrid(items: media) { zoomed = $0 }
         }
@@ -479,6 +597,10 @@ struct OfficialChatInfoView: View {
     /// ⛔ THE CHAT PROFILE'S OWN CIRCLES — owner, 2026-09-28: "make it exactly how it looks in a
     /// normal chat, and how it works". `ContactInfoView.actionsRow`: 60pt glass `PosterActionIcon`s
     /// with no captions, the bell showing what a tap does, Mute behind a menu.
+    ///
+    /// ⚠️ EACH CIRCLE IN A FIFTH OF THE ROW, the slot it has in a normal profile's five-circle row
+    /// (owner, 2026-09-28: "the space between Mute and Search is too big"). `PosterActionIcon`
+    /// stretches to fill its slot, so two of them split the whole width and sat half a screen apart.
     private var actionButtons: some View {
         HStack(spacing: 0) {
             Menu {
@@ -489,12 +611,18 @@ struct OfficialChatInfoView: View {
                 }
             } label: {
                 PosterActionIcon(icon: store.state.muted ? "ic_bell" : "ic_bell_off", onPhoto: false)
+                    .frame(width: actionSlot)
             }.tint(.primary)
-            Button { showSearch = true } label: {
+            Button { onSearch() } label: {
                 PosterActionIcon(icon: "magnifyingglass", onPhoto: false)
+                    .frame(width: actionSlot)
             }.tint(.primary)
         }
+        .frame(maxWidth: .infinity)
     }
+
+    /// One slot of a five-circle row across this page's width (16pt margins each side).
+    private var actionSlot: CGFloat { (UIScreen.main.bounds.width - 32) / 5 }
 
     // MARK: Cards
 
@@ -509,16 +637,10 @@ struct OfficialChatInfoView: View {
         card {
             VStack(alignment: .leading, spacing: 10) {
                 Label("About", systemImage: "text.alignleft").font(.body)
-                Text("This is where we tell you about new things, fixes and updates.")
-                Text("We will never ask you for your password, your login code, or money. Nobody from Fariin will ever ask you for those, anywhere.")
-                    .fontWeight(.medium)
-                Label {
-                    Text("There is no Fariin account. This chat is built into the app itself, so it cannot be copied. Anyone claiming to be Fariin is not.")
-                } icon: {
-                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.white, Color(hex: 0x0A84FF))
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                // ⛔ ONE SHORT TEXT, ONE STYLE — owner, 2026-09-28, circled the card: "this text is 3
+                // types, clear all and write only one simple short text". The three paragraphs
+                // (regular, medium, secondary with a tick) are gone.
+                Text("Updates and news from Fariin. We will never ask for your password, login code or money.")
             }
             .padding(18)
         }
@@ -637,47 +759,6 @@ private struct OfficialMediaGrid: View {
     }
 }
 
-/// Search in this chat: matching announcements, newest first; a tap goes back to the chat at it.
-private struct OfficialSearchView: View {
-    private let onPick: (String) -> Void
-    private var store = OfficialChannelStore.shared
-    @State private var query = ""
-    init(onPick: @escaping (String) -> Void) { self.onPick = onPick }
-
-    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
-
-    private var results: [Announcement] {
-        guard !trimmed.isEmpty else { return [] }
-        return Array(store.visible.reversed()).filter {
-            $0.title.localizedCaseInsensitiveContains(trimmed) || $0.body.localizedCaseInsensitiveContains(trimmed)
-        }
-    }
-
-    var body: some View {
-        List(results) { a in
-            Button { onPick(a.id) } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(a.title.isEmpty ? a.body : a.title).font(.body.weight(.medium)).lineLimit(1)
-                    if !a.title.isEmpty {
-                        Text(a.body).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                    }
-                    Text(a.sortAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .foregroundStyle(.primary)
-        }
-        .listStyle(.plain)
-        .overlay {
-            if !trimmed.isEmpty && results.isEmpty { ContentUnavailableView.search(text: query) }
-        }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
-        .navigationTitle("Search")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-
 // MARK: - The channel's face
 
 /// The app's own icon on a circle. The reference app renders its own release-channel logo asset into the release channel's
@@ -740,7 +821,7 @@ struct AnnouncementRow: View {
     /// 2026-09-24 decision D-admin-preview: the compose preview's picked picture, drawn inside the
     /// bubble exactly where the uploaded one will be (it used to sit above it as a separate shape).
     var localImage: UIImage? = nil
-    /// This reader's own reaction, drawn as the badge under the bubble like a chat message's.
+    /// This reader's own reaction, drawn as the chip inside the bubble like a chat message's.
     var myReaction: String? = nil
     /// The real chat only: publishes the bubble's outline so the long press lifts THIS bubble.
     var menuId: String? = nil
@@ -815,29 +896,27 @@ struct AnnouncementRow: View {
                         .allowsHitTesting(false)
                 }
             }
-            .overlay(alignment: .bottomLeading) {
-                if let myReaction {
-                    // The chat's reaction chip: its height, face size and overhang (BubbleMetrics).
-                    Text(myReaction)
-                        .font(.system(size: BubbleMetrics.reactionFace * 0.8))
-                        .frame(minWidth: BubbleMetrics.reactionChipHeight,
-                               minHeight: BubbleMetrics.reactionChipHeight)
-                        .padding(.horizontal, 4)
-                        .background(Capsule().fill(Color(.secondarySystemBackground)))
-                        .overlay(Capsule().strokeBorder(Color(.systemBackground), lineWidth: 2))
-                        .offset(x: 10, y: BubbleMetrics.reactionOverhang + 4)
-                }
-            }
-            .modifier(OptionalRectReporter(id: menuId, overhang: myReaction == nil ? 0 : 16))
+            .modifier(OptionalRectReporter(id: menuId, overhang: 0))
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
-        .padding(.bottom, myReaction == nil ? 0 : 14)
         .onAppear { if countsAsRead { AnnouncementStats.countRead(announcement) } }
     }
 
+    /// ⛔ THE CHAT'S OWN REACTION CHIP — owner, 2026-09-28: "official is using a different react
+    /// badge, use my own". A normal text bubble carries its reactions INSIDE, bottom-left, on the
+    /// time's row (`MessageRowLayout.decorations`, `ReactionChipView`): a 30pt capsule, 17pt emoji,
+    /// 11pt sides, filled with the label colour at 18% because it is always the reader's own. It
+    /// used to hang outside the bubble with a ring, which is how nothing else in the app looks.
     private var timeRow: some View {
         HStack(spacing: 4) {
+            if let myReaction {
+                Text(myReaction)
+                    .font(.system(size: BubbleMetrics.reactionEmojiFont))
+                    .padding(.horizontal, BubbleMetrics.reactionChipInset)
+                    .frame(height: BubbleMetrics.reactionChipHeight)
+                    .background(Capsule().fill(Color(BubblePalette.accent).opacity(0.18)))
+            }
             Spacer(minLength: 0)
             if announcement.editedAt != nil {
                 Text("edited").font(Font(BubbleMetrics.metaFont)).foregroundStyle(.secondary)
