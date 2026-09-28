@@ -2131,11 +2131,21 @@ private final class ChatListCell: UITableViewCell {
         // gap. So in select mode a ticked row now wears a plain fill in the same system colour that
         // styling uses (`systemGray4`, measured 209,209,213), with nothing else: no inset, no corner,
         // no stroke, no line. Every other state keeps Apple's list background untouched.
+        //
+        // ⛔ AND IT REACHES ONE POINT PAST ITS OWN BOTTOM — owner, 2026-09-28, build 785, light mode,
+        // five rows ticked: the line is STILL there, make it like the reference app. The plain fill proved
+        // the line is not in the background's styling; it is the one point where one ticked row's
+        // fill ends and the next one's has not begun, white on a white list at rest and so only
+        // visible once both sides are grey. The reference app's ticked rows are one block. A negative bottom
+        // inset lays this row's fill across that point, whatever puts it there (a seam on a
+        // fractional pixel or a real gap), so two ticked rows meet as one surface. Below the last
+        // ticked row it reaches one point into the next row, which draws its own opaque background
+        // over it or is the heading's white; neither shows a step.
         let bg: UIBackgroundConfiguration
         if state.isEditing && state.isSelected {
             var plain = UIBackgroundConfiguration.clear()
             plain.backgroundColor = .systemGray4
-            plain.backgroundInsets = .zero
+            plain.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: -1, trailing: 0)
             plain.edgesAddingLayoutMarginsToBackgroundInsets = []
             plain.cornerRadius = 0
             plain.strokeWidth = 0
