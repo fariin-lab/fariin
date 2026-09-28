@@ -202,6 +202,14 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         host.view.layoutIfNeeded()
     }
 
+    /// ⛔ THE GLYPH LIVES IN THE GLASS'S OWN SPACE, not the shell's — owner, 2026-09-28, with a
+    /// picture: the "+" sat low in its circle as the sheet closed. The glass is framed at the
+    /// shell's visible square, whose origin is (0, (h − w) / 2) in shell coordinates; centring the
+    /// glyph at that square's `mid` put it that far below the circle's middle.
+    private static func middle(of glassFrame: CGRect) -> CGPoint {
+        CGPoint(x: glassFrame.width / 2, y: glassFrame.height / 2)
+    }
+
     private func sourceRect() -> CGRect {
         let r = ChatComposerView.AttachSource.windowRect
         guard r != .zero, let w = view.window else { return .zero }
@@ -298,7 +306,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             shell.center = CGPoint(x: src.midX, y: src.midY)
             shell.transform = CGAffineTransform(scaleX: scale, y: scale)
             shell.layer.cornerRadius = target.width / 2
-            glyph.center = CGPoint(x: square.midX, y: square.midY)
+            glyph.center = Self.middle(of: square)
             glyph.transform = CGAffineTransform(scaleX: 1 / scale, y: 1 / scale)
             glyph.alpha = 1
             content.alpha = 0
@@ -315,7 +323,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             shell.bounds = full
             shell.transform = .identity
             glass.frame = full
-            glyph.center = CGPoint(x: full.midX, y: full.midY)
+            glyph.center = Self.middle(of: full)
         }
 
         run(position)
@@ -387,7 +395,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         glass.isHidden = false
         glass.frame = cur
         glass.alpha = 1
-        glyph.center = CGPoint(x: cur.midX, y: cur.midY)
+        glyph.center = Self.middle(of: cur)
         glyph.transform = CGAffineTransform(scaleX: 1 / scale, y: 1 / scale)
         ChatComposerView.AttachSource.setLifted(true)
 
@@ -400,7 +408,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             shell.bounds = square
             shell.transform = CGAffineTransform(scaleX: scale, y: scale)
             glass.frame = square
-            glyph.center = CGPoint(x: square.midX, y: square.midY)
+            glyph.center = Self.middle(of: square)
         }
         let corners = RefSpring.animator(damping: 124, velocity: v, duration: 0.2)
         corners.addAnimations { [self] in shell.layer.cornerRadius = w / 2 }
