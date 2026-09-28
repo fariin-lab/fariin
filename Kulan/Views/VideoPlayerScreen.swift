@@ -130,7 +130,16 @@ struct VideoPlayerScreen: View {
                 targetId: { MediaOpenRects.key(rectScope, message.id) },
                 clipRect: clipProvider,
                 closeToken: closeToken,
-                onDismiss: { instantDismiss() })
+                onDismiss: { instantDismiss() },
+                // ⛔ A DRAG THAT SPRINGS BACK PLAYS ON — owner, 2026-09-28: "when I scroll down on a
+                // video and back up, the video is frozen". The drag pauses the clip the moment it
+                // begins (above), and nothing ever started it again, so it sat on one frame with the
+                // pause button still showing. `isPlaying` is still the viewer's own word on whether
+                // it was playing, so a clip he had paused himself stays paused.
+                onCancel: {
+                    guard isPlaying, !lifetime.closed else { return }
+                    player?.play()
+                })
         }
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
         // Always dark, for the same reason as the photo viewer beside it and in the same breath as

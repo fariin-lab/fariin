@@ -45,6 +45,10 @@ struct MediaDismissHost: UIViewRepresentable {
     /// the drag). the reference app's model too — their X runs the same dismiss animator the pan drives.
     var closeToken: Int = 0
     var onDismiss: () -> Void
+    /// A drag that sprang back instead of closing, once the viewer is fully back. Separate from
+    /// `onHideContent(false)`, which also runs on the way OUT (a close with no copy, the dropped-
+    /// dismiss recovery): the video resumes its clip here and only here (2026-09-28).
+    var onCancel: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -613,6 +617,15 @@ struct MediaDismissHost: UIViewRepresentable {
             animator.addCompletion { position in
                 imageCloseLog.info("cancel completion, finished \(position == .end)")
                 self.parent.onHideContent(false)
+                if !self.active {
+                    // ⚠️ AN INTERRUPTED SPRING STOPS WHERE IT IS, and the root's alpha with it: the
+                    // viewer stayed see-through over the chat, chrome drawn, the video gone (owner's
+                    // screenshot, 2026-09-28). The viewer is staying, so it is fully back. Not while a
+                    // new drag owns the root: its own scrub decides then.
+                    self.root?.alpha = 1
+                    // Not when a held button close is about to run: that exit is on its way out.
+                    if !self.closeAfterCancel { self.parent.onCancel() }
+                }
                 // Un-hide the source bubble. The drag's .began hid it, and only finish() ever revealed
                 // it — a CANCELLED drag left the bubble invisible in the chat, which showed the moment
                 // the viewer was later closed with the X instead of another drag.
