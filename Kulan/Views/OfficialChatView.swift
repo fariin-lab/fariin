@@ -88,12 +88,19 @@ struct OfficialChatView: View {
         Group {
             if selecting { selectionBar } else if searching { searchNavBar } else { cannotReplyBar }
         }
-        .background(GeometryReader { g in
-            let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
-            Color.clear.preference(key: OfficialBarHeightKey.self,
-                                   value: g.size.height + max(0, min(under, Self.homeBand)))
-        })
-        .onPreferenceChange(OfficialBarHeightKey.self) { barHeight = $0 }
+        // ⛔ WRITTEN DIRECTLY, THE WAY THE CHAT'S COMPOSER BAR IS (`ThreadView`, `composerBarHeight`)
+        // — owner, 2026-09-28, build 793: the last message still ran under the bar after the
+        // clearance itself was fixed, and the numbers off his screenshot say the list never
+        // received the new height at all. This bar lives in a `safeAreaBar`, and a preference
+        // raised inside it did not reliably reach `onPreferenceChange`. The chat's own bar has
+        // always reported through `onChange(of:initial:)` on its geometry, and that one works.
+        .background {
+            GeometryReader { g in
+                let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
+                let h = g.size.height + max(0, min(under, Self.homeBand))
+                Color.clear.onChange(of: h, initial: true) { _, v in barHeight = v }
+            }
+        }
     }
 
     var body: some View {
@@ -503,11 +510,6 @@ struct OfficialChatView: View {
             if screen == .invite { shareInvite = true } else { pushedScreen = screen }
         }
     }
-}
-
-private struct OfficialBarHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 private struct ForwardBatch: Identifiable {
