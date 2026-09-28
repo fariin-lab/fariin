@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            NEW ATTACH SHEET, OFFICIAL CHAT FIXES, REACT WITH THE KEYBOARD UP, BLOCK NOTICES.
+            ATTACH BAR STAYS, OFFICIAL CHAT LAST MESSAGE, LONG PRESS ON BUTTONS, DISAPPEARING ICON, ALL MEDIA BUTTONS.
+
+            ATTACH: the Camera/GIF/Files/Location bar no longer disappears when you tap the Album button or its back arrow. Scrolling right after opening the sheet moves the sheet, with no black band at the top or bottom.
+
+            OFFICIAL CHAT: the last message stops above the "Only Fariin can send messages" bar.
+
+            LONG PRESS: works on messages that have a button (for example "Review Devices").
+
+            DISAPPEARING MESSAGES: every message sent after you turn it on shows the timer icon beside the time (it used to show a small circle on only some). A reaction no longer runs into it.
+
+            ALSO: the time on photos and GIFs is centred in its pill; All Media's back and ••• buttons are light in light mode.
+
+            PLEASE TEST: tap Album and back in the attach sheet; open the sheet and scroll at once; long-press the Review Devices message; send messages in a disappearing chat and react to one; open All Media in light mode.
+
+            EARLIER IN THIS ROUND (build 793): NEW ATTACH SHEET, OFFICIAL CHAT FIXES, REACT WITH THE KEYBOARD UP, BLOCK NOTICES.
 
             ATTACH: the + grows into the sheet and the sheet shrinks back into the + (the + stays centred). Tapping during the animation turns it around. The sheet floats with space on the sides and bottom, and pulling the photos down no longer shows a black gap. The Album button is a normal colour.
 
@@ -89,22 +103,5 @@ jobs:
             ALSO: the time on photos and GIFs is centred in its pill; the disappearing-message notice is no longer cut; All Media, Chat Key, Message Requests and Archive have a light top bar in light mode; the pin bar has the new pin icon.
 
             PLEASE TEST: open and close the attach sheet many times, pull it up and down; with the keyboard up, long-press and react; block and unblock someone; search in the Fariin chat.
-
-            EARLIER IN THIS ROUND: YOUR LOGO, ATTACH SHEET FROM THE +, MORE REACTIONS, PHOTO PEN, COLOUR AND WALLPAPER RESETS.
-
-            LOGO: the opening screen, the Welcome page and the sign-in page show the Fariin logo (black in light mode, white in dark). Create Account is black.
-
-            ATTACH: the attach sheet grows out of the + button and goes back into it when you close it (Apple's own animation). Please pull it up to full height a few times.
-
-            REACTIONS: the bar's ... is now +. Swipe the emoji row for about 45 more; a tap picks. The highlight on your reaction is a soft grey, and a reaction outside the six shows at the right end. The reactions list shows your name instead of "You".
-
-            PHOTO EDITOR: cropping keeps what you drew. The pen page is the story pen: undo and Clear All on top, pen, highlighter and size in one bar.
-
-            COLOUR AND WALLPAPER: Auto with a photo wallpaper is blue. Reset Chat Color gives blue; Reset Wallpaper gives the plain background (white in light mode, black in dark).
-
-            SELECT: ticked chats join into one grey block with no line between them.
-
-            PLEASE TEST: open and close the attach sheet; swipe the reaction bar; draw on a photo and then crop it; reset a chat's colour and wallpaper; tick several chats in a row.
-
 
         run: fastlane beta
