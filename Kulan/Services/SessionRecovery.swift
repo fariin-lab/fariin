@@ -18,8 +18,8 @@ import FirebaseFirestore
 ///  - a fresh token that passes the same two-step test as the rules posts `recovered`, and every
 ///    owner of a listener that must not stay dead attaches its own again;
 ///  - a fresh token that does not pass posts `needsTwoStep`: the screen a new sign-in gets;
-///  - no user at all after the refresh (Firebase signs out by itself when the session was revoked or
-///    the account disabled) posts `sessionEnded`: the teardown of a sign-out from another device.
+///  - a refresh Firebase refuses because the session is over (revoked, the account disabled or
+///    deleted) posts `sessionEnded`: the teardown of a sign-out from another device.
 ///
 /// Retries back off (1s, 3s, 10s, 30s, 60s, 60s) and then stop; coming back to the app starts them
 /// again. The back-off only resets after five quiet minutes, so a refusal that survives a fresh
@@ -79,7 +79,14 @@ import FirebaseFirestore
             NotificationCenter.default.post(
                 name: TwoStepGate.sessionPassed(token) ? recovered : needsTwoStep, object: nil)
         } catch {
-            if Auth.auth().currentUser == nil {
+            // ⚠️ FIREBASE'S OWN WORD THAT THE SESSION IS OVER (revoked, disabled, deleted), not
+            // merely "no user". A Sign Out tapped while this refresh was in flight also leaves no
+            // user, and that sign-out has already run its own teardown, keeping the media it chose
+            // to keep; a second, keep-nothing wipe on top would delete it.
+            let code = (error as NSError).code
+            let over = [AuthErrorCode.userTokenExpired, .userDisabled, .userNotFound, .invalidUserToken]
+                .map(\.rawValue).contains(code)
+            if over {
                 unrecovered = false
                 attempt = 0
                 NotificationCenter.default.post(name: sessionEnded, object: nil)

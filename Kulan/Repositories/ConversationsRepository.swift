@@ -487,6 +487,8 @@ final class ConversationsRepository {
     // unpinned, left or deleted and is forgotten.
     @ObservationIgnored private var pinnedExtraListeners: [String: ListenerRegistration] = [:]
     @ObservationIgnored private var pinnedExtraDocs: [String: Conversation] = [:]
+    /// Pinned chats whose listener was refused once and has not answered since (2026-09-28).
+    @ObservationIgnored private var pinnedRefusedOnce = Set<String>()
 
     private func pinnedIdsKey(_ uid: String) -> String { "pinnedChatIds-\(uid)" }
 
@@ -508,16 +510,25 @@ final class ConversationsRepository {
             pinnedExtraListeners[id] = db.collection("conversations").document(id)
                 .addSnapshotListener { [weak self] snap, error in
                     guard let self else { return }
-                    // ⛔ AN ERROR IS NOT "THE CHAT IS GONE" — 2026-09-28. With no snapshot this fell
-                    // into the branch below and FORGOT the pin, so one refused moment took a pinned
-                    // chat off the list until it next reached the top on its own. The listener is
-                    // dead either way; drop only the handle, keep the pin and the last copy, and the
-                    // next window snapshot (after `SessionRecovery`) attaches a fresh one.
+                    // ⛔ ONE ERROR IS NOT "THE CHAT IS GONE" — 2026-09-28. With no snapshot this fell
+                    // into the branch below and FORGOT the pin, so one refused moment (the whole
+                    // session refused, see `SessionRecovery`) took a pinned chat off the list. The
+                    // listener is dead either way, so drop the handle; the next window snapshot
+                    // attaches a fresh one. A window snapshot only arrives while the chat list itself
+                    // is being answered, so a SECOND refusal with the list healthy is about this chat
+                    // alone (I was removed from it), and that one forgets, as before.
                     if snap == nil {
                         self.pinnedExtraListeners.removeValue(forKey: id)?.remove()
+                        if self.pinnedRefusedOnce.contains(id), !self.loadFailed {
+                            self.pinnedRefusedOnce.remove(id)
+                            self.forgetPinnedExtra(id, uid: uid)
+                            return
+                        }
+                        self.pinnedRefusedOnce.insert(id)
                         Task { @MainActor in SessionRecovery.noteRefusal(error, "pinned chat") }
                         return
                     }
+                    self.pinnedRefusedOnce.remove(id)
                     // Offline and not cached yet says nothing about the chat; wait for the server.
                     if let snap, snap.metadata.isFromCache, !snap.exists { return }
                     guard let snap, snap.exists, let data = snap.data(with: .estimate),

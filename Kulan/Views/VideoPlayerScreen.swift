@@ -582,8 +582,9 @@ struct VideoPlayerScreen: View {
             let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
             await MainActor.run {
                 OpenTrace.mark(String(format: "audio ready (%.0fms, off the main thread)", ms))   // TEMPORARY
-                // Still open, still this viewer's clip, and nobody paused or started a scrub meanwhile.
-                guard !life.closed, player === p, isPlaying, !scrubbing else { return }
+                // Still open, still this viewer's clip, and nobody paused, started a scrub or began
+                // dragging it closed (which pauses it) meanwhile.
+                guard !life.closed, player === p, isPlaying, !scrubbing, !dismissing else { return }
                 p.play()
             }
         }
