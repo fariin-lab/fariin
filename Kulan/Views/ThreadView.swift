@@ -1564,8 +1564,14 @@ struct ThreadView: View {
         .sheet(item: $reactorsTarget) { m in
             // 2026-09-24 feature-audit: the live row, so a reaction added or taken back while the
             // sheet is open shows (the Edit History sheet below reads it the same way).
+            // ⛔ MY OWN ROW SAYS MY NAME — owner, 2026-09-28: "when I react it says You; make it my
+            // name". This list only: reply quotes and the rest keep "You" (`personName`).
             ReactorsSheet(reactions: (repo.items.first(where: { $0.id == m.id }) ?? m).reactions,
-                          nameFor: { personName($0) })
+                          nameFor: { uid in
+                              guard uid == me else { return personName(uid) }
+                              let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
+                              return mine.isEmpty ? "You" : mine
+                          })
         }
         // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.
         .sheet(item: $editHistoryTarget) { m in
