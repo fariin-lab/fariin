@@ -1211,11 +1211,98 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     // Ensure every id in `ids` has a cached height (measured at the current width). No-op once cached.
-    private func measureMissing(_ ids: [String], width: CGFloat) {
+    //
+    // ⛔ THE FIRST OPEN MEASURES ONE SCREEN, NOT THE WHOLE WINDOW — owner, 2026-09-28: "I want the chat
+    // to open immediately when I tap it, like the reference app… do not measure 60–200 messages before
+    // the chat can open". This runs inside the SwiftUI update that starts the push, so every row it
+    // lays out is time the slide waits for. The reference app's first load is one screen of rows
+    // (`initialLoadCount`, screen height / 35pt, about 24). `landingOnly` does the same: it measures the
+    // landing row and outwards from it until a screen and a half is covered on each side, and gives
+    // every other row an ESTIMATE, recorded in `estimatedIds`. Those rows are off screen by
+    // construction; `settleEstimatedHeights` measures them after the slide, holding the reader still
+    // with the same continuity anchor every off-screen re-measure uses, and a row scrolled into view
+    // before then corrects itself at dequeue (`adoptHeight`, the cell registration's safety net).
+    private func measureMissing(_ ids: [String], width: CGFloat, landingOnly: Bool = false) {
         guard width > 0 else { return }
         seedRenderedHeights(width: width)
-        for id in ids where heights[id] == nil { heights[id] = measure(id, width: width) }
+        guard landingOnly, !ids.isEmpty else {
+            for id in ids where heights[id] == nil { heights[id] = measure(id, width: width) }
+            measuredWidth = width
+            return
+        }
+        let center = initialScrollId.flatMap { ids.firstIndex(of: $0) } ?? ids.count - 1
+        let screen = collectionView.bounds.height > 0 ? collectionView.bounds.height : UIScreen.main.bounds.height
+        let budget = screen * 1.5
+        func exact(_ i: Int) -> CGFloat {
+            let id = ids[i]
+            if let h = heights[id], !estimatedIds.contains(id) { return h }
+            let h = measure(id, width: width)
+            heights[id] = h
+            estimatedIds.remove(id)
+            return h
+        }
+        _ = exact(center)
+        var below: CGFloat = 0
+        var i = center + 1
+        while i < ids.count, below < budget { below += exact(i); i += 1 }
+        var above: CGFloat = 0
+        var j = center - 1
+        while j >= 0, above < budget { above += exact(j); j -= 1 }
+        for id in ids where heights[id] == nil {
+            // What this row rendered at last time is the best guess there is; a plain bubble otherwise.
+            heights[id] = renderedHeights[id] ?? Self.estimatedRowHeight
+            estimatedIds.insert(id)
+        }
         measuredWidth = width
+    }
+
+    /// Rows whose height is a guess, waiting for `settleEstimatedHeights`. Never on screen at the land.
+    private var estimatedIds = Set<String>()
+    private static let estimatedRowHeight: CGFloat = 60
+    private var settlingEstimates = false
+
+    /// ⛔ THE REST OF THE WINDOW, AFTER THE SLIDE. The rows `measureMissing(landingOnly:)` guessed,
+    /// measured a dozen at a time, newest first (the ones a reader reaches first scrolling up), one
+    /// batch per runloop turn so no single frame carries them. Never under a finger, never inside an
+    /// inset pass or a blocked land: those retry shortly. The reader is held still by the
+    /// bottom-biased continuity anchor, exactly as `remeasureOffscreenChanged` does it, so a guessed
+    /// row above them taking its real height moves nothing they can see.
+    private func settleEstimatedHeights() {
+        let width = collectionView.bounds.width
+        estimatedIds.formIntersection(currentIds)
+        guard !estimatedIds.isEmpty, width > 0 else { settlingEstimates = false; return }
+        settlingEstimates = true
+        let moving = collectionView.isTracking || collectionView.isDragging || collectionView.isDecelerating
+        if moving || isUpdatingInsets || !canLandLoad {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.settleEstimatedHeights() }
+            return
+        }
+        let batch = currentIds.reversed().filter { estimatedIds.contains($0) }.prefix(12)
+        collectionView.layoutIfNeeded()
+        let anchors = continuityAnchors(relativeToTop: false)
+        let before = frameMinY(for: currentIds)
+        var moved = false
+        for id in batch {
+            estimatedIds.remove(id)
+            let h = measure(id, width: width)
+            if abs((heights[id] ?? h) - h) > 0.5 { moved = true }
+            heights[id] = h
+        }
+        if moved {
+            let after = frameMinY(for: currentIds)
+            layout.generation += 1
+            layout.invalidateLayout()
+            if let landed = continuityDelta(anchors, before: before, after: after), abs(landed.delta) > 0.5 {
+                collectionView.layoutIfNeeded()
+                let y = clampOffset(collectionView.contentOffset.y + landed.delta)
+                if abs(collectionView.contentOffset.y - y) > 0.5 {
+                    UIView.performWithoutAnimation {
+                        collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                    }
+                }
+            }
+        }
+        DispatchQueue.main.async { [weak self] in self?.settleEstimatedHeights() }
     }
 
     /// ⛔ START FROM WHAT THIS CHAT ALREADY PROVED, instead of re-learning it with a visible jump.
@@ -2348,7 +2435,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // one case the anchor cascade cannot answer at all.
         recordDistanceFromBottom()
 
-        measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
+        // Exact heights BEFORE the layout prepares (no self-size correction). Before the first land,
+        // only the landing screen; the rest are estimated and settled after the slide.
+        measureMissing(ids, width: width, landingOnly: !didFirstLand)
         // Every row whose content changed, on screen or not — this whole block is already bracketed
         // by `beforeY` / `afterY`, so a row above the reader growing is compensated like any other.
         for id in sigChanged {
@@ -2634,7 +2723,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
         let rowCount = currentIds.count
         let seeded = renderedHeights.count
-        measureMissing(currentIds, width: collectionView.bounds.width)
+        measureMissing(currentIds, width: collectionView.bounds.width, landingOnly: true)
         layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
@@ -2658,6 +2747,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         landedTopInset = collectionView.adjustedContentInset.top
         awaitingInitialRepin = initialScrollId != nil && initialScrollOffset != nil
         reveal()
+        // The guessed rows, once the push has finished sliding (about 0.35s), so the slide is not
+        // sharing its frames with them. See `settleEstimatedHeights`.
+        if !estimatedIds.isEmpty, !settlingEstimates {
+            settlingEstimates = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.settleEstimatedHeights() }
+        }
     }
 
     /// ⛔ THE NAV BAR'S INSET ARRIVES AFTER THE LANDING, AND THE LANDING IS WRONG BY EXACTLY IT.
@@ -3982,6 +4077,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // A plan is only true at the width it was planned at, for the same reason.
             planStore.invalidateAll()
             for id in currentIds { heights[id] = measure(id, width: w) }
+            estimatedIds.removeAll()   // every row was just measured for real
             measuredWidth = w
             layout.generation += 1
             layout.invalidateLayout()
