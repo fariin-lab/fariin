@@ -166,11 +166,22 @@ final class ChatHeaderView: UIView {
             secondaryIconView.heightAnchor.constraint(equalToConstant: 16),
             secondaryIconView.widthAnchor.constraint(equalTo: secondaryIconView.heightAnchor),
 
-            rootStack.topAnchor.constraint(equalTo: topAnchor),
+            // ⛔ CENTRED AT ITS OWN HEIGHT, NOT PINNED TO THE BAR'S — owner, 2026-09-28, the
+            // official chat's header: "sometimes the space between the name and last seen is lost".
+            // The second report (08-26 fixed the stack's distribution). The row was pinned top and
+            // bottom to this view, whose height is whatever the navigation bar hands the title view
+            // at that moment; less its 4 + 4 margins that left 36pt for a name line (21) and a
+            // subtitle line (15.5) that need 36.5, beside a 40pt avatar, and less still whenever the
+            // bar offered under 44. The title row's height floor is required, so the SUBTITLE was
+            // the one squeezed, drawn up into the name. Centred and unpinned vertically, the row
+            // takes its natural height every time and the two lines keep their spacing; any excess
+            // over the bar's height spills evenly above and below, which nothing clips.
+            rootStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             rootStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             rootStack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        titleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        subtitleLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         // Theirs, verbatim in intent: "Embed a small glass view behind the avatar so that it's never
         // visible to the user. Glass views react to content underneath and update appearance
