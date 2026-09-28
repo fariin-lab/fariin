@@ -173,7 +173,12 @@ enum BubbleText {
         let f = BubbleMetrics.metaFont
         a.bounds = CGRect(x: 0, y: (f.capHeight - img.size.height) / 2,
                           width: img.size.width, height: img.size.height)
-        s.append(NSAttributedString(string: " "))
+        // ⛔ THE SPACE CARRIES THE TIME'S FONT — owner, 2026-09-28, a GIF and a photo: the time and
+        // tick sat right in the grey pill, the tick against its edge. A run with no font is measured
+        // (`lineSize`, `boundingRect`) in the 12pt default, but a label DRAWS it in its own font, so
+        // the drawn line was wider than the pill built around the measured one and every extra point
+        // landed on the right. With the font stated, measure and draw are the same string.
+        s.append(NSAttributedString(string: " ", attributes: [.font: f]))
         s.append(NSAttributedString(attachment: a))
         return s
     }
