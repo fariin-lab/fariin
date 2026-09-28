@@ -46,7 +46,10 @@ struct OfficialChatView: View {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom ?? 0
     }
 
-    var body: some View {
+    /// ⚠️ SPLIT FROM `body` ON PURPOSE: one chain holding the list, both bars, search, the sheets
+    /// and the alerts was more than the type-checker would finish ("unable to type-check this
+    /// expression in reasonable time", 2026-09-28, when search joined it).
+    private var chatSurface: some View {
         list
             // ⛔ UNDER BOTH BARS, LIKE A CHAT — owner, 2026-09-28, three circles: a gap over the bar,
             // a hard edge where the bubbles stopped at the header, no blur. The list stopped at both
@@ -67,29 +70,34 @@ struct OfficialChatView: View {
                     .overlay { WallpaperAnchor(cid: OfficialChannel.cid) }   // the slices' reference — see WallpaperBlur
                     .ignoresSafeArea()
             }
-            .floatingBottomBar {
-                // ⛔ FROM THE BAR'S TOP TO THE SCREEN'S BOTTOM, not the bar's own height — owner,
-                // 2026-09-28: "official messages go under the bottom bar". The list runs to the
-                // screen's edge and counts its clearance from there (`bottomClearance`, the no-
-                // composer path), so the home-indicator band under the bar was missing from it and
-                // the newest bubble ended that far under the glass. ⚠️ The gap under the bar is
-                // capped at the home-indicator band: with the search keyboard up it would include
-                // the keyboard, which the list already adds on its own.
-                Group {
-                    if selecting { selectionBar } else if searching { searchNavBar } else { cannotReplyBar }
-                }
-                    .background(GeometryReader { g in
-                        let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
-                        Color.clear.preference(key: OfficialBarHeightKey.self,
-                                               value: g.size.height + max(0, min(under, Self.homeBand)))
-                    })
-                    .onPreferenceChange(OfficialBarHeightKey.self) { barHeight = $0 }
-            }
+            .floatingBottomBar { bottomBar }
             // Search owns the top while it is open, as in a normal chat (`ThreadView.searchBar`).
             .safeAreaInset(edge: .top) { if searching { searchBar } }
             .toolbar(searching ? .hidden : .automatic, for: .navigationBar)
             .onChange(of: searchQuery) { updateSearchMatches() }
             .onChange(of: store.visible.map(\.id)) { if searching { updateSearchMatches() } }
+    }
+
+    /// ⛔ FROM THE BAR'S TOP TO THE SCREEN'S BOTTOM, not the bar's own height — owner, 2026-09-28:
+    /// "official messages go under the bottom bar". The list runs to the screen's edge and counts
+    /// its clearance from there (`bottomClearance`, the no-composer path), so the home-indicator
+    /// band under the bar was missing from it and the newest bubble ended that far under the glass.
+    /// ⚠️ The gap under the bar is capped at the home-indicator band: with the search keyboard up it
+    /// would include the keyboard, which the list already adds on its own.
+    private var bottomBar: some View {
+        Group {
+            if selecting { selectionBar } else if searching { searchNavBar } else { cannotReplyBar }
+        }
+        .background(GeometryReader { g in
+            let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
+            Color.clear.preference(key: OfficialBarHeightKey.self,
+                                   value: g.size.height + max(0, min(under, Self.homeBand)))
+        })
+        .onPreferenceChange(OfficialBarHeightKey.self) { barHeight = $0 }
+    }
+
+    var body: some View {
+        chatSurface
             // Tapping the header opens the info screen, the same as every other chat. It used to do
             // nothing at all — I left the closure empty when this screen was built, so the one chat
             // people are most likely to be suspicious of was the one that would not tell them
