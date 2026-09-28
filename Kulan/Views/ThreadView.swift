@@ -123,16 +123,11 @@ struct ThreadView: View {
     @State private var afterSendError: (() -> Void)?   // 2026-09-24 fix-all #149: runs when that alert is dismissed
     @State private var showCamera = false
     @State private var showAttachPanel = false
-    /// The "+" the attach sheet grows out of and shrinks back into (see `ChatComposerView.AttachSource`).
-    @Namespace private var attachZoom
-    @State private var attachSourceRect: CGRect = .zero
-    /// The sheet is waiting for the source to reach the "+" before it presents (`attachZoomSource`).
-    @State private var attachPending = false
-    /// The "+" copy is showing in place of the real button, from the tap until the sheet is back.
-    @State private var attachLifted = false
-    // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
-    static let attachOpenDetent: PresentationDetent = .fraction(0.62)
-    @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
+    // The attach sheet is `AttachSheetController` (grows out of the "+", 62% at rest, full on caption
+    // focus). Bumping this asks it for the full height.
+    @State private var attachExpandTick = 0
+    /// Runs once the attach sheet is fully gone (a tile's next screen), instead of a guessed delay.
+    @State private var attachAfterClose: (() -> Void)?
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
     /// The attach sheet showing its album LIST instead of the photo grid. It lives here rather than
     /// inside the strip because the button that flips it (`albumButton`) sits in this view's bottom
@@ -1357,23 +1352,20 @@ struct ThreadView: View {
         }
         // `attachShowAlbums` and `attachInAlbum` are reset with the rest: the sheet reopens on the
         // photo grid, never on the album list or inside the album you happened to leave it in.
-        .overlay { attachZoomSource }
-        .sheet(isPresented: $showAttachPanel, onDismiss: { attachLifted = false; ChatComposerView.AttachSource.setLifted(false); recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false; attachDetent = ThreadView.attachOpenDetent }) {
+        // ⛔ OUR OWN CONTAINER — owner, 2026-09-28, build 789: "+ sometimes does not open, sometimes
+        // does not close, lags after many times; copy the reference app". `AttachSheetController`
+        // grows out of the "+" and shrinks back into it on the reference app's own springs, owns
+        // its 62%/full drag, and a tap mid-animation reverses it. Why `.sheet` + zoom had to go is
+        // at the top of that file. The solid system background and the 62% rest are unchanged.
+        // The panel covers (editor after Send etc.) are cleared here too: the container takes them
+        // down with it, and a stale item would re-present on the next open.
+        .attachSheet(isPresented: $showAttachPanel, expandTick: attachExpandTick, onDismiss: {
+            recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false
+            panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
+            if let next = attachAfterClose { attachAfterClose = nil; next() }
+        }) {
             attachPanel
-                .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
-                // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
-                // sheet showed the chat blurring through, which read as a broken half-empty panel.
-                .presentationBackground(Color(.systemBackground))
-                // ⛔ THE THIRD TIME, ON HIS WORD — owner, 2026-09-28: "I want the attach sheet coming
-                // out of that button, and going back into it when I close; Apple's native iOS 26
-                // animation, not custom". So it is Apple's zoom again, knowingly, after the two
-                // removals recorded below. What differs from 08-24: the "+" is UIKit now, so the
-                // source is an invisible SwiftUI stand-in laid over it (`attachZoomSource`) rather
-                // than the button itself, and the composer it once disturbed lives inside the list
-                // controller, not in this view. The detents are untouched. If it misbehaves on the
-                // 62%-to-full drag again, that is the known risk he chose; the history is below.
-                .navigationTransition(.zoom(sourceID: "attach", in: attachZoom))
-                // (History.) NO ZOOM TRANSITION, AND THAT IS NOW TWICE. Built again on his word 2026-08-24
+                // (History, the `.sheet` era.) NO ZOOM TRANSITION, AND THAT IS NOW TWICE. Built again on his word 2026-08-24
                 // and pulled the same day on his verdict: it "caused the bugs" in that build. The
                 // note below is from the FIRST removal, July, and it named the reason both times —
                 // the morph fights the detent snap, and the detents are the part he will not give
@@ -4189,56 +4181,6 @@ struct ThreadView: View {
             }
     }
 
-    /// The attach sheet's zoom source: an invisible circle laid exactly over the composer's "+"
-    /// (which is UIKit and so cannot carry `matchedTransitionSource` itself). The sheet grows out of
-    /// it and, on close, shrinks back into it; the real button stays drawn underneath. Global
-    /// coordinates, because the rect comes from the button's window.
-    ///
-    /// ⛔ ALWAYS THERE, AND DRAWN — owner, 2026-09-28, with a picture: "it appears from the center of
-    /// the screen". The source used to be created only once the rect was known, which is the same
-    /// update that presents the sheet, and it was `Color.clear`, which draws nothing. The zoom found
-    /// no source and fell back to the middle of the screen. August's working zoom grew from the real
-    /// button, always on screen. So this one is mounted with the chat and filled at an opacity the
-    /// eye cannot see; the tap only moves it, it never has to appear first.
-    private var attachZoomSource: some View {
-        GeometryReader { g in
-            let origin = g.frame(in: .global).origin
-            let r = attachSourceRect
-            let side = max(min(r.width, r.height), 1)
-            // ⛔ THE BUTTON ITSELF BECOMES THE SHEET — owner, 2026-09-28, build 789, with pictures of
-            // the system Messages app: "the + button itself goes to open; in mine the sheet comes on
-            // the + button, but not the + button itself". The zoom morphs whatever its source draws,
-            // and this source drew nothing, so the sheet grew over a + that stayed put. It now draws
-            // a copy of the "+" (same glass circle, same glyph) while the real UIKit one is hidden,
-            // from the tap until the sheet has shrunk back (`attachLifted`).
-            ZStack {
-                Color.white.opacity(0.001)
-                if attachLifted {
-                    Image("ic_composer_plus")
-                        .renderingMode(.template)
-                        .foregroundStyle(.primary)
-                        .frame(width: max(r.width, 1), height: max(r.height, 1))
-                        .glassEffect(.regular, in: Circle())
-                }
-            }
-                .frame(width: max(r.width, 1), height: max(r.height, 1))
-                // A circle as the one shape the source accepts: a rounded rect of half its height.
-                .matchedTransitionSource(id: "attach", in: attachZoom) {
-                    $0.clipShape(RoundedRectangle(cornerRadius: side / 2, style: .continuous))
-                }
-                .position(x: r.midX - origin.x, y: r.midY - origin.y)
-                // The sheet presents once the source has been laid out on the "+", not in the same
-                // update that moves it there, or the zoom starts from where the source used to be.
-                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in
-                    guard attachPending else { return }
-                    attachPending = false
-                    showAttachPanel = true
-                }
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-    }
-
     // Custom attach panel — slides up from the + button.
     // Top: one-tap recents strip (camera-roll photos + videos). Below: the pickers.
     private var attachPanel: some View {
@@ -4330,7 +4272,7 @@ struct ThreadView: View {
                         panelMediaApprove = MediaWrap(items: items)
                     }
                 },
-                onCaptionFocused: { attachDetent = .large },
+                onCaptionFocused: { attachExpandTick &+= 1 },
                 hasSelection: $recentsHasSelection,
                 // Declared last on the strip, so it goes last here — Swift matches these by position
                 // as well as by name.
@@ -4646,9 +4588,10 @@ struct ThreadView: View {
     /// three actions read as three loose blobs. See the row above.
     private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
+            // The next picker opens once the sheet is really gone (its `onDismiss`), not after a
+            // guessed 0.35s: the sheet shrinks into the "+" on a spring, not the system's clock.
+            attachAfterClose = action
             showAttachPanel = false
-            // Let the sheet finish dismissing before presenting the next picker (avoids a clash).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
             // MEDIUM, HIS WORD (2026-08-14): the bar read thick beside the sheet it floats on. Not
             // thin either — these are the only three shortcuts on that screen and they have to stay
@@ -7023,30 +6966,9 @@ struct ThreadView: View {
             // `didHide` instead of a stopwatch. `onceHidden` fires straight away when the keyboard
             // was never up.
             inputFocused = false
-            keyboard.onceHidden {
-                // The source goes where the "+" is NOW (the keyboard has gone, so the bar has come
-                // down). If it has to move, the sheet waits for the move to be laid out (the
-                // source's geometry callback presents it); if it is already there, it opens a turn
-                // later as before. See `attachZoomSource`.
-                let r = ChatComposerView.AttachSource.windowRect
-                // The copy takes the real button's place before the zoom starts from it.
-                if r != .zero {
-                    attachLifted = true
-                    ChatComposerView.AttachSource.setLifted(true)
-                }
-                if r != .zero && r != attachSourceRect {
-                    attachPending = true
-                    attachSourceRect = r
-                    // Never a "+" that does nothing: if the callback somehow does not come, open anyway.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        guard attachPending else { return }
-                        attachPending = false
-                        showAttachPanel = true
-                    }
-                } else {
-                    DispatchQueue.main.async { showAttachPanel = true }
-                }
-            }
+            // The sheet reads where the "+" is at the moment it opens (the keyboard has gone by
+            // then, so the bar is down), and hides and shows the button itself.
+            keyboard.onceHidden { showAttachPanel = true }
         }
         a.gif = {
             // Same as "+", all the way — owner, 2026-08-25, build 681: "the keyboard goes away, but

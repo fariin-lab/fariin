@@ -238,9 +238,11 @@ final class ChatComposerView: UIView {
             guard let b = button, b.window != nil else { return .zero }
             return b.convert(b.bounds, to: nil)
         }
-        /// Hides the real "+" while its SwiftUI copy is the thing that turns into the sheet, and
-        /// shows it again once the sheet has shrunk back into it (ThreadView `attachZoomSource`).
-        static func setLifted(_ on: Bool) { button?.alpha = on ? 0 : 1 }
+        /// Hides the real "+" while the sheet's copy of it is the thing that grows and shrinks
+        /// (`AttachSheetController`). ⚠️ A MASK, NOT `alpha`: this bar animates the button's alpha,
+        /// transform and `isHidden` for its own states (recording, text-only), and a second writer
+        /// of the same property is how the "+" once stayed invisible. Nothing here touches `mask`.
+        static func setLifted(_ on: Bool) { button?.mask = on ? UIView() : nil }
     }
 
     private func build() {
