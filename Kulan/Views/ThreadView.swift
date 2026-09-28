@@ -4576,12 +4576,20 @@ struct ThreadView: View {
                         .frame(width: 29, height: 29)
                 }
             }
-                .foregroundStyle(.primary)
+                // ⛔ A PLAIN LABEL COLOUR AND THE BAR'S OWN GLASS — owner, 2026-09-28, with a
+                // picture: "the Album button is blur, make it normal colour". His drawing is one
+                // flat colour, yet it drew blue and hazy: `.primary` is a hierarchical style the
+                // button's tint could reach, and the interactive glass adds its own highlight. A
+                // concrete label colour, a plain button style and the same non-interactive glass
+                // as the source bar beside it.
+                .foregroundStyle(Color(.label))
                 .frame(width: Self.attachBarHeight, height: Self.attachBarHeight)
                 // ⚠️ The glass goes on the LABEL, not around the Button. That is how the removed
                 // header's ✕ carried its circle, and it is the shape known to work here.
-                .liquidGlass(Circle(), interactive: true)
+                .liquidGlass(Circle())
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
     }
 
     // Polls aren't built yet — a small "coming soon" sheet at a 60% detent (user request).
