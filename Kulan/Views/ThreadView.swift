@@ -4186,7 +4186,10 @@ struct ThreadView: View {
             if r != .zero {
                 Color.clear
                     .frame(width: r.width, height: r.height)
-                    .matchedTransitionSource(id: "attach", in: attachZoom) { $0.clipShape(Circle()) }
+                    // A circle as the one shape the source accepts: a rounded rect of half its height.
+                    .matchedTransitionSource(id: "attach", in: attachZoom) {
+                        $0.clipShape(RoundedRectangle(cornerRadius: min(r.width, r.height) / 2, style: .continuous))
+                    }
                     .position(x: r.midX - origin.x, y: r.midY - origin.y)
             }
         }
