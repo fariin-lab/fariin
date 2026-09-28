@@ -44,9 +44,16 @@ import UIKit
     /// SwiftUI row in an off-screen host, and that copy's `.global` frame starts at 0,0, which passes
     /// the on-screen check above and overwrote the real bubble's rect. A probe outside a window is
     /// never asked, and the one inside it answers with where the bubble is at the moment of the press.
+    ///
+    /// ⛔ THE NEWEST PROBE THAT IS ACTUALLY SHOWING — owner, 2026-09-28, build 794: on the Fariin
+    /// message with a "Review Devices" button, long press AND double-tap did nothing, while the plain
+    /// message beside it worked. Both gestures gate on this rect. A row that is re-rendered leaves
+    /// its earlier host behind in a hidden, recycled cell that is still in the window, and the
+    /// first probe in the list answered with that copy's frame, somewhere the finger was not. So:
+    /// newest first, and never one with a hidden or transparent view above it.
     static func rect(_ id: String) -> CGRect? {
-        for p in probes[id] ?? [] {
-            guard let v = p.view, v.window != nil else { continue }
+        for p in (probes[id] ?? []).reversed() {
+            guard let v = p.view, v.window != nil, isShowing(v) else { continue }
             var r = v.convert(v.bounds, to: nil)
             guard !r.isEmpty else { continue }
             r.size.height += v.bottomOverhang
@@ -55,6 +62,16 @@ import UIKit
         return rects[id]?.rect
     }
     static func radius(_ id: String) -> CGFloat { rects[id]?.radius ?? 18 }
+
+    /// No hidden or fully transparent view between this one and its window.
+    private static func isShowing(_ v: UIView) -> Bool {
+        var cur: UIView? = v
+        while let c = cur {
+            if c.isHidden || c.alpha < 0.01 { return false }
+            cur = c.superview
+        }
+        return true
+    }
 }
 
 /// A plain view laid behind a bubble so its window frame can be read at press time.
