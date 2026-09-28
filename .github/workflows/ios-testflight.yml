@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FASTER CHAT OPEN, SELECT-MODE LINES, HEADER TEXT COLOUR.
+            THE APP HEALS ITSELF WHEN THE SERVER REFUSES IT, VIDEO WITHOUT THE BLACK SCREEN, CHAT OPENS DRAWN, VOICE TIME.
+
+            SERVER REFUSED: when the server refuses the phone for a moment (the "everyone looks deleted, nothing sends" problem), the app now gets a fresh sign-in and reconnects the chat list, open chats, your settings, the block list and the device check by itself, within about a minute. No restart needed. Profiles keep their last copy instead of going blank. If two-step is not finished you get the two-step screen; if the session was really ended you are signed out properly.
+
+            VIDEO: the picture that flies in stays on screen until the video's first frame, so there is no black screen. The sound setup no longer holds the player back, and the spinner only appears if loading really takes a while.
+
+            CHAT OPEN: the chat slides in with its messages already drawn, which also gives the header its blur from the start of the slide.
+
+            VOICE: the time on a voice message counts while it plays and no longer shows "0:...".
+
+            PLEASE TEST: force-close the app, open it, tap a chat and screenshot the black box; open a video and screenshot its box. If the app breaks again, screenshot the red box and wait a minute. Play a voice message. Select three chats in a row.
+
+            EARLIER IN THIS ROUND: FASTER CHAT OPEN, SELECT-MODE LINES, HEADER TEXT COLOUR.
 
             CHAT OPEN: like the reference app, the messages are laid out off the main thread while the chat slides in, and the chat no longer redoes its work mid-slide when the server copy arrives. The slide should start sooner and run smoothly.
 
