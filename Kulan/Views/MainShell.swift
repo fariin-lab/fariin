@@ -2615,6 +2615,14 @@ struct ChatsView: View {
             }
             .navigationTitle("Chats")
             .navigationBarTitleDisplayMode(.inline)   // one row: avatar · Chats · camera · compose
+            // ⛔ THE BAR SAYS WHICH APPEARANCE IT IS IN — owner, 2026-09-28, light mode: Edit, the
+            // capsule and the search field drawn dark (white glyphs on pale glass). The profile a chat
+            // pushes pins this SAME bar to `.dark` over its photo (`ContactInfoView.barScheme`), and
+            // a page that declares nothing does not take it back when it is on top again, so the
+            // dark stayed on the chat list after Back. This names the phone's own appearance, which
+            // is what "stock" means here; it is not an appearance object and changes nothing in dark
+            // mode.
+            .toolbarColorScheme(scheme, for: .navigationBar)
             // ⛔ THE BAR IS STOCK — owner, 2026-09-24: the header is the reference app's on iOS 26,
             // and theirs sets nothing on the bar. No `toolbarBackground`, no
             // `UINavigationBarAppearance` on this page's item (see `ChatListTableController
