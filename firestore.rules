@@ -689,7 +689,23 @@ service cloud.firestore {
       // both directions - what you have read is nobody's business, and the read COUNTS the admin
       // screen shows come from anonymous shard counters, never from here.
       match /officialChannel/{doc} {
-        allow read, write: if signedIn() && request.auth.uid == uid;
+        // 2026-09-28, the channel's state machine (see OfficialChannelState in the app): the two
+        // watermarks only move forward, and a switch changes only with a choice time at least as new
+        // as the stored one. Firestore applies writes in the order they ARRIVE, so without these an
+        // offline phone's queued, older write undid a newer one made on another phone. A write that
+        // leaves a switch alone is not asked about it, and a build that writes no choice time still
+        // passes (its time equals the stored one), so nothing that worked before is refused.
+        function notBehind(f) {
+          return request.resource.data.get(f, 0) >= resource.data.get(f, 0);
+        }
+        function notOlder(f) {
+          return request.resource.data.get(f, null) == resource.data.get(f, null)
+            || request.resource.data.get(f + 'At', 0) >= resource.data.get(f + 'At', 0);
+        }
+        allow read, create, delete: if signedIn() && request.auth.uid == uid;
+        allow update: if signedIn() && request.auth.uid == uid
+          && notBehind('lastReadAt') && notBehind('clearedAt')
+          && notOlder('muted') && notOlder('blocked') && notOlder('pinned') && notOlder('archived');
       }
 
       // Announcements sent to THIS PERSON by hand. A real copy, because a phone cannot filter itself
