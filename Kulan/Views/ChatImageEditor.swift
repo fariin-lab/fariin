@@ -36,6 +36,9 @@ struct ChatImageEditor: View {
     @State private var caption = ""
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
+    /// The story pen's two questions, same words (see `penBar`): Clear All, and ✕ with strokes drawn.
+    @State private var showClearAll = false
+    @State private var confirmDiscardDrawing = false
     @State private var filterIndex = 0
     @State private var aspectIndex = 0
     @State private var hd = false
@@ -94,35 +97,26 @@ struct ChatImageEditor: View {
     // opening the caption keyboard lifts ONLY this bottom bar — the photo and top X stay put.
     private var chromeOverlay: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button {
-                    // In the PEN page (draw mode entered from the editor's scribble tool): X = CANCEL →
-                    // discard the current strokes and return to the EDITOR page, not dismiss everything.
-                    // (editOnly opens straight into draw with no editor behind it, so there X dismisses.)
-                    if isDrawing && !editOnly {
-                        drawing = PKDrawing()
-                        isDrawing = false
-                    } else {
-                        close()   // inline overlay → onClose; presented cover → dismiss
+            // ⛔ THE PEN PAGE IS THE STORY PEN — owner, 2026-09-28: "the pen page is using the old pen
+            // design, use the design the story uses". Its top bar is the story's: undo on the left and
+            // Clear All on the right, both only once something is drawn. The ✕ and the ✓ are in the
+            // bottom bar (`penBar`), as there. Outside the pen, the editor's own ✕ stays.
+            Group {
+                if isDrawing { penTopBar } else {
+                    HStack {
+                        Button { close() } label: {   // inline overlay → onClose; presented cover → dismiss
+                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
+                                .frame(width: 44, height: 44)
+                                .liquidGlass(Circle(), interactive: true)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
                     }
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .liquidGlass(Circle(), interactive: true)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                if isDrawing {
-                    Button { bakeDrawing(); isDrawing = false } label: {
-                        Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
-                            .padding(.horizontal, 18).frame(height: 44)
-                            .liquidGlass(Capsule(), interactive: true)
-                    }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal)
                 }
             }
-            .padding(.horizontal)
+            .frame(height: 44)
             .padding(.top, 4)
             Spacer(minLength: 0)
             Group {
@@ -141,14 +135,26 @@ struct ChatImageEditor: View {
             )
         }
         .animation(.easeInOut(duration: 0.2), value: captionFocused)
+        // The story pen's two questions, in its words (StoryEditorView).
+        .darkConfirm("Clear all drawing?", isPresented: $showClearAll,
+                     destructive: "Clear All", cancel: "Cancel",
+                     onDestructive: { drawing = PKDrawing() })
+        .darkConfirm("Discard your drawing?", isPresented: $confirmDiscardDrawing,
+                     destructive: "Discard", cancel: "Keep Drawing",
+                     onDestructive: { leavePen() })
     }
 
     // Crop presented INLINE with a cross-fade (in-place crop feel).
     @ViewBuilder private var cropOverlay: some View {
         if showCrop {
-            ChatCropView(image: source, inline: true,
+            // ⛔ THE CROP STARTS FROM THE PHOTO AS IT IS NOW — owner, 2026-09-28: "when I draw with
+            // the pen and then crop, the drawing is gone". It was handed `source`, the untouched
+            // original, and its result replaced `edited` outright: every stroke already baked into
+            // the photo (and any earlier crop) was thrown away. `edited` carries them, and it is
+            // already filtered, so the result is taken as it is rather than filtered a second time.
+            ChatCropView(image: edited, inline: true,
                          onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } }) { cropped in
-                editedCache = Self.filtered(cropped, filterIndex)
+                editedCache = cropped
             }
             .transition(.opacity)
             .zIndex(20)
@@ -240,7 +246,43 @@ struct ChatImageEditor: View {
         }
     }
 
-    // Brush bottom bar: color palette slider (white → rainbow), then undo · pen/highlighter · width · ✓.
+    /// The story pen's top bar (`StoryEditorView.penTopBar`): undo on the left, Clear All on the right,
+    /// and nothing at all until there is a stroke to act on.
+    @ViewBuilder private var penTopBar: some View {
+        if !drawing.strokes.isEmpty {
+            HStack {
+                Button {
+                    var s = drawing.strokes
+                    if !s.isEmpty { s.removeLast(); drawing = PKDrawing(strokes: s) }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                // It asks first, as the story's does: undo one stroke at a time is not a way back.
+                Button { showClearAll = true } label: {
+                    Text("Clear All")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .frame(height: 40)
+                        .liquidGlass(Capsule(), interactive: true)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    /// The story pen's bottom bar (`StoryEditorView.penBar`): the colour slider, then ✕ · one capsule
+    /// holding pen, highlighter and width · a blue ✓. Same sizes, same glass, same words.
     private var penBar: some View {
         let currentColor = penHue == 0 ? Color.white : Color(hue: penHue, saturation: 1, brightness: 1)
         return VStack(spacing: 14) {
@@ -249,47 +291,73 @@ struct ChatImageEditor: View {
                 startPoint: .leading, endPoint: .trailing))
                 .padding(.horizontal, 20)
             HStack(spacing: 12) {
-                penTool("arrow.uturn.backward") {
-                    var strokes = drawing.strokes
-                    if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
-                }
-                // Pen (solid) vs Highlighter (marker) — the active one shows a colored ring.
-                penTool("pencil.tip", active: !isHighlighter) { isHighlighter = false }
-                penTool("highlighter", active: isHighlighter) { isHighlighter = true }
-                // Stroke width cycles thin → medium → thick.
-                Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
-                    Circle().fill(currentColor).frame(width: min(penWidth + 6, 26), height: min(penWidth + 6, 26))
+                // CANCEL, and it asks before it throws strokes away.
+                Button { closePenFromCancel() } label: {
+                    Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                Spacer()
-                // Edit-only (opened straight into pen from the multi-image screen): finishing the drawing
-                // returns the photo immediately — no extra editor page in between.
-                Button { if editOnly { returnEdited() } else { bakeDrawing(); isDrawing = false } } label: {
-                    // BLUR material (user spec 2026-07-14): over the pen bar's pure-black band, Liquid
-                    // Glass has nothing to refract and rendered as a flat gray disc — the frosted
-                    // material reads as a real blur button and marks the confirm action.
-                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 22) {
+                    penCapsuleTool("pencil.tip", active: !isHighlighter) { isHighlighter = false }
+                    penCapsuleTool("highlighter", active: isHighlighter) { isHighlighter = true }
+                    // The width, which is also where the chosen colour shows as a solid.
+                    Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
+                        Circle().fill(currentColor)
+                            .frame(width: min(penWidth + 6, 24), height: min(penWidth + 6, 24))
+                            .frame(width: 32, height: 32).contentShape(Rectangle())
+                    }
+                    .buttonStyle(StoryPressStyle())
+                }
+                .padding(.horizontal, 20).frame(height: 46)
+                .liquidGlass(Capsule())
+
+                Spacer(minLength: 8)
+
+                // Keep the drawing. Edit-only (opened straight into pen from the multi-image screen)
+                // hands the photo straight back, with no editor page in between.
+                Button { finishPen() } label: {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .environment(\.colorScheme, .dark)   // frosted-dark look on the black band
+                        .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
         }
     }
 
-    private func penTool(_ icon: String, active: Bool = false, _ action: @escaping () -> Void) -> some View {
+    /// The story pen's capsule tool: a plain glyph, blue while it is the one in use.
+    private func penCapsuleTool(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 17, weight: .medium))
-                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
-                .frame(width: 44, height: 44)
-                .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+            Image(systemName: icon).font(.system(size: 20, weight: .medium))
+                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(StoryPressStyle())
+    }
+
+    /// ✕ in the pen: nothing drawn, it simply leaves; strokes drawn, it asks Discard / Keep first.
+    private func closePenFromCancel() {
+        if drawing.strokes.isEmpty { leavePen() } else { confirmDiscardDrawing = true }
+    }
+
+    /// Out of the pen without keeping this session's strokes (they are only baked on ✓). Edit-only
+    /// has no editor page behind the pen, so leaving the pen is leaving.
+    private func leavePen() {
+        drawing = PKDrawing()
+        if editOnly { close() } else { isDrawing = false }
+    }
+
+    private func finishPen() {
+        if editOnly { returnEdited() } else { bakeDrawing(); isDrawing = false }
     }
 
     // Bottom chrome (attachment approval toolbar): a row of round glass tool buttons, then the
