@@ -221,10 +221,16 @@ struct MediaGalleryView: View {
         // title, the count and every `.primary` in the page read; the toolbar scheme is what the
         // bar's own material and its glass buttons read; and the tint is what the back chevron
         // reads, which the profile pins to white so it survives its own bar's material flip.
-        .environment(\.colorScheme, pageScheme)
         .toolbarColorScheme(pageScheme, for: .navigationBar)
         .tint(Color.accentColor)
         .toolbar { toolbar }
+        // ⛔ AFTER `.toolbar`, NOT BEFORE IT — owner, 2026-09-28, build 793: the title came back but
+        // the back and ••• buttons were still dark discs with white glyphs. An environment value
+        // reaches only what is inside the modifier it wraps; the toolbar items are declared by
+        // `.toolbar`, so with the override above it they took the chat's forced dark (ThreadView
+        // pins `\.colorScheme` to dark over a wallpaper, and the profile and this page are pushed
+        // from inside it). Placed outside, it covers the page AND its bar items.
+        .environment(\.colorScheme, pageScheme)
         .background { NavBarNoHairline() }   // no hairline under the header (see below)
         // ⛔ AN OVERLAY, NOT A RESERVED STRIP — owner, 2026-08-23: "All media Page buttom plz remove
         // the border".
