@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            YOUR LOGO, ATTACH SHEET FROM THE +, MORE REACTIONS, PHOTO PEN, COLOUR AND WALLPAPER RESETS.
+            NEW ATTACH SHEET, OFFICIAL CHAT FIXES, REACT WITH THE KEYBOARD UP, BLOCK NOTICES.
+
+            ATTACH: the + grows into the sheet and the sheet shrinks back into the + (the + stays centred). Tapping during the animation turns it around. The sheet floats with space on the sides and bottom, and pulling the photos down no longer shows a black gap. The Album button is a normal colour.
+
+            OFFICIAL CHAT: Search works inside the chat like a normal chat. Reactions use the normal chip. The last message no longer hides under the bottom bar. Mute and Search sit closer together, and About is one short line.
+
+            REACT WITH THE KEYBOARD UP: long-pressing a message keeps the keyboard open and the menu opens above it.
+
+            BLOCK: "You blocked this person." and "You unblocked this person." show in the chat, only to you.
+
+            ALSO: the time on photos and GIFs is centred in its pill; the disappearing-message notice is no longer cut; All Media is light in light mode; the pin bar has the new pin icon.
+
+            PLEASE TEST: open and close the attach sheet many times, pull it up and down; with the keyboard up, long-press and react; block and unblock someone; search in the Fariin chat.
+
+            EARLIER IN THIS ROUND: YOUR LOGO, ATTACH SHEET FROM THE +, MORE REACTIONS, PHOTO PEN, COLOUR AND WALLPAPER RESETS.
 
             LOGO: the opening screen, the Welcome page and the sign-in page show the Fariin logo (black in light mode, white in dark). Create Account is black.
 
@@ -90,76 +104,5 @@ jobs:
 
             PLEASE TEST: open and close the attach sheet; swipe the reaction bar; draw on a photo and then crop it; reset a chat's colour and wallpaper; tick several chats in a row.
 
-            EARLIER IN THIS ROUND: NO MORE DEBUG BOXES, VIDEO NO LONGER FREEZES, LIGHT-MODE CHATS BAR.
-
-            DEBUG BOXES: the red server box and the black timing box are gone. Nothing about sign-in, tokens or timing shows in the app any more.
-
-            VIDEO: pulling a video down and letting it spring back keeps it playing (it used to freeze on one frame), and the viewer comes back fully, never see-through over the chat.
-
-            LIGHT MODE: after you open a chat and go back, the Chats bar (Edit, the buttons on the right, the search field) is light again instead of dark.
-
-            PLEASE TEST: in light mode, open a chat with a wallpaper and go back to Chats. Open a video, pull it down a little, let go so it springs back. Use the app normally and check that no box appears.
-
-            EARLIER IN THIS ROUND: THE APP HEALS ITSELF WHEN THE SERVER REFUSES IT, VIDEO WITHOUT THE BLACK SCREEN, CHAT OPENS DRAWN, VOICE TIME.
-
-            SERVER REFUSED: when the server refuses the phone for a moment (the "everyone looks deleted, nothing sends" problem), the app gets a fresh sign-in and reconnects by itself within about a minute. Profiles keep their last copy instead of going blank.
-
-            VIDEO: the picture that flies in stays on screen until the video's first frame, so there is no black screen.
-
-            CHAT OPEN: the chat slides in with its messages already drawn.
-
-            VOICE: the time on a voice message counts while it plays and no longer shows "0:...".
-
-            EARLIER: select-mode lines, header text colour, gradient bubbles, a freeze when opening a chat, bubble colour after a wallpaper change, reaction jumps.
-
-            EARLIER IN THIS ROUND: PHOTO AND GIF REACTIONS AND TIME.
-
-            REACTIONS ON PICTURES: a smaller reaction sits on the picture's bottom-left edge, so it is clear which picture it belongs to.
-
-            TIME ON PICTURES: the time and tick are centred in their dark capsule, and the tick is fully white.
-
-            PLEASE TEST: react to several photos and GIFs in a row; look at the time on a photo you sent.
-
-            EARLIER IN THIS ROUND: REACTIONS, HEADER BLUR, AUTO COLOR, WALLPAPER SHEET.
-
-            REACTIONS: reacting no longer drops the chat down and brings it back; a new reaction appears in place, not over the message below.
-
-            HEADER: opening a chat, the blur under the header is there while the page slides in.
-
-            AUTO COLOR: Auto is always one flat color that matches the wallpaper.
-
-            WALLPAPER SHEET: the selection ring moves to the wallpaper you tap straight away.
-
-            PLEASE TEST: react to the last message and to a photo; open a few chats and watch the header; try Auto on different wallpapers.
-
-            EARLIER IN THIS ROUND: SELECTION, ARCHIVE AND FAILED MESSAGES.
-
-            SELECTION: the delete button works even when a call is selected; no empty circles stay behind after you cancel.
-
-            ARCHIVE: an archived chat fades out instead of sliding under the Pinned heading.
-
-            FAILED MESSAGE: tapping the red (!) opens Resend / Delete right next to it.
-
-            PLEASE TEST: select messages including a call and delete them; select and cancel; archive a pinned chat; tap a failed message's (!).
-
-            EARLIER IN THIS ROUND: PHOTO REACTIONS, ALL MEDIA SPEED, RESET MENU, SELECTION.
-
-            PHOTO REACTIONS: a reaction on a photo or GIF sits under the picture with the person's face, and no longer covers the time.
-
-            ALL MEDIA: swiping between Media, Files, Voice, Links and GIFs is smooth in chats with a lot of media.
-
-            RESET: Settings > Set Wallpaper and Chat Color have a new ... menu (top right) to reset the wallpaper or the chat color, for Settings or for every chat.
-
-            SELECTION: selecting messages no longer flashes the back button.
-
-            PLEASE TEST: react to a photo; swipe through All Media in a busy chat; try the ... reset menu; select several messages.
-
-            AUTO COLOR: the first circle in Chat Color is now Auto. On Auto, your bubbles take the matching color of the wallpaper; a color you pick yourself is never changed by a wallpaper. Reset in the chat wallpaper sheet can reset the chat color or the wallpaper; Settings > Chat Color has Reset All Chat Colors.
-
-            WALLPAPER: a chat with its own wallpaper keeps it when you change the wallpaper in Settings. In the chat wallpaper sheet, the color row no longer jumps over the wallpapers.
-
-            REACTIONS: even spacing around the heart and the avatar in a reaction pill.
-
-            PLEASE TEST: set a chat to Auto and try different wallpapers; give one chat its own wallpaper, then change the one in Settings; react to a message.
 
         run: fastlane beta
