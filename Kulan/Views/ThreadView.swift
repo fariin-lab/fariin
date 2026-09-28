@@ -126,6 +126,8 @@ struct ThreadView: View {
     /// The "+" the attach sheet grows out of and shrinks back into (see `ChatComposerView.AttachSource`).
     @Namespace private var attachZoom
     @State private var attachSourceRect: CGRect = .zero
+    /// The sheet is waiting for the source to reach the "+" before it presents (`attachZoomSource`).
+    @State private var attachPending = false
     // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
@@ -4189,19 +4191,32 @@ struct ThreadView: View {
     /// (which is UIKit and so cannot carry `matchedTransitionSource` itself). The sheet grows out of
     /// it and, on close, shrinks back into it; the real button stays drawn underneath. Global
     /// coordinates, because the rect comes from the button's window.
+    ///
+    /// ⛔ ALWAYS THERE, AND DRAWN — owner, 2026-09-28, with a picture: "it appears from the center of
+    /// the screen". The source used to be created only once the rect was known, which is the same
+    /// update that presents the sheet, and it was `Color.clear`, which draws nothing. The zoom found
+    /// no source and fell back to the middle of the screen. August's working zoom grew from the real
+    /// button, always on screen. So this one is mounted with the chat and filled at an opacity the
+    /// eye cannot see; the tap only moves it, it never has to appear first.
     private var attachZoomSource: some View {
         GeometryReader { g in
             let origin = g.frame(in: .global).origin
             let r = attachSourceRect
-            if r != .zero {
-                Color.clear
-                    .frame(width: r.width, height: r.height)
-                    // A circle as the one shape the source accepts: a rounded rect of half its height.
-                    .matchedTransitionSource(id: "attach", in: attachZoom) {
-                        $0.clipShape(RoundedRectangle(cornerRadius: min(r.width, r.height) / 2, style: .continuous))
-                    }
-                    .position(x: r.midX - origin.x, y: r.midY - origin.y)
-            }
+            let side = max(min(r.width, r.height), 1)
+            Color.white.opacity(0.001)
+                .frame(width: max(r.width, 1), height: max(r.height, 1))
+                // A circle as the one shape the source accepts: a rounded rect of half its height.
+                .matchedTransitionSource(id: "attach", in: attachZoom) {
+                    $0.clipShape(RoundedRectangle(cornerRadius: side / 2, style: .continuous))
+                }
+                .position(x: r.midX - origin.x, y: r.midY - origin.y)
+                // The sheet presents once the source has been laid out on the "+", not in the same
+                // update that moves it there, or the zoom starts from where the source used to be.
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in
+                    guard attachPending else { return }
+                    attachPending = false
+                    showAttachPanel = true
+                }
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
@@ -6993,10 +7008,22 @@ struct ThreadView: View {
             inputFocused = false
             keyboard.onceHidden {
                 // The source goes where the "+" is NOW (the keyboard has gone, so the bar has come
-                // down), and the sheet presents a turn later, once that source is on screen for the
-                // zoom to find. See `attachZoomSource`.
-                attachSourceRect = ChatComposerView.AttachSource.windowRect
-                DispatchQueue.main.async { showAttachPanel = true }
+                // down). If it has to move, the sheet waits for the move to be laid out (the
+                // source's geometry callback presents it); if it is already there, it opens a turn
+                // later as before. See `attachZoomSource`.
+                let r = ChatComposerView.AttachSource.windowRect
+                if r != .zero && r != attachSourceRect {
+                    attachPending = true
+                    attachSourceRect = r
+                    // Never a "+" that does nothing: if the callback somehow does not come, open anyway.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        guard attachPending else { return }
+                        attachPending = false
+                        showAttachPanel = true
+                    }
+                } else {
+                    DispatchQueue.main.async { showAttachPanel = true }
+                }
             }
         }
         a.gif = {
