@@ -97,6 +97,9 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
     // Drag state
     private var scroll: UIScrollView?
+    /// Set by the simultaneous-recognition callback just before the pan begins.
+    private weak var touchedScroll: UIScrollView?
+    private var scrollBounced = true
     private var lastTranslation: CGFloat = 0
     private var sheetMoved = false
 
@@ -479,14 +482,23 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        g is UIPanGestureRecognizer && other.view is UIScrollView
+        guard g is UIPanGestureRecognizer, let s = other.view as? UIScrollView else { return false }
+        // The scroll view whose own pan is running with ours is the one under the finger.
+        if Self.isVertical(s), other === s.panGestureRecognizer { touchedScroll = s }
+        return true
     }
 
-    /// The vertical scroll view under the finger, if any (the reference's `findScrollView`).
+    /// Is this a scroll view that scrolls up and down (not a sideways strip)?
+    private static func isVertical(_ s: UIScrollView) -> Bool {
+        !(s.contentSize.width > s.bounds.width + 1 && s.contentSize.height <= s.bounds.height + 1)
+    }
+
+    /// The vertical scroll view under the finger, if any (the reference's `findScrollView`). Only
+    /// a fallback: `touchedScroll`, handed over by the finger's own pan, is the reliable answer.
     private func scrollView(at p: CGPoint) -> UIScrollView? {
         var v = view.hitTest(p, with: nil)
         while let cur = v, cur !== shell {
-            if let s = cur as? UIScrollView, s.contentSize.width <= s.bounds.width + 1 { return s }
+            if let s = cur as? UIScrollView, Self.isVertical(s) { return s }
             v = cur.superview
         }
         return nil
@@ -511,7 +523,15 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
                 stopAll()
                 sheetTop = shell.frame.minY
             }
-            scroll = scrollView(at: g.location(in: view))
+            // ⛔ THE GRID IS THE ONE THE FINGER IS IN, AND IT DOES NOT BOUNCE WHILE THE SHEET MOVES —
+            // owner, 2026-09-28, with a picture: pulling the photos down tore them off the sheet's
+            // top and showed a black band. The grid was found by hit-testing SwiftUI content, which
+            // can miss; then nothing pinned it and it rubber-banded on its own, and even when found
+            // its bounce ran on after the release. The reference turns `bounces` off for the drag
+            // and puts it back at the end; the scroll view now comes from its own pan (below).
+            scroll = touchedScroll ?? scrollView(at: g.location(in: view))
+            touchedScroll = nil
+            scrollBounced = scroll?.bounces ?? true
             lastTranslation = 0
             sheetMoved = false
 
@@ -523,6 +543,9 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             // the top; otherwise the list scrolls. Whichever moves, the other holds still.
             if sheetTop > expandedTop + 0.5 || (dy > 0 && atScrollTop(scroll)) {
                 sheetMoved = true
+                // Off only while the sheet is the thing moving: at full height a plain scroll of
+                // the photos keeps its normal bounce.
+                if scroll?.bounces == true { scroll?.bounces = false }
                 setTop(max(expandedTop, sheetTop + dy))
                 pinScrollTop(scroll)
             }
@@ -530,6 +553,10 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         case .ended, .cancelled, .failed:
             let s = scroll
             scroll = nil
+            s?.bounces = scrollBounced
+            // The sheet took this drag: stop the grid's own fling so it cannot glide on (or bounce)
+            // while the sheet snaps.
+            if sheetMoved { pinScrollTop(s); s?.setContentOffset(s?.contentOffset ?? .zero, animated: false) }
             guard sheetMoved else { return }
             let vy = g.state == .ended ? g.velocity(in: view).y : 0
             let y = sheetTop
