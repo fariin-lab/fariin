@@ -41,8 +41,13 @@ struct RootView: View {
             case .loading:
                 // Static branded launch screen (no spinner) — matches the native iOS launch
                 // screen so boot feels instant, like other chat apps. No "loading" UI.
-                Text("Fariin").font(.system(size: 40, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                // ⛔ HIS LOGO, NOT THE WORD — owner, 2026-09-28, who sent the two files: the black
+                // mark in light mode, the white one in dark (one asset, `LaunchLogo`, two appearances).
+                Image("LaunchLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 120, height: 120)
+                    .accessibilityLabel("Fariin")
             case .welcome:
                 // Signed out → the front door (Apple / Google / email). After any door
                 // succeeds, route() decides onboarding (new account) vs main (returning).
