@@ -78,10 +78,9 @@ import UIKit
         guard frame.width > 1, frame.height > 1 else { return .unspecified }
         let key = "hdr|\(cid)|\(dark)|\(store.version)"
         if let hit = backdropCache[key] { return hit }
-        // TEMPORARY timing, see OpenTrace.
-        guard let picture = OpenTrace.time("wallpaper render (header)", { renderWallpaper(cid: cid, dark: dark, size: frame.size) }) else { return .unspecified }
+        guard let picture = renderWallpaper(cid: cid, dark: dark, size: frame.size) else { return .unspecified }
         let band = CGRect(x: 0, y: 0, width: picture.size.width, height: min(150, picture.size.height))
-        let style: UIUserInterfaceStyle = OpenTrace.time("header brightness", { averageLuminance(of: picture, in: band) }) < 0.4 ? .dark : .light
+        let style: UIUserInterfaceStyle = averageLuminance(of: picture, in: band) < 0.4 ? .dark : .light
         if backdropCache.count >= 8 { backdropCache.removeAll() }
         backdropCache[key] = style
         return style
@@ -172,9 +171,8 @@ import UIKit
             WallpaperBlurSliceView.adopt(hit)
             return hit
         }
-        // TEMPORARY timing, see OpenTrace.
-        guard let source = OpenTrace.time("wallpaper render (bubbles)", { renderWallpaper(cid: cid, dark: dark, size: frame.size) }),
-              let blurred = OpenTrace.time("wallpaper blur (bubbles)", { Self.blurred(source, dark: dark) }) else { return nil }
+        guard let source = renderWallpaper(cid: cid, dark: dark, size: frame.size),
+              let blurred = Self.blurred(source, dark: dark) else { return nil }
         let state = WallpaperBlurState(image: blurred, frame: frame, cid: cid)
         // One chat is open at a time and the official channel is the other; anything past a
         // handful is a theme flip or a rotation that will not come back soon.

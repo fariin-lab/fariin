@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import UIKit.UIGestureRecognizerSubclass   // TEMPORARY, for TouchTimeRecognizer (see OpenTrace)
 
 extension Notification.Name {
     /// "Take me to the newest message." Posted by the down-arrow button, answered by whichever
@@ -198,15 +197,12 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.coordinator = context.coordinator
         context.coordinator.controller = vc
         vc.loadViewIfNeeded()   // force viewDidLoad now so collectionView + dataSource exist before apply
-        OpenTrace.markOnce("message list: set up")   // TEMPORARY, see OpenTrace
         return vc
     }
 
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
-        let traceStart = CFAbsoluteTimeGetCurrent()   // TEMPORARY, see OpenTrace
-        defer { OpenTrace.took("message list update", since: traceStart) }
         // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
         // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
         // following the system again rather than being pinned the other way.
@@ -804,7 +800,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        OpenTrace.markOnce("message list: created")   // TEMPORARY, see OpenTrace
         layout = MessageLayout()
         // ⛔ THE HEIGHT IS RESOLVED THROUGH THE DATA SOURCE, NEVER THROUGH `currentIds` — owner,
         // 2026-08-25, reporting rows that jump and draw on top of each other while scrolling.
@@ -2634,11 +2629,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
         let rowCount = currentIds.count
         let seeded = renderedHeights.count
-        // TEMPORARY, see OpenTrace: how many rows are measured, and how many through the SwiftUI sizer.
-        let swiftUIRows = currentIds.filter { rowModels[$0] == nil && heights[$0] == nil }.count
-        OpenTrace.time("measure \(rowCount) rows (\(swiftUIRows) SwiftUI)") {
-            measureMissing(currentIds, width: collectionView.bounds.width)
-        }
+        measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
@@ -2662,7 +2653,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         landedTopInset = collectionView.adjustedContentInset.top
         awaitingInitialRepin = initialScrollId != nil && initialScrollOffset != nil
         reveal()
-        OpenTrace.markOnce("messages shown")   // TEMPORARY, see OpenTrace
     }
 
     /// ⛔ THE NAV BAR'S INSET ARRIVES AFTER THE LANDING, AND THE LANDING IS WRONG BY EXACTLY IT.
@@ -3734,7 +3724,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        OpenTrace.markOnce("push prepared (list will appear)")   // TEMPORARY, see OpenTrace
         // Registered once, not on every appearance (the `ChatListTable` rule): re-registering makes
         // the bar re-decide standard vs scroll-edge while it is already animating a pop, a flicker
         // for no gain. `didMove(toParent:)` does the real registration; this catches a parent chain
@@ -3774,7 +3763,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// frame yet. Only on the way in, so a pop never makes the bar re-decide mid-animation.
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        OpenTrace.markOnce("slide-in starts")   // TEMPORARY, see OpenTrace
         attachHeaderEdgeEffectForTransition()
         if isMovingToParent || !didRegisterOnAppearing {
             didRegisterOnAppearing = true
@@ -3845,7 +3833,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         detachHeaderEdgeEffectForTransition()   // the bar's own link has the list now
-        OpenTrace.finish(in: view.window)       // TEMPORARY, see OpenTrace
         isDisappearing = false
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
@@ -5266,186 +5253,6 @@ enum RxTrace {
     static func log(_ what: String) {
         guard let s = start, Date().timeIntervalSince(s) <= 2 else { return }
         NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what)
-    }
-}
-
-/// ⛔ TEMPORARY, REMOVE WITH `RxTrace` — owner, 2026-09-27, reported several times: the first chat
-/// opened after a launch takes seconds, the same chat opened again is instant. Every earlier fix to
-/// this was a guess. This times each step of the first three opens after launch, from the tap to the
-/// chat being fully on screen, and shows the numbers over the chat for eight seconds so he can
-/// photograph them. Steps under 5ms are left out.
-enum OpenTrace {
-    private static var t0: CFAbsoluteTime = 0
-    private static var lines: [String] = []
-    private static var once = Set<String>()
-    private static var opens: [String: Int] = [:]
-    private static var title = ""
-
-    /// `what` is "chat" or "video"; each gets its first three opens since launch.
-    static func start(_ what: String = "chat") {
-        let n = (opens[what] ?? 0) + 1
-        guard n <= 3 else { return }
-        opens[what] = n
-        generation += 1
-        t0 = CFAbsoluteTimeGetCurrent()
-        title = what.uppercased()
-        lines = ["tap (\(what) open \(n) since launch)"]
-        once = []
-        FrameGapWatch.shared.start()
-        let now = ProcessInfo.processInfo.systemUptime
-        if launchAt > 0 { lines.append(String(format: "  %.1fs after launch", now - launchAt)) }
-        if lastTouchAt > 0, now - lastTouchAt < 10 {
-            lines.append(String(format: "  finger touched %.0fms before this; app heard it %.0fms late",
-                                (now - lastTouchAt) * 1000, lastTouchLag * 1000))
-        }
-    }
-
-    static var isActive: Bool { t0 > 0 }
-    /// Which open is being timed, so a late timeout from an earlier open cannot close this one's box.
-    private(set) static var generation = 0
-
-    // MARK: Before the tap — owner, 2026-09-27: build 781's box showed the chat on screen 0.2s after
-    // the tap, and he says the open still felt slow. So the time goes BEFORE the app sees the tap:
-    // the main thread is busy when his finger lands. These record every main-thread freeze in the
-    // first minute after launch, and when his finger really touched the row.
-    private static var launchAt: TimeInterval = 0
-    private static var launchLog: [String] = []
-    private static var lastTouchAt: TimeInterval = 0
-    private static var lastTouchLag: TimeInterval = 0
-
-    /// From `didFinishLaunching`. A background queue asks the main thread to answer every 50ms and
-    /// writes down any answer that took longer than 150ms: that is a freeze, and when it happened.
-    static func startLaunchWatch() {
-        launchAt = ProcessInfo.processInfo.systemUptime
-        let q = DispatchQueue(label: "kulan.opentrace.watch", qos: .userInteractive)
-        func ping() {
-            let sent = ProcessInfo.processInfo.systemUptime
-            DispatchQueue.main.async {
-                let back = ProcessInfo.processInfo.systemUptime
-                if back - sent > 0.15 { launchNote(String(format: "app frozen %.0fms", (back - sent) * 1000), at: sent) }
-                guard back - launchAt < 60 else { return }
-                q.asyncAfter(deadline: .now() + 0.05, execute: ping)
-            }
-        }
-        q.async(execute: ping)
-    }
-
-    /// Main thread only.
-    static func launchNote(_ what: String, at t: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard launchAt > 0, launchLog.count < 20, t - launchAt < 60 else { return }
-        launchLog.append(String(format: "%5.1fs  %@", t - launchAt, what))
-    }
-
-    /// `touch.timestamp` is when the finger landed on the glass, whatever the main thread was doing;
-    /// the difference to now is how late the app got to hear about it.
-    static func noteTouchDown(_ touch: UITouch) {
-        lastTouchAt = touch.timestamp
-        lastTouchLag = ProcessInfo.processInfo.systemUptime - touch.timestamp
-    }
-
-    @MainActor static func finishInKeyWindow(_ last: String) {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        finish(in: scenes.flatMap(\.windows).first(where: \.isKeyWindow), last)
-    }
-
-    static func mark(_ what: String) {
-        guard t0 > 0 else { return }
-        lines.append(String(format: "%5.0f  %@", (CFAbsoluteTimeGetCurrent() - t0) * 1000, what))
-    }
-
-    static func markOnce(_ what: String) {
-        guard t0 > 0, once.insert(what).inserted else { return }
-        mark(what)
-    }
-
-    static func took(_ what: String, since start: CFAbsoluteTime) {
-        guard t0 > 0 else { return }
-        let d = (CFAbsoluteTimeGetCurrent() - start) * 1000
-        guard d >= 5 else { return }
-        lines.append(String(format: "%5.0f  %@: %.0fms", (start - t0) * 1000, what, d))
-    }
-
-    static func time<T>(_ what: String, _ body: () -> T) -> T {
-        guard t0 > 0 else { return body() }
-        let s = CFAbsoluteTimeGetCurrent()
-        let r = body()
-        took(what, since: s)
-        return r
-    }
-
-    @MainActor static func finish(in window: UIWindow?, _ last: String = "fully open") {
-        guard t0 > 0, let window else { return }
-        mark(last)
-        // Every stretch the screen went without a new frame, from the tap to here: a smooth slide
-        // draws every 8-16ms, so anything longer is the animation standing still.
-        let gaps = FrameGapWatch.shared.stop()
-            .sorted { $0.ms > $1.ms }.prefix(4)
-            .sorted { $0.at < $1.at }
-        if !gaps.isEmpty {
-            lines.append("app too busy to draw a frame:")
-            for g in gaps { lines.append(String(format: "%5.0f  for %.0fms", (g.at - t0) * 1000, g.ms)) }
-        }
-        t0 = 0
-        let label = UILabel()
-        label.numberOfLines = 0
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        label.textColor = .white
-        label.backgroundColor = UIColor.black.withAlphaComponent(0.8)
-        var text = "\(title) OPEN TIMING (ms from tap)\n" + lines.joined(separator: "\n")
-        if !launchLog.isEmpty { text += "\nSINCE LAUNCH\n" + launchLog.joined(separator: "\n") }
-        label.text = text
-        let width = window.bounds.width - 24
-        let size = label.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        label.frame = CGRect(x: 12, y: window.safeAreaInsets.top + 60, width: width, height: size.height + 8)
-        label.isUserInteractionEnabled = false
-        window.addSubview(label)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { label.removeFromSuperview() }
-    }
-}
-
-/// TEMPORARY, see OpenTrace: a display link from the tap to the chat being open, writing down every
-/// gap between two frames longer than 25ms. Times are CFAbsoluteTime so they line up with the marks.
-final class FrameGapWatch: NSObject {
-    static let shared = FrameGapWatch()
-    private var link: CADisplayLink?
-    private var last: CFTimeInterval = 0
-    private var gaps: [(at: CFAbsoluteTime, ms: Double)] = []
-
-    func start() {
-        link?.invalidate()
-        gaps = []
-        last = 0
-        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
-        l.add(to: .main, forMode: .common)
-        link = l
-    }
-
-    func stop() -> [(at: CFAbsoluteTime, ms: Double)] {
-        link?.invalidate()
-        link = nil
-        return gaps
-    }
-
-    @objc private func tick(_ l: CADisplayLink) {
-        defer { last = l.timestamp }
-        guard last > 0 else { return }
-        let ms = (l.timestamp - last) * 1000
-        // The gap ENDED now; it began `ms` ago.
-        if ms > 25 { gaps.append((CFAbsoluteTimeGetCurrent() - ms / 1000, ms)) }
-    }
-}
-
-/// TEMPORARY, see OpenTrace: hears every touch on the chat list the moment UIKit hands it over and
-/// fails at once, so it never takes part in a tap or a scroll.
-final class TouchTimeRecognizer: UIGestureRecognizer {
-    override init(target: Any?, action: Selector?) {
-        super.init(target: target, action: action)
-        cancelsTouchesInView = false
-        delaysTouchesEnded = false
-    }
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let t = touches.first { OpenTrace.noteTouchDown(t) }
-        state = .failed
     }
 }
 

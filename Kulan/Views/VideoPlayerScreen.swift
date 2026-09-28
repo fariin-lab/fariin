@@ -53,7 +53,6 @@ struct VideoPlayerScreen: View {
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var interruptObserver: NSObjectProtocol?
-    @State private var readyObservation: NSKeyValueObservation?   // TEMPORARY, see OpenTrace
     /// The player layer has drawn its first picture. Until then the poster is what is on screen.
     @State private var firstFrameShown = false
     /// The spinner waits a beat: a clip on this phone has its player well inside it, and a spinner
@@ -505,12 +504,9 @@ struct VideoPlayerScreen: View {
     // MARK: - Load (mailman: local → download+decrypt+cache → clear server)
 
     private func load() async {
-        OpenTrace.mark("viewer starts loading")   // TEMPORARY, see OpenTrace
         if let local = VideoCache.url(for: message.id) {
-            OpenTrace.mark("found on this phone")   // TEMPORARY
             await MainActor.run { startPlayer(local) }; return
         }
-        OpenTrace.mark("NOT on this phone (sent-file: \(message.localMediaURL.map { FileManager.default.fileExists(atPath: $0) } ?? false))")   // TEMPORARY
         // ⛔ MY OWN VIDEO PLAYS FROM THE FILE I SENT — owner, 2026-09-26: tapping a video sat on the
         // spinner. The clip I just sent is on this phone at `localMediaURL` (Share already used it,
         // line ~170), but loading skipped it and went to the network: a long wait for a file that
@@ -544,7 +540,6 @@ struct VideoPlayerScreen: View {
             }
         }.value
         if Task.isCancelled { return }
-        OpenTrace.mark("download finished (ok=\(ok))")   // TEMPORARY, see OpenTrace
         if let local = VideoCache.url(for: message.id) {
             await MainActor.run { startPlayer(local) }
             return
@@ -575,32 +570,14 @@ struct VideoPlayerScreen: View {
         player = p
         let life = lifetime
         Task.detached(priority: .userInitiated) {
-            let started = CFAbsoluteTimeGetCurrent()
             let session = AVAudioSession.sharedInstance()
             if session.category != .playback { try? session.setCategory(.playback) }
             try? session.setActive(true)
-            let ms = (CFAbsoluteTimeGetCurrent() - started) * 1000
             await MainActor.run {
-                OpenTrace.mark(String(format: "audio ready (%.0fms, off the main thread)", ms))   // TEMPORARY
                 // Still open, still this viewer's clip, and nobody paused, started a scrub or began
                 // dragging it closed (which pauses it) meanwhile.
                 guard !life.closed, player === p, isPlaying, !scrubbing, !dismissing else { return }
                 p.play()
-            }
-        }
-        OpenTrace.mark("player created")   // TEMPORARY
-        if OpenTrace.isActive {   // TEMPORARY: the moment the first frame can be drawn
-            readyObservation = p.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in
-                guard item.status != .unknown else { return }
-                let ok = item.status == .readyToPlay
-                // The box closes on the first frame actually drawn (PlayerLayerUIView), or here after
-                // 10s if no frame ever is: that difference is the question now.
-                let gen = OpenTrace.generation
-                Task { @MainActor in
-                    OpenTrace.mark(ok ? "video ready to show" : "video failed")
-                    try? await Task.sleep(nanoseconds: 10_000_000_000)
-                    if OpenTrace.generation == gen { OpenTrace.finishInKeyWindow("no frame drawn after 10s") }
-                }
             }
         }
         duration = message.duration ?? 0
@@ -660,15 +637,10 @@ private final class PlayerLayerUIView: UIView {
         backgroundColor = .clear
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspect
-        // When the first picture is really on screen: the poster goes, and (TEMPORARY, see
-        // OpenTrace) the timing box closes with how big this view is.
-        frameObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+        // When the first picture is really on screen, the poster underneath goes.
+        frameObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { layer, _ in
             guard layer.isReadyForDisplay else { return }
-            Task { @MainActor in
-                onFirstFrame()
-                let size = self?.bounds.size ?? .zero
-                OpenTrace.finishInKeyWindow("first frame drawn (view \(Int(size.width))x\(Int(size.height)), in window: \(self?.window != nil))")
-            }
+            Task { @MainActor in onFirstFrame() }
         }
     }
     required init?(coder: NSCoder) { fatalError("not implemented") }

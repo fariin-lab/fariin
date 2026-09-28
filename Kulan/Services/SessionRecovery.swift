@@ -49,7 +49,7 @@ enum SessionRecovery {
         let ns = error as NSError
         // 7 = permission denied, 16 = unauthenticated (the numbers SendQueue and PushManager test too).
         guard ns.domain == FirestoreErrorDomain, ns.code == 7 || ns.code == 16 else { return }
-        RefusalTrace.note(error, from)   // TEMPORARY, remove with RefusalTrace
+        print("server refused (\(from)):", error)   // developer console only, never on screen
         // Signed out: there is no session to get back into, and sign-out tears the listeners down.
         guard Auth.auth().currentUser != nil else { return }
         if Date().timeIntervalSince(lastRecoveredAt) > 300 { attempt = 0 }
