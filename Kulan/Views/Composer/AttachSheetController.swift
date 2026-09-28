@@ -165,7 +165,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         dim.frame = view.bounds
-        if !keyboardUp { setBottom(view.safeAreaInsets.bottom) }
+        if !keyboardUp { setBottom(bottomPad(forTop: sheetTop)) }
         // A size change (rotation) while resting re-seats the sheet; never under a running animation.
         if phase == .open, animators.allSatisfy({ $0.state != .active }), scroll == nil {
             setTop(isExpanded ? expandedTop : compactTop)
@@ -179,12 +179,33 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     /// Where the system's large detent sat: just under the status bar.
     private var expandedTop: CGFloat { view.safeAreaInsets.top > 0 ? view.safeAreaInsets.top + 10 : 0 }
 
-    /// The sheet's frame for a top edge. Above rest it grows (its bottom stays on the screen's);
-    /// below rest it only moves, so the panel's own layout is not touched while it is pulled away.
+    /// ⛔ IT FLOATS AT REST — owner, 2026-09-28, with a picture: "the sheet is touching the corners
+    /// and the bottom, make it like before, before had space". The system sheet it replaced sat
+    /// inset from both sides and the bottom at its 62% detent and went edge to edge only at full
+    /// height, as every iOS 26 sheet does. Same here: `restInset` at rest (and while pulled down
+    /// from rest), easing to 0 as the top travels up to full.
+    private static let restInset: CGFloat = 8
+
+    private func inset(forTop y: CGFloat) -> CGFloat {
+        let span = compactTop - expandedTop
+        guard span > 1 else { return Self.restInset }
+        return Self.restInset * min(max((y - expandedTop) / span, 0), 1)
+    }
+
+    /// The sheet's frame for a top edge. Above rest it grows (its bottom stays put); below rest it
+    /// only moves, so the panel's own layout is not touched while it is pulled away.
     private func frame(forTop y: CGFloat) -> CGRect {
         let b = view.bounds
-        if y >= compactTop { return CGRect(x: 0, y: y, width: b.width, height: b.height - compactTop) }
-        return CGRect(x: 0, y: y, width: b.width, height: b.height - y)
+        let i = inset(forTop: y)
+        let bottom = b.height - i
+        let height = y >= compactTop ? bottom - compactTop : bottom - y
+        return CGRect(x: i, y: y, width: b.width - 2 * i, height: height)
+    }
+
+    /// The home-indicator band the panel pads its bar by, less the gap the sheet already floats
+    /// above the screen's bottom, so the bar stays where it was.
+    private func bottomPad(forTop y: CGFloat) -> CGFloat {
+        max(0, view.safeAreaInsets.bottom - inset(forTop: y))
     }
 
     private func layoutContent(size: CGSize) {
@@ -201,6 +222,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         shell.bounds = CGRect(origin: .zero, size: f.size)
         shell.center = CGPoint(x: f.midX, y: f.midY)
         glass.frame = shell.bounds
+        if !keyboardUp { setBottom(bottomPad(forTop: y)) }
         layoutContent(size: f.size)
         host.view.layoutIfNeeded()
     }
@@ -272,6 +294,9 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
         let target = frame(forTop: compactTop)
         sheetTop = compactTop
+        // The bar's pad for the floating rest, before the first layout, or it lands 8pt off and
+        // jumps when the grow finishes.
+        if !keyboardUp { setBottom(bottomPad(forTop: compactTop)) }
         let src = sourceRect()
 
         guard src != .zero else {
@@ -601,11 +626,13 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     }
     @objc private func keyboardWillHide() {
         keyboardUp = false
-        setBottom(view.safeAreaInsets.bottom)
+        setBottom(bottomPad(forTop: sheetTop))
     }
-    /// Only on a real change: an `@Observable` write re-renders the panel even when equal.
+    /// Only on a real change (to the half point): an `@Observable` write re-renders the panel even
+    /// when equal, and the pad moves with every frame of a drag between rest and full.
     private func setBottom(_ v: CGFloat) {
-        if metrics.bottom != v { metrics.bottom = v }
+        let r = (v * 2).rounded() / 2
+        if metrics.bottom != r { metrics.bottom = r }
     }
 }
 
