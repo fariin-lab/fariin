@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            ATTACH BAR STAYS, OFFICIAL CHAT LAST MESSAGE, LONG PRESS ON BUTTONS, DISAPPEARING ICON, ALL MEDIA BUTTONS.
+            LONG PRESS AND DOUBLE-TAP ON THE FARIIN MESSAGE WITH A BUTTON, PHOTOS NO LONGER OPEN AFTER A LONG PRESS.
+
+            FARIIN CHAT: long press and double-tap to react should work on the "Review Devices" message, the same as on the plain message.
+
+            PHOTOS: long-pressing a photo and letting go no longer opens it.
+
+            PLEASE TEST: long-press and double-tap the Review Devices message; long-press a photo and let go.
+
+            EARLIER IN THIS ROUND (build 794): ATTACH BAR STAYS, OFFICIAL CHAT LAST MESSAGE, LONG PRESS ON BUTTONS, DISAPPEARING ICON, ALL MEDIA BUTTONS.
 
             ATTACH: the Camera/GIF/Files/Location bar no longer disappears when you tap the Album button or its back arrow. Scrolling right after opening the sheet moves the sheet, with no black band at the top or bottom.
 
