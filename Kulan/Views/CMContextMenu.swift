@@ -25,12 +25,57 @@ import UIKit
 /// position with a rect nowhere near the finger (the KeyboardSafeRects lesson, kept).
 @MainActor enum CMBubbleRects {
     private static var rects: [String: (rect: CGRect, radius: CGFloat)] = [:]
+    private static var probes: [String: [Weak]] = [:]
+    private struct Weak { weak var view: CMWindowProbeView? }
+
     static func capture(_ id: String, _ rect: CGRect, radius: CGFloat) {
         guard !rect.isEmpty, rect.intersects(UIScreen.main.bounds) else { return }
         rects[id] = (rect, radius)
     }
-    static func rect(_ id: String) -> CGRect? { rects[id]?.rect }
+
+    static func register(_ id: String, _ view: CMWindowProbeView) {
+        var list = (probes[id] ?? []).filter { $0.view != nil && $0.view !== view }
+        list.append(Weak(view: view))
+        probes[id] = list
+    }
+
+    /// ⛔ THE COPY THAT IS IN THE WINDOW, ASKED NOW — owner, 2026-09-28: the official chat's long
+    /// press sometimes did nothing and lifted a bubble cut to a sliver. The list measures every
+    /// SwiftUI row in an off-screen host, and that copy's `.global` frame starts at 0,0, which passes
+    /// the on-screen check above and overwrote the real bubble's rect. A probe outside a window is
+    /// never asked, and the one inside it answers with where the bubble is at the moment of the press.
+    static func rect(_ id: String) -> CGRect? {
+        for p in probes[id] ?? [] {
+            guard let v = p.view, v.window != nil else { continue }
+            var r = v.convert(v.bounds, to: nil)
+            guard !r.isEmpty else { continue }
+            r.size.height += v.bottomOverhang
+            return r
+        }
+        return rects[id]?.rect
+    }
     static func radius(_ id: String) -> CGFloat { rects[id]?.radius ?? 18 }
+}
+
+/// A plain view laid behind a bubble so its window frame can be read at press time.
+final class CMWindowProbeView: UIView {
+    var bottomOverhang: CGFloat = 0
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+}
+
+private struct CMWindowProbe: UIViewRepresentable {
+    let id: String
+    let bottomOverhang: CGFloat
+    func makeUIView(context: Context) -> CMWindowProbeView {
+        let v = CMWindowProbeView()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+    func updateUIView(_ v: CMWindowProbeView, context: Context) {
+        v.bottomOverhang = bottomOverhang
+        CMBubbleRects.register(id, v)
+    }
 }
 
 /// Publishes a bubble's window rect + corner radius for as long as it is on screen.
@@ -53,6 +98,7 @@ struct CMBubbleRectReporter: ViewModifier {
                     .onChange(of: bottomOverhang) { _, _ in publish(g.frame(in: .global)) }
             }
         )
+        .background(CMWindowProbe(id: id, bottomOverhang: bottomOverhang))
     }
 
     private func publish(_ f: CGRect) {
@@ -1076,7 +1122,17 @@ final class CMReactionBar: UIView {
         stack.frame = CGRect(x: 0, y: 0, width: CGFloat(allEmojis.count) * side, height: bounds.height)
         scroll.contentSize = stack.frame.size
         holders.last?.frame = CGRect(x: padding + window, y: padding, width: side, height: bounds.height - padding * 2)
+        // ⛔ MY REACTION IS IN VIEW WHEN THE BAR OPENS — owner, 2026-09-28: a reaction picked from the
+        // swipe part was highlighted out of sight, and he had to swipe to find it. Once, on the first
+        // real layout, the strip scrolls so that emoji is the last one showing.
+        if !revealedSelected, window > 0, let sel = config.selected,
+           let i = allEmojis.firstIndex(of: sel), i >= config.emojis.count {
+            revealedSelected = true
+            let maxX = max(0, scroll.contentSize.width - window)
+            scroll.contentOffset.x = min(maxX, CGFloat(i + 1) * side - window)
+        }
     }
+    private var revealedSelected = false
 
     private func makeEmoji(_ emoji: String) -> UIView {
         let holder = UIView()

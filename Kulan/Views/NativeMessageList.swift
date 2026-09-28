@@ -95,6 +95,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapPinNotice: (String) -> Void = { _ in }
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
+    /// Rows drawn in SwiftUI that still take the double-tap reaction (the official channel, whose
+    /// every bubble is SwiftUI). Off for everything else, so the chat's hosted rows are unchanged.
+    var hostedDoubleTap: (String) -> Bool = { _ in false }
     // CUSTOM LONG-PRESS MENU (experiment — see CMContextMenu.swift). ThreadView supplies the row's
     // actions and reaction config; the controller owns the press, the snapshot and the overlay.
     var customMenuActions: (String) -> [CMAction] = { _ in [] }
@@ -244,6 +247,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.cid = cid
         vc.uikitMenu = uikitMenu
         vc.onUikitDoubleTap = onUikitDoubleTap
+        vc.hostedDoubleTap = hostedDoubleTap
         vc.onTapLink = onTapLink
         vc.onTapQuote = onTapQuote
         vc.onTapStoryQuote = onTapStoryQuote
@@ -657,6 +661,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     var uikitMenu: (String) -> UIMenu? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }
+    var hostedDoubleTap: (String) -> Bool = { _ in false }
     var onTapLink: (URL) -> Void = { _ in }
     var onTapQuote: (String) -> Void = { _ in }
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
@@ -4195,7 +4200,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if g === doubleTapGesture {
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
-                  let id = dataSource.itemIdentifier(for: ip), rowModels[id] != nil else { return false }
+                  let id = dataSource.itemIdentifier(for: ip) else { return false }
+            // A SwiftUI row the screen opted in: ON its bubble only, the same rule as a UIKit one.
+            if rowModels[id] == nil {
+                guard !isSelecting, hostedDoubleTap(id), let rect = CMBubbleRects.rect(id) else { return false }
+                return rect.contains(g.location(in: nil))
+            }
             // The BUBBLE only, not the full-width row: double-tapping the empty area beside a uikit bubble
             // hearted it, while SwiftUI rows react on the bubble content only.
             guard let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return false }
@@ -4420,7 +4430,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard g.state == .ended else { return }
         let loc = g.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc),
-              let id = dataSource.itemIdentifier(for: ip), rowModels[id] != nil else { return }
+              let id = dataSource.itemIdentifier(for: ip),
+              rowModels[id] != nil || hostedDoubleTap(id) else { return }
         // A tap meant for Play, Pause, the scrubber or the speed pill is not a reaction. See
         // `VoiceBubbleView.controlTookTouchRecently` — the control stamps itself in `hitTest`, which
         // happens while the touch is being delivered and therefore strictly before this recogniser

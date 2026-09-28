@@ -36,6 +36,11 @@ struct OfficialChatView: View {
 
     var body: some View {
         list
+            // ⛔ UNDER BOTH BARS, LIKE A CHAT — owner, 2026-09-28, three circles: a gap over the bar,
+            // a hard edge where the bubbles stopped at the header, no blur. The list stopped at both
+            // bars AND took the bar's height as extra inset, so the space was counted twice and the
+            // header had nothing under it to blur. `ThreadView.scrollStack` is the model.
+            .ignoresSafeArea(.container, edges: [.top, .bottom])
             // 2026-09-24 decision D-admin-loading: a spinner until the channel's listeners have all
             // answered, then the chat list's own empty line. Both used to be the same blank screen.
             .overlay {
@@ -50,8 +55,12 @@ struct OfficialChatView: View {
                     .overlay { WallpaperAnchor(cid: OfficialChannel.cid) }   // the slices' reference — see WallpaperBlur
                     .ignoresSafeArea()
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if selecting { selectionBar } else { cannotReplyBar }
+            .floatingBottomBar {
+                Group { if selecting { selectionBar } else { cannotReplyBar } }
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: OfficialBarHeightKey.self, value: g.size.height)
+                    })
+                    .onPreferenceChange(OfficialBarHeightKey.self) { barHeight = $0 }
             }
             // Tapping the header opens the info screen, the same as every other chat. It used to do
             // nothing at all — I left the closure empty when this screen was built, so the one chat
@@ -164,6 +173,15 @@ struct OfficialChatView: View {
                                         onToggle: { toggle(a.id) })))
             },
             onToggleSelect: { toggle($0) },
+            // Double tap reacts with the chat's quick reaction, and again takes it off (owner,
+            // 2026-09-28). Not on a picture: a picture opens on one tap (his 2026-07-29 rule).
+            onUikitDoubleTap: { id in
+                let quick = QuickReaction.current
+                store.react(id, store.state.reactions[id] == quick ? nil : quick)
+            },
+            hostedDoubleTap: { id in
+                store.visible.first(where: { $0.id == id }).map { $0.mediaUrl == nil } ?? false
+            },
             customMenuActions: { id in menuActions(id) },
             customReactConfig: { id in
                 guard !selecting, store.visible.contains(where: { $0.id == id }) else { return nil }
@@ -323,8 +341,9 @@ struct OfficialChatView: View {
         // (see `ThreadView.composerNotice`). It was a full-width system strip with a hard Divider
         // ruled across the top, which is the bordered slab the owner circled: the one piece of this
         // screen that did not look like the rest of the app.
+        // The chat's own notice text (`ThreadView.removedBar`), so the two bars read the same.
         Text(OfficialChannel.cannotReply)
-            .font(.footnote)
+            .font(.subheadline.weight(.medium))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 18)
@@ -334,10 +353,6 @@ struct OfficialChatView: View {
             // stands, so it is edge-attached SYSTEM CHROME and takes the device's margins and the
             // indicator-band dip, not the 12/6 that used to be written here. See `SystemBarChrome`.
             .systemBarChrome()
-            .background(GeometryReader { g in
-                Color.clear.preference(key: OfficialBarHeightKey.self, value: g.size.height)
-            })
-            .onPreferenceChange(OfficialBarHeightKey.self) { barHeight = $0 }
     }
 
     // MARK: Buttons
@@ -461,27 +476,24 @@ struct OfficialChatInfoView: View {
 
     // MARK: Mute and Search
 
+    /// ⛔ THE CHAT PROFILE'S OWN CIRCLES — owner, 2026-09-28: "make it exactly how it looks in a
+    /// normal chat, and how it works". `ContactInfoView.actionsRow`: 60pt glass `PosterActionIcon`s
+    /// with no captions, the bell showing what a tap does, Mute behind a menu.
     private var actionButtons: some View {
-        HStack(spacing: 12) {
-            roundAction(store.state.muted ? "bell.slash" : "bell",
-                        store.state.muted ? "Unmute" : "Mute") { store.setMuted(!store.state.muted) }
-            roundAction("magnifyingglass", "Search") { showSearch = true }
+        HStack(spacing: 0) {
+            Menu {
+                if store.state.muted {
+                    Button { store.setMuted(false) } label: { Label("Unmute", systemImage: "bell") }
+                } else {
+                    Button { store.setMuted(true) } label: { Label("Mute", systemImage: "bell.slash") }
+                }
+            } label: {
+                PosterActionIcon(icon: store.state.muted ? "ic_bell" : "ic_bell_off", onPhoto: false)
+            }.tint(.primary)
+            Button { showSearch = true } label: {
+                PosterActionIcon(icon: "magnifyingglass", onPhoto: false)
+            }.tint(.primary)
         }
-    }
-
-    private func roundAction(_ icon: String, _ title: String,
-                             _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 21, weight: .regular))
-                    .frame(width: 80, height: 54)
-                    .background(Capsule().fill(Color(.secondarySystemGroupedBackground)))
-                Text(title).font(.subheadline).foregroundStyle(.secondary)
-            }
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
     }
 
     // MARK: Cards
