@@ -128,6 +128,8 @@ struct ThreadView: View {
     @State private var attachSourceRect: CGRect = .zero
     /// The sheet is waiting for the source to reach the "+" before it presents (`attachZoomSource`).
     @State private var attachPending = false
+    /// The "+" copy is showing in place of the real button, from the tap until the sheet is back.
+    @State private var attachLifted = false
     // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
@@ -1356,7 +1358,7 @@ struct ThreadView: View {
         // `attachShowAlbums` and `attachInAlbum` are reset with the rest: the sheet reopens on the
         // photo grid, never on the album list or inside the album you happened to leave it in.
         .overlay { attachZoomSource }
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false; attachDetent = ThreadView.attachOpenDetent }) {
+        .sheet(isPresented: $showAttachPanel, onDismiss: { attachLifted = false; ChatComposerView.AttachSource.setLifted(false); recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
                 .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
@@ -4203,7 +4205,22 @@ struct ThreadView: View {
             let origin = g.frame(in: .global).origin
             let r = attachSourceRect
             let side = max(min(r.width, r.height), 1)
-            Color.white.opacity(0.001)
+            // ⛔ THE BUTTON ITSELF BECOMES THE SHEET — owner, 2026-09-28, build 789, with pictures of
+            // the system Messages app: "the + button itself goes to open; in mine the sheet comes on
+            // the + button, but not the + button itself". The zoom morphs whatever its source draws,
+            // and this source drew nothing, so the sheet grew over a + that stayed put. It now draws
+            // a copy of the "+" (same glass circle, same glyph) while the real UIKit one is hidden,
+            // from the tap until the sheet has shrunk back (`attachLifted`).
+            ZStack {
+                Color.white.opacity(0.001)
+                if attachLifted {
+                    Image("ic_composer_plus")
+                        .renderingMode(.template)
+                        .foregroundStyle(.primary)
+                        .frame(width: max(r.width, 1), height: max(r.height, 1))
+                        .glassEffect(.regular, in: Circle())
+                }
+            }
                 .frame(width: max(r.width, 1), height: max(r.height, 1))
                 // A circle as the one shape the source accepts: a rounded rect of half its height.
                 .matchedTransitionSource(id: "attach", in: attachZoom) {
@@ -7012,6 +7029,11 @@ struct ThreadView: View {
                 // source's geometry callback presents it); if it is already there, it opens a turn
                 // later as before. See `attachZoomSource`.
                 let r = ChatComposerView.AttachSource.windowRect
+                // The copy takes the real button's place before the zoom starts from it.
+                if r != .zero {
+                    attachLifted = true
+                    ChatComposerView.AttachSource.setLifted(true)
+                }
                 if r != .zero && r != attachSourceRect {
                     attachPending = true
                     attachSourceRect = r

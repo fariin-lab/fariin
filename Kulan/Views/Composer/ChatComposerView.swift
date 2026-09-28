@@ -238,6 +238,9 @@ final class ChatComposerView: UIView {
             guard let b = button, b.window != nil else { return .zero }
             return b.convert(b.bounds, to: nil)
         }
+        /// Hides the real "+" while its SwiftUI copy is the thing that turns into the sheet, and
+        /// shows it again once the sheet has shrunk back into it (ThreadView `attachZoomSource`).
+        static func setLifted(_ on: Bool) { button?.alpha = on ? 0 : 1 }
     }
 
     private func build() {
