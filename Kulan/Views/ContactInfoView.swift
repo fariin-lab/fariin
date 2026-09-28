@@ -597,7 +597,12 @@ struct ContactInfoView: View {
     /// buttins only that buttons"). The bar and the row are allowed to differ; that is his call.
     private var barTint: Color? { useAdaptive ? .white : nil }
 
-    private var barColorScheme: ColorScheme? { useAdaptive ? Self.barScheme : nil }
+    /// ⚠️ NOT WHILE ALL MEDIA IS PUSHED OVER IT — owner, 2026-09-28, iOS 27, light phone: All
+    /// Media's back and ••• were dark discs and its title was gone. A toolbar scheme set here stays
+    /// in force for the screen pushed on top of this one, whatever that screen asks for itself
+    /// (`MediaGalleryView.pageScheme`, which is right and was being out-voted). So this page lets go
+    /// of the bar for as long as All Media is up.
+    private var barColorScheme: ColorScheme? { useAdaptive && !showAllMedia ? Self.barScheme : nil }
 
     private static var barScheme: ColorScheme {
         if #available(iOS 27.0, *) { return .dark }
