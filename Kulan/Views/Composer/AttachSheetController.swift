@@ -370,6 +370,16 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         setTop(isExpanded ? expandedTop : compactTop)
     }
 
+    /// Jumps the grow to its end, for a drag that starts before it finished.
+    private func settleOpenNow() {
+        stopAll()
+        shell.layer.cornerRadius = 38
+        content.alpha = 1
+        glyph.alpha = 0
+        dim.alpha = 1
+        didOpen()
+    }
+
     /// The panel asked for the full height (caption field focused). Their 0.5s keyboard curve.
     func expand() {
         guard phase == .open, !isExpanded, scroll == nil else { return }
@@ -500,7 +510,9 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let pan = g as? UIPanGestureRecognizer else { return true }
-        guard phase == .open else { return false }
+        // `.opening` too: see `settleOpenNow`. Refusing here left the finger to the photo grid for
+        // the length of the grow, and the grid rubber-banded past its ends.
+        guard phase == .open || phase == .opening else { return false }
         let v = pan.velocity(in: view)
         return abs(v.y) > abs(v.x)
     }
@@ -543,6 +555,13 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     @objc private func pan(_ g: UIPanGestureRecognizer) {
         switch g.state {
         case .began:
+            // ⛔ GRABBED WHILE STILL GROWING — owner, 2026-09-28, two pictures: scrolling in the first
+            // moments after opening showed a black band at the top (pulling down) or the bottom
+            // (pushing up). The sheet ignored the drag until the grow finished, so the finger
+            // moved the grid instead and it stretched past its ends onto the bare sheet. The
+            // reference animates in with user interaction allowed; here a grab finishes the grow
+            // on the spot and the drag moves the sheet from rest, as it would a moment later.
+            if phase == .opening { settleOpenNow() }
             // Grabbed mid-snap: freeze it where it is and carry on from there.
             if !animators.isEmpty {
                 stopAll()
