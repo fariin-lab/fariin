@@ -74,7 +74,23 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            NO MORE DEBUG BOXES, VIDEO NO LONGER FREEZES, LIGHT-MODE CHATS BAR.
+            YOUR LOGO, ATTACH SHEET FROM THE +, MORE REACTIONS, PHOTO PEN, COLOUR AND WALLPAPER RESETS.
+
+            LOGO: the opening screen, the Welcome page and the sign-in page show the Fariin logo (black in light mode, white in dark). Create Account is black.
+
+            ATTACH: the attach sheet grows out of the + button and goes back into it when you close it (Apple's own animation). Please pull it up to full height a few times.
+
+            REACTIONS: the bar's ... is now +. Swipe the emoji row for about 45 more; a tap picks. The highlight on your reaction is a soft grey, and a reaction outside the six shows at the right end. The reactions list shows your name instead of "You".
+
+            PHOTO EDITOR: cropping keeps what you drew. The pen page is the story pen: undo and Clear All on top, pen, highlighter and size in one bar.
+
+            COLOUR AND WALLPAPER: Auto with a photo wallpaper is blue. Reset Chat Color gives blue; Reset Wallpaper gives the plain background (white in light mode, black in dark).
+
+            SELECT: ticked chats join into one grey block with no line between them.
+
+            PLEASE TEST: open and close the attach sheet; swipe the reaction bar; draw on a photo and then crop it; reset a chat's colour and wallpaper; tick several chats in a row.
+
+            EARLIER IN THIS ROUND: NO MORE DEBUG BOXES, VIDEO NO LONGER FREEZES, LIGHT-MODE CHATS BAR.
 
             DEBUG BOXES: the red server box and the black timing box are gone. Nothing about sign-in, tokens or timing shows in the app any more.
 
