@@ -860,6 +860,9 @@ enum QuickReaction {
     }
     /// Offered in the picker. The common reaction set, so a choice is one tap rather than a keyboard.
     static let choices = ["❤️", "👍", "👎", "😂", "😮", "😢", "🙏", "🔥", "🎉", "💯"]
+    /// ⛔ The long-press reaction bar's six, in this order, ALWAYS — owner, 2026-09-28, with a picture
+    /// of this exact row: "never change the default emojis". Using an emoji never moves or replaces one.
+    static let bar = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 }
 
 struct QuickReactionPage: View {

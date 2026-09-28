@@ -989,8 +989,8 @@ final class CMReactionBar: UIView {
     /// After the quick set, in the order a swipe reveals them. Any the quick set already holds is
     /// left out, so no emoji appears twice.
     private static let extraEmojis = [
-        "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "😢", "🎉", "🤩", "🙏", "👌", "😍", "💯", "🤣",
-        "😭", "😘", "🤗", "🫡", "🤝", "👀", "😇", "🥹", "😅", "🙈", "💔", "😡", "🤬", "😴", "🤨",
+        "🥹", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "😢", "🎉", "🤩", "🙏", "👌", "😍", "💯", "🤣",
+        "😭", "😘", "🤗", "🫡", "🤝", "👀", "😇", "😅", "🙈", "💔", "😡", "🤬", "😴", "🤨",
         "😐", "🤓", "👻", "🤡", "💩", "🥳", "😏", "🙄", "😬", "✅", "💪", "🌹", "⚡", "🏆", "🍾",
     ]
 
@@ -1017,12 +1017,10 @@ final class CMReactionBar: UIView {
 
     init(config: CMReactConfig) {
         self.config = config
-        // ⛔ MY REACTION IS ALWAYS ON THE BAR — owner, 2026-09-28, "make it like the reference app".
-        // Theirs keeps a reaction from the quick set in its own place and puts any other one at the
-        // RIGHT END of the bar. The bar keeps its size here, so the right end is the quick window's
-        // last slot: my reaction takes it, highlighted, instead of hiding somewhere down the strip.
-        var quick = config.emojis
-        if let mine = config.selected, !quick.isEmpty, !quick.contains(mine) { quick[quick.count - 1] = mine }
+        // ⛔ THE QUICK SIX NEVER CHANGE — owner, 2026-09-28: "never change the default emojis, now
+        // every emoji I use comes first". My reaction from the swipe part used to take the sixth
+        // slot; it now stays highlighted in its own place in the strip, and the six stay as given.
+        let quick = config.emojis
         self.allEmojis = quick + Self.extraEmojis.filter { !quick.contains($0) }
         // Liquid glass on iOS 26+, same as the card and same as the reference app's bar there.
         if #available(iOS 26.0, *) {

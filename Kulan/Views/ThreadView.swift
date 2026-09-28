@@ -3218,10 +3218,10 @@ struct ThreadView: View {
         // ⛔ A FIXED SET IN A FIXED ORDER — owner, 2026-09-28, "make it like the reference app": react
         // with B in A B C, long-press again, and it must still read A B C with B highlighted, never
         // B A C. The bar was recents first (2026-09-24 feature-audit), so every reaction moved the
-        // one just used to the front. The reference app's bar is its saved set, in its order, and a
-        // reaction outside it shows at the right end (`CMReactionBar.init`); its default set is
-        // these six, the first six of ours. Recents are still recorded, for the full picker.
-        return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
+        // one just used to the front. Later the same day, with a picture: "never change the default
+        // emojis", so a reaction from the swipe part stays in its own place there too
+        // (`CMReactionBar.init`). Recents are still recorded, for the full picker.
+        return (QuickReaction.bar, m.reactions[me])
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
