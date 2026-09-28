@@ -4680,7 +4680,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // change is absorbed without walking the conversation. Coming back is the mirror image and is
         // deliberately NOT symmetric: see the note in `customMenuDidEnd` for why the flag is dropped
         // BEFORE the keyboard is restored.
-        let keyboardWasUp = onMenuCloseKeyboard()
+        // ⛔ REVERSED ON HIS WORD, 2026-09-28: "when the keyboard is open and I try to react, the
+        // keyboard closes by itself and the reaction does not work, fix it". The 08-27 ruling
+        // below (keyboard down for the menu, back after) is history. The keyboard now STAYS UP and
+        // the menu opens in its own window above the keyboard's (`presentsAboveKeyboard`), which
+        // is the reference app's model and the machinery 90195a37 built for it. Nothing moves, so
+        // there is nothing to restore: `keyboardWasUp` is false and `onMenuCloseKeyboard` is not
+        // called.
+        let keysUp = keyboardIsUp
+        let keyboardWasUp = false
         let overlay = CMOverlay(previewView: container, sourceFrame: src.frame,
                                 alignRight: alignRight, actions: actions, react: react) { [weak self] in
             self?.customMenuDidEnd()
@@ -4707,7 +4715,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // sheet presented later has to be reasoned about — the more-emoji picker already needed a
         // special case for exactly that. `keyboardIsUp` would still read true here, because the guide
         // travels with the keys' animation, so this is set flatly rather than asked.
-        overlay.presentsAboveKeyboard = false
+        overlay.presentsAboveKeyboard = keysUp   // (the note above is the 08-27 era; see the top of this block)
         overlay.present(in: window, startAtSqueeze: true)
     }
 
