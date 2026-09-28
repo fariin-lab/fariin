@@ -421,7 +421,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         shell.isHidden = true
         ChatComposerView.AttachSource.setLifted(false)
         NotificationCenter.default.removeObserver(self)
-        let done = { [weak self] in self?.onClosed?() }
+        let done: () -> Void = { [weak self] in self?.onClosed?() }
         if dismissed || presentingViewController == nil { done() }
         else { presentingViewController?.dismiss(animated: false, completion: done) }
     }
