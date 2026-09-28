@@ -2160,10 +2160,22 @@ enum MessageRowLayout {
             attr = NSMutableAttributedString()
             if let symbol = n.symbol, let img = UIImage(systemName: symbol,
                                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 11)) {
+                // ⛔ THE GLYPH RIDES THE NOTICE'S FONT AND SITS ON ITS CAP HEIGHT — owner, 2026-09-28,
+                // the disappearing-timer pill: the words sat low and their descenders were cut off,
+                // while the same pill without a glyph ("You pinned…") was fine. The attachment run
+                // had no font, so it was MEASURED in the 12pt default but DRAWN in the label's own
+                // font, and `y: -1` hung the glyph past the font's ascent: the drawn line was taller
+                // than the capsule built from the measured one, and the text dropped out of its
+                // bottom. Same cure as the tick in `BubbleText.meta`: state the font, centre the
+                // glyph on the cap height, and the line box is the font's again.
+                let f = BubbleMetrics.noticeFont
                 let a = NSTextAttachment()
                 a.image = img.withTintColor(.label, renderingMode: .alwaysOriginal)
-                a.bounds = CGRect(x: 0, y: -1, width: img.size.width, height: img.size.height)
-                attr.append(NSAttributedString(attachment: a))
+                a.bounds = CGRect(x: 0, y: (f.capHeight - img.size.height) / 2,
+                                  width: img.size.width, height: img.size.height)
+                let glyph = NSMutableAttributedString(attachment: a)
+                glyph.addAttribute(.font, value: f, range: NSRange(location: 0, length: glyph.length))
+                attr.append(glyph)
             }
             attr.append(NSAttributedString(string: n.text, attributes: [
                 .font: BubbleMetrics.noticeFont, .foregroundColor: UIColor.label]))
