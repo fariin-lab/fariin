@@ -1403,8 +1403,15 @@ enum MessageRowLayout {
         let columnStart = hPad + disc + gap
         let columnW2 = max(1, contentW - disc - gap)
 
+        // ⛔ TABULAR DIGITS, NOT THE SYSTEM DEFAULT — owner, 2026-09-28, screenshot of "0:..." on a
+        // part-played note. The label's box is measured once, against the TOTAL, and the elapsed
+        // time is drawn into it. With the default proportional digits a "1" is narrower than a "0"
+        // or a "4", so "0:04" is WIDER than a box measured for "0:11" and truncates. Tabular digits
+        // make every string of the same shape the same width, which is the only thing that makes
+        // "elapsed never outgrows the total" true. The SwiftUI bubble always had `.monospacedDigit()`;
+        // the UIKit port dropped it.
         let durationAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: 11),
+            .font: UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
             .foregroundColor: textColor.withAlphaComponent(0.8)]
         let durationAttr = NSAttributedString(string: v.durationText, attributes: durationAttrs)
         let durH = lineSizeOf(durationAttr).height
