@@ -2048,8 +2048,19 @@ struct ContactInfoView: View {
     /// generous and instantly undoable, while removing one silently cuts somebody out of an
     /// audience they are currently in. His words: "when he click Glowing show context menu remove
     /// glowing" — so the second state is a MENU, not a toggle that fires on touch.
+    /// ⛔ NEITHER STATE UNTIL THE RELATIONSHIP IS KNOWN (from the parked 09-05 Glow fixes, landed
+    /// 2026-09-28). Before the glow listeners answer, `isGlowing` is false for everybody, so a person
+    /// you already glow showed "Glow Story" and a tap tried to give it again. Held dimmed and inert
+    /// until the relationship has loaded; a failed load keeps it inert rather than guessing.
+    private var glowRelationshipKnown: Bool { glow.hasLoaded && !glow.hasFailed }
+
     @ViewBuilder private var glowActionButton: some View {
-        if glow.isGlowing(otherUid) {
+        if !glowRelationshipKnown {
+            PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader)
+                .opacity(0.35)
+                .accessibilityLabel("Glow Story")
+                .accessibilityHint("Loading")
+        } else if glow.isGlowing(otherUid) {
             Menu {
                 // ⛔ THE GLOW MARK ON THE REMOVE ROW, NOT AN ✕ — owner, 2026-09-05, with a shot of
                 // this row. The ✕ described the mechanic, which is that a row closes something; the
@@ -2096,7 +2107,11 @@ struct ContactInfoView: View {
 
     /// The ••• menu's Glow entry — the second of his two doors. Same two states as the button.
     @ViewBuilder private var glowMenuItem: some View {
-        if glow.isGlowing(otherUid) {
+        if !glowRelationshipKnown {
+            // Same hold as the button: shown, not tappable, until the relationship is known.
+            Button { } label: { Label { Text("Glow Story") } icon: { GlowStyle.mark(20) } }
+                .disabled(true)
+        } else if glow.isGlowing(otherUid) {
             // Same row as the button's menu, down to the glyph — see `glowActionButton`. Two doors
             // to one action means two rows that have to read identically, or the second door looks
             // like a different action.
