@@ -1017,7 +1017,13 @@ final class CMReactionBar: UIView {
 
     init(config: CMReactConfig) {
         self.config = config
-        self.allEmojis = config.emojis + Self.extraEmojis.filter { !config.emojis.contains($0) }
+        // ⛔ MY REACTION IS ALWAYS ON THE BAR — owner, 2026-09-28, "make it like the reference app".
+        // Theirs keeps a reaction from the quick set in its own place and puts any other one at the
+        // RIGHT END of the bar. The bar keeps its size here, so the right end is the quick window's
+        // last slot: my reaction takes it, highlighted, instead of hiding somewhere down the strip.
+        var quick = config.emojis
+        if let mine = config.selected, !quick.isEmpty, !quick.contains(mine) { quick[quick.count - 1] = mine }
+        self.allEmojis = quick + Self.extraEmojis.filter { !quick.contains($0) }
         // Liquid glass on iOS 26+, same as the card and same as the reference app's bar there.
         if #available(iOS 26.0, *) {
             backdrop = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
@@ -1078,7 +1084,10 @@ final class CMReactionBar: UIView {
         let holder = UIView()
         if emoji == config.selected {
             let disc = UIView()
-            disc.backgroundColor = UIColor.tintColor.withAlphaComponent(0.18)
+            // The reference app's neutral system fill, not the chat colour: tinted, the disc read as a
+            // heavy coloured blob a size too big (owner, 2026-09-28). The size is theirs already,
+            // the bar's height less 4.
+            disc.backgroundColor = .secondarySystemFill
             disc.layer.cornerRadius = (barHeight - 4) / 2
             disc.isUserInteractionEnabled = false
             holder.addSubview(disc)
