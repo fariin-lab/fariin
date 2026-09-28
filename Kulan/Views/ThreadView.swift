@@ -1571,6 +1571,11 @@ struct ThreadView: View {
                               guard uid == me else { return personName(uid) }
                               let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
                               return mine.isEmpty ? "You" : mine
+                          },
+                          // The chat's own photo mirror, the one Message Info reads; my profile's
+                          // photo when the mirror has none of mine yet.
+                          photoFor: { uid in
+                              conversation?.photos[uid] ?? (uid == me ? ProfileStore.shared.me?.photoUrl : nil)
                           })
         }
         // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.

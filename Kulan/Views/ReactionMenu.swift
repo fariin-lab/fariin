@@ -160,6 +160,8 @@ struct EditHistorySheet: View {
 struct ReactorsSheet: View {
     let reactions: [String: String]      // uid -> emoji
     let nameFor: (String) -> String
+    /// The reactor's photo url, for the round avatar in front of the name (owner, 2026-09-28).
+    var photoFor: (String) -> String? = { _ in nil }
     @Environment(\.dismiss) private var dismiss
     @State private var selected: String?  // nil = All
 
@@ -213,7 +215,9 @@ struct ReactorsSheet: View {
                     .listRowSeparator(.hidden)
                 }
                 ForEach(rows, id: \.uid) { r in
-                    HStack {
+                    HStack(spacing: 12) {
+                        // The same avatar and size the message info list uses for its people.
+                        AvatarView(name: r.name, photoUrl: photoFor(r.uid), size: 40)
                         Text(r.name).font(.body)
                         VerifiedMark(uid: r.uid, size: 13)
                         Spacer()
