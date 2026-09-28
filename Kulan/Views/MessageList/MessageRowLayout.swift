@@ -1980,11 +1980,23 @@ enum MessageRowLayout {
         // width so a label never clips, and the capsule was built around it, but the label draws
         // from its left edge: that point always landed on the right. The capsule is now built
         // around the ink (`size.width - 1`), and the label keeps its slack inside the right pad.
-        let ink = max(0, size.width - 1)
+        //
+        // ⛔ AND FROM THE INK ITSELF, NOT THE ADVANCE — owner, 2026-09-28 (third report, build 793,
+        // a red line through the pill's middle): the time and tick still sat right of centre, with
+        // wider gaps than the 7pt pad on both sides. A string's advance width is not where its
+        // glyphs are: the "8" begins after its side bearing and the tick image carries clear space
+        // of its own, so a pill built from the advance is off by whatever those happen to be.
+        // `.usesDeviceMetrics` gives the glyphs' real ink box; the pill is that box plus the pad on
+        // each side, and the label is placed so the ink, not the advance, starts at the pad.
+        let inkBox = attr.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
+                                       options: [.usesLineFragmentOrigin, .usesDeviceMetrics], context: nil)
+        let useInk = inkBox.width > 0 && inkBox.width <= size.width + 4
+        let ink = useInk ? ceil(inkBox.width) : max(0, size.width - 1)
+        let lead = useInk ? inkBox.minX : 0
         let capsule = CGRect(x: rect.maxX - 7 - (ink + hPad * 2),
                              y: rect.maxY - 7 - (lineH + vPad * 2),
                              width: ink + hPad * 2, height: lineH + vPad * 2)
-        let text = CGRect(x: capsule.minX + hPad,
+        let text = CGRect(x: capsule.minX + hPad - lead,
                           y: capsule.midY - lineH / 2,
                           width: size.width, height: lineH)
         return (capsule, text)
