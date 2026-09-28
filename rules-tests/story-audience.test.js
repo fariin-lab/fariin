@@ -19,6 +19,11 @@
 const fs = require('fs');
 const { token } = require('./auth');
 
+// Fallback answers for the block check: nobody in these cases has blocked anybody.
+const NOT_BLOCKED = [
+  { function: 'exists', args: [{ anyValue: {} }], result: { value: false } },
+];
+
 const RULES = process.argv[2] || '../firestore.rules';
 const D = '/databases/(default)/documents';
 const A = 'uidAAA';   // the author
@@ -178,7 +183,10 @@ const cases = [
       time: new Date().toISOString(),
     };
     if (c.after) request.resource = { data: c.after };
-    const testCase = { expectation: c.expect, request, functionMocks: c.mocks };
+    // 2026-09-28: the 09-26 block check (isBlockedByUser) reads users/{author}/blocked/{reader} and the
+    // pair conversation. Production answers "not blocked" for these readers; the engine refuses any
+    // lookup it has no answer for, so the answer is given, AFTER every specific mock.
+    const testCase = { expectation: c.expect, request, functionMocks: [...(c.mocks || []), ...NOT_BLOCKED] };
     if (c.before) testCase.resource = { data: c.before };
 
     const r = await fetch('https://firebaserules.googleapis.com/v1/projects/kulan-2ef85:test', {

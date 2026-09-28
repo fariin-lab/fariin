@@ -17,6 +17,11 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { token } = require('./auth');
 
+// Fallback answers for the block check: nobody in these cases has blocked anybody.
+const NOT_BLOCKED = [
+  { function: 'exists', args: [{ anyValue: {} }], result: { value: false } },
+];
+
 const RULES = process.argv[2] || '../firestore.rules';
 const D = '/databases/(default)/documents';
 const A = 'uidAAA';      // the story's author
@@ -180,19 +185,19 @@ const cases = [
   // ---- 5. the rate limit. THE OUTAGE GUARD: a client that has never written a counter must post.
   ['post with no counter at all', 'ALLOW', A,
     `${D}/stories/${SID}`, 'create',
-    { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
+    { ...friendsStory, createdAt: iso(now), expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
     [...notBanned(A), ...notAdmin(A), ...budget(A, null)]],
   ['post inside a window that is not full', 'ALLOW', A,
     `${D}/stories/${SID}`, 'create',
-    { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
+    { ...friendsStory, createdAt: iso(now), expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
     [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: iso(now - 60e3), count: 3 })]],
   ['post inside a window that is full', 'DENY', A,
     `${D}/stories/${SID}`, 'create',
-    { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
+    { ...friendsStory, createdAt: iso(now), expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
     [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: iso(now - 60e3), count: 40 })]],
   ['post after a full window has expired', 'ALLOW', A,
     `${D}/stories/${SID}`, 'create',
-    { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
+    { ...friendsStory, createdAt: iso(now), expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
     [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: iso(now - 2 * 3600e3), count: 99 })]],
 
   // ---- 6. the counter itself
@@ -228,7 +233,10 @@ const cases = [
       path, method, time: REQ_TIME,
     };
     if (after) request.resource = { data: after };
-    const testCase = { expectation: expect, request, functionMocks: mocks };
+    // 2026-09-28: the 09-26 block check (isBlockedByUser) reads users/{author}/blocked/{reader} and the
+    // pair conversation. Production answers "not blocked" for these readers; the engine refuses any
+    // lookup it has no answer for, so the answer is given, AFTER every specific mock.
+    const testCase = { expectation: expect, request, functionMocks: [...(mocks || []), ...NOT_BLOCKED] };
     if (before) testCase.resource = { data: before };
     const body = {
       source: { files: [{ name: 'firestore.rules', content: source }] },

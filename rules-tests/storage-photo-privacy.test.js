@@ -20,6 +20,8 @@ function world(viewer, { audience = 'everyone', hidden = false, chat = null } = 
   const cid = cidOf(OWNER, viewer);
   const conv = `${D}/conversations/${cid}`;
   return [
+    // 2026-09-28: the 09-27 rule reads the owner's document only after checking it exists.
+    { function: 'firestore.exists', args: [{ exactValue: `${D}/users/${OWNER}` }], result: { value: true } },
     { function: 'firestore.get', args: [{ exactValue: `${D}/users/${OWNER}` }],
       result: { value: { data: { privacy: { photo: audience } } } } },
     { function: 'firestore.exists', args: [{ exactValue: `${D}/users/${OWNER}/photoHiddenFrom/${viewer}` }],
@@ -69,7 +71,9 @@ const cases = [
 async function run(t, source, [, , , uid, path, method, after, before, mocks], expectation) {
   const request = { auth: { uid, token: { firebase: { sign_in_provider: 'password' } } }, path, method, time: REQ_TIME };
   if (after) request.resource = after;
-  const testCase = { expectation, request, functionMocks: mocks, resource: before || null };
+  // 2026-09-28: the 09-26 block rebuild added block lookups these cases predate; production answers
+  // "not blocked" for them, so that answer is given AFTER every specific mock.
+  const testCase = { expectation, request, functionMocks: [...(mocks || []), { function: 'firestore.exists', args: [{ anyValue: {} }], result: { value: false } }], resource: before || null };
   const r = await fetch('https://firebaserules.googleapis.com/v1/projects/kulan-2ef85:test', {
     method: 'POST',
     headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },

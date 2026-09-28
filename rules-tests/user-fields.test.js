@@ -1,76 +1,38 @@
 // Runs real assertions against firestore.rules using Firebase's own rules test engine.
 // Nothing is deployed. Each case says what it expects, and a mismatch is printed loudly.
+//
+//   node user-fields.test.js              # against ../firestore.rules
+//   node user-fields.test.js old.rules    # or any other rules file
+//
+// 2026-09-28: REWRITTEN IN THE FORMAT THE ENGINE ACTUALLY READS. The first version sent Firestore
+// typed values ({stringValue: ...}) and a bare `token: {}`. `resource.data` in this API is PLAIN
+// JSON (README, trap 1), and without a sign-in provider the request is not signed in at all, so the
+// ALLOW case ("edit own NAME") failed on every rules version for reasons that had nothing to do with
+// the rules, and the DENY cases passed for the wrong reason.
 const fs = require('fs');
 const { token } = require('./auth');
 
-const RULES = '../firestore.rules';
-const P = 'projects/kulan-2ef85/databases/(default)/documents';
+const RULES = process.argv[2] || '../firestore.rules';
+const D = '/databases/(default)/documents';
 const VICTIM = 'uidVictim';
 
 // A user document as it exists for somebody who has been banned by a moderator.
-const bannedDoc = {
-  name: { stringValue: 'Someone' },
-  banned: { booleanValue: true },
-  handleLower: { stringValue: 'someone' },
-};
+const bannedDoc = { name: 'Someone', banned: true, handleLower: 'someone' };
+// The same person, not banned: the ordinary case.
+const normalDoc = { name: 'Someone', banned: false, handleLower: 'someone' };
 
-function req({ path, method, auth, data, resource }) {
-  return {
-    expectation: undefined, // filled by caller
-    request: {
-      auth: auth ? { uid: auth, token: { firebase: { sign_in_provider: 'password' } } } : null,
-      path: `/databases/(default)/documents/${path}`,
-      method,
-      time: new Date().toISOString(),
-      ...(data ? { resource: { data } } : {}),
-    },
-    ...(resource ? { resource: { data: resource } } : {}),
-  };
-}
+const mocks = [
+  { function: 'exists', args: [{ exactValue: `${D}/admins/${VICTIM}` }], result: { value: false } },
+  { function: 'get', args: [{ exactValue: `${D}/users/${VICTIM}` }], result: { value: { data: normalDoc } } },
+  { function: 'exists', args: [{ exactValue: `${D}/users/${VICTIM}` }], result: { value: true } },
+];
 
 const cases = [
-  {
-    name: 'BANNED user tries to unban THEMSELVES',
-    expect: 'DENY',
-    tc: {
-      expectation: 'DENY',
-      request: {
-        auth: { uid: VICTIM, token: {} },
-        path: `/databases/(default)/documents/users/${VICTIM}`,
-        method: 'update',
-        resource: { data: { ...bannedDoc, banned: { booleanValue: false } } },
-      },
-      resource: { data: bannedDoc },
-    },
-  },
-  {
-    name: 'normal user edits their own NAME',
-    expect: 'ALLOW',
-    tc: {
-      expectation: 'ALLOW',
-      request: {
-        auth: { uid: VICTIM, token: {} },
-        path: `/databases/(default)/documents/users/${VICTIM}`,
-        method: 'update',
-        resource: { data: { ...bannedDoc, name: { stringValue: 'New Name' } } },
-      },
-      resource: { data: bannedDoc },
-    },
-  },
-  {
-    name: 'user tries to TAKE A USERNAME directly',
-    expect: 'DENY',
-    tc: {
-      expectation: 'DENY',
-      request: {
-        auth: { uid: VICTIM, token: {} },
-        path: `/databases/(default)/documents/users/${VICTIM}`,
-        method: 'update',
-        resource: { data: { ...bannedDoc, handleLower: { stringValue: 'malia' } } },
-      },
-      resource: { data: bannedDoc },
-    },
-  },
+  ['BANNED user tries to unban THEMSELVES', 'DENY', bannedDoc, { ...bannedDoc, banned: false }],
+  ['normal user edits their own NAME', 'ALLOW', normalDoc, { ...normalDoc, name: 'New Name' }],
+  ['user tries to TAKE A USERNAME directly', 'DENY', normalDoc, { ...normalDoc, handleLower: 'malia' }],
+  ['user tries to BAN THEMSELVES off (writes banned: false over nothing)', 'DENY',
+    { name: 'Someone', handleLower: 'someone' }, { name: 'Someone', handleLower: 'someone', banned: false }],
 ];
 
 (async () => {
@@ -78,10 +40,23 @@ const cases = [
   const source = fs.readFileSync(RULES, 'utf8');
   let pass = 0, fail = 0;
 
-  for (const c of cases) {
+  for (const [name, expect, before, after] of cases) {
     const body = {
       source: { files: [{ name: 'firestore.rules', content: source }] },
-      testSuite: { testCases: [c.tc] },
+      testSuite: {
+        testCases: [{
+          expectation: expect,
+          request: {
+            auth: { uid: VICTIM, token: { firebase: { sign_in_provider: 'password' } } },
+            path: `${D}/users/${VICTIM}`,
+            method: 'update',
+            time: new Date().toISOString(),
+            resource: { data: after },
+          },
+          resource: { data: before },
+          functionMocks: mocks,
+        }],
+      },
     };
     const r = await fetch('https://firebaserules.googleapis.com/v1/projects/kulan-2ef85:test', {
       method: 'POST',
@@ -93,7 +68,7 @@ const cases = [
     const state = result?.state || JSON.stringify(j).slice(0, 200);
     const ok = state === 'SUCCESS';
     if (ok) pass++; else fail++;
-    console.log(`${ok ? 'PASS' : 'FAIL'}  expected ${c.expect.padEnd(5)}  ${c.name}`);
+    console.log(`${ok ? 'PASS' : 'FAIL'}  expected ${expect.padEnd(5)}  ${name}`);
     if (!ok && result?.debugMessages) console.log('      ', result.debugMessages.join(' | ').slice(0, 300));
   }
   console.log(`\n${pass} passed, ${fail} failed`);

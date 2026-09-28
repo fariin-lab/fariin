@@ -63,7 +63,12 @@ const cases = [
     m({ lastMessage: 'hello', lastSender: A, updatedAt: 1234567890 })],
   // unreadCount is deliberately exempt: the SENDER increments the RECIPIENT'S badge, so it is the
   // one uid-keyed map that legitimately crosses. If this denies, sending is broken.
+  // 2026-09-28: +1, not 3. Since the 2026-09-24 badge rule (`unreadKeyOk`) a send moves the other
+  // member's badge by exactly one; the old "3 from nothing" case was a tamper the rule now refuses,
+  // which is what the next case pins.
   ["A increments B's unread badge (must stay allowed)", 'ALLOW',
+    m({ unreadCount: { [B]: 1 }, lastSender: A, lastMessage: 'hi' })],
+  ["A sets B's badge to 3 in one write (tamper)", 'DENY',
     m({ unreadCount: { [B]: 3 }, lastSender: A, lastMessage: 'hi' })],
 ];
 

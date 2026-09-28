@@ -178,8 +178,10 @@ const cases = [
   ['OK      a contact reads last seen (My Contacts, no block)',
     'ALLOW', 'ALLOW', ME, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
     presenceMocks('contacts', {})],
-  ['OK      last seen set to Everyone, reader blocked (Everyone means everyone)',
-    'ALLOW', 'ALLOW', ME, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
+  // 2026-09-28: REVERSED ON PURPOSE by the 2026-09-26 block rebuild (his order): a person the owner
+  // blocked never sees their last seen, whatever the setting. D8's "Everyone means everyone" is gone.
+  ['CHANGED last seen set to Everyone, reader blocked (the block wins since 09-26)',
+    'ALLOW', 'DENY', ME, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
     presenceMocks('everyone', { [THIRD]: true })],
   ['ATTACK  a blocked person reads the blocker\'s last seen',
     'ALLOW', 'DENY', ME, `${D}/users/${THIRD}/presence/state`, 'get', null, { online: false },
@@ -914,7 +916,9 @@ async function run(t, source, [, , , uid, path, method, after, before, mocks, to
     path, method, time: REQ_TIME,
   };
   if (after) request.resource = { data: after };
-  const testCase = { expectation, request, functionMocks: mocks };
+  // 2026-09-28: the 09-26 block rebuild added block lookups these cases predate; production answers
+  // "not blocked" for them, so that answer is given AFTER every specific mock.
+  const testCase = { expectation, request, functionMocks: [...(mocks || []), { function: 'exists', args: [{ anyValue: {} }], result: { value: false } }] };
   if (before) testCase.resource = { data: before };
   const r = await fetch('https://firebaserules.googleapis.com/v1/projects/kulan-2ef85:test', {
     method: 'POST',
