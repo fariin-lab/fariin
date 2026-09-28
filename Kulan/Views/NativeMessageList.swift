@@ -2190,61 +2190,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    /// ⛔ THE FIRST WINDOW IS LAID OUT OFF THE MAIN THREAD — owner, 2026-09-28, "make it like the
-    /// reference app", with the timing box: the slide began 0.18s after the tap, and the largest
-    /// single piece before it was this list's first update, 43ms, laying out every row of the
-    /// window one by one on the main thread before the push could start.
-    ///
-    /// The reference app never does that: its loader builds and measures the render items on a
-    /// background queue and lands them on the main thread when they are ready, and the conversation
-    /// slides in meanwhile. Same here, for the first land only: the rows' plans are computed on a
-    /// background queue while the push begins, seeded into `planStore`, and the land then runs
-    /// exactly as before, finding every row already measured. The list is still hidden behind its
-    /// reveal until it has landed, so nothing half-drawn shows. Later updates and every other path
-    /// are untouched. `MessageRowLayout.plan` is pure text measurement; its one shared cache (the
-    /// tick glyphs) is locked for this.
-    ///
-    /// Returns true when it has taken the ids (they land when the plans are back).
-    private enum FirstPlans { case idle, computing, ready }
-    private var firstPlans = FirstPlans.idle
-    private var firstPlansIds: [String] = []
-    private var firstPlansTarget: String?
-
-    private func planFirstLandOffMain(_ ids: [String], width: CGFloat, scrollTarget: String?) -> Bool {
-        guard !didFirstLand, currentIds.isEmpty, !ids.isEmpty, width > 0 else { return false }
-        switch firstPlans {
-        case .ready:
-            return false
-        case .computing:
-            // A newer window arrived while the first was being laid out: land that one. Rows it
-            // adds or changed are laid out on the main thread by the land, as always.
-            firstPlansIds = ids
-            if let scrollTarget { firstPlansTarget = scrollTarget }
-            return true
-        case .idle:
-            firstPlans = .computing
-            firstPlansIds = ids
-            firstPlansTarget = scrollTarget
-            let models = ids.compactMap { rowModels[$0] }
-            let traceStart = CFAbsoluteTimeGetCurrent()   // TEMPORARY, see OpenTrace
-            DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-                let plans = models.map { ($0, MessageRowLayout.plan($0, width: width)) }
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    OpenTrace.took("lay out \(plans.count) rows off the main thread", since: traceStart)   // TEMPORARY
-                    if self.collectionView.bounds.width == width {
-                        for (m, p) in plans { self.planStore.seed(m, width: width, plan: p) }
-                    }
-                    self.firstPlans = .ready
-                    let ids = self.firstPlansIds, target = self.firstPlansTarget
-                    self.firstPlansIds = []
-                    self.firstPlansTarget = nil
-                    self.apply(rowIds: ids, scrollTarget: target)
-                }
-            }
-            return true
-        }
-    }
+    // ⛔ NO OFF-MAIN FIRST LAND — 2026-09-28, reversing 19139911's third part. It laid the first
+    // window out on a background queue and RETURNED, so the push began with the list still hidden
+    // and the messages arrived into it mid-slide: the exact "REVEAL IN THIS TURN" bug the note in
+    // `performFirstLandIfReady` records from 2026-08-27, and the reason the header had nothing to
+    // blur for the first part of the slide (he reported both the same day). The 43ms it saved is
+    // spent before the first frame again, which is what the reference apps do too: they start the
+    // load before the push and slide in a screen that is already drawn. The other two parts of that
+    // commit (the snapshot work off main, no republish of an unchanged window) stay.
 
     func apply(rowIds rawIds: [String], scrollTarget: String? = nil) {
         // LAST LINE OF DEFENCE, AND IT IS NOT OPTIONAL. `appendItemsWithIdentifiers:` throws on a repeated
@@ -2263,8 +2216,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Chronological, as handed to us. Index 0 is the oldest loaded row, the newest is last.
         let ids = unique
         let width = collectionView.bounds.width
-
-        if planFirstLandOffMain(ids, width: width, scrollTarget: scrollTarget) { return }
 
         if didFirstLand, ids != currentIds, scrollTarget == nil, !canLandLoad {
             let wasWaiting = pendingIdsApply != nil
