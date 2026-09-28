@@ -201,7 +201,16 @@ enum ChatColors {
     /// pairing is what this answers while it is being tried — their `previewWallpaper`.
     func autoColor(for cid: String) -> ChatColorSpec? {
         let walls = WallpaperStore.shared
-        if walls.hasOverride(for: cid), let c = walls.wallpaper(for: cid).pairedColor { return c }
+        if walls.hasOverride(for: cid) {
+            // ⛔ THE CHAT'S OWN PHOTO OR PLAIN WALLPAPER IS BLUE ON AUTO — owner, 2026-09-28: "chat
+            // colour on Auto, then a wallpaper from Photos: use the blue bubble; don't touch a custom
+            // colour". A wallpaper with no paired colour used to fall through to the SETTINGS
+            // wallpaper's pairing, so a photo in this chat drew the bubbles in the colour of a theme
+            // the chat was not even showing (pink, his screenshot). It stops at a colour he chose in
+            // Settings, or the app's blue. A colour chosen for this chat never reaches here.
+            if let c = walls.wallpaper(for: cid).pairedColor { return c }
+            return globalChosenColor
+        }
         return globalColor
     }
 
