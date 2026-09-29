@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseAuth
 
 // Signing in without a password: we email a six-digit code and you type it here.
 //
@@ -59,9 +60,16 @@ struct LoginCodeView: View {
     var purpose: Purpose = .forgot
     var onAuthed: () -> Void
 
-    private enum Step { case email, code }
+    /// `newPassword`: FORGOT PASSWORD ONLY, after the code signs you in — owner, 2026-09-29, "after
+    /// the correct code give me the option to add a new password, because I forgot the old one".
+    /// The code already signed the person in (a fresh sign-in, so Firebase allows the change), and
+    /// the app is only entered (`onAuthed`) once they save or choose "Not now".
+    private enum Step { case email, code, newPassword }
 
     @State private var step: Step = .email
+    @State private var newPassword = ""
+    @State private var confirmPassword = ""
+    private static let passwordMin = 8   // the server's PASSWORD_MIN and PasswordView's rule
     /// onAppear fires again on every back-navigation, and the auto-send below must not re-post a
     /// code each time somebody swipes back into this screen. Sends are rate-limited server-side, so
     /// without this guard the second visit would be answered with "too many codes requested".
@@ -84,17 +92,32 @@ struct LoginCodeView: View {
             VStack(spacing: 14) {
                 Spacer().frame(height: 40)
 
-                Text(step == .email ? "What is your email?" : purpose.title)
+                Text(step == .email ? "What is your email?"
+                     : step == .newPassword ? "Create a new password" : purpose.title)
                     .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
 
-                Text(step == .email
-                     ? purpose.blurb
+                Text(step == .email ? purpose.blurb
+                     : step == .newPassword ? "Use at least \(Self.passwordMin) characters. You will use it to log in next time."
                      : "We sent a six-digit code to \(trimmedEmail). It expires in 10 minutes.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
 
-                if step == .email {
+                if step == .newPassword {
+                    labelled("New password") {
+                        SecureField("", text: $newPassword)
+                            .textContentType(.newPassword)
+                            .focused($focused)
+                    }
+                    labelled("Confirm password") {
+                        SecureField("", text: $confirmPassword)
+                            .textContentType(.newPassword)
+                    }
+                    primaryButton("Save Password", enabled: newPasswordValid) { saveNewPassword() }
+                    Button("Not now") { onAuthed() }
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .disabled(busy)
+                } else if step == .email {
                     labelled("Email") {
                         // No placeholder, same reason as the login field: the row is labelled
                         // "Email" already, so a fake address underneath it only repeated the label.
@@ -156,6 +179,8 @@ struct LoginCodeView: View {
             .padding(.horizontal, 24)
         }
         .navigationBarTitleDisplayMode(.inline)
+        // Signed in already on the password step: Back would land on the login form while signed in.
+        .navigationBarBackButtonHidden(step == .newPassword)
         .onAppear {
             if address.isEmpty { address = email }
             // EVERY DOOR THAT LEADS HERE ALREADY KNOWS THE ADDRESS. Forgot Password carries it over
@@ -214,11 +239,40 @@ struct LoginCodeView: View {
         Task {
             do {
                 try await AuthService.shared.signInWithLoginCode(email: trimmedEmail, code: code)
-                await MainActor.run { onAuthed() }
+                await MainActor.run {
+                    if purpose == .forgot {
+                        step = .newPassword; error = nil; focused = true
+                    } else {
+                        onAuthed()
+                    }
+                }
             } catch {
                 // Clear the field on a bad code: leaving six wrong digits there means the next
                 // attempt starts with a delete.
                 await MainActor.run { self.error = plain(error); code = "" }
+            }
+            await MainActor.run { busy = false }
+        }
+    }
+
+    private var newPasswordValid: Bool {
+        newPassword.count >= Self.passwordMin && newPassword == confirmPassword
+    }
+
+    /// Same call the Password page makes: `updatePassword` when the account already has a password,
+    /// `link` when it only ever signed in with Apple or Google. The code sign-in just happened, so
+    /// this is a fresh sign-in and Firebase does not ask for the old password.
+    private func saveNewPassword() {
+        guard newPasswordValid, !busy else { return }
+        busy = true; error = nil
+        Task {
+            do {
+                let hasPassword = Auth.auth().currentUser?.providerData
+                    .contains { $0.providerID == "password" } ?? false
+                try await AuthService.shared.setPassword(newPassword, isFirst: !hasPassword)
+                await MainActor.run { onAuthed() }
+            } catch {
+                await MainActor.run { self.error = plain(error) }
             }
             await MainActor.run { busy = false }
         }
