@@ -379,6 +379,8 @@ struct WallpaperPreviewScreen: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.displayScale) private var displayScale
     @State private var blurred = false
+    /// Tried here, written on Apply (`WallpaperStore.setBrightness`).
+    @State private var brightness: Double = WallpaperStore.shared.brightness
     // Pinch-to-zoom / pan on a chosen photo, baked into the saved wallpaper on Apply.
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
@@ -420,6 +422,7 @@ struct WallpaperPreviewScreen: View {
                     background(for: wallpaper)
                 }
             }
+            .overlay(Color.black.opacity(WallpaperStore.dimOpacity(brightness)).allowsHitTesting(false))
             .ignoresSafeArea()
                 .background(
                     GeometryReader { proxy in
@@ -461,6 +464,11 @@ struct WallpaperPreviewScreen: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
+
+                // Right side, under the header (his circle).
+                HStack { Spacer(); brightnessSlider }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
 
                 Spacer()
 
@@ -562,8 +570,48 @@ struct WallpaperPreviewScreen: View {
             .font(.system(size: 15))
             .foregroundStyle(mine ? .white : .primary)
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(mine ? AnyShapeStyle(Theme.defaultBubble(dark)) : AnyShapeStyle(.regularMaterial),
+            .background(mine ? myBubbleFill : AnyShapeStyle(.regularMaterial),
                         in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// ⛔ THE COLOUR THE CHATS WILL ACTUALLY GET — owner, 2026-09-29: "I selected Auto, but when I
+    /// change wallpaper the colour is not live on this page, always blue". Same order as
+    /// `ChatColorStore.globalColor` after Apply: a colour chosen in Settings, else the showing
+    /// wallpaper's paired colour, else the app's blue.
+    private var myBubbleFill: AnyShapeStyle {
+        if let c = ChatColorStore.shared.globalChosenColor ?? wallpaper.pairedColor { return c.fill }
+        return AnyShapeStyle(Theme.defaultBubble(dark))
+    }
+
+    /// Vertical brightness control on the right edge: bright at the top, dim at the bottom.
+    private var brightnessSlider: some View {
+        let h: CGFloat = 170
+        return VStack(spacing: 8) {
+            Image(systemName: "sun.max.fill").font(.system(size: 14, weight: .semibold))
+            GeometryReader { geo in
+                ZStack(alignment: .bottom) {
+                    Capsule().fill(Color.primary.opacity(0.18))
+                    Capsule().fill(Color.primary)
+                        .frame(height: max(6, geo.size.height * brightness))
+                }
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                    brightness = min(1, max(0, 1 - v.location.y / geo.size.height))
+                })
+            }
+            .frame(width: 6, height: h)
+            Image(systemName: "sun.min").font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(.primary)
+        .padding(.vertical, 12)
+        .frame(width: 44)
+        .liquidGlass(Capsule(), interactive: true)
+        .accessibilityElement()
+        .accessibilityLabel("Wallpaper brightness")
+        .accessibilityValue("\(Int(brightness * 100)) percent")
+        .accessibilityAdjustableAction { d in
+            brightness = min(1, max(0, brightness + (d == .increment ? 0.1 : -0.1)))
+        }
     }
 
     private func apply() {
@@ -582,6 +630,7 @@ struct WallpaperPreviewScreen: View {
             }
         }
         store.applyToAllChats(final)
+        store.setBrightness(brightness)
         dismiss()
     }
 
