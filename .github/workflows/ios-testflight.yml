@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            KEYBOARD STAYS UP WHEN YOU LONG-PRESS A MESSAGE, NEW DISAPPEARING BADGE.
+            VOICE BAR MAKES ROOM IN CHATS, DEVICES SHEET, ALBUM FROM RECENTS WITHOUT SLIDE.
+
+            CHATS: the playing voice note bar now pushes the list down instead of covering "Pinned".
+
+            DEVICES: smaller rows, round blue icons, and a device opens as a sheet with a red Sign Out button.
+
+            ATTACH SHEET: Album from Recents opens with no slide; folders and Back still slide.
+
+            CHAT LIST: the disappearing badge is a little smaller with a grey clock.
+
+            PLEASE TEST: play a voice note and leave the chat; open Settings > Devices and tap a device; open Album from Recents, then a folder, then Back.
+
+            EARLIER IN THIS ROUND (build 806): KEYBOARD STAYS UP WHEN YOU LONG-PRESS A MESSAGE, NEW DISAPPEARING BADGE.
 
             CHAT: with the keyboard open, long-pressing a message (latest or older) no longer closes the keyboard, and closing the menu no longer makes the messages jump.
 
