@@ -2660,6 +2660,9 @@ struct ThreadView: View {
                         // on screen, and it closed the keyboard under the reaction bar. While a
                         // message menu is showing, nothing here counts as a tap on the conversation.
                         guard CMOverlay.current == nil else { return }
+                        // …and the lift of a press that did NOT open a menu (let go during the 0.2s
+                        // squeeze) is still a press, not a tap: stamped by the press itself.
+                        guard Date().timeIntervalSince(MessagePressStamp.last) > 0.4 else { return }
                         inputFocused = false
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                         to: nil, from: nil, for: nil)

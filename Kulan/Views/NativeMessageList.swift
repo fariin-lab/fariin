@@ -376,6 +376,12 @@ private struct RowHeightKey: PreferenceKey {
 // it was a blanket refusal, and a blanket refusal also eats a legitimate scroll to the top. If the
 // snap reappears, the answer is the layout's `targetContentOffset(forProposedContentOffset:)`
 // (the reference app's route), not this class.
+/// When a message long-press last lifted. Read by ThreadView's tap-to-close-keyboard, which hears the
+/// same lift; see `MessageListController.handleCustomPress`.
+@MainActor enum MessagePressStamp {
+    static var last = Date.distantPast
+}
+
 final class HardenedCollectionView: UICollectionView {
     override var frame: CGRect {
         get { super.frame }
@@ -4592,6 +4598,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return (cell.contentView, snap, cell.contentView.convert(cell.contentView.bounds, to: nil))
     }
 
+    /// ⛔ owner, 2026-09-29: "keyboard open, long-press a message, the keyboard closes; after Close it
+    /// comes back and the messages jump". Root cause (5-agent audit): the conversation's
+    /// tap-to-close-keyboard (ThreadView `listBody`) has no duration limit, so the finger lifting off
+    /// a LONG PRESS ended it too, during the 0.2s squeeze or with the menu already up, and it resigned
+    /// the keyboard. With the keyboard gone under an open menu, Close then settled the list against
+    /// the missing keyboard while the keyboard animated back: the jump. The press is stamped here,
+    /// at its own lift, the same shape as `composerTouch` and `VoiceBubbleView.controlTouch`, and
+    /// the tap stands down for it. A press shorter than the recogniser's 0.2s never reaches this
+    /// method, so a real tap on the conversation still closes the keyboard.
     @objc private func handleCustomPress(_ g: UILongPressGestureRecognizer) {
         switch g.state {
         case .began:
@@ -4599,6 +4614,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         case .changed:
             activeMenu?.overlay.fingerMoved(to: g.location(in: nil))
         case .ended, .cancelled, .failed:
+            // The finger that long-pressed is lifting: ThreadView's tap-to-close-keyboard hears this
+            // same lift and must not treat it as a tap (see `MessagePressStamp`).
+            MessagePressStamp.last = Date()
             if let menu = activeMenu {
                 menu.overlay.fingerEnded(at: g.location(in: nil))
             } else {

@@ -156,6 +156,11 @@ struct CMReactConfig {
 /// ⚠️ IT DELIBERATELY DOES NOT OVERRIDE THE STATUS BAR OR THE HOME INDICATOR. UIKit takes both from
 /// the KEY window's root controller, this window is never key, and answering those questions here
 /// would be a way to accidentally change the chrome of a screen that is otherwise untouched.
+/// The menu's window above the keyboard. It must never become key (see `makeWindowAboveKeyboard`).
+final class CMNonKeyWindow: UIWindow {
+    override var canBecomeKey: Bool { false }
+}
+
 final class CMOverlayHost: UIViewController {
     override func loadView() {
         let v = UIView()
@@ -648,7 +653,9 @@ final class CMOverlay: UIView {
         for s in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             for w in s.windows where !w.isHidden { top = max(top, w.windowLevel.rawValue) }
         }
-        let own = UIWindow(windowScene: scene)
+        // Never key: a key window of its own would take first responder from the composer, the
+        // keyboard would go while `inputFocused` stayed true, and SwiftUI would bring it back on close.
+        let own = CMNonKeyWindow(windowScene: scene)
         own.frame = host.frame
         own.backgroundColor = .clear
         own.isOpaque = false
