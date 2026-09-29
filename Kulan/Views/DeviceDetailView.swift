@@ -16,11 +16,14 @@ struct DeviceDetailView: View {
         session.isThisDevice || session.lastSeenAt > Date().addingTimeInterval(-360)
     }
 
+    /// ⛔ A SHEET NOW, NOT A PAGE — owner, 2026-09-29, with the reference's device sheet: "when I tap a
+    /// device it opens a full page; open a sheet about 60%". ✕ at the top left, the tile, name and
+    /// status, the facts in one card, and the sign-out as a wide red button at the bottom.
     var body: some View {
         List {
             Section {
                 VStack(spacing: 10) {
-                    DeviceTile(session: session, size: 72)
+                    DeviceTile(session: session, size: 64)
                     Text(session.displayName).font(.title2.weight(.bold))
                     if isActive {
                         HStack(spacing: 5) {
@@ -48,28 +51,42 @@ struct DeviceDetailView: View {
                 LabeledContent("Last active", value: isActive ? "Now" : session.lastSeenAt.formatted(fullDate))
             }
 
-            if !session.isThisDevice {
-                Section {
-                    Button(role: .destructive) { confirm = true } label: {
-                        HStack {
-                            Text("Sign Out This Device")
-                            Spacer()
-                            if working { ProgressView() }
-                        }
-                    }
-                    .tint(.red)
-                    .disabled(working)
-                } footer: {
-                    Text("It stops receiving messages and calls straight away, and is signed out the next time it is opened.")
-                }
-            }
-
             if let error {
                 Section { Text(error).font(.footnote).foregroundStyle(.red) }
             }
         }
-        .navigationTitle("Device")
-        .navigationBarTitleDisplayMode(.inline)
+        .contentMargins(.top, 12, for: .scrollContent)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !session.isThisDevice {
+                Button { confirm = true } label: {
+                    ZStack {
+                        Text("Sign Out This Device").opacity(working ? 0 : 1)
+                        if working { ProgressView().tint(.white) }
+                    }
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).frame(height: 52)
+                    .background(Color.red, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(working)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+            .padding(16)
+        }
+        .presentationDetents([.fraction(0.6)])
         .alert("Sign out \(session.displayName)?", isPresented: $confirm) {
             Button("Sign Out", role: .destructive) { signOut() }
             Button("Cancel", role: .cancel) {}

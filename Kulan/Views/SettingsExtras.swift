@@ -275,6 +275,8 @@ struct DevicesView: View {
     @State private var signingOut: Set<String> = []
     @State private var autoDays = DeviceRegistry.autoSignOutDefaultDays
     @State private var autoLoaded = false
+    /// The device whose sheet is open (owner, 2026-09-29: a sheet, not a pushed page).
+    @State private var detail: DeviceSession?
 
     private var others: [DeviceSession] { sessions.filter { !$0.isThisDevice } }
 
@@ -319,7 +321,7 @@ struct DevicesView: View {
         List {
             Section {
                 if let this = sessions.first(where: { $0.isThisDevice }) {
-                    NavigationLink { DeviceDetailView(session: this) } label: { row(this) }
+                    Button { detail = this } label: { row(this) }
                 } else if loaded {
                     // Registration failed or has not landed yet: say so rather than draw a
                     // device card out of thin air.
@@ -352,9 +354,7 @@ struct DevicesView: View {
                     ForEach(others) { s in
                         // Tap for the details page and its Sign Out button (owner, 2026-09-25:
                         // "this page looks too basic"). The swipe stays for people who know it.
-                        NavigationLink {
-                            DeviceDetailView(session: s)
-                        } label: { row(s) }
+                        Button { detail = s } label: { row(s) }
                             .disabled(signingOut.contains(s.id))
                             .swipeActions(edge: .trailing) {
                                 // `.tint(.red)` explicitly. `role: .destructive` only colours a
@@ -413,6 +413,7 @@ struct DevicesView: View {
         }
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $detail) { s in DeviceDetailView(session: s) }
         .onAppear { startListening() }
         .onDisappear { listener?.remove(); listener = nil }
         .task {
@@ -462,11 +463,13 @@ struct DevicesView: View {
     }
 
     private func row(_ s: DeviceSession) -> some View {
-        HStack(spacing: 14) {
+        // ⛔ A NORMAL ROW — owner, 2026-09-29: "the device card looks big, make it normal; the icons
+        // are big, make them small". Tile 40 → 30, tighter lines, no extra vertical padding.
+        HStack(spacing: 12) {
             // A colored device tile — the flat grey glyph read as unfinished (user feedback,
             // the reference app's device tiles as the reference; our green, our glyph).
-            DeviceTile(session: s, size: 40)
-            VStack(alignment: .leading, spacing: 3) {
+            DeviceTile(session: s, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
                 // NO "This device" PILL. It could only ever appear in the section whose header
                 // already says "This device", so it was the same two words twice, eight points
                 // apart, and it put a second coloured shape in a row that already has a green tile
@@ -478,13 +481,12 @@ struct DevicesView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 statusLine(s)
             }
+            Spacer(minLength: 0)
             // 2026-09-24 fix-all #143: this device's sign-out is in flight.
-            if signingOut.contains(s.id) {
-                Spacer()
-                ProgressView()
-            }
+            if signingOut.contains(s.id) { ProgressView() }
         }
-        .padding(.vertical, 4)
+        .foregroundStyle(.primary)          // a Button row would tint its text
+        .contentShape(Rectangle())          // the whole row opens the sheet
         .opacity(signingOut.contains(s.id) ? 0.5 : 1)   // 2026-09-24 fix-all #143
     }
 
