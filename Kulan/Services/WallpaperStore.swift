@@ -395,6 +395,12 @@ enum ChatWallpapers {
     }
 
     func wallpaper(for cid: String) -> ChatWallpaper {
+        // ⛔ THE FARIIN CHAT NEVER HAS A WALLPAPER — owner, 2026-09-29: "change the wallpaper in
+        // Settings and Fariin changes too; the official chat never uses a wallpaper, always the
+        // default light/dark". It fell back to the all-chats default like any chat. Answered here,
+        // at the one source, so the background, the bubble surfaces, the blur slices and the chat
+        // colour's Auto all agree it is the plain page.
+        if OfficialChannel.isOfficial(cid) { return .none }
         if let c = cache[cid] { return c }
         // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
         // An explicit per-chat "none" is stored as the string "none", so it does NOT fall through.
