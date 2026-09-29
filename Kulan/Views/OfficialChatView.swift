@@ -230,7 +230,8 @@ struct OfficialChatView: View {
                     myReaction: store.state.reactions[a.id],
                     menuId: a.id,
                     onReactionTap: { reactorsFor = a.id },
-                    onForward: selecting ? nil : { forwarding = [forwardable(a)] }
+                    onForward: selecting ? nil : { forwarding = [forwardable(a)] },
+                    searchTerm: searching ? searchQuery.trimmingCharacters(in: .whitespaces) : ""
                 )
                 .padding(.horizontal, 16)
                 .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
@@ -277,7 +278,7 @@ struct OfficialChatView: View {
     /// fixing a typo has to reach a phone that already has the old words on screen.
     private func signature(_ a: Announcement) -> String {
         // `hasAppStoreUrl`: the Update Link arriving shows the hidden "Update Now" (D-admin-update).
-        "\(a.title.count)|\(a.body.count)|\(store.state.reactions[a.id] ?? "")|\(selecting)|\(wasSelecting)|\(selectedIds.contains(a.id))|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)"
+        "\(a.title.count)|\(a.body.count)|\(store.state.reactions[a.id] ?? "")|\(selecting)|\(wasSelecting)|\(selectedIds.contains(a.id))|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)|\(searching ? searchQuery : "")"
     }
 
     private static let cal = Calendar.current
@@ -890,6 +891,22 @@ struct AnnouncementRow: View {
     var onReactionTap: (() -> Void)? = nil
     /// The round forward button beside the post (the real chat only; hidden while selecting).
     var onForward: (() -> Void)? = nil
+    /// ⛔ THE CHAT'S SEARCH HIGHLIGHT — owner, 2026-09-29: "search in the official chat is not like a
+    /// normal chat". A chat marks every matched term yellow with black text (`BubbleText.body`,
+    /// `ChatSearch.highlightRanges`); these posts marked nothing, so a hit looked like no hit.
+    var searchTerm: String = ""
+
+    static func highlighted(_ text: String, _ term: String) -> AttributedString {
+        var out = AttributedString(text)
+        guard term.count >= 2 else { return out }
+        for r in ChatSearch.highlightRanges(in: text, query: term) {
+            guard let lo = AttributedString.Index(r.lowerBound, within: out),
+                  let hi = AttributedString.Index(r.upperBound, within: out) else { continue }
+            out[lo..<hi].backgroundColor = .yellow
+            out[lo..<hi].foregroundColor = .black
+        }
+        return out
+    }
 
     /// ⛔ A CHANNEL POST, NOT A CHAT BUBBLE — owner, 2026-09-29, with two reference screenshots:
     /// "the Official Chat should clearly feel like a channel, not a regular private conversation".
@@ -957,16 +974,23 @@ struct AnnouncementRow: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 if !announcement.title.isEmpty {
-                    Text(announcement.title)
+                    Text(Self.highlighted(announcement.title, searchTerm))
                         .font(.system(size: 17, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                // Parsed markdown, so the addresses in it are real links.
+                // Parsed markdown, so the addresses in it are real links. While searching, the plain
+                // words with the matches marked instead (the markdown would move them).
                 if !announcement.body.isEmpty {
-                    Text(.init(announcement.body))
-                        .font(.system(size: 17))
-                        .tint(Color(hex: 0x0A84FF))
-                        .fixedSize(horizontal: false, vertical: true)
+                    Group {
+                        if searchTerm.count >= 2 {
+                            Text(Self.highlighted(announcement.body, searchTerm))
+                        } else {
+                            Text(.init(announcement.body))
+                        }
+                    }
+                    .font(.system(size: 17))
+                    .tint(Color(hex: 0x0A84FF))
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .foregroundStyle(.primary)
