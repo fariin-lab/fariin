@@ -3537,7 +3537,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // container is collapsed and the clearance comes from the fallback, exactly as it does for
         // the announcements list. See `hideComposer`.
         guard let bar = composerBar, !bar.isHidden else {
-            return keyboardOverlap + composerBarH + 12
+            // ⛔ `barTopPad`, THE COMPOSER'S OWN GAP, not a separate 12 — owner, 2026-09-29: the
+            // Official Chat's last post sat higher over its bar than a chat's over its composer
+            // ("remove the large space… the exact same position as in Normal Chat"). With the
+            // composer the container runs from `barTopPad` above the pill to the screen's bottom;
+            // a bar standing in for it reports from its glass to the screen's bottom, so the same
+            // pad above it lands the last row where the composer would have it.
+            return keyboardOverlap + composerBarH + Self.barTopPad
         }
         guard bottomBarContainer.frame.height > 1 else {
             // ⛔ OUR BAR IS THERE BUT ITS CONTAINER HAS NOT BEEN LAID OUT YET (the first open, a

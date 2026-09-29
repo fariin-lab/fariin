@@ -29,6 +29,7 @@ struct OfficialChatView: View {
     @State private var selectedIds = Set<String>()
     @State private var forwarding: [Message]?
     @State private var morePickerId: String?
+    @State private var reactorsFor: String?   // my chip tapped → the reactions list
     @State private var pendingDelete: [String]?
     @State private var showClearConfirm = false
     // Search in the chat itself, the normal chat's way (owner, 2026-09-28): top field, ↑/↓ and
@@ -84,22 +85,25 @@ struct OfficialChatView: View {
     /// band under the bar was missing from it and the newest bubble ended that far under the glass.
     /// ⚠️ The gap under the bar is capped at the home-indicator band: with the search keyboard up it
     /// would include the keyboard, which the list already adds on its own.
+    /// ⛔ 2026-09-29: measured from each bar's GLASS, not its container. The list adds the composer's
+    /// own `barTopPad` above whatever is reported (`MessageListController.bottomClearance`), so the
+    /// report is what the composer's container would be: the visible bar's top to the screen's
+    /// bottom. The container's top also carried the chrome's padding, which is the extra space he
+    /// circled. Reported with `onChange(of:initial:)` (a preference from inside the `safeAreaBar`
+    /// never arrived, build 793).
     private var bottomBar: some View {
         Group {
             if selecting { selectionBar } else if searching { searchNavBar } else { cannotReplyBar }
         }
-        // ⛔ WRITTEN DIRECTLY, THE WAY THE CHAT'S COMPOSER BAR IS (`ThreadView`, `composerBarHeight`)
-        // — owner, 2026-09-28, build 793: the last message still ran under the bar after the
-        // clearance itself was fixed, and the numbers off his screenshot say the list never
-        // received the new height at all. This bar lives in a `safeAreaBar`, and a preference
-        // raised inside it did not reliably reach `onPreferenceChange`. The chat's own bar has
-        // always reported through `onChange(of:initial:)` on its geometry, and that one works.
-        .background {
-            GeometryReader { g in
-                let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
-                let h = g.size.height + max(0, min(under, Self.homeBand))
-                Color.clear.onChange(of: h, initial: true) { _, v in barHeight = v }
-            }
+    }
+
+    private func barGlassReporter() -> some View {
+        GeometryReader { g in
+            let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
+            // Capped just past the home-indicator band: with the search keyboard up this would
+            // include the keyboard, which the list adds on its own.
+            let h = g.size.height + max(0, min(under, Self.homeBand + 10))
+            Color.clear.onChange(of: h, initial: true) { _, v in barHeight = v }
         }
     }
 
@@ -119,6 +123,19 @@ struct OfficialChatView: View {
             .sheet(item: Binding(get: { morePickerId.map(ZoomTarget.init) },
                                  set: { morePickerId = $0?.url })) { target in
                 EmojiMorePicker { store.react(target.url, $0) }
+            }
+            // The chat's own reactions list for my chip, "Tap to remove" included.
+            .sheet(item: Binding(get: { reactorsFor.map(ZoomTarget.init) },
+                                 set: { reactorsFor = $0?.url })) { target in
+                let me = AuthService.shared.uid ?? ""
+                ReactorsSheet(reactions: store.state.reactions[target.url].map { [me: $0] } ?? [:],
+                              nameFor: { _ in
+                                  let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
+                                  return mine.isEmpty ? "You" : mine
+                              },
+                              photoFor: { _ in ProfileStore.shared.me?.photoUrl },
+                              me: me,
+                              onRemoveMine: { store.react(target.url, nil) })
             }
             .alert(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
                                                     set: { if !$0 { pendingDelete = nil } })) {
@@ -207,9 +224,11 @@ struct OfficialChatView: View {
                     wallpaperBlur: WallpaperBlur.state(for: OfficialChannel.cid, dark: dark,
                                                        frame: WallpaperBlur.windowFrame),
                     myReaction: store.state.reactions[a.id],
-                    menuId: a.id
+                    menuId: a.id,
+                    onReactionTap: { reactorsFor = a.id },
+                    onForward: selecting ? nil : { forwarding = [forwardable(a)] }
                 )
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 16)
                 .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
                                         selected: selectedIds.contains(a.id),
                                         tint: Color(hex: 0x0A84FF),
@@ -221,7 +240,7 @@ struct OfficialChatView: View {
             // 2026-09-28). Not on a picture: a picture opens on one tap (his 2026-07-29 rule).
             onUikitDoubleTap: { id in
                 let quick = QuickReaction.current
-                store.react(id, store.state.reactions[id] == quick ? nil : quick)
+                store.react(id, ThreadView.sameEmoji(store.state.reactions[id], quick) ? nil : quick)
             },
             hostedDoubleTap: { id in
                 store.visible.first(where: { $0.id == id }).map { $0.mediaUrl == nil } ?? false
@@ -316,6 +335,7 @@ struct OfficialChatView: View {
                          onDelete: { pendingDelete = liveSelection.map(\.id) },
                          onForward: { forwarding = liveSelection.map(forwardable) })
             .frame(height: 44)
+            .background { barGlassReporter() }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
     }
@@ -393,6 +413,7 @@ struct OfficialChatView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
             .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .background { barGlassReporter() }
             // ⛔ THE INPUT BAR'S OWN INSETS — owner, 2026-08-25. This bar stands where the composer
             // stands, so it is edge-attached SYSTEM CHROME and takes the device's margins and the
             // indicator-band dip, not the 12/6 that used to be written here. See `SystemBarChrome`.
@@ -492,6 +513,8 @@ struct OfficialChatView: View {
                     .liquidGlass(Capsule(), interactive: false)
             }
         }
+        .frame(height: 44)
+        .background { barGlassReporter() }
         .padding(.horizontal, 16).padding(.bottom, 6)
     }
 
@@ -837,13 +860,30 @@ struct AnnouncementRow: View {
     /// The real chat only: publishes the bubble's outline so the long press lifts THIS bubble.
     var menuId: String? = nil
 
-    /// Received-side cluster geometry, matching a normal chat bubble: 18pt outer corners, and the
-    /// small 6pt corner is the one that fuses a run together. Every announcement stands alone, so
-    /// they are all 18.
-    private var corners: RectangleCornerRadii {
-        let r = BubbleMetrics.bigCorner
-        return RectangleCornerRadii(topLeading: r, bottomLeading: r, bottomTrailing: r, topTrailing: r)
-    }
+    /// My chip was tapped (the real chat only): opens the reactions list, where my row takes it back.
+    var onReactionTap: (() -> Void)? = nil
+    /// The round forward button beside the post (the real chat only; hidden while selecting).
+    var onForward: (() -> Void)? = nil
+
+    /// ⛔ A CHANNEL POST, NOT A CHAT BUBBLE — owner, 2026-09-29, with two reference screenshots:
+    /// "the Official Chat should clearly feel like a channel, not a regular private conversation".
+    /// Measured off his 924px-wide screenshots (430pt screen, 2.15px/pt):
+    ///
+    ///   post         699px wide = 0.76 of the screen, 16pt from the left edge, every post the
+    ///                same width (a channel's column, not a bubble hugging its words)
+    ///   corners      ~20pt, all four
+    ///   header       the channel's name and tick on their own row at the top, 17pt semibold
+    ///   picture      edge to edge under the header, its own shape, never inset
+    ///   words        12pt in from the sides; title semibold directly over the body, both 17pt
+    ///   time         bottom-right under the words
+    ///   buttons      full-width rows under a hairline, label centred
+    ///   forward      a 32pt round button 14pt to the right of the post, centred on it
+    ///
+    /// Its list, scrolling, bottom position, long press and reactions are the chat's own; only the
+    /// drawing of a post is the channel's.
+    static var postWidth: CGFloat { min(UIScreen.main.bounds.width * 0.76, 380) }
+    private static let radius: CGFloat = 20
+    private static let side: CGFloat = 12
 
     /// 2026-09-24 decision D-admin-update: "Update Now" is hidden while the owner has not set the
     /// Update Link. It used to show and do nothing when tapped.
@@ -851,75 +891,93 @@ struct AnnouncementRow: View {
         announcement.buttons.filter { $0.isUsable && ($0.action != .appStore || OfficialConfig.shared.hasAppStoreUrl) }
     }
 
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 0) {
-                if let localImage {
-                    AnnouncementImage(url: "", width: announcement.mediaWidth,
-                                      height: announcement.mediaHeight, local: localImage)
-                } else if let url = announcement.mediaUrl {
-                    AnnouncementImage(url: url,
-                                      width: announcement.mediaWidth,
-                                      height: announcement.mediaHeight)
-                        .onTapGesture { onImageTap(url) }
-                }
-                // ⛔ NO KIND LABEL ("SECURITY", "UPDATE"...) — owner, 2026-09-28, circled: "remove these
-                // labels, make it a normal bubble". The title and body say what it is.
-                VStack(alignment: .leading, spacing: 6) {
-                    if !announcement.title.isEmpty {
-                        Text(announcement.title)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    // The body carries real links people are meant to tap, so it is parsed markdown
-                    // rather than a plain string. `.init(_:)` is what turns a String into
-                    // LocalizedStringKey, which is what makes SwiftUI detect addresses.
-                    Text(.init(announcement.body))
-                        .font(.system(size: 17))
-                        .foregroundStyle(.primary)
-                        .tint(Color(hex: 0x0A84FF))
-                        .fixedSize(horizontal: false, vertical: true)
-                    timeRow
-                }
-                // The chat bubble's own insets (BubbleMetrics), so the two read as one design.
-                .padding(.horizontal, BubbleMetrics.hPad)
-                .padding(.vertical, BubbleMetrics.vPad)
+    private var onWallpaper: Bool { WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid) }
 
-                if !usableButtons.isEmpty { buttonStack }
-            }
-            // The chat bubble's width rule: at most 72% of the screen, not a fixed 320.
-            .frame(maxWidth: UIScreen.main.bounds.width * BubbleMetrics.maxWidthFraction, alignment: .leading)
-            // An announcement is an incoming bubble and this channel takes a wallpaper like any
-            // other chat, so it resolves its surface the same way. Read at draw time rather than
-            // passed in: these rows are built in two places and neither threads chat state through.
-            .background {
-                ReceivedBubbleSurface(dark: dark,
-                                      onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid),
-                                      blur: wallpaperBlur)
-            }
-            .clipShape(UnevenRoundedRectangle(cornerRadii: corners, style: .continuous))
-            // The rim every incoming bubble wears on a wallpaper — see Theme.bubbleRim.
-            .overlay {
-                if WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid) {
-                    UnevenRoundedRectangle(cornerRadii: corners, style: .continuous)
-                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.bubbleRimWidth)
-                        .allowsHitTesting(false)
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            post
+            if let onForward {
+                Button(action: onForward) {
+                    Image(systemName: "arrowshape.turn.up.right.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.black.opacity(0.28)))
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Forward")
             }
-            .modifier(OptionalRectReporter(id: menuId, overhang: 0))
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 6)
         .onAppear { if countsAsRead { AnnouncementStats.countRead(announcement) } }
     }
 
-    /// ⛔ THE CHAT'S OWN REACTION CHIP — owner, 2026-09-28: "official is using a different react
-    /// badge, use my own". A normal text bubble carries its reactions INSIDE, bottom-left, on the
-    /// time's row (`MessageRowLayout.decorations`, `ReactionChipView`): a 30pt capsule, 17pt emoji,
-    /// 11pt sides, filled with the label colour at 18% because it is always the reader's own. It
-    /// used to hang outside the bubble with a ring, which is how nothing else in the app looks.
-    private var timeRow: some View {
+    private var post: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 5) {
+                Text(OfficialChannel.name).font(.system(size: 17, weight: .semibold))
+                VerifiedTick(size: 16)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, Self.side)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+
+            if let localImage {
+                AnnouncementImage(url: "", width: announcement.mediaWidth,
+                                  height: announcement.mediaHeight, local: localImage, tallest: 1.25)
+            } else if let url = announcement.mediaUrl {
+                AnnouncementImage(url: url, width: announcement.mediaWidth,
+                                  height: announcement.mediaHeight, tallest: 1.25)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onImageTap(url) }
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                if !announcement.title.isEmpty {
+                    Text(announcement.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                // Parsed markdown, so the addresses in it are real links.
+                if !announcement.body.isEmpty {
+                    Text(.init(announcement.body))
+                        .font(.system(size: 17))
+                        .tint(Color(hex: 0x0A84FF))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Self.side)
+            .padding(.top, announcement.mediaUrl != nil || localImage != nil ? 8 : 0)
+
+            footer
+                .padding(.horizontal, Self.side)
+                .padding(.top, 4)
+                .padding(.bottom, 10)
+
+            if !usableButtons.isEmpty { buttonStack }
+        }
+        .frame(maxWidth: Self.postWidth, alignment: .leading)
+        // An announcement takes the wallpaper like any incoming message, so it wears the same
+        // surface and rim; only its shape and layout are the channel's.
+        .background { ReceivedBubbleSurface(dark: dark, onWallpaper: onWallpaper, blur: wallpaperBlur) }
+        .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
+        .overlay {
+            if onWallpaper {
+                RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+                    .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.bubbleRimWidth)
+                    .allowsHitTesting(false)
+            }
+        }
+        .modifier(OptionalRectReporter(id: menuId, overhang: 0))
+    }
+
+    /// My reaction chip (the chat's own look) on the left, "edited" and the time on the right.
+    private var footer: some View {
         HStack(spacing: 4) {
             if let myReaction {
                 Text(myReaction)
@@ -927,6 +985,8 @@ struct AnnouncementRow: View {
                     .padding(.horizontal, BubbleMetrics.reactionChipInset)
                     .frame(height: BubbleMetrics.reactionChipHeight)
                     .background(Capsule().fill(Color(BubblePalette.accent).opacity(0.18)))
+                    .contentShape(Capsule())
+                    .onTapGesture { onReactionTap?() }
             }
             Spacer(minLength: 0)
             if announcement.editedAt != nil {
@@ -938,18 +998,15 @@ struct AnnouncementRow: View {
         }
     }
 
-    /// Buttons live INSIDE the bubble under a hairline, which is what that same messenger's official account
-    /// does and what an iOS alert does. A row of pills floating under the bubble was the other option
-    /// and it reads as a web page.
     private var buttonStack: some View {
         VStack(spacing: 0) {
             ForEach(usableButtons) { button in
                 Divider()
                 Button { onButtonTap(button) } label: {
                     Text(button.label)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 17))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+                        .frame(height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -984,6 +1041,9 @@ private struct AnnouncementImage: View {
     var local: UIImage? = nil
     /// The profile's media strip and grid: a square crop instead of the picture's own shape.
     var square = false
+    /// The tallest a picture may draw, as height over width (a channel post caps a portrait
+    /// picture and crops the rest, 2026-09-29). nil = its own shape, however tall.
+    var tallest: CGFloat? = nil
 
     @State private var image: UIImage?
 
@@ -1005,7 +1065,9 @@ private struct AnnouncementImage: View {
     private var ratio: CGFloat {
         if square { return 1 }   // the profile's media tiles
         guard let width, let height, width > 0, height > 0 else { return 4.0 / 3.0 }
-        return CGFloat(width / height)
+        let own = CGFloat(width / height)
+        if let tallest { return max(own, 1 / tallest) }
+        return own
     }
 
     var body: some View {
