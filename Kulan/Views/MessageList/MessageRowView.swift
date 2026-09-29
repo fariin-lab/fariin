@@ -1444,8 +1444,17 @@ final class MessageRowView: UIView {
         v.isHidden = false
         v.tintColor = b.metaColor
         // Over the tick, at the footer's trailing edge.
+        // ⛔ CENTRED ON THE DIGITS, NOT ON THE LINE BOX — owner, 2026-09-29: "the pending clock sits
+        // higher than the time". `meta.midY` is the middle of the whole line box, whose height is
+        // not the digits' (the line carries more room above the cap height than below the
+        // baseline), so the clock rode high. The tick attachment it stands in for is centred on the
+        // cap height (`BubbleText.meta`); this uses the same point: baseline − capHeight / 2, with
+        // the baseline found from the line's bottom and the font's descender.
         let side: CGFloat = 10
-        v.frame = CGRect(x: b.meta.maxX - side, y: b.meta.midY - side / 2, width: side, height: side)
+        let f = BubbleMetrics.metaFont
+        let baseline = b.meta.maxY + f.descender          // descender is negative
+        let centreY = baseline - f.capHeight / 2
+        v.frame = CGRect(x: b.meta.maxX - side, y: centreY - side / 2, width: side, height: side)
         bubbleBox.bringSubviewToFront(v)
         guard v.layer.animation(forKey: "spin") == nil else { return }
         // Their numbers, verbatim: one full turn, one second, cumulative, forever.
