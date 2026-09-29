@@ -597,7 +597,7 @@ final class ProfileStore {
         // fetched record has to be here and say Everyone (a missing key is Everyone, as in
         // storage.rules). Any doubt is "checked", which only ever falls back to the full check.
         guard let me, me.id == Auth.auth().currentUser?.uid,
-              (me.privacy?["photo"] ?? "everyone") == "everyone" else { return "checked" }
+              (me.privacy["photo"] ?? "everyone") == "everyone" else { return "checked" }
         let everyoneAndNoHides = await PhotoPrivacy.shared.publishesCover()
         let noBlocks = BlockList.shared.isLoaded && BlockList.shared.entries.isEmpty
         return everyoneAndNoHides && noBlocks ? "everyone" : "checked"
