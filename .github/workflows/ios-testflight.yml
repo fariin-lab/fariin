@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FARIIN SPACING, FARIIN REACTIONS, FARIIN MUTE MENU, WALLPAPER LIGHT/DARK, CHATS WITH A WALLPAPER IN LIGHT MODE.
+            SEARCH BAR ON BACK, HEADER IN LIGHT/DARK, LAST SEEN COLOUR, FARIIN POSTS, NO EDIT ON FORWARDS.
+
+            CHATS: the search field stays grey during the Back swipe from a chat. The header buttons and search field switch with light/dark at the same moment as the rest of the screen.
+
+            CHAT HEADER: "last seen" takes the right colour straight after switching light/dark.
+
+            FARIIN CHAT: no "Fariin" name inside posts, and no empty strip at the bottom of a post.
+
+            FORWARD: Edit is no longer offered on a forwarded message.
+
+            PLEASE TEST: open a chat and swipe back slowly; switch light/dark with the chat list and a chat open; look at a Fariin post with and without a reaction; long-press a forwarded message.
+
+            EARLIER IN THIS ROUND (build 797): FARIIN SPACING, REACTIONS, MUTE MENU, WALLPAPER LIGHT/DARK, WALLPAPER CHATS IN LIGHT MODE.
 
             FARIIN CHAT: the empty space over the "Only Fariin can send messages" bar is gone. Your reaction appears the moment you tap. Profile > Mute offers 1 hour, 8 hours, 1 day, 1 week and Always, and a timed mute ends by itself.
 
