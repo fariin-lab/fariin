@@ -2664,6 +2664,9 @@ struct ThreadView: View {
                         // …and the lift of a press that did NOT open a menu (let go during the 0.2s
                         // squeeze) is still a press, not a tap: stamped by the press itself.
                         guard Date().timeIntervalSince(MessagePressStamp.last) > 0.4 else { return }
+                        // …and a tap ON a bubble, mine or theirs, keeps the keyboard (owner,
+                        // 2026-09-29): only the empty area, or dragging the list down, closes it.
+                        guard Date().timeIntervalSince(MessageBubbleTouch.last) > 0.4 else { return }
                         inputFocused = false
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                         to: nil, from: nil, for: nil)

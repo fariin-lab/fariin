@@ -383,6 +383,12 @@ private struct RowHeightKey: PreferenceKey {
     static var last = Date.distantPast
 }
 
+/// When a tap last landed ON a message bubble. Read by ThreadView's tap-to-close-keyboard, which
+/// keeps the keyboard for it; see `MessageListController.stampBubbleTap`.
+@MainActor enum MessageBubbleTouch {
+    static var last = Date.distantPast
+}
+
 final class HardenedCollectionView: UICollectionView {
     override var frame: CGRect {
         get { super.frame }
@@ -709,6 +715,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // instance, which can't switch renderers.
     private var configuredRoutes: [String: Bool] = [:]
     private var doubleTapGesture: UITapGestureRecognizer!
+    private var bubbleTapStamp: UITapGestureRecognizer!
+
+    @objc private func stampBubbleTap(_ g: UITapGestureRecognizer) {
+        guard g.state == .ended else { return }
+        let loc = g.location(in: collectionView)
+        guard let ip = collectionView.indexPathForItem(at: loc) else { return }
+        if let cell = collectionView.cellForItem(at: ip) as? MessageRowCell {
+            let p = collectionView.convert(loc, to: cell.previewBubble)
+            if cell.previewBubble.bounds.contains(p) { MessageBubbleTouch.last = Date() }
+        } else if let id = dataSource.itemIdentifier(for: ip), let rect = CMBubbleRects.rect(id),
+                  rect.contains(g.location(in: nil)) {
+            MessageBubbleTouch.last = Date()   // a hosted SwiftUI row, by its published rect
+        }
+    }
     private var holdPress: UILongPressGestureRecognizer!     // passive: marks the context-menu lift window
     private var interactionHoldUntil = Date.distantPast      // lands defer while a long-press is in flight
     private var contextMenuVisible = false                   // UIKit says a context menu is on screen
@@ -972,6 +992,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.addGestureRecognizer(swipePan)
 
         // Double-tap quick-react for UIKit-routed rows (the SwiftUI rows carry their own gesture).
+        // ⛔ A TAP ON A BUBBLE KEEPS THE KEYBOARD — owner, 2026-09-29: "tapping my outgoing or an
+        // incoming message closes the keyboard; close it only on the empty area or when I scroll
+        // down". ThreadView's tap-to-close hears every tap; this listener stamps the ones that land
+        // on a bubble (`MessageBubbleTouch`), and the close stands down for them, the same shape
+        // as the composer and voice-control stamps. It cancels nothing and blocks nothing.
+        bubbleTapStamp = UITapGestureRecognizer(target: self, action: #selector(stampBubbleTap(_:)))
+        bubbleTapStamp.cancelsTouchesInView = false
+        bubbleTapStamp.delaysTouchesEnded = false
+        bubbleTapStamp.delegate = self
+        collectionView.addGestureRecognizer(bubbleTapStamp)
+
         doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTapGesture.numberOfTapsRequired = 2
         doubleTapGesture.delegate = self
@@ -4357,6 +4388,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // holdPress is a PASSIVE observer â€” it must never block the SwiftUI context-menu press or anything else.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        // The bubble-tap stamp only listens; it must never block or be blocked by anything.
+        if g === bubbleTapStamp || other === bubbleTapStamp { return true }
         // The custom press coexists ONLY with the passive hold observer. Letting it run with the
         // scroll pan let the still-down finger keep scrolling the list behind the menu's blur (user:
         // "you feel scroll jump") — exclusivity makes UIKit prevent the pan the moment the press
