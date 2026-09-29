@@ -84,6 +84,8 @@ jobs:
 
             CHAT LIST: the disappearing badge is a little smaller with a grey clock.
 
+            WALLPAPER PREVIEW: the close button, the dark/light button and swiping between wallpapers work again.
+
             PLEASE TEST: play a voice note and leave the chat; open Settings > Devices and tap a device; open Album from Recents, then a folder, then Back.
 
             EARLIER IN THIS ROUND (build 806): KEYBOARD STAYS UP WHEN YOU LONG-PRESS A MESSAGE, NEW DISAPPEARING BADGE.
