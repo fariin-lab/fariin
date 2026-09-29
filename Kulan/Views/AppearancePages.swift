@@ -161,6 +161,9 @@ struct ChatWallpaperPage: View {
     private var store: WallpaperStore { .shared }
     @State private var photoItem: PhotosPickerItem?
     @State private var previewing: ChatWallpaper?   // full-screen preview before applying
+    /// The photo just picked from Photos — the ONLY one that opens with pinch/drag framing. Tapping
+    /// a photo already in the grid opens it in the swipeable set, as it is (owner, 2026-09-29).
+    @State private var justPickedPhoto: String?
 
     private var dark: Bool { scheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
@@ -240,7 +243,7 @@ struct ChatWallpaperPage: View {
                        UIImage(data: data).flatMap { WallpaperStore.prepareForLibrary($0) }
                    }).value,
                    let id = await MainActor.run(body: { store.addPrepared(prepared) }) {
-                    await MainActor.run { previewing = .photo(id); photoItem = nil }
+                    await MainActor.run { justPickedPhoto = id; previewing = .photo(id); photoItem = nil }
                 } else {
                     // Audit 2026-09-24: a photo that failed to load left the selection set, so
                     // picking the same photo again changed nothing and the picker looked dead.
@@ -251,9 +254,18 @@ struct ChatWallpaperPage: View {
         // ⛔ A SHEET, NOT A FULL-SCREEN COVER — owner, 2026-09-23: "when i want to select wallpaper
         // now is opening full page plz make it sheet". See `WallpaperPreviewScreen` for the header
         // that came with it.
-        .sheet(item: $previewing) { w in
-            // The built-in set pages among itself; a photo previews alone.
-            WallpaperPreviewScreen(wallpaper: w, siblings: ChatWallpapers.all.map { ChatWallpaper.gradient($0.id) })
+        .sheet(item: $previewing, onDismiss: { justPickedPhoto = nil }) { w in
+            // ⛔ owner, 2026-09-29: "an already-chosen photo wallpaper moves and zooms when I swipe;
+            // framing is for the first time only; swipe should slide through all the wallpapers".
+            // A photo just picked previews ALONE with pinch/drag framing. Every tile in the grid,
+            // photos included, pages through the whole grid as it is.
+            if case .photo(let id) = w, id == justPickedPhoto {
+                WallpaperPreviewScreen(wallpaper: w)
+            } else {
+                WallpaperPreviewScreen(wallpaper: w,
+                                       siblings: store.libraryIds.map { ChatWallpaper.photo($0) }
+                                           + ChatWallpapers.all.map { ChatWallpaper.gradient($0.id) })
+            }
         }
     }
 
@@ -374,7 +386,10 @@ struct WallpaperPreviewScreen: View {
         self.siblings = siblings
         _index = State(initialValue: siblings.firstIndex(of: wallpaper) ?? 0)
     }
-    private var pages: Bool { inSet && siblings.count > 1 && !isPhoto }
+    // Photos page too now (owner, 2026-09-29): only a photo previewed ALONE (just picked) is framed.
+    private var pages: Bool { inSet && siblings.count > 1 }
+    /// Pinch/drag framing and the Blurred choice: a freshly picked photo only, never one in the set.
+    private var photoEditable: Bool { isPhoto && !inSet }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @Environment(\.displayScale) private var displayScale
@@ -488,7 +503,7 @@ struct WallpaperPreviewScreen: View {
                 }
                 .padding(.horizontal, 14)
 
-                if isPhoto {
+                if photoEditable {
                     Text("Pinch to zoom · drag to reposition")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
@@ -564,7 +579,9 @@ struct WallpaperPreviewScreen: View {
                                                             height: basePan.height + v.translation.height), zoom: zoom)
                                 }
                                 .onEnded { _ in basePan = pan }
-                        )
+                        ),
+                        // Framing only for a photo just picked; in the set the pager owns the swipe.
+                        including: photoEditable ? .all : .subviews
                     )
             } else { Theme.bg(dark) }
         case .color(let hex):
