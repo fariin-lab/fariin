@@ -81,14 +81,28 @@ struct GlowIntroSheet: View {
     /// Design" ("Story Ads Illustration", 1104×744, rendered at 3x from his exported HTML, unedited).
     /// This replaces the lit monochrome mark the 09-02 note above describes, on his word. Filled and
     /// clipped to the panel's 190pt, so the sheet's height and everything below are unchanged.
+    /// ⚠️ LIGHT ONLY FOR NOW: the illustration's white ground is part of the picture, so in dark mode
+    /// it would be a white block on a dark sheet. Dark keeps the lit mark until he supplies a dark
+    /// version (asked 2026-09-29).
     private var hero: some View {
-        Image("GlowIntroArt")
-            .resizable()
-            .scaledToFill()
-            .frame(maxWidth: .infinity)
-            .frame(height: 190)
-            .clipped()
-            .accessibilityHidden(true)
+        Group {
+            if scheme == .dark {
+                ZStack {
+                    RadialGradient(colors: [Color.primary.opacity(0.20), Color.primary.opacity(0)],
+                                   center: .center, startRadius: 2, endRadius: 160)
+                    GlowStyle.mark(76, filled: true)
+                        .foregroundStyle(Color.primary)
+                }
+            } else {
+                Image("GlowIntroArt")
+                    .resizable()
+                    .scaledToFill()
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 190)
+        .clipped()
         .overlay(alignment: .topTrailing) {
             // ⚠️ AN ✕ AND NO DRAG INDICATOR. His reference has the ✕ and the two together are two
             // ways to say the same thing in the same corner of the eye — the attach sheet went
