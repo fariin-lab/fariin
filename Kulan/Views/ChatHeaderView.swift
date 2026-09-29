@@ -213,6 +213,11 @@ final class ChatHeaderView: UIView {
                 // name is readable on the first frame and stays so if the probe never speaks.
                 guard let self else { return }
                 self.probeHasDecided = true
+                // ⛔ ONLY WITH NO WALLPAPER — owner, 2026-09-29: dark name and "online" on a dark
+                // wallpaper after switching light/dark or picking a photo wallpaper. Over a
+                // wallpaper the probe kept its old answer (or read the glass wrong) and overrode the
+                // measured one for good. With a wallpaper the measured backdrop decides (`configure`).
+                guard self.lastBackdrop == .unspecified else { return }
                 self.textRows.overrideUserInterfaceStyle = view.traitCollection.userInterfaceStyle
             }
         )
@@ -249,8 +254,15 @@ final class ChatHeaderView: UIView {
         // The measured answer is only the SEED for the first frame; once the glass probe has
         // resolved (see init) it alone decides, and this line stops writing. `.unspecified` means
         // no wallpaper, so the app's own appearance stands until the probe says otherwise.
+        // The wallpaper just went away: the old forced style must not outlive it.
+        if model.backdrop == .unspecified, lastBackdrop != .unspecified { probeHasDecided = false }
         lastBackdrop = model.backdrop
-        if !probeHasDecided {
+        // With a wallpaper, the measured backdrop is the answer every time it arrives: it is
+        // re-measured whenever the wallpaper or the appearance changes (`WallpaperBlur.headerBackdrop`
+        // keys on both), so the name and subtitle follow a switch or a new photo live (2026-09-29).
+        if model.backdrop != .unspecified {
+            textRows.overrideUserInterfaceStyle = model.backdrop
+        } else if !probeHasDecided {
             // `.unspecified` (no wallpaper) hands the labels back to the app's own appearance,
             // which after a light ↔ dark switch is the one thing they must follow.
             textRows.overrideUserInterfaceStyle = model.backdrop
