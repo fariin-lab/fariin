@@ -94,9 +94,14 @@ struct GlowIntroSheet: View {
                         .foregroundStyle(Color.primary)
                 }
             } else {
+                // ⛔ NO BACKGROUND, WHOLE PICTURE — owner, 2026-09-29, on 804: "remove the background,
+                // keep only the phones and the design inside them, and zoom out". The asset is his
+                // illustration re-rendered with a transparent ground (the white fade at the bottom is
+                // now a fade to clear), and it FITS the panel instead of filling and cropping it.
                 Image("GlowIntroArt")
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .padding(.top, 12)
                     .accessibilityHidden(true)
             }
         }
