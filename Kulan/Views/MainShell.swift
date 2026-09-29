@@ -3383,6 +3383,26 @@ private struct StoryAvatarTap: ViewModifier {
     }
 }
 
+/// The timer badge on a chat's photo while disappearing messages are on. The ring is the list's own
+/// background, so it reads as a notch in the photo in both appearances; the fill is one step up from
+/// the background in dark (the reference's dark grey disc) and white in light.
+struct DisappearingAvatarBadge: View {
+    static let side: CGFloat = 22
+
+    var body: some View {
+        Image(systemName: "timer")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color(uiColor: .systemGray))
+            .frame(width: Self.side, height: Self.side)
+            .background(Circle().fill(Color(uiColor: UIColor { t in
+                t.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
+            })))
+            .padding(2)
+            .background(Circle().fill(Color(uiColor: .systemBackground)))
+            .accessibilityLabel("Disappearing messages on")
+    }
+}
+
 struct ChatRow: View, Equatable {
     let conv: Conversation
     let me: String
@@ -3931,6 +3951,12 @@ struct ChatRow: View, Equatable {
                         StoryRingView(seen: storySeen, lineWidth: 2)
                             .frame(width: Self.ringedSide, height: Self.ringedSide)
                     }
+                }
+                // ⛔ DISAPPEARING MESSAGES ON = A TIMER ON THE PHOTO — owner, 2026-09-29, with the
+                // reference's list: a small round badge at the photo's lower right, cut out of the
+                // photo by a ring of the page colour. Drawn after the story ring so it sits on top.
+                .overlay(alignment: .bottomTrailing) {
+                    if conv.disappearSeconds > 0 { DisappearingAvatarBadge().offset(x: 3, y: 3) }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
                 .modifier(StoryAvatarTap(active: !storySeen.isEmpty && onStoryTap != nil) { onStoryTap?() })
