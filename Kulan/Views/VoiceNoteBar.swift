@@ -20,18 +20,9 @@ struct VoiceNoteBar: View {
 
     static let height: CGFloat = 44
 
-    /// When the bar last came or went. The chat list reads it: the bar is a top inset, and a
-    /// `UITableView` answers a growing inset by moving `adjustedContentInset` and leaving
-    /// `contentOffset` where it was, so a list resting at the top ended up with its first rows
-    /// ("Pinned") UNDER the bar (owner, 2026-09-29). See `ChatListSelfSizingTable`.
-    @MainActor static var lastToggle = Date.distantPast
-
+    // The bar is a top inset; the chat list keeps itself at its top when the inset changes (see
+    // `ChatListSelfSizingTable.adjustedContentInsetDidChange`), so nothing here signals it.
     var body: some View {
-        ZStack { bar }
-            .onChange(of: engine.barVisible) { _, _ in Self.lastToggle = Date() }
-    }
-
-    @ViewBuilder private var bar: some View {
         if engine.barVisible {
             HStack(spacing: 0) {
                 // Play AND pause, not pause alone. The bar now outlives a pause — it has to, because

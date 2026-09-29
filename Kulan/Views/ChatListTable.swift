@@ -567,19 +567,24 @@ final class ChatListSelfSizingTable: UITableView {
         let oldTop = lastInsetTop
         lastInsetTop = adjustedContentInset.top
         super.adjustedContentInsetDidChange()
-        // ⛔ THE VOICE BAR KEEPS A LIST AT THE TOP AT THE TOP — owner, 2026-09-29, the playing-note
+        // ⛔ A LIST RESTING AT ITS TOP STAYS AT ITS TOP — owner, 2026-09-29, twice: the playing-note
         // bar drawn over the "Pinned" heading. The bar is a top inset; this view answered it by
-        // moving the inset and leaving the offset, so the first rows slid under the bar. ONLY while
-        // the bar is coming or going (`VoiceNoteBar.lastToggle`) and only when the list was resting
-        // at its old top: the search transition moves this inset too, and UIKit already corrects
-        // that one itself (see the warning on `ChatListCell` — correcting it twice was build 736).
-        if Date().timeIntervalSince(VoiceNoteBar.lastToggle) < 1,
+        // moving the inset and leaving the offset, so the first rows slid under the bar.
+        // ⚠️ NOT A TIME WINDOW ANY MORE. Build 803 corrected only within 1s of the bar changing, and
+        // the bar usually appears when you LEAVE a chat: this list is off screen then and takes the
+        // new inset when it comes back, later than that, so 803 still showed his screenshot. Any
+        // inset change now keeps a list that was resting at its old top at its new top — except
+        // while search opens or closes (`searchInFlight`), which UIKit corrects itself (correcting
+        // it twice was build 736, see the warning on `ChatListCell`), and never under a finger.
+        if !searchInFlight, abs(adjustedContentInset.top - oldTop) > 0.5,
            abs(contentOffset.y + oldTop) < 1, !isTracking, !isDecelerating {
             contentOffset.y = -adjustedContentInset.top
         }
         updateFooterHeight()
     }
     private var lastInsetTop: CGFloat = 0
+    /// Search is opening or closing (the controller's `searchHold`): leave the offset to UIKit.
+    var searchInFlight = false
 
     private func updateFooterHeight() {
         // See `suspendFooterUpdates`: during a transition this would move `contentSize` on every
@@ -1869,6 +1874,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     private func holdFooterIfNeeded() {
         (tableView as? ChatListSelfSizingTable)?.suspendFooterUpdates = isInTransition || searchHold
+        (tableView as? ChatListSelfSizingTable)?.searchInFlight = searchHold
     }
 
     /// Scrolling has genuinely stopped: put the newest state on screen.
