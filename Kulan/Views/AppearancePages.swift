@@ -610,6 +610,13 @@ struct WallpaperPreviewScreen: View {
                     .offset(x: -f.minX, y: -f.minY)
             }
             .clipShape(shape)
+            // ⛔ PAINT ONLY — owner, 2026-09-29, three reports: "the ✕, the dark/light button and
+            // swiping wallpapers do not work". The gradient above is SCREEN-SIZED and offset to the
+            // screen's origin; `clipShape` clips what is drawn, not what is hit, so this bubble's
+            // background caught every touch over the whole preview. It sits in the VStack after the
+            // header and over the pager, so the ✕, the button and the swipe were all dead, while
+            // Apply (laid out after the bubbles) still worked, and only with a gradient chat colour.
+            .allowsHitTesting(false)
         } else {
             shape.fill(myBubbleFill)
         }
