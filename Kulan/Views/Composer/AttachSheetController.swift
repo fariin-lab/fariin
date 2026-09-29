@@ -204,6 +204,26 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
     /// The home-indicator band the panel pads its bar by, less the gap the sheet already floats
     /// above the screen's bottom, so the bar stays where it was.
+    /// ⛔ THE SYSTEM SHEET'S CORNERS — owner, 2026-09-29, the attach sheet beside the chat wallpaper
+    /// sheet (a system sheet): "that one's corners, spacing and bottom look perfect, this one does
+    /// not". Ours was one fixed 38 on all four corners, so at the bottom, where the sheet floats
+    /// `restInset` inside the screen's much rounder corners, the gap between the two opened up at
+    /// each corner. The system sheet's bottom corners are CONCENTRIC with the display; these are too
+    /// (`containerConcentric`, with a floor per `StoryCameraDoor.appleCardRadius`: 55, the modern
+    /// display corner, less the inset). The top keeps its 38. Every corner write on the shell goes
+    /// through these two, so the grow/shrink to and from the "+" and the resting shape are one
+    /// mechanism and never overwrite each other.
+    private func restCorners() {
+        let top = UICornerRadius.fixed(38)
+        let bottom = UICornerRadius.containerConcentric(minimum: 55 - Self.restInset)
+        shell.cornerConfiguration = .corners(topLeftRadius: top, topRightRadius: top,
+                                             bottomLeftRadius: bottom, bottomRightRadius: bottom)
+    }
+
+    private func setCorners(_ r: CGFloat) {
+        shell.cornerConfiguration = .uniformCorners(radius: .fixed(r))
+    }
+
     private func bottomPad(forTop y: CGFloat) -> CGFloat {
         max(0, view.safeAreaInsets.bottom - inset(forTop: y))
     }
@@ -361,13 +381,13 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             if !reversing {
                 glass.isHidden = true
                 content.alpha = 1
-                shell.layer.cornerRadius = 38
+                restCorners()
                 setTop(compactTop)
                 shell.center.y += view.bounds.height
             }
             let a = UIViewPropertyAnimator(duration: 0.4, timingParameters: UICubicTimingParameters(
                 controlPoint1: CGPoint(x: 0.23, y: 1), controlPoint2: CGPoint(x: 0.32, y: 1)))
-            a.addAnimations { [self] in setTop(compactTop); shell.layer.cornerRadius = 38; content.alpha = 1 }
+            a.addAnimations { [self] in setTop(compactTop); restCorners(); content.alpha = 1 }
             a.addCompletion { [weak self] p in if p == .end { self?.didOpen() } }
             run(a)
             run(linear(0.3) { [self] in dim.alpha = 1 })
@@ -390,7 +410,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             glass.alpha = 1
             shell.center = CGPoint(x: src.midX, y: src.midY)
             shell.transform = CGAffineTransform(scaleX: scale, y: scale)
-            shell.layer.cornerRadius = target.width / 2
+            setCorners(target.width / 2)
             glyph.center = Self.middle(of: square)
             glyph.transform = CGAffineTransform(scaleX: 1 / scale, y: 1 / scale)
             glyph.alpha = 1
@@ -413,7 +433,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
 
         run(position)
         run(size)
-        run(easeInOut(0.2) { [self] in shell.layer.cornerRadius = 38 })
+        run(easeInOut(0.2) { [self] in restCorners() })
         run(easeInOut(0.2) { [self] in content.alpha = 1 })
         run(easeInOut(0.15) { [self] in glyph.alpha = 0 })
         run(linear(0.3) { [self] in dim.alpha = 1 })
@@ -430,7 +450,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     /// Jumps the grow to its end, for a drag that starts before it finished.
     private func settleOpenNow() {
         stopAll()
-        shell.layer.cornerRadius = 38
+        restCorners()
         content.alpha = 1
         glyph.alpha = 0
         dim.alpha = 1
@@ -509,7 +529,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             glyph.center = Self.middle(of: square)
         }
         let corners = RefSpring.animator(damping: 124, velocity: v, duration: 0.2)
-        corners.addAnimations { [self] in shell.layer.cornerRadius = w / 2 }
+        corners.addAnimations { [self] in setCorners(w / 2) }
 
         run(position)
         run(size)
