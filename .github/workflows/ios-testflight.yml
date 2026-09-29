@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            VOICE BAR MAKES ROOM IN CHATS, DEVICES SHEET, ALBUM FROM RECENTS WITHOUT SLIDE.
+            ONE-TIME MEDIA, MENU ABOVE THE KEYBOARD, APPLE PASSWORD, ALBUM CANCEL, CLOCK.
+
+            ONE-TIME: a photo opens once only; a voice plays once and the page closes, and it is downloaded before you open it; with a reaction the bubble keeps your normal shape.
+
+            CHAT: keyboard open, long-press the last message: the menu stays above the keys. The sending clock lines up with the time. A photo you cancel in a group leaves at once.
+
+            PASSWORD: an Apple account with a hidden email can set a new password by signing in with Apple. Forgot password is a link.
+
+            LOG OUT: a playing voice note stops.
+
+            PLEASE TEST: open a one-time photo twice; play a one-time voice to the end; keyboard up, long-press the last message; send 3 photos and cancel one.
+
+            EARLIER IN THIS ROUND (build 807): VOICE BAR MAKES ROOM IN CHATS, DEVICES SHEET, ALBUM FROM RECENTS WITHOUT SLIDE.
 
             CHATS: the playing voice note bar now pushes the list down instead of covering "Pinned".
 
