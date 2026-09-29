@@ -19,6 +19,9 @@ struct VoiceNoteBar: View {
     @ObservedObject private var engine = VoiceNotePlayer.shared
 
     static let height: CGFloat = 44
+    /// The whole slot the bar takes under a header: the capsule plus its 6 above and 4 below
+    /// (`body`'s paddings). The chat list reserves exactly this (`ChatListTable.voiceBar`).
+    static let slotHeight: CGFloat = height + 6 + 4
 
     // The bar is a top inset; the chat list keeps itself at its top when the inset changes (see
     // `ChatListSelfSizingTable.adjustedContentInsetDidChange`), so nothing here signals it.

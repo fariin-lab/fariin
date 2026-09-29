@@ -407,6 +407,15 @@ struct ChatListTable: UIViewControllerRepresentable {
     var onReachEnd: () -> Void = {}
     /// 2026-09-24 feature-audit: older chats are on their way; the end of the list shows a spinner.
     var loadingMore: Bool = false
+    /// ⛔ THE VOICE BAR'S ROOM IS GIVEN HERE, EXPLICITLY — owner, 2026-09-29, the THIRD report of the
+    /// playing-note bar over "Pinned". The page mounts this table with
+    /// `.ignoresSafeArea(.container, edges: [.top, .bottom])` (rows run under the header's soft
+    /// blur), and ignoring the container safe area ignores the bar's `safeAreaInset` too: the table
+    /// was never told the bar exists, so it made no room at all. The two earlier fixes (803's 1s
+    /// window, then `efd560c9`'s offset pin) both reacted to an inset change that never arrived.
+    /// Observed here, so a bar coming or going re-renders this and the controller adds exactly the
+    /// bar's slot to its top safe area; the offset pin then keeps a list at its top at its top.
+    @ObservedObject var voiceBar = VoiceNotePlayer.shared
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
         vc.host = context.coordinator
@@ -421,6 +430,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         // invalidated. The editing state settles first, then the diff runs against it.
         vc.setTint(UIColor(Theme.defaultBubble(dark)))
         vc.setLoadingMore(loadingMore)   // 2026-09-24 feature-audit
+        vc.setVoiceBarInset(voiceBar.barVisible ? VoiceNoteBar.slotHeight : 0)
         vc.setSelecting(selecting)
         // The search bar's cancel button is re-checked on every render as well as every layout
         // pass: SwiftUI re-installs its search controller freely (cancelling a search is enough),
@@ -730,6 +740,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         didSet { if searchHold != oldValue { holdFooterIfNeeded() } }
     }
     private var searchReleaseWork: DispatchWorkItem?
+
+    /// The playing-note bar's slot, on top of whatever the bars already give (see
+    /// `ChatListTable.voiceBar`). `additionalSafeAreaInsets` reaches the table's automatic
+    /// `adjustedContentInset`, so the first row sits under the bar, not beneath it.
+    func setVoiceBarInset(_ h: CGFloat) {
+        guard abs(additionalSafeAreaInsets.top - h) > 0.5 else { return }
+        additionalSafeAreaInsets.top = h
+    }
 
     func setSearching(_ on: Bool) {
         searchReleaseWork?.cancel()
