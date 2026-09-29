@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            GLOW SHEET PICTURE.
+            VOICE BAR NO LONGER COVERS PINNED, ATTACH SHEET BOTTOM, DISAPPEARING BADGE.
+
+            CHATS: the playing voice note bar no longer covers "Pinned", even when it appears as you leave a chat.
+
+            ATTACH SHEET: no white band at the bottom; the bar and Album button keep the same gap from the sheet half or full; Album from Recents opens without a slide (folders and Back still slide).
+
+            CHAT LIST: disappearing badge is white with a black icon in light mode and black with a white icon in dark mode, icon a little bigger.
+
+            PLEASE TEST: play a voice note, leave the chat, look at the top of Chats; open the attach sheet half and full; look at a chat with disappearing messages on.
+
+            EARLIER IN THIS ROUND (build 804): GLOW SHEET PICTURE.
 
             GLOW: the "What a Glow does" sheet shows the new illustration (light mode; dark mode keeps the Glow icon for now).
 
