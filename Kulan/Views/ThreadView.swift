@@ -4584,7 +4584,13 @@ struct ThreadView: View {
                 } else if attachShowAlbums {
                     attachShowAlbums = false
                 } else {
-                    attachShowAlbums = true
+                    // ⛔ FROM RECENTS THE LIST JUST APPEARS — owner, 2026-09-29: "first time, when I
+                    // tap Album from Recents, no animation; keep the slide for a folder and for Back".
+                    // A transaction that disables animations switches off the strip's own
+                    // `.animation(value: showAlbums)` for this one change only.
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { attachShowAlbums = true }
                 }
             }
         } label: {

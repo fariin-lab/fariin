@@ -238,7 +238,9 @@ struct AttachRecentsStrip: View {
                     .transition(.move(edge: .trailing))
             }
         }
-        .clipped()
+        // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.
+        // A clip cuts at this view's frame, which stops at the safe area, and the grid is meant to
+        // scroll on under the bar to the sheet's edge. The sheet's shell already clips the slide.
         .animation(.snappy(duration: 0.3), value: showAlbums)
         // ⛔ THE HEADER IS GONE — OWNER, 2026-09-02, with a screenshot: "Photo sheet no header".
         //
