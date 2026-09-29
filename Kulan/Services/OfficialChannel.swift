@@ -407,6 +407,15 @@ extension Announcement {
 ///     moments this phone chooses). The phone's own clock decides nothing.
 struct OfficialChannelState: Equatable {
     var muted: Bool = true
+    /// ⛔ WHEN A TIMED MUTE ENDS, server ms; 0 = Always — owner, 2026-09-29: the profile's Mute
+    /// offers the chat's own 1 hour / 8 hours / 1 day / 1 week / Always. Written with `muted` and
+    /// `mutedAt` (the rules' `notOlder('muted')` already orders it), read through `isMutedNow`.
+    var mutedUntilMillis: Double = 0
+
+    /// Muted at this moment: switched on, and either Always or not yet run out.
+    var isMutedNow: Bool {
+        muted && (mutedUntilMillis == 0 || ServerClock.now.timeIntervalSince1970 * 1000 < mutedUntilMillis)
+    }
     var blocked: Bool = false
     var pinned: Bool = false
     var archived: Bool = false
@@ -425,6 +434,7 @@ struct OfficialChannelState: Equatable {
 
     init(data: [String: Any]) {
         muted = data["muted"] as? Bool ?? true
+        mutedUntilMillis = Self.millis(data["mutedUntil"])
         blocked = data["blocked"] as? Bool ?? false
         pinned = data["pinned"] as? Bool ?? false
         archived = data["archived"] as? Bool ?? false
@@ -551,7 +561,10 @@ final class OfficialChannelStore {
             "lastMessage": latest.preview,
             "lastSender": OfficialChannel.cid,
             "unreadCount": [uid: unreadCount],
-            "mutedBy": [uid: state.muted ? Double.greatestFiniteMagnitude : 0],
+            // The end of a timed mute is the chat list's own `mutedBy` value (ms), as for any chat.
+            "mutedBy": [uid: state.isMutedNow
+                            ? (state.mutedUntilMillis > 0 ? state.mutedUntilMillis : Double.greatestFiniteMagnitude)
+                            : 0],
             "pinnedBy": [uid: state.pinned],
             "archivedBy": [uid: state.archived],
             "clearedAt": [uid: state.clearedAtMillis],
@@ -620,7 +633,8 @@ final class OfficialChannelStore {
                 // launching, this phone muting, and the account's OTHER phone muting. A mute made on
                 // one device that left the other still being knocked on would read as the switch
                 // being broken.
-                OfficialPushTopics.sync(muted: self.state.muted)
+                OfficialPushTopics.sync(muted: self.state.isMutedNow)
+                self.scheduleMuteEnd()
             }
 
         // The passage of time is scheduled by `recompute` itself (`scheduleNextBoundary`): one timer
@@ -845,14 +859,38 @@ final class OfficialChannelStore {
     /// switch so the rules can refuse an older choice that reaches the server after a newer one.
     private static var chosenAt: Double { ServerClock.now.timeIntervalSince1970 * 1000 }
 
-    func setMuted(_ muted: Bool) {
+    /// `until`: when a timed mute ends (server ms, `ChatService.muteUntil`); nil or "Always" = 0.
+    func setMuted(_ muted: Bool, until: Double? = nil) {
         state.muted = muted
-        stateRef?.setData(["muted": muted, "mutedAt": Self.chosenAt], merge: true)
+        // `ChatService.muteUntil(nil)` (Always) is a far-future number; stored as 0, "no end".
+        let end = (muted ? until : nil).map { $0 > 9_000_000_000_000 ? 0 : $0 } ?? 0
+        state.mutedUntilMillis = end
+        stateRef?.setData(["muted": muted, "mutedUntil": end, "mutedAt": Self.chosenAt], merge: true)
         // Locally too, not only through the listener above. The write has to reach Doha and come
         // back before that fires, and on a bad connection that is seconds in which the bell reads
         // OFF while an announcement could still knock. Both calls land on the same set, and the
         // second one is free.
-        OfficialPushTopics.sync(muted: muted)
+        OfficialPushTopics.sync(muted: state.isMutedNow)
+        scheduleMuteEnd()
+        recompute()   // the chat list's bell
+    }
+
+    /// A timed mute runs out on its own: one timer for the end, and the unmute is WRITTEN (not only
+    /// computed) so the other phone and the push topics hear it too. Also run when the state
+    /// arrives, so a mute that ended while the app was closed is lifted the moment it opens.
+    ///
+    /// ⚠️ The announcements arrive by push TOPIC, which the server cannot filter per person, so a
+    /// mute that ends while the app is closed brings notifications back when the app next runs,
+    /// not to the minute. A normal chat's timed mute is checked by the server at send time.
+    @ObservationIgnored private var muteEndTimer: Timer?
+    private func scheduleMuteEnd() {
+        muteEndTimer?.invalidate(); muteEndTimer = nil
+        guard state.muted, state.mutedUntilMillis > 0 else { return }
+        let wait = state.mutedUntilMillis / 1000 - ServerClock.now.timeIntervalSince1970
+        guard wait > 0 else { setMuted(false); return }
+        muteEndTimer = Timer.scheduledTimer(withTimeInterval: wait + 1, repeats: false) { _ in
+            MainActor.assumeIsolated { OfficialChannelStore.shared.scheduleMuteEnd() }
+        }
     }
 
     /// Mark Unread from the chat list: the badge shows one, which is what a normal chat does.

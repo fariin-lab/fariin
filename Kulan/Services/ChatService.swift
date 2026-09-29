@@ -3228,9 +3228,11 @@ enum ChatService {
     /// Mute until a specific epoch-ms time (0 = unmute, far-future = always).
     static func setMute(_ cid: String, until: Double) async {
         if OfficialChannel.isOfficial(cid) {
-            // The official channel's mute is a plain on/off. A timed mute would expire and start
-            // making noise on its own, which is the opposite of the promise the welcome message makes.
-            OfficialChannelStore.shared.setMuted(until > Date().timeIntervalSince1970 * 1000)
+            // ⛔ TIMED NOW — owner, 2026-09-29: the channel's Mute offers the same 1 hour … Always as
+            // any chat. It used to be a plain on/off. The channel still STARTS muted (Always); only
+            // a mute its reader chose with an end runs out.
+            let on = until > Date().timeIntervalSince1970 * 1000
+            await MainActor.run { OfficialChannelStore.shared.setMuted(on, until: on ? until : nil) }
             return
         }
         try? await db.collection("conversations").document(cid)

@@ -364,7 +364,7 @@ enum Push {
         // Boot calls this before anybody is signed in, hence the explicit check: a phone sitting on
         // the sign-in screen must not be in a topic. Once signed in, the channel's own state
         // listener takes over and syncs on every launch anyway.
-        OfficialPushTopics.sync(muted: OfficialChannelStore.shared.state.muted,
+        OfficialPushTopics.sync(muted: OfficialChannelStore.shared.state.isMutedNow,
                                 signedIn: Auth.auth().currentUser != nil)
     }
 

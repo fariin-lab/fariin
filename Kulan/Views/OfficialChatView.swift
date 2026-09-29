@@ -100,9 +100,13 @@ struct OfficialChatView: View {
     private func barGlassReporter() -> some View {
         GeometryReader { g in
             let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
-            // Capped just past the home-indicator band: with the search keyboard up this would
-            // include the keyboard, which the list adds on its own.
-            let h = g.size.height + max(0, min(under, Self.homeBand + 10))
+            // ⛔ LESS THE HOME-INDICATOR BAND — build 796, his screenshot: still ~58pt of empty space
+            // over the bar where ~14 belongs. The list's clearance is `keyboardOverlap + this + pad`,
+            // and at rest `keyboardOverlap` IS the band (`restSafeBottom`), so a report that also
+            // ran down to the screen's edge counted the band twice. The report is the glass's top
+            // measured from the band's top. (`under` capped just past the band: with the search
+            // keyboard up it would hold the keyboard, which `keyboardOverlap` already is.)
+            let h = max(0, g.size.height + min(under, Self.homeBand + 10) - Self.homeBand)
             Color.clear.onChange(of: h, initial: true) { _, v in barHeight = v }
         }
     }
@@ -389,9 +393,9 @@ struct OfficialChatView: View {
     private var bellButton: ChatNavigationItem.BarButton {
         ChatNavigationItem.BarButton(
             id: "bell",
-            image: store.state.muted ? "ic_bell_off" : "ic_bell",
-            accessibilityLabel: store.state.muted ? "Notifications off" : "Notifications on",
-            action: { store.setMuted(!store.state.muted) })
+            image: store.state.isMutedNow ? "ic_bell_off" : "ic_bell",
+            accessibilityLabel: store.state.isMutedNow ? "Notifications off" : "Notifications on",
+            action: { store.setMuted(!store.state.isMutedNow) })
     }
 
     // MARK: The bar where the composer would be
@@ -636,14 +640,25 @@ struct OfficialChatInfoView: View {
     /// stretches to fill its slot, so two of them split the whole width and sat half a screen apart.
     private var actionButtons: some View {
         HStack(spacing: 0) {
+            // ⛔ THE CHAT'S OWN MUTE MENU — owner, 2026-09-29: "when I tap Mute show 1 hour, 8 hours,
+            // 1 day, 1 week, Always". The same items and wording as `ContactInfoView.muteMenuItems`;
+            // muted, it says until when and offers Unmute.
             Menu {
-                if store.state.muted {
-                    Button { store.setMuted(false) } label: { Label("Unmute", systemImage: "bell") }
+                if store.state.isMutedNow {
+                    Section(muteUntilLabel) {
+                        Button("Unmute") { store.setMuted(false) }
+                    }
                 } else {
-                    Button { store.setMuted(true) } label: { Label("Mute", systemImage: "bell.slash") }
+                    Section("Mute this chat for…") {
+                        Button("1 hour")  { store.setMuted(true, until: ChatService.muteUntil(1)) }
+                        Button("8 hours") { store.setMuted(true, until: ChatService.muteUntil(8)) }
+                        Button("1 day")   { store.setMuted(true, until: ChatService.muteUntil(24)) }
+                        Button("1 week")  { store.setMuted(true, until: ChatService.muteUntil(168)) }
+                        Button("Always")  { store.setMuted(true) }
+                    }
                 }
             } label: {
-                PosterActionIcon(icon: store.state.muted ? "ic_bell" : "ic_bell_off", onPhoto: false)
+                PosterActionIcon(icon: store.state.isMutedNow ? "ic_bell" : "ic_bell_off", onPhoto: false)
                     .frame(width: actionSlot)
             }.tint(.primary)
             Button { onSearch() } label: {
@@ -652,6 +667,17 @@ struct OfficialChatInfoView: View {
             }.tint(.primary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// "Muted always" / "Muted until 3:40 PM", the chat profile's wording.
+    private var muteUntilLabel: String {
+        let end = store.state.mutedUntilMillis
+        guard end > 0 else { return "Muted always" }
+        let date = Date(timeIntervalSince1970: end / 1000)
+        let t = Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(date: .abbreviated, time: .shortened)
+        return "Muted until \(t)"
     }
 
     /// One slot of a five-circle row across this page's width (16pt margins each side).
@@ -976,10 +1002,20 @@ struct AnnouncementRow: View {
         .modifier(OptionalRectReporter(id: menuId, overhang: 0))
     }
 
+    /// ⛔ READ LIVE FROM THE STORE IN THE REAL CHAT — owner, 2026-09-29, build 796: "when I react the
+    /// badge appears late". The chip used to wait for the list to notice the row's signature change,
+    /// reconfigure the hosted row and re-measure it (the chip made the footer taller). This body
+    /// observes the store itself, so the chip draws in the same frame as the tap; and the footer
+    /// always keeps the chip's height in the real chat, so a reaction never resizes the post.
+    /// The previews pass `myReaction` and have no store state of their own.
+    private var shownReaction: String? {
+        menuId != nil ? OfficialChannelStore.shared.state.reactions[announcement.id] : myReaction
+    }
+
     /// My reaction chip (the chat's own look) on the left, "edited" and the time on the right.
     private var footer: some View {
         HStack(spacing: 4) {
-            if let myReaction {
+            if let myReaction = shownReaction {
                 Text(myReaction)
                     .font(.system(size: BubbleMetrics.reactionEmojiFont))
                     .padding(.horizontal, BubbleMetrics.reactionChipInset)
@@ -996,6 +1032,7 @@ struct AnnouncementRow: View {
                 .font(Font(BubbleMetrics.metaFont))
                 .foregroundStyle(.secondary)
         }
+        .frame(minHeight: menuId != nil ? BubbleMetrics.reactionChipHeight : nil, alignment: .bottom)
     }
 
     private var buttonStack: some View {
