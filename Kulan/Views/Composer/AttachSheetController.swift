@@ -222,8 +222,63 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         shell.bounds = CGRect(origin: .zero, size: f.size)
         shell.center = CGPoint(x: f.midX, y: f.midY)
         glass.frame = shell.bounds
+        // While a snap is being followed frame by frame (`driveTick`), the panel is NOT laid out
+        // here: this runs inside the animator, and animating the panel to its final size is exactly
+        // the one-shot layout that broke the fast swipe.
+        guard !driving else { return }
         if !keyboardUp { setBottom(bottomPad(forTop: y)) }
         layoutContent(size: f.size)
+        host.view.layoutIfNeeded()
+    }
+
+    // MARK: - Following an animated resize
+
+    /// ⛔ THE PANEL FOLLOWS THE SHEET EVERY FRAME OF A SNAP — owner, 2026-09-29, twice: a FAST swipe
+    /// down on the full sheet threw the attach bar upward and left a black (dark) or white (light)
+    /// band under it; a slow drag was fine.
+    ///
+    /// A drag calls `setTop` per touch, so the SwiftUI panel re-lays out every frame. A flick puts
+    /// the whole resize inside ONE animator, and the panel was laid out once, at the final size.
+    /// The first fix (593cf43f) placed that final-size panel on the shell's bottom edge and slid it
+    /// to 0 alongside the shell; the flick's spring OVERSHOOTS, and below rest the shell only moves
+    /// (its height is clamped, `frame(forTop:)`) while the panel's offset kept travelling, so the
+    /// panel rode up out of the shell: bar too high, empty band under it. Now a display link reads
+    /// the shell's in-flight (presentation) size each frame and lays the panel out at it, without
+    /// animation: the same per-frame layout the drag already gets, on the animator's clock.
+    private var link: CADisplayLink?
+    private var driving = false
+
+    private func startDriving() {
+        link?.invalidate()
+        driving = true
+        let l = CADisplayLink(target: self, selector: #selector(driveTick))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    private func stopDriving() {
+        guard driving || link != nil else { return }
+        driving = false
+        link?.invalidate()
+        link = nil
+    }
+
+    @objc private func driveTick() {
+        guard let p = shell.layer.presentation() else { return }
+        let size = p.bounds.size
+        let top = p.position.y - size.height / 2
+        UIView.performWithoutAnimation {
+            if !keyboardUp { setBottom(bottomPad(forTop: top)) }
+            layoutContent(size: size)
+            host.view.layoutIfNeeded()
+        }
+    }
+
+    /// The end of a followed snap: one exact layout at the resting size.
+    private func finishDriving() {
+        stopDriving()
+        if !keyboardUp { setBottom(bottomPad(forTop: sheetTop)) }
+        layoutContent(size: shell.bounds.size)
         host.view.layoutIfNeeded()
     }
 
@@ -270,6 +325,8 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         for a in animators where a.state == .active { a.stopAnimation(true) }
         animators.removeAll()
         laterGen &+= 1
+        // A grab mid-snap: the drag lays the panel out from here (`setTop` per touch).
+        stopDriving()
     }
 
     private func linear(_ d: TimeInterval, _ body: @escaping () -> Void) -> UIViewPropertyAnimator {
@@ -381,38 +438,16 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     }
 
     /// The panel asked for the full height (caption field focused). Their 0.5s keyboard curve.
-    /// ⛔ AN ANIMATED RESIZE KEEPS THE PANEL ON THE SHEET'S BOTTOM EDGE — owner, 2026-09-29: a fast
-    /// swipe on the full sheet threw the attach bar upward and left a black (dark) or white (light)
-    /// band under it until the snap finished; a slow drag was fine.
-    ///
-    /// A drag resizes frame by frame, so SwiftUI follows. A snap puts `setTop` inside an animator:
-    /// the shell animates, but the hosted SwiftUI panel lays out ONCE at the final size, and it
-    /// sat at the shell's top edge, which is still travelling. For the whole snap the panel ended
-    /// short of the shell's bottom (the bar too high) and the shell's own background showed below.
-    ///
-    /// Between rest and full the sheet's BOTTOM never moves (`frame(forTop:)`), so the panel is
-    /// laid out at its final size now, placed so its bottom sits on the shell's bottom, and slides
-    /// to 0 inside the same animation as the shell (`setTop` → `layoutContent`). Its bottom, and
-    /// the bar on it, stay put; its top travels with the sheet's top.
-    private func anchorContentBottom(toward target: CGFloat) {
-        let old = shell.bounds.height
-        let size = frame(forTop: target).size
-        guard abs(old - size.height) > 0.5 else { return }
-        UIView.performWithoutAnimation {
-            layoutContent(size: size)
-            content.frame.origin.y = old - size.height
-            host.view.layoutIfNeeded()
-        }
-    }
-
+    /// The panel follows the resize frame by frame (`startDriving`), as in `snap`.
     func expand() {
         guard phase == .open, !isExpanded, scroll == nil else { return }
         stopAll()
         isExpanded = true
-        anchorContentBottom(toward: expandedTop)
         let a = UIViewPropertyAnimator(duration: 0.5, timingParameters: UICubicTimingParameters(
             controlPoint1: CGPoint(x: 0.23, y: 1), controlPoint2: CGPoint(x: 0.32, y: 1)))
         a.addAnimations { [self] in setTop(expandedTop) }
+        a.addCompletion { [weak self] pos in if pos == .end { self?.finishDriving() } }
+        startDriving()
         run(a)
     }
 
@@ -652,7 +687,6 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         isExpanded = expanded
         let target = expanded ? expandedTop : compactTop
         let distance = abs(target - sheetTop)
-        anchorContentBottom(toward: target)
         let a: UIViewPropertyAnimator
         if stay || distance < 0.5 {
             a = easeInOut(0.3) { [self] in setTop(target) }
@@ -660,6 +694,9 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             a = RefSpring.animator(damping: 124, velocity: abs(velocity) / distance, duration: 0.45)
             a.addAnimations { [self] in setTop(target) }
         }
+        // The panel follows the shell frame by frame (see `driveTick`); one exact layout at the end.
+        a.addCompletion { [weak self] pos in if pos == .end { self?.finishDriving() } }
+        startDriving()
         run(a)
     }
 
