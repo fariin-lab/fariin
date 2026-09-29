@@ -2950,8 +2950,18 @@ struct ThreadView: View {
             "\(repo.expiryTick)",
             // 2026-09-24 feature-audit: an edit waiting for the server draws the sending clock.
             "\(editPendingIds.count):\(editPendingIds.hashValue)",
+            // The chat's timer draws the icon on messages the server has not stamped yet.
+            "\(conversation?.disappearSeconds ?? 0)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
+
+        // The timer in force and the notice that set it (owner 2026-09-29, the icon on every
+        // message sent while it is on — `MessageRowModelBuilder.provisionalExpiry`).
+        let timerSeconds = conversation?.disappearSeconds ?? 0
+        let timerSince = timerSeconds > 0
+            ? repo.items.last(where: { $0.disappearSeconds != nil })
+                .flatMap { ($0.disappearSeconds ?? 0) > 0 ? $0.createdAt : nil }
+            : nil
 
         let ctx = MessageRowContext(
             me: me, cid: cid, isGroup: isGroup, dark: dark,
@@ -2970,7 +2980,8 @@ struct ThreadView: View {
                 // "unavailable" on the way in and then correct itself.
                 !storiesRepo.didLoad || storiesRepo.hasLive(storyId: storyId, author: author)
             },
-            editPendingIds: editPendingIds)   // 2026-09-24 feature-audit
+            editPendingIds: editPendingIds,   // 2026-09-24 feature-audit
+            timer: timerSeconds > 0 ? (timerSince, timerSeconds) : nil)
 
         var out: [String: MessageRowModel] = [:]
         for (idx, m) in repo.items.enumerated() {

@@ -132,6 +132,20 @@ enum BubbleText {
         }
         s.append(NSAttributedString(string: m.timeText, attributes: [
             .font: BubbleMetrics.metaFont, .foregroundColor: color]))
+        // ⛔ TIME → TIMER → TICK — owner, 2026-09-29. The timer used to be a separate view laid
+        // just LEFT of the time, with room reserved for it by hand in three places, and it drifted
+        // out of place. It is part of the footer text now, so it is measured with it everywhere the
+        // footer is (inline, own line, photo capsule, reaction row) and cannot land anywhere else.
+        if m.expiresAt != nil,
+           let t = UIImage(systemName: "timer",
+                           withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)) {
+            let a = NSTextAttachment()
+            a.image = t.withTintColor(color, renderingMode: .alwaysOriginal)
+            let cap = BubbleMetrics.metaFont.capHeight
+            a.bounds = CGRect(x: 0, y: (cap - t.size.height) / 2, width: t.size.width, height: t.size.height)
+            s.append(NSAttributedString(string: " ", attributes: [.font: BubbleMetrics.metaFont]))
+            s.append(NSAttributedString(attachment: a))
+        }
         // ⛔ A FAILED SEND HAS NO FOOTER GLYPH. Theirs: `case .failed: // No status indicator icon.`
         // The red (!) outside the bubble says it, and drawing both put two exclamation marks on one
         // message — which is what his 2026-08-26 screenshot shows.
@@ -203,10 +217,8 @@ enum BubbleText {
     static func footerWidth(_ m: MetaChrome, isMe: Bool) -> CGFloat {
         var widest = m
         if isMe, m.tick != .failed { widest.tick = .read }
-        // A message on a timer carries its ring just left of the time (`setExpiryTimer`: 9pt + 3).
-        // Its expiry never changes, so reserving it here never resizes the bubble.
-        let ring: CGFloat = m.expiresAt == nil ? 0 : 12
-        return BubbleMetrics.metaInlineGap + ring + lineSize(meta(widest, isMe: isMe, color: .black)).width
+        // The timer icon is inside `meta` itself now (time → timer → tick), so it is measured there.
+        return BubbleMetrics.metaInlineGap + lineSize(meta(widest, isMe: isMe, color: .black)).width
     }
 
     /// The width of the last line `s` lays out into at `width`, or nil when the footer cannot share

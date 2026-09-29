@@ -1422,31 +1422,9 @@ final class MessageRowView: UIView {
     /// configured or repainted — which already happens on every land, tick and scroll — and the
     /// remaining time is coarse enough that a second's lag is invisible.
     private func setExpiryTimer(_ expiresAt: Date?, bornAt: Date?, over b: BubblePlan) {
-        guard expiresAt != nil, b.meta != .zero else {
-            expiryRing?.isHidden = true
-            return
-        }
-        // ⛔ THE DISAPPEARING-MESSAGE ICON, NOT A RING — owner, 2026-09-28: "keep it, but use the
-        // disappearing-message icon". A ring for a one-week timer is an almost full, empty circle
-        // and read as a stray mark. It is now the same `timer` glyph the chat header and the
-        // "You set disappearing message time…" notice show, same place, same size, same colour
-        // as the time. (`bornAt` and the proportion it fed are no longer drawn.)
-        let v = expiryRing ?? {
-            let x = UIImageView(image: UIImage(systemName: "timer",
-                                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)))
-            x.contentMode = .center
-            bubbleBox.addSubview(x)
-            expiryRing = x
-            return x
-        }()
-        _ = bornAt
-        v.isHidden = false
-        v.tintColor = b.metaColor
-        // Leading of the footer, so it reads before the time rather than colliding with the tick's
-        // reserved slot at the trailing edge.
-        let side: CGFloat = 9
-        v.frame = CGRect(x: b.meta.minX - side - 3, y: b.meta.midY - side / 2, width: side, height: side)
-        bubbleBox.bringSubviewToFront(v)
+        // ⛔ RETIRED 2026-09-29: the icon is drawn inside the footer text now, between the time and
+        // the tick (`BubbleText.meta`). This view stays hidden so a reused cell never shows both.
+        expiryRing?.isHidden = true
     }
 
     private func setSendingSpin(_ on: Bool, over b: BubblePlan) {

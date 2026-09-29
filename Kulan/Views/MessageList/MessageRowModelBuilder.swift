@@ -40,6 +40,9 @@ struct MessageRowContext {
     /// 2026-09-24 feature-audit: my edits the server has not answered yet. Their footer shows the
     /// sending clock, as the reference app does for an edit in flight.
     var editPendingIds: Set<String> = []
+    /// The disappearing timer in force now, and since when (the notice that set it, or nil when that
+    /// notice is outside the loaded window). See `provisionalExpiry`.
+    var timer: (since: Date?, seconds: Int)? = nil
 }
 
 /// ⚠️ `@MainActor` because it genuinely is main-actor work, not to silence a warning: it reads
@@ -326,7 +329,7 @@ enum MessageRowModelBuilder {
                              bornAt: msg.createdAt,
                              // A tombstone is already gone; putting a countdown on one would be
                              // promising to remove something that has been removed.
-                             expiresAt: msg.deleted ? nil : msg.expiresAt),
+                             expiresAt: msg.deleted ? nil : (msg.expiresAt ?? provisionalExpiry(msg, ctx))),
             sender: sender,
             quote: quote,
             storyReply: storyReply,
@@ -342,6 +345,21 @@ enum MessageRowModelBuilder {
             // why it keeps the double-tap shortcut and the others give it away.
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
             canDoubleTapReact: msg.sendState == nil && !msg.deleted)
+    }
+
+    /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the
+    /// timer was set showed no icon, or grew one later and shifted. `expiresAt` is the server's
+    /// (`onNewMessage` stamps it after the message lands), so my own bubble had no icon while
+    /// sending, and gained one when the stamp came back. The reference app carries the timer on
+    /// the message from the moment it is written. Here: a message the server has not stamped yet,
+    /// written after the notice that turned the current timer on, draws with the time it will get.
+    /// Drawing only; hiding still waits for the real stamp (`ThreadRepository`).
+    private static func provisionalExpiry(_ m: Message, ctx: MessageRowContext) -> Date? {
+        guard let t = ctx.timer, t.seconds > 0 else { return nil }
+        // Notice out of the loaded window: only messages still in flight or just sent can be new.
+        let since = t.since ?? Date().addingTimeInterval(-120)
+        guard m.createdAt >= since else { return nil }
+        return m.createdAt.addingTimeInterval(TimeInterval(t.seconds))
     }
 
     private static func mediaBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.MediaBody {

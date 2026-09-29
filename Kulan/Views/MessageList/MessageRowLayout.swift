@@ -851,8 +851,8 @@ enum MessageRowLayout {
                 // disappearing-message icon. The icon is drawn just left of the time
                 // (`MessageRowView.setExpiryTimer`, 12pt with its gap) and `footerWidth` reserves that
                 // for a text line, but this row counted only the time, so the chips ran under it.
-                let timerRoom: CGFloat = b.meta.expiresAt == nil ? 0 : 12
-                let metaW = BubbleMetrics.metaInlineGap + timerRoom + plan.meta.width
+                // (The timer icon is inside the footer text now, so `plan.meta.width` counts it.)
+                let metaW = BubbleMetrics.metaInlineGap + plan.meta.width
                 let fitsOnRow = padH + total + metaW + padH <= columnW
                 let ownTextRow = plan.metaOnOwnLine && plan.text != .zero
                 let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
