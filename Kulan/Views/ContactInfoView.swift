@@ -1893,6 +1893,8 @@ struct ContactInfoView: View {
             // the very colour the page begins with, so there is nothing left at the join to see.
             // Off, it is the grouped background it has always arrived at.
             fadeInto: posterFadeInto,
+            // The round photo stands in if the tall crop cannot be fetched (2026-09-29).
+            fallbackUrl: gatedPhotoUrl,
             caption: { posterCaption($0) },
             actions: { glassActions }
         )
@@ -2316,11 +2318,28 @@ struct ContactInfoView: View {
             // frame (so it never jumps), from what this phone already knew; when that was nothing,
             // the fetch a moment later found the photo and the page ignored it. Letter → photo is
             // allowed now, once, and only when the profile really has one this viewer may see.
+            // ⛔ AND A RECENT REFUSAL IS ASKED AGAIN, NOT TRUSTED — owner, 2026-09-29, the same
+            // person a silhouette on one open and a photo on the next. `header` says "none" for a
+            // url that failed in the last minute, so re-running it alone gave the same silhouette.
+            // A real download of the round photo decides: on success the loader files it as good
+            // and `header` answers yes. Asked now, then at 3s and 10s while the page is open.
+            // Its own task, so the rest of this load (the conversation, the story) never waits on it.
             if !headerFacts.hasPhoto, let photo = p.photoUrl, !photo.isEmpty {
-                let next = ProfilePhotoIndex.header(uid: otherUid, fallbackPhoto: photo,
-                                                    fallbackPoster: p.posterUrl,
-                                                    iAmContact: PrivacyPrefs.mayViewPhotoOf(otherUid))
-                if next.hasPhoto { headerFacts = next }
+              Task { @MainActor in
+                for wait in [0.0, 3.0, 10.0] {
+                    if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                    if Task.isCancelled || headerFacts.hasPhoto { break }
+                    var next = ProfilePhotoIndex.header(uid: otherUid, fallbackPhoto: photo,
+                                                        fallbackPoster: p.posterUrl,
+                                                        iAmContact: PrivacyPrefs.mayViewPhotoOf(otherUid))
+                    if !next.hasPhoto, await ProfilePhotoLoader.shared.avatar(photo) != nil {
+                        next = ProfilePhotoIndex.header(uid: otherUid, fallbackPhoto: photo,
+                                                        fallbackPoster: p.posterUrl,
+                                                        iAmContact: PrivacyPrefs.mayViewPhotoOf(otherUid))
+                    }
+                    if next.hasPhoto { headerFacts = next; break }
+                }
+              }
             }
         }
         // ⛔ AN EMPTY `cid` IS NOT A DOCUMENT, AND FIRESTORE ANSWERS THAT WITH AN OBJC EXCEPTION.

@@ -254,10 +254,17 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// not yet saved — there is no url to load, and the whole point of the preview is to show it
     /// before it exists anywhere.
     var localImage: UIImage? = nil
+    /// The ROUND photo's url, drawn full size when the tall crop cannot be fetched. Sharp and a
+    /// little soft beats a 30px smear that never clears.
+    var fallbackUrl: String? = nil
     @ViewBuilder var caption: (Color) -> Caption
     @ViewBuilder var actions: () -> Actions
 
     @State private var image: UIImage?
+    /// `image` is the round photo standing in, so the tall crop is still wanted.
+    @State private var showingFallback = false
+    /// Bumped on coming back to the foreground, so a failed load asks again.
+    @State private var attempt = 0
     @State private var tone: PosterTone?
     @State private var width: CGFloat
     @State private var contentTop: CGFloat
@@ -277,6 +284,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
          actionsTopSpacing: CGFloat = 18,
          fadeInto: Color = Color(uiColor: .systemGroupedBackground),
          localImage: UIImage? = nil,
+         fallbackUrl: String? = nil,
          @ViewBuilder caption: @escaping (Color) -> Caption,
          @ViewBuilder actions: @escaping () -> Actions) {
         self.name = name
@@ -293,6 +301,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.actionsTopSpacing = actionsTopSpacing
         self.fadeInto = fadeInto
         self.localImage = localImage
+        self.fallbackUrl = fallbackUrl
         self.caption = caption
         self.actions = actions
 
@@ -363,7 +372,10 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         // off the other. A background does not change the size of what it sits behind, which is the
         // only reason this can reach both screen edges without moving anything.
         .background(alignment: .top) { layers }
-        .task(id: photoUrl) { await load() }
+        .task(id: "\(photoUrl ?? "")#\(attempt)") { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            if image == nil || showingFallback { attempt += 1 }
+        }
     }
 
     /// Reserves the square the photo occupies, less the strip that lives behind the bars. Invisible
@@ -558,38 +570,66 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// it arrives.
     private func load() async {
         if localImage != nil { return }      // handed the picture directly — nothing to fetch
-        if let warm = image {                // already seeded from the cache in init
+        if let warm = image, !showingFallback {   // already seeded from the cache in init
             noteAdaptive(warm)
             return
         }
         guard let s = photoUrl, !s.isEmpty else { image = nil; tone = nil; return }
         if let cached = await DiskImageCache.shared.image(for: s) {
-            image = cached
-            tone = PosterTone.sample(cached, for: s)
-            noteAdaptive(cached)
-            ProfilePhotoIndex.noteLoad(s, ok: true)
+            show(cached, for: s)
             return
         }
+        // ⛔ A FAILED LOAD IS NOT THE END — owner, 2026-09-29, somebody's profile "sometimes blur,
+        // sometimes nothing". This used to fetch once and return on any failure, and `.task(id:)`
+        // only runs again when the url changes, so the 30px cover stayed smeared across the header
+        // for the whole visit. Now: the round photo stands in after the first miss, and the tall
+        // crop is asked again at 3s, 10s and 30s while the page is open, and on every return to the
+        // foreground (`attempt`). The loader's own retries still run inside each ask.
+        //
         // 2026-09-25: the download is `ProfilePhotoLoader.fetch`, shared with every avatar of the
-        // same person (one request, not two) and with its retry rule. Only a real refusal or absence
-        // is filed as missing below; a network failure used to be filed too, and hid the photo on
-        // the next profile opened.
-        let result = await ProfilePhotoLoader.shared.fetch(s)
-        if case .image(let data) = result, let ui = UIImage(data: data) {
-            DiskImageCache.shared.store(ui, data: data, for: s)
-            image = ui
-            tone = PosterTone.sample(ui, for: s)
-            noteAdaptive(ui)
-            ProfilePhotoIndex.noteLoad(s, ok: true)
-            return
+        // same person (one request, not two). Only a real refusal or absence is filed as missing;
+        // a network failure used to be filed too, and hid the photo on the next profile opened.
+        for (i, wait) in [0.0, 3.0, 10.0, 30.0].enumerated() {
+            if wait > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+            if Task.isCancelled { return }
+            let result = await ProfilePhotoLoader.shared.fetch(s)
+            if Task.isCancelled { return }
+            if case .image(let data) = result, let ui = UIImage(data: data) {
+                DiskImageCache.shared.store(ui, data: data, for: s)
+                show(ui, for: s)
+                return
+            }
+            // A FACT ABOUT A URL, not a signal about this layout. Nothing reads this to decide what
+            // THIS view does; it is filed for the next profile that has to answer "circle or big
+            // photo" before it draws.
+            if case .noPhoto = result { ProfilePhotoIndex.noteLoad(s, ok: false) }
+            if i == 0, image == nil { await showFallback(besides: s) }
         }
-        guard case .noPhoto = result else { return }
-        // A FACT ABOUT A URL, not a signal about this layout — the distinction that matters here.
-        // Nothing reads this to decide what THIS view does; it is filed for the next profile that
-        // has to answer "circle or big photo" before it draws. The old `onPhotoResolved` fed the
-        // live layout from this same moment, which is why the header rearranged itself seconds
-        // after you opened it.
-        ProfilePhotoIndex.noteLoad(s, ok: false)
+    }
+
+    private func show(_ ui: UIImage, for s: String) {
+        image = ui
+        showingFallback = false
+        tone = PosterTone.sample(ui, for: s)
+        noteAdaptive(ui)
+        ProfilePhotoIndex.noteLoad(s, ok: true)
+    }
+
+    /// The round photo, full size, while the tall crop is refused or unreachable.
+    private func showFallback(besides s: String) async {
+        guard let f = fallbackUrl, !f.isEmpty, f != s else { return }
+        var ui = await DiskImageCache.shared.image(for: f)
+        if ui == nil, case .image(let data) = await ProfilePhotoLoader.shared.fetch(f) {
+            ui = UIImage(data: data)
+            if let ui { DiskImageCache.shared.store(ui, data: data, for: f) }
+        }
+        guard let ui, !Task.isCancelled, image == nil else { return }
+        image = ui
+        showingFallback = true
+        tone = PosterTone.sample(ui, for: f)
+        ProfilePhotoIndex.noteLoad(f, ok: true)
     }
 
     /// Hand the page its colours, off the bitmap this header is already holding.
