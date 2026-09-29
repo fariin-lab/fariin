@@ -137,6 +137,7 @@ struct ThreadView: View {
     /// picked; written FALSE by the round button's arrow to mean "back to Recents". See the
     /// binding's note in `AttachRecentsStrip`.
     @State private var attachInAlbum = false
+    @State private var attachAlbumsInstant = false   // Album-from-Recents opens without the slide
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
     @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
@@ -4341,7 +4342,8 @@ struct ThreadView: View {
                 // as well as by name.
                 removedIds: deselectedIds,
                 showAlbums: $attachShowAlbums,
-                inAlbum: $attachInAlbum)
+                inAlbum: $attachInAlbum,
+                albumsInstant: $attachAlbumsInstant)
                 // ⛔ NO TOP PADDING — owner, 2026-09-02, "no header". This 10 held the sheet's own
                 // header clear of the grabber. With the header gone it is a strip of empty sheet
                 // above the photos, which is the exact thing he has rejected twice before.
@@ -4589,18 +4591,19 @@ struct ThreadView: View {
                 // list back over that grid. So the next tap has a Recents grid already loaded
                 // underneath it and only has to close the list.
                 if attachInAlbum {
+                    attachAlbumsInstant = false   // Back from a folder slides
                     attachInAlbum = false
                     attachShowAlbums = true
                 } else if attachShowAlbums {
+                    attachAlbumsInstant = false   // Back from the list slides
                     attachShowAlbums = false
                 } else {
-                    // ⛔ FROM RECENTS THE LIST JUST APPEARS — owner, 2026-09-29: "first time, when I
-                    // tap Album from Recents, no animation; keep the slide for a folder and for Back".
-                    // A transaction that disables animations switches off the strip's own
-                    // `.animation(value: showAlbums)` for this one change only.
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) { attachShowAlbums = true }
+                    // ⛔ FROM RECENTS THE LIST JUST APPEARS — owner, 2026-09-29, twice: "first time,
+                    // when I tap Album from Recents, no animation; keep the slide for a folder and
+                    // for Back". The strip reads `albumsInstant` to pick no animation for this one
+                    // swap (a disabling transaction, tried in 806, did not reach it).
+                    attachAlbumsInstant = true
+                    attachShowAlbums = true
                 }
             }
         } label: {

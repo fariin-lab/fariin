@@ -176,6 +176,12 @@ struct AttachRecentsStrip: View {
     /// ⚠️ Declared after `showAlbums`, still last of the external inputs — the memberwise-init
     /// position rule, third time now.
     @Binding var inAlbum: Bool
+    /// ⛔ The next page swap happens WITHOUT the slide — owner, 2026-09-29, twice: "from Recents,
+    /// Album opens with no animation; a folder and Back keep the slide". The parent raises it for
+    /// Album-from-Recents; a folder tap (`selectAlbum`) and the parent's Back lower it. A disabling
+    /// transaction (build 806) did not reach `.animation(_:value:)`, so the value itself decides.
+    /// Last of the external inputs, the memberwise-init position rule.
+    @Binding var albumsInstant: Bool
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
@@ -241,7 +247,7 @@ struct AttachRecentsStrip: View {
         // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.
         // A clip cuts at this view's frame, which stops at the safe area, and the grid is meant to
         // scroll on under the bar to the sheet's edge. The sheet's shell already clips the slide.
-        .animation(.snappy(duration: 0.3), value: showAlbums)
+        .animation(albumsInstant ? nil : .snappy(duration: 0.3), value: showAlbums)
         // ⛔ THE HEADER IS GONE — OWNER, 2026-09-02, with a screenshot: "Photo sheet no header".
         //
         // What went with it: the ✕, the "Recents ▾" title, and the selected-count circle. The way
@@ -451,6 +457,7 @@ struct AttachRecentsStrip: View {
         albumTitle = album.title
         // Tells the parent's round button to stay a back arrow while a real album fills the grid.
         inAlbum = selectedAlbum != nil
+        albumsInstant = false   // a folder always slides in
         showAlbums = false   // animated by the body's own `.animation(value: showAlbums)`, not a transaction
         load()
     }
