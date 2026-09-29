@@ -944,7 +944,12 @@ struct OneTimeVoicePill: View {
             onOpen()
         }
         .onChange(of: message.id) { _, _ in consumedLive = ViewedOnce.contains(message.id) }   // hosted cells are reused
-        .onAppear { consumedLive = ViewedOnce.contains(message.id) }
+        .onAppear {
+            consumedLive = ViewedOnce.contains(message.id)
+            // Owner, 2026-09-29: "every time I open, it is loading". Fetch the sealed bytes while
+            // the pill is on screen so the page only has to decrypt.
+            if !isMe, !spent, message.sendState == nil { OneTimeVoicePrefetch.start(message) }
+        }
     }
 
     private var icon: String {
@@ -955,6 +960,28 @@ struct OneTimeVoicePill: View {
         if isMe { return openedByOther ? "Opened" : "Voice message" }
         if spent { return "Played" }
         return "Voice message · " + durationText
+    }
+}
+
+// MARK: - One-time voice prefetch
+
+/// The ENCRYPTED bytes of one-time notes, fetched while their pill is on screen. Ciphertext only,
+/// memory only: the plaintext still exists nowhere but the page's own tmp file. The page takes
+/// its entry out when it opens, so nothing outlives the listen.
+@MainActor
+enum OneTimeVoicePrefetch {
+    private static var tasks: [String: Task<Data?, Never>] = [:]
+
+    static func start(_ message: Message) {
+        guard tasks[message.id] == nil, let s = message.audioUrl, let url = URL(string: s) else { return }
+        tasks[message.id] = Task { try? await MediaSession.shared.data(from: url).0 }
+    }
+
+    /// Hands over the prefetch (finished or still running) and forgets it.
+    static func take(_ message: Message) async -> Data? {
+        start(message)
+        guard let t = tasks.removeValue(forKey: message.id) else { return nil }
+        return await t.value
     }
 }
 
@@ -978,6 +1005,7 @@ struct OneTimeVoicePage: View {
     @State private var progress: Double = 0
     @State private var failed = false
     @State private var ticker: Timer?
+    @State private var localBars: [Int]?
 
     private var durationText: String {
         let d = Int(player?.duration ?? message.duration ?? 0)
@@ -1011,36 +1039,8 @@ struct OneTimeVoicePage: View {
                     if failed {
                         Text("Could not load this voice message.")
                             .font(.system(size: 14)).foregroundStyle(.white.opacity(0.7))
-                    } else if player == nil {
-                        ProgressView().tint(.white)
                     } else {
-                        Button { toggle() } label: {
-                            Image(systemName: playing ? "pause.fill" : "play.fill")
-                                .font(.system(size: 30)).foregroundStyle(.black)
-                                .frame(width: 84, height: 84)
-                                .background(.white, in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        // A thin progress line — no waveform exists for a one-time note on purpose
-                        // (none is ever sent), so the line is the honest picture.
-                        VStack(spacing: 6) {
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(.white.opacity(0.25))
-                                    Capsule().fill(.white)
-                                        .frame(width: max(4, geo.size.width * progress))
-                                }
-                            }
-                            .frame(width: 220, height: 4)
-                            HStack {
-                                Text(elapsedText)
-                                Spacer()
-                                Text(durationText)
-                            }
-                            .font(.system(size: 12).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.7))
-                            .frame(width: 220)
-                        }
+                        bubble
                     }
                 }
                 Spacer()
@@ -1051,6 +1051,82 @@ struct OneTimeVoicePage: View {
         }
         .task { await load() }
         .onDisappear { teardown() }
+    }
+
+    /// ⛔ THE CHAT'S OWN VOICE BUBBLE, DRAWN ON BLACK — owner, 2026-09-29, with the reference's page:
+    /// "use my real voice bubble". Same disc, wave and caption numbers as `VoiceMessageView`, but
+    /// driven by this page's private player (the shared engine must never hold a one-time note).
+    /// It is on screen from the first frame; until the bytes are ready the disc shows a spinner in
+    /// place of the triangle instead of the whole page waiting.
+    private var bubble: some View {
+        HStack(spacing: VoiceMessageView.discGap) {
+            Button { toggle() } label: {
+                ZStack {
+                    Circle().fill(.white)
+                    if player == nil {
+                        ProgressView().tint(.black)
+                    } else {
+                        Image(systemName: playing ? "pause.fill" : "play.fill")
+                            .font(.system(size: 18, weight: .bold)).foregroundStyle(.black)
+                            .offset(x: playing ? 0 : 1.5)
+                    }
+                }
+                .frame(width: VoiceMessageView.discSize, height: VoiceMessageView.discSize)
+            }
+            .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 6) {
+                WaveformBars(bars: bars, progress: progress, played: .white,
+                             unplayed: .white.opacity(0.45),
+                             onSeek: { pct in seek(pct) })
+                    .frame(height: VoiceMessageView.waveHeight)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(playing || progress > 0 && progress < 0.999 ? elapsedText : durationText)
+                        .font(.system(size: 12).monospacedDigit())
+                    Spacer()
+                    Text(message.createdAt, format: .dateTime.hour().minute())
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(.white.opacity(0.75))
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 16).padding(.vertical, 10)
+        .frame(minHeight: VoiceMessageView.contentHeight)
+        .background(Color(white: 0.17), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .frame(maxWidth: 320)
+        .padding(.horizontal, 24)
+    }
+
+    /// The note's own bars when it carries them; otherwise read off the decoded audio once it is
+    /// here (a one-time note is sent without a waveform). A neutral row until then.
+    private var bars: [Int] {
+        if !message.waveform.isEmpty { return message.waveform }
+        return localBars ?? Array(repeating: 35, count: 28)
+    }
+
+    private func seek(_ pct: Double) {
+        guard let p = player, p.duration > 0 else { return }
+        p.currentTime = p.duration * max(0, min(1, pct))
+        progress = p.currentTime / p.duration
+    }
+
+    /// Bars on the recorder's own scale (`AudioRecorder.perceptualLevel`: −50 dB silence,
+    /// `pow(norm, 0.85)`), so `WaveformBars.display` shapes them exactly like a sent note's.
+    nonisolated private static func bars(of url: URL, count: Int = 40) -> [Int]? {
+        guard let file = try? AVAudioFile(forReading: url),
+              let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                         frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: buf)) != nil,
+              let ch = buf.floatChannelData?[0] else { return nil }
+        let n = Int(buf.frameLength)
+        guard n >= count else { return nil }
+        let step = n / count
+        return (0..<count).map { i in
+            var sum: Float = 0
+            for j in (i * step)..<((i + 1) * step) { sum += ch[j] * ch[j] }
+            let db = 20 * log10(max(sqrt(sum / Float(step)), 1e-6))
+            let norm = max(0, min(1, (db + 50) / 50))
+            return Int(pow(norm, 0.85) * 100)
+        }
     }
 
     private func toggle() {
@@ -1064,8 +1140,9 @@ struct OneTimeVoicePage: View {
     private func load() async {
         // The shared engine must not talk over the room.
         VoiceNotePlayer.shared.pause()
-        guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc,
-              let (cipher, _) = try? await MediaSession.shared.data(from: url),
+        // The pill has usually fetched the sealed bytes already; `take` waits for it or starts it.
+        guard let meta = message.enc,
+              let cipher = await OneTimeVoicePrefetch.take(message),
               let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
             failed = true
             return
@@ -1078,6 +1155,12 @@ struct OneTimeVoicePage: View {
         try? AVAudioSession.sharedInstance().setActive(true)
         player = try? AVAudioPlayer(contentsOf: tmp)
         guard player != nil else { failed = true; return }
+        if message.waveform.isEmpty {
+            Task.detached(priority: .userInitiated) {
+                let b = Self.bars(of: tmp)
+                await MainActor.run { localBars = b }
+            }
+        }
         // The room plays as it opens — nobody opens a one-time note to look at it.
         player?.play()
         playing = true
