@@ -17,6 +17,8 @@ import SwiftUI
 /// as a line along the capsule's bottom edge.
 struct VoiceNoteBar: View {
     @ObservedObject private var engine = VoiceNotePlayer.shared
+    /// The capsule's width, for turning a drag position into a point in the note.
+    @State private var barWidth: CGFloat = 0
 
     static let height: CGFloat = 44
     /// The whole slot the bar takes under a header: the capsule plus its 6 above and 4 below
@@ -104,6 +106,24 @@ struct VoiceNoteBar: View {
             // bubble that was moving. `pendingChatId` is what MainShell watches, so writing it last
             // guarantees the message is already parked when the chat is pushed.
             .contentShape(Capsule())
+            // ⛔ SLIDE TO SCRUB — owner, 2026-09-29: "I need to slide the progress bar left and right".
+            // A horizontal drag anywhere on the capsule moves the note to that point of its width,
+            // on the engine's own seek (the same one the bubble's waveform uses). Eight points of
+            // travel before it counts, so a tap still opens the chat and the buttons still tap.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { v in
+                        guard barWidth > 0 else { return }
+                        engine.setScrubbing(true)
+                        engine.seek(Self.fraction(v.location.x, in: barWidth), id: engine.messageId)
+                    }
+                    .onEnded { v in
+                        guard barWidth > 0 else { return }
+                        engine.seek(Self.fraction(v.location.x, in: barWidth), id: engine.messageId)
+                        engine.setScrubbing(false)
+                    }
+            )
             .onTapGesture {
                 AppRouter.shared.pendingMessageId = engine.messageId
                 AppRouter.shared.pendingChatId = engine.cid
@@ -121,6 +141,15 @@ struct VoiceNoteBar: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
         .allowsHitTesting(false)
+    }
+
+    /// A drag's x across the bar's slot → a point in the note. The slot carries the capsule's 16pt
+    /// side margins (`body`), so they come off both ends: the capsule's own edges are 0 and 1.
+    static func fraction(_ x: CGFloat, in slotWidth: CGFloat) -> Double {
+        let inset: CGFloat = 16
+        let w = slotWidth - inset * 2
+        guard w > 0 else { return 0 }
+        return Double(max(0, min(1, (x - inset) / w)))
     }
 
     /// "1×", "1.5×", "2×", "0.5×".
