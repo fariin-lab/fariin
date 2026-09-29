@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PROFILE PHOTO NO LONGER STUCK BLURRED OR MISSING, CHAT BUTTONS IN DARK MODE, ATTACH SHEET, BLOCK NOTICES.
+            ATTACH SHEET FIXES, VOICE BAR REDESIGN, DISAPPEARING BADGE, TWO-STEP AND FORGOT PASSWORD.
+
+            ATTACH SHEET: the bar and Album button no longer vanish on Album or Back, no flicker when you open an album, albums slide in from the right, a fast swipe keeps the bar in place with no empty band, and the bottom corners follow the screen like Apple's sheets.
+
+            VOICE BAR: new minimal look (play, name, speed); it no longer covers "Pinned".
+
+            CHAT LIST: a timer badge on the photo when disappearing messages are on.
+
+            TWO-STEP: Turn Off shows a spinner, and asks you to sign in again when needed instead of doing nothing.
+
+            FORGOT PASSWORD: after the code you can create a new password.
+
+            PLEASE TEST: open Album, go back, open Videos; flick the full attach sheet down fast; play a voice note and leave the chat; turn two-step off; use Forgot password.
+
+            EARLIER IN THIS ROUND (build 802): PROFILE PHOTO NO LONGER STUCK BLURRED OR MISSING, CHAT BUTTONS IN DARK MODE, ATTACH SHEET, BLOCK NOTICES.
 
             PROFILE: someone's big photo no longer stays blurred. If it cannot load, their round photo shows sharp instead, and the page keeps trying. A page that opened with the grey silhouette tries the photo again before giving up.
 
