@@ -1811,6 +1811,8 @@ service cloud.firestore {
         // already said either).
         function editAllowedNow() {
           return resource.data.get('deleted', false) == false
+            // 2026-09-29, owner: a forwarded message is never edited (its words are not mine).
+            && resource.data.get('forwarded', false) == false
             && resource.data.get('createdAt', null) is timestamp
             && request.time < resource.data.createdAt + duration.value(1020, 's')
             && request.resource.data.get('edited', false) == true
