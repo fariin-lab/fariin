@@ -329,7 +329,7 @@ enum MessageRowModelBuilder {
                              bornAt: msg.createdAt,
                              // A tombstone is already gone; putting a countdown on one would be
                              // promising to remove something that has been removed.
-                             expiresAt: msg.deleted ? nil : (msg.expiresAt ?? provisionalExpiry(msg, ctx))),
+                             expiresAt: msg.deleted ? nil : (msg.expiresAt ?? provisionalExpiry(msg, ctx: ctx))),
             sender: sender,
             quote: quote,
             storyReply: storyReply,
