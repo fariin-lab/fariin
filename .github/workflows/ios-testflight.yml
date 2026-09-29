@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PROFILE PHOTOS VISIBLE TO OTHERS AGAIN.
+            PROFILE PHOTO NO LONGER STUCK BLURRED OR MISSING, CHAT BUTTONS IN DARK MODE, ATTACH SHEET, BLOCK NOTICES.
+
+            PROFILE: someone's big photo no longer stays blurred. If it cannot load, their round photo shows sharp instead, and the page keeps trying. A page that opened with the grey silhouette tries the photo again before giving up.
+
+            CHAT: after switching light/dark with a chat open, Back and the call buttons change at once, no reopen.
+
+            ALSO: attach sheet keeps its place on a fast swipe; Fariin reaction pops like a chat; block notices stay after reopening a chat; Fariin search highlights the words.
+
+            PLEASE TEST: open a friend's profile several times; switch light/dark inside a chat.
+
+            EARLIER IN THIS ROUND (build 800): PROFILE PHOTOS VISIBLE TO OTHERS AGAIN.
 
             PROFILE PHOTO: a photo set to Everyone (nobody hidden, nobody blocked) is visible to everyone again. Open this build once so your photo is updated; people on "My Chats", Hide From or with blocked people still follow those settings.
 
