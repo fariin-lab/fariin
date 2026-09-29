@@ -468,7 +468,7 @@ struct DevicesView: View {
         HStack(spacing: 12) {
             // A colored device tile — the flat grey glyph read as unfinished (user feedback,
             // the reference app's device tiles as the reference; our green, our glyph).
-            DeviceTile(session: s, size: 30)
+            DeviceTile(session: s, size: 36)   // 40 was big, 30 small (owner, 2026-09-29)
             VStack(alignment: .leading, spacing: 1) {
                 // NO "This device" PILL. It could only ever appear in the section whose header
                 // already says "This device", so it was the same two words twice, eight points
