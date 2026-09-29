@@ -3387,7 +3387,7 @@ private struct StoryAvatarTap: ViewModifier {
 /// background, so it reads as a notch in the photo in both appearances; the fill is one step up from
 /// the background in dark (the reference's dark grey disc) and white in light.
 struct DisappearingAvatarBadge: View {
-    static let side: CGFloat = 24
+    static let side: CGFloat = 22   // 24 → 22, owner 2026-09-29: "a little smaller"
     /// How far the badge hangs past the photo's circle at the lower right (the call site's offset).
     static let overhang: CGFloat = 5
 
@@ -3399,7 +3399,7 @@ struct DisappearingAvatarBadge: View {
         // that hangs over, which is why ours read as tucked inside. The icon is unchanged.
         Image(systemName: "timer")
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Color(uiColor: .label))
+            .foregroundStyle(Color(uiColor: .systemGray))   // grey again in both modes (owner, 2026-09-29)
             .frame(width: Self.side, height: Self.side)
             .background(Circle().fill(Color(uiColor: UIColor { t in
                 t.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
