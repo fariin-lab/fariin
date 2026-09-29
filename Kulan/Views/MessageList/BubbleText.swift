@@ -50,6 +50,10 @@ enum BubbleText {
         let ns = full as NSString
         let whole = NSRange(location: 0, length: ns.length)
         var links: [LinkRun] = []
+        if t.boldPrefix > 0 {   // an announcement's title line (see `TextBody.boldPrefix`)
+            out.addAttribute(.font, value: UIFont.systemFont(ofSize: BubbleMetrics.bodyFont.pointSize, weight: .semibold),
+                             range: NSRange(location: 0, length: min(t.boldPrefix, ns.length)))
+        }
 
         // In-chat search: highlight the matched TERM, never the whole bubble. Case, diacritic and
         // width insensitive so the highlight finds exactly what the search matched.

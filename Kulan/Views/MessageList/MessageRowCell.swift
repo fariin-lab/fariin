@@ -33,6 +33,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCell(_ cell: MessageRowCell, didTapSender uid: String)
     func rowCellDidTapCallRow(_ cell: MessageRowCell)
     func rowCellDidTapPinNotice(_ cell: MessageRowCell, jumpTo id: String)
+    func rowCell(_ cell: MessageRowCell, didTapAction index: Int)
 }
 
 final class MessageRowCell: UICollectionViewCell {
@@ -366,6 +367,11 @@ final class MessageRowCell: UICollectionViewCell {
             }
             if rowView.hitsReactions(p) {
                 delegate?.rowCellDidTapReactions(self)
+                return
+            }
+            // Official Chat's in-bubble buttons (`BubbleRow.actions`).
+            if let i = rowView.actionIndex(at: p) {
+                delegate?.rowCell(self, didTapAction: i)
                 return
             }
             // The picture opens the viewer. Before the quote test, because a media bubble's quote

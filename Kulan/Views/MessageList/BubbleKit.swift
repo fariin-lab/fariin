@@ -21,6 +21,7 @@ enum BubbleMetrics {
     static let bigCorner: CGFloat = 18
     static let smallCorner: CGFloat = 6        // the interior corner of a fused cluster
     static let metaGap: CGFloat = 8            // gap above a timestamp on its own row
+    static let actionRowHeight: CGFloat = 44   // one in-bubble button row (Official Chat), hairline included
     /// Between the last word and a timestamp sharing its line: the reference app's `leftInset`
     /// for an in-bubble footer.
     static let metaInlineGap: CGFloat = 5
