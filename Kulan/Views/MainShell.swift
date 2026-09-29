@@ -3395,15 +3395,15 @@ struct DisappearingAvatarBadge: View {
         // ⛔ owner, 2026-09-29, on 803: "light mode: white badge, black icon; dark mode: white icon",
         // and "the icon a bit bigger". Then, with the reference beside ours: "make it exactly like
         // this, don't change my icon" — the badge hangs past the photo's edge, and in dark mode the
-        // disc is a dark grey inside a black ring. A black disc on the black page swallowed the part
-        // that hangs over, which is why ours read as tucked inside. The icon is unchanged.
+        // ⛔ AND THE DISC IS THE PAGE — owner, 2026-09-29, a second reference side by side: the disc is
+        // the list's own background (black at night, white by day), so the badge reads as a notch
+        // cut out of the photo with the grey clock in it. Not the dark grey tried in `98b0f323`.
+        // Icon and its grey unchanged.
         Image(systemName: "timer")
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(Color(uiColor: .systemGray))   // grey again in both modes (owner, 2026-09-29)
             .frame(width: Self.side, height: Self.side)
-            .background(Circle().fill(Color(uiColor: UIColor { t in
-                t.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
-            })))
+            .background(Circle().fill(Color(uiColor: .systemBackground)))
             .padding(2.5)
             .background(Circle().fill(Color(uiColor: .systemBackground)))
             .accessibilityLabel("Disappearing messages on")
