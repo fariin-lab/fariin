@@ -232,6 +232,11 @@ struct MediaGalleryView: View {
         // from inside it). Placed outside, it covers the page AND its bar items.
         .environment(\.colorScheme, pageScheme)
         .background { NavBarNoHairline() }   // no hairline under the header (see below)
+        // ⛔ FOURTH REPORT, 2026-09-29: back and ••• still dark discs on a light phone after the
+        // environment, toolbar-scheme and profile-release fixes. The glass buttons draw from the
+        // UIKit bar's own traits, which none of those SwiftUI values is guaranteed to reach, so the
+        // bar itself is told while this page is up, and gets its old value back on the way out.
+        .background { NavBarStyle(style: pageScheme == .dark ? .dark : .light) }
         // ⛔ AN OVERLAY, NOT A RESERVED STRIP — owner, 2026-08-23: "All media Page buttom plz remove
         // the border".
         //
@@ -1115,6 +1120,43 @@ private struct LiveTabBar: View {
     let progress: PagerProgress
     var body: some View {
         MediaTabBar(titles: titles, selection: $selection, progress: progress.value)
+    }
+}
+
+/// Pins the navigation bar's own `overrideUserInterfaceStyle` while this view is mounted and puts
+/// back what it found when it goes.
+private struct NavBarStyle: UIViewRepresentable {
+    let style: UIUserInterfaceStyle
+
+    final class Coordinator {
+        weak var bar: UINavigationBar?
+        var previous: UIUserInterfaceStyle = .unspecified
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView(frame: .zero)
+        v.isUserInteractionEnabled = false
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        let c = context.coordinator, style = style
+        DispatchQueue.main.async {   // attached to its controller only after this pass
+            var r: UIResponder? = uiView
+            while let next = r?.next {
+                if let vc = next as? UIViewController, let bar = vc.navigationController?.navigationBar {
+                    if c.bar !== bar { c.bar = bar; c.previous = bar.overrideUserInterfaceStyle }
+                    if bar.overrideUserInterfaceStyle != style { bar.overrideUserInterfaceStyle = style }
+                    return
+                }
+                r = next
+            }
+        }
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.bar?.overrideUserInterfaceStyle = coordinator.previous
     }
 }
 
