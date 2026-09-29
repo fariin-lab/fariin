@@ -81,6 +81,15 @@ struct MediaGalleryView: View {
     ///
     /// The app's own setting is the authority: Light and Dark answer outright, System defers to the
     /// window's trait, which no SwiftUI subtree override can reach.
+    /// The two UIKit bar helpers behind the page (see where `body` mounts them).
+    private var barHelpers: some View {
+        let style: UIUserInterfaceStyle = pageScheme == .dark ? .dark : .light
+        return ZStack {
+            NavBarNoHairline()
+            NavBarStyle(style: style)
+        }
+    }
+
     private var pageScheme: ColorScheme {
         if let fixed = AppAppearance(rawValue: appearanceRaw)?.colorScheme { return fixed }
         let style = UIApplication.shared.connectedScenes
@@ -231,12 +240,12 @@ struct MediaGalleryView: View {
         // pins `\.colorScheme` to dark over a wallpaper, and the profile and this page are pushed
         // from inside it). Placed outside, it covers the page AND its bar items.
         .environment(\.colorScheme, pageScheme)
-        .background { NavBarNoHairline() }   // no hairline under the header (see below)
-        // ⛔ FOURTH REPORT, 2026-09-29: back and ••• still dark discs on a light phone after the
-        // environment, toolbar-scheme and profile-release fixes. The glass buttons draw from the
-        // UIKit bar's own traits, which none of those SwiftUI values is guaranteed to reach, so the
-        // bar itself is told while this page is up, and gets its old value back on the way out.
-        .background { NavBarStyle(style: pageScheme == .dark ? .dark : .light) }
+        // No hairline under the header (see below), and — ⛔ FOURTH REPORT, 2026-09-29: back and •••
+        // still dark discs on a light phone after the environment, toolbar-scheme and profile-release
+        // fixes — the UIKit bar's own style pinned to the phone's while this page is up (its glass
+        // buttons draw from the bar's traits, which none of those SwiftUI values is sure to reach).
+        // One background for both: a second modifier here tipped `body` past the type-checker.
+        .background { barHelpers }
         // ⛔ AN OVERLAY, NOT A RESERVED STRIP — owner, 2026-08-23: "All media Page buttom plz remove
         // the border".
         //
