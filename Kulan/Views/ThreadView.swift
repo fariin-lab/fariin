@@ -409,7 +409,14 @@ struct ThreadView: View {
     /// ⚠️ **`.preferredColorScheme` IS NOT AN OPTION HERE and it is the obvious wrong turn.**
     /// `KulanApp` applies its own OUTSIDE `RootView`, and an outer one always wins — five pins in
     /// the auth flow were dead for weeks before anyone noticed. See [[kulan-preferredcolorscheme-trap]].
-    private var dark: Bool { chatHasWallpaper || scheme == .dark }
+    ///
+    /// ⛔⛔ REVERSED ON HIS WORD, 2026-09-29, with a screenshot of a wallpapered chat in dark mode:
+    /// "bring back message list light mode and dark mode; now it works only in dark mode". A chat
+    /// with a wallpaper follows the phone again, like every other chat. The built-in wallpapers
+    /// carry a light and a dark palette for exactly this, and the preview's new dark/light button
+    /// shows both. Everything above is kept as the history of why it was pinned; the three pins
+    /// (this flag, the environment in `body`, `forceDark` on the list) are all lifted together.
+    private var dark: Bool { scheme == .dark }
 
     init(cid: String, title: String, photoUrl: String?, preview: Bool = false) {
         self.cid = cid
@@ -1752,7 +1759,8 @@ struct ThreadView: View {
         // ⚠️ IT DOES NOT REACH THIS VIEW'S OWN `scheme`. A view cannot read an environment value it
         // sets on its own body, which is exactly why `dark` has to test `chatHasWallpaper` itself
         // rather than trusting this line to cover it.
-        .environment(\.colorScheme, chatHasWallpaper ? .dark : scheme)
+        // ⛔ LIFTED 2026-09-29 (see `dark`): the phone's own appearance, wallpaper or not.
+        .environment(\.colorScheme, scheme)
         // Chat wallpaper picker. ContactInfoView's "Change Wallpaper" pops back to this chat and
         // posts this notification, so the picker opens here (over the live chat, previewing behind).
         .sheet(isPresented: $showWallpaper) { WallpaperPickerSheet(cid: cid) }
@@ -3640,9 +3648,9 @@ struct ThreadView: View {
             // keyboard insets from the keyboard band itself, inside the keyboard's animation.
             composerMargin: chromeMargin,
             cid: cid,
-            // A wallpapered chat is dark whatever the phone says — see the note on `dark`. The
-            // UIKit half has to be told separately because it resolves its colours from traits.
-            forceDark: chatHasWallpaper
+            // ⛔ LIFTED 2026-09-29 (see `dark`): a wallpapered chat follows the phone again, so the
+            // UIKit half is no longer pinned either.
+            forceDark: false
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
