@@ -254,7 +254,17 @@ struct ChatWallpaperPage: View {
         // ⛔ A SHEET, NOT A FULL-SCREEN COVER — owner, 2026-09-23: "when i want to select wallpaper
         // now is opening full page plz make it sheet". See `WallpaperPreviewScreen` for the header
         // that came with it.
-        .sheet(item: $previewing, onDismiss: { justPickedPhoto = nil }) { w in
+        .sheet(item: $previewing, onDismiss: {
+            // ⛔ NOT KEPT UNLESS APPLIED — owner, 2026-09-29: "I pick a photo, tap ✕ before Apply,
+            // and it is already in my presets". Picking adds it to the library so the preview can
+            // draw it; closing without Apply takes it back out. Applied as is, it is the default
+            // now and stays; applied with framing/blur, `apply()` already replaced it with the
+            // baked copy, so this id is gone and nothing is touched.
+            if let id = justPickedPhoto, current != .photo(id), store.libraryIds.contains(id) {
+                store.deleteFromLibrary(id)
+            }
+            justPickedPhoto = nil
+        }) { w in
             // ⛔ owner, 2026-09-29: "an already-chosen photo wallpaper moves and zooms when I swipe;
             // framing is for the first time only; swipe should slide through all the wallpapers".
             // A photo just picked previews ALONE with pinch/drag framing. Every tile in the grid,
