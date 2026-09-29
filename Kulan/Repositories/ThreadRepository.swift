@@ -241,6 +241,15 @@ final class ThreadRepository {
 
     init(cid: String) {
         self.cid = cid
+        // ⛔ WHO THE OTHER PERSON IS, BEFORE THE FIRST SEED — owner, 2026-09-29: "You blocked / You
+        // unblocked this person" vanished on coming back to a chat and returned when he reacted.
+        // A warm reopen seeds from memory right here, and `blockNotices` answers nothing without
+        // `otherUid`, which `start()` used to be the first to set; the listener's rebuild then saw
+        // no MESSAGE change and never republished, so the notices waited for the next message. A
+        // 1:1 id is the two uids, so it is known now. `start()` still sets it as before.
+        if cid.contains("_"), let me = Auth.auth().currentUser?.uid {
+            otherUid = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+        }
         // Restore anything still unsent from a previous visit to this chat, BEFORE the cached window is
         // seeded, so a pending message is on screen from the very first frame with its sending/failed
         // state intact and its retry affordance available.
