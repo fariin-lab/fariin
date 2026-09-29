@@ -592,11 +592,11 @@ struct WallpaperPreviewScreen: View {
                 ZStack(alignment: .bottom) {
                     Capsule().fill(Color.primary.opacity(0.18))
                     Capsule().fill(Color.primary)
-                        .frame(height: max(6, geo.size.height * brightness))
+                        .frame(height: max(6, geo.size.height * CGFloat(brightness)))
                 }
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                    brightness = min(1, max(0, 1 - v.location.y / geo.size.height))
+                    brightness = min(1, max(0, 1 - Double(v.location.y / max(1, geo.size.height))))
                 })
             }
             .frame(width: 6, height: h)
