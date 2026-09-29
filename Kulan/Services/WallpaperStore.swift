@@ -372,22 +372,13 @@ enum ChatWallpapers {
     @ObservationIgnored private var imageCache: [String: UIImage] = [:]
     @ObservationIgnored private var hashes: [String: String]   // photo id -> content hash (dedup)
 
-    /// ⛔ WALLPAPER BRIGHTNESS, 0…1, 1 = the wallpaper as it is — owner, 2026-09-29: "a brightness
-    /// control on the right side, low to high". Set from the preview's slider on Apply, for every
-    /// chat (the preview applies to all chats). Drawn as black over the picture: `dimOpacity`.
-    private(set) var brightness: Double = 1
-    static func dimOpacity(_ brightness: Double) -> Double { (1 - max(0, min(1, brightness))) * 0.7 }
-
-    func setBrightness(_ b: Double) {
-        brightness = max(0, min(1, b))
-        UserDefaults.standard.set(brightness, forKey: "wallpaper.brightness.v1")
-        version &+= 1
-    }
+    // (The brightness slider of build 796 is gone, on his word the same day: "low and high is not
+    // working, change it completely". The preview has a dark/light button instead, which saves
+    // nothing. A stored "wallpaper.brightness.v1" from 796 is simply never read.)
 
     private init() {
         libraryIds = UserDefaults.standard.stringArray(forKey: "wallpaper.library.v1") ?? []
         hashes = (UserDefaults.standard.dictionary(forKey: "wallpaper.libraryHashes.v1") as? [String: String]) ?? [:]
-        brightness = (UserDefaults.standard.object(forKey: "wallpaper.brightness.v1") as? Double) ?? 1
     }
 
     // MARK: - Active wallpaper (per chat)
@@ -604,14 +595,7 @@ struct ChatWallpaperBackground: View {
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
 
-    var body: some View {
-        let w = store.wallpaper(for: cid)
-        // The brightness setting, over any real wallpaper (a chat without one is left alone).
-        picture.overlay(w == .none ? Color.clear
-                        : Color.black.opacity(WallpaperStore.dimOpacity(store.brightness)))
-    }
-
-    @ViewBuilder private var picture: some View {
+    @ViewBuilder var body: some View {
         let dark = scheme == .dark
         let _ = store.version   // observe: re-render when the wallpaper is changed live from the picker
         switch store.wallpaper(for: cid) {

@@ -379,8 +379,8 @@ struct WallpaperPreviewScreen: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.displayScale) private var displayScale
     @State private var blurred = false
-    /// Tried here, written on Apply (`WallpaperStore.setBrightness`).
-    @State private var brightness: Double = WallpaperStore.shared.brightness
+    /// The top-right button's pick: nil = the phone's own appearance.
+    @State private var previewDark: Bool?
     // Pinch-to-zoom / pan on a chosen photo, baked into the saved wallpaper on Apply.
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
@@ -388,7 +388,7 @@ struct WallpaperPreviewScreen: View {
     @State private var basePan: CGSize = .zero
     @State private var canvas: CGSize = .zero   // full-screen size = what gets baked
     private var store: WallpaperStore { .shared }
-    private var dark: Bool { scheme == .dark }
+    private var dark: Bool { previewDark ?? (scheme == .dark) }
 
     private var isPhoto: Bool { if case .photo = wallpaper { return true }; return false }
     private var photoImg: UIImage? {
@@ -422,7 +422,6 @@ struct WallpaperPreviewScreen: View {
                     background(for: wallpaper)
                 }
             }
-            .overlay(Color.black.opacity(WallpaperStore.dimOpacity(brightness)).allowsHitTesting(false))
             .ignoresSafeArea()
                 .background(
                     GeometryReader { proxy in
@@ -460,15 +459,24 @@ struct WallpaperPreviewScreen: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close")
                         Spacer()
+                        // ⛔ ONE BUTTON, DARK ↔ LIGHT — owner, 2026-09-29, replacing the brightness
+                        // slider (build 796: "low and high is not working, change it completely; one
+                        // button: tap, dark mode; tap again, light mode"). It shows this wallpaper
+                        // the way the chat draws it in the other appearance; nothing is saved.
+                        Button { previewDark = !dark } label: {
+                            Image(systemName: dark ? "sun.max.fill" : "moon.fill")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 44, height: 44)
+                                .liquidGlass(Circle(), interactive: true)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(dark ? "Show in light mode" : "Show in dark mode")
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
-
-                // Right side, under the header (his circle).
-                HStack { Spacer(); brightnessSlider }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
 
                 Spacer()
 
@@ -515,6 +523,9 @@ struct WallpaperPreviewScreen: View {
                 .padding(.bottom, 12)
             }
         }
+        // The button's appearance reaches the bubbles, the glass and the text too, not only the
+        // wallpaper. `dark` is read above this line, from the phone's own `scheme`.
+        .environment(\.colorScheme, dark ? .dark : .light)
         // ⚠️ `.statusBarHidden()` IS GONE WITH THE FULL-SCREEN COVER, and the report it was added for
         // goes with it. It existed because a cover reaches the physical top of the screen and the
         // clock landed on the ✕. A sheet starts below the status bar, so there is nothing to
@@ -583,37 +594,6 @@ struct WallpaperPreviewScreen: View {
         return AnyShapeStyle(Theme.defaultBubble(dark))
     }
 
-    /// Vertical brightness control on the right edge: bright at the top, dim at the bottom.
-    private var brightnessSlider: some View {
-        let h: CGFloat = 170
-        return VStack(spacing: 8) {
-            Image(systemName: "sun.max.fill").font(.system(size: 14, weight: .semibold))
-            GeometryReader { geo in
-                ZStack(alignment: .bottom) {
-                    Capsule().fill(Color.primary.opacity(0.18))
-                    Capsule().fill(Color.primary)
-                        .frame(height: max(6, geo.size.height * CGFloat(brightness)))
-                }
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                    brightness = min(1, max(0, 1 - Double(v.location.y / max(1, geo.size.height))))
-                })
-            }
-            .frame(width: 6, height: h)
-            Image(systemName: "sun.min").font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(.primary)
-        .padding(.vertical, 12)
-        .frame(width: 44)
-        .liquidGlass(Capsule(), interactive: true)
-        .accessibilityElement()
-        .accessibilityLabel("Wallpaper brightness")
-        .accessibilityValue("\(Int(brightness * 100)) percent")
-        .accessibilityAdjustableAction { d in
-            brightness = min(1, max(0, brightness + (d == .increment ? 0.1 : -0.1)))
-        }
-    }
-
     private func apply() {
         var final = wallpaper
         // Photo: bake the current framing (pinch-zoom + pan) AND the optional blur into one real
@@ -630,7 +610,6 @@ struct WallpaperPreviewScreen: View {
             }
         }
         store.applyToAllChats(final)
-        store.setBrightness(brightness)
         dismiss()
     }
 
