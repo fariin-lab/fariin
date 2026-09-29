@@ -224,8 +224,14 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         shell.cornerConfiguration = .uniformCorners(radius: .fixed(r))
     }
 
+    /// ⛔ ONE GAP FROM THE SHEET'S BOTTOM, HALF OR FULL — owner, 2026-09-29: "the attach bar and the
+    /// Album button use different padding when the sheet is half and when it is full; use one, like
+    /// the reference". This subtracted the sheet's CURRENT inset, which pinned the bar to the SCREEN:
+    /// 26pt above the sheet's edge at half (the sheet floats 8pt up) and 34pt at full, easing
+    /// between them on every drag. The resting number now holds in both states, so the bar keeps
+    /// the same distance from the sheet's own bottom edge and moves with the sheet.
     private func bottomPad(forTop y: CGFloat) -> CGFloat {
-        max(0, view.safeAreaInsets.bottom - inset(forTop: y))
+        max(0, view.safeAreaInsets.bottom - Self.restInset)
     }
 
     private func layoutContent(size: CGSize) {
