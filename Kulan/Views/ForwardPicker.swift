@@ -50,69 +50,26 @@ struct ForwardPicker: View {
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
 
-    private var snippet: String {
-        if messages.count > 1 { return "\(messages.count) messages" }
-        let message = messages[0]
-        if message.isAlbum { return "Album · \(message.album.count) items" }
-        if message.isImage { return "Photo" }
-        if message.isVideo { return "Video" }
-        if message.isAudio { return "Voice message" }
-        if message.isGif { return "GIF" }
-        return message.safeText   // never leak a raw fariin-…: marker (contact/location card)
-    }
+    // ⛔ NO "FORWARDING" PREVIEW — owner, 2026-09-29, with the reference's "Send to" sheet: "remove
+    // the forwarding preview". The thumbnails-and-snippet header (his 416 ask) is gone; the sheet
+    // is the people list alone.
 
-    // WHAT you're forwarding, visibly (owner's 416 report vs the reference app: "won't show what u
-    // forwarding?"): real decrypted thumbnails for media — the same SecureImageView the chat
-    // renders with — as an overlapping stack, with a quote line for text-only forwards.
-    private struct Thumb { let url: String; let enc: EncMeta?; let isVideo: Bool }
-    private var previewThumbs: [Thumb] {
-        var out: [Thumb] = []
-        for m in messages {
-            if m.isAlbum {
-                for it in m.album {
-                    out.append(Thumb(url: it.imageUrl, enc: it.enc, isVideo: it.isVideo))
-                    if out.count >= 3 { return out }
-                }
-            } else if m.isImage, let u = m.imageUrl {
-                out.append(Thumb(url: u, enc: m.enc, isVideo: false))
-            } else if m.isVideo, let t = m.thumbUrl {
-                out.append(Thumb(url: t, enc: m.thumbEnc, isVideo: true))
-            } else if m.isGif, let u = m.imageUrl {
-                out.append(Thumb(url: u, enc: nil, isVideo: false))
-            }
-            if out.count >= 3 { return out }
-        }
-        return out
-    }
+    /// Second lines: the person's @handle from the on-disk cache (same source and rule as
+    /// `NewChatView.loadHandles`: no network read, no handle = one-line row).
+    @State private var handles: [String: String] = [:]
 
-    @ViewBuilder private var forwardingPreview: some View {
-        let thumbs = previewThumbs
-        HStack(spacing: 12) {
-            if !thumbs.isEmpty {
-                HStack(spacing: -14) {   // overlapping stack — the reference feel, our drawing
-                    ForEach(Array(thumbs.enumerated()), id: \.offset) { i, t in
-                        SecureImageView(imageUrl: t.url, enc: t.enc, cid: sourceCid)
-                            .frame(width: 48, height: 48)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color(uiColor: .systemBackground), lineWidth: 2)
-                                if t.isVideo {
-                                    Image(systemName: "play.circle.fill").font(.system(size: 16))
-                                        .foregroundStyle(.white).shadow(radius: 2)
-                                }
-                            }
-                            .zIndex(Double(thumbs.count - i))
-                    }
-                }
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Forwarding").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                Text(snippet).font(.system(size: 15)).foregroundStyle(.primary).lineLimit(2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 6)
+    /// ⛔ TWO SECTIONS — owner, 2026-09-29, the reference's "Frequently contacted" over "Recent
+    /// chats". Same rule `NewChatView.frequent` uses for its own "Frequently contacted" (the most
+    /// recent people; the app keeps no per-chat message count), five of them, and never the same
+    /// chat twice: Recent chats starts where they stop. Only with enough chats for it to be a
+    /// shortcut, and not while searching (one list of matches then).
+    private var frequent: [Conversation] {
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty, people.count >= 8 else { return [] }
+        return Array(people.filter { !$0.isGroup }.prefix(5))
+    }
+    private var recent: [Conversation] {
+        let top = Set(frequent.map(\.id))
+        return people.filter { !top.contains($0.id) }
     }
 
     /// The bottom bar IS the chat composer, on purpose.
@@ -172,35 +129,20 @@ struct ForwardPicker: View {
     // content and reported that it could not convert a ContentUnavailableView to a TableColumn,
     // which says nothing about the real problem. Same reason ContactInfoView is split into layers.
     @ViewBuilder private var peopleList: some View {
+        // Rounded cards with inset separators, grey section titles above them: the reference's
+        // sheet is the system's own inset-grouped list, so this is that list, not a drawing of it.
         List {
+            if !frequent.isEmpty {
+                Section { ForEach(frequent) { row($0) } } header: { sectionTitle("Frequently contacted") }
+            }
             Section {
-                ForEach(people) { c in
-                    Button { toggle(c.id) } label: {
-                        HStack(spacing: 12) {
-                            AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 44)
-                            Text(c.displayName(me))
-                                .font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
-                            if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 13) }
-                            Spacer()
-                            Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 20))
-                                // `Color.primary`, NOT `Color.accentColor`. Both are black by day and
-                                // white by night, but the accent reads the environment's TINT, which
-                                // anything up the tree can change — and did: StoryAudienceViews
-                                // records it resolving near-grey, which is why that one screen was
-                                // hardcoded to blue on 2026-08-09. `primary` follows the colour
-                                // scheme only and cannot be pulled grey. Owner's rule, 2026-08-16:
-                                // black in light, whatever reads in dark.
-                                .foregroundStyle(selected.contains(c.id) ? Color.primary : Color.secondary)
-                        }
-                    }
-                    .listRowSeparator(.hidden)
-                }
+                ForEach(recent) { row($0) }
             } header: {
-                forwardingPreview.textCase(nil)
+                if !frequent.isEmpty { sectionTitle("Recent chats") }
             }
         }
-        .listStyle(.plain)
+        .listStyle(.insetGrouped)
+        .task { await loadHandles() }
         // SWIPE THE LIST TO PUT THE KEYBOARD AWAY. There was no way out of it: this screen has no
         // Done button, and tapping a row picks that person rather than dismissing, so once the
         // message box had focus the keyboard stayed up over half the list (owner screenshot).
@@ -229,20 +171,61 @@ struct ForwardPicker: View {
             .safeAreaInset(edge: .bottom) {
                 if !selected.isEmpty { forwardComposer }
             }
-            .navigationTitle("Forward to…")
+            // "Send to", ✕ on the left — the reference's sheet (owner, 2026-09-29). Its right-hand
+            // "New group" is not here: groups are switched off in this app (`Flags.groupsEnabled`),
+            // and a button that leads nowhere is worse than none. The greyed "Send" that used to
+            // sit there went with the preview; Send is the composer's, beside the text.
+            .navigationTitle("Send to")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") }.tint(.primary) }
-                // Send lives in the composer now, next to the text. Kept here ONLY for the moment
-                // before anyone is picked, when there is no composer on screen to hold it, so the
-                // screen still explains what it is for.
-                ToolbarItem(placement: .topBarTrailing) {
-                    if selected.isEmpty {
-                        Button("Send") { }.disabled(true).fontWeight(.semibold)
-                    }
-                }
             }
         }
+    }
+
+    private func sectionTitle(_ s: String) -> some View {
+        Text(s).font(.system(size: 17, weight: .semibold)).foregroundStyle(.secondary).textCase(nil)
+    }
+
+    private func row(_ c: Conversation) -> some View {
+        let on = selected.contains(c.id)
+        let handle = c.isGroup ? nil : handles[c.otherUid(me)]
+        return Button { toggle(c.id) } label: {
+            HStack(spacing: 12) {
+                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 40)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(c.displayName(me)).font(.system(size: 17)).foregroundStyle(.primary)
+                        if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 13) }
+                    }
+                    .lineLimit(1)
+                    if let handle {
+                        Text("@\(handle)").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                // `Color.primary`, NOT `Color.accentColor`: the accent reads the environment's
+                // TINT, which anything up the tree can pull grey (owner's rule, 2026-08-16).
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(on ? Color.primary : Color.secondary)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // The separator starts at the name, not under the photo (the reference's rows).
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
+    }
+
+    private func loadHandles() async {
+        var found: [String: String] = [:]
+        for c in people where !c.isGroup {
+            let uid = c.otherUid(me)
+            guard !uid.isEmpty, found[uid] == nil else { continue }
+            if let p = await ProfileStore.shared.cachedPeer(uid), !p.handle.isEmpty { found[uid] = p.handle }
+        }
+        if !found.isEmpty { handles = found }
     }
 
     private func toggle(_ id: String) {
