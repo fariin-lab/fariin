@@ -87,6 +87,11 @@ struct DeviceDetailView: View {
             .padding(16)
         }
         .presentationDetents([.fraction(0.6)])
+        // SOLID, NOT GLASS — owner, 2026-09-29: "this sheet looks like glass; a light sheet in light
+        // mode, a dark one in dark mode". iOS 26 draws a partial sheet as glass by default; the
+        // grouped background is the page colour the facts card is designed to sit on.
+        .scrollContentBackground(.hidden)
+        .presentationBackground(Color(.systemGroupedBackground))
         .alert("Sign out \(session.displayName)?", isPresented: $confirm) {
             Button("Sign Out", role: .destructive) { signOut() }
             Button("Cancel", role: .cancel) {}
