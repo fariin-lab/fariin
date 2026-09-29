@@ -20,7 +20,18 @@ struct VoiceNoteBar: View {
 
     static let height: CGFloat = 44
 
+    /// When the bar last came or went. The chat list reads it: the bar is a top inset, and a
+    /// `UITableView` answers a growing inset by moving `adjustedContentInset` and leaving
+    /// `contentOffset` where it was, so a list resting at the top ended up with its first rows
+    /// ("Pinned") UNDER the bar (owner, 2026-09-29). See `ChatListSelfSizingTable`.
+    @MainActor static var lastToggle = Date.distantPast
+
     var body: some View {
+        ZStack { bar }
+            .onChange(of: engine.barVisible) { _, _ in Self.lastToggle = Date() }
+    }
+
+    @ViewBuilder private var bar: some View {
         if engine.barVisible {
             HStack(spacing: 0) {
                 // Play AND pause, not pause alone. The bar now outlives a pause — it has to, because
@@ -30,23 +41,28 @@ struct VoiceNoteBar: View {
                 Button {
                     engine.playing ? engine.pause() : engine.resume()
                 } label: {
+                    // ⛔ MINIMAL, AS IN THE REFERENCE — owner, 2026-09-29: "redesign the play icon,
+                    // the text and the speed, don't touch the X". A smaller glyph in the accent, the
+                    // only colour on the strip, so it reads as the control and nothing else does.
                     Image(systemName: engine.playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Color.accentColor)
+                        .contentTransition(.symbolEffect(.replace))
                         .frame(width: 48, height: Self.height)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
                 // One answer for who this is from, shared with the lock screen — see
-                // `VoiceNotePlayer.noteTitle`.
-                VStack(spacing: 1) {
+                // `VoiceNotePlayer.noteTitle`. Tight pair: a medium 13 name over a 11 caption, the
+                // reference's strip weights, instead of two full-size lines filling the capsule.
+                VStack(spacing: 0) {
                     Text(engine.noteTitle)
-                        .font(.system(size: 15))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text("Voice Message")
-                        .font(.system(size: 13))
+                    Text("Voice message")
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -113,42 +129,28 @@ struct VoiceNoteBar: View {
         .allowsHitTesting(false)
     }
 
-    /// "1X", "1.5X", "2X", "0.5X".
+    /// "1×", "1.5×", "2×", "0.5×".
     static func rateText(_ r: Float) -> String {
         let s = r == r.rounded() ? String(Int(r)) : String(format: "%g", Double(r))
-        return "\(s)X"
+        return "\(s)×"
     }
 }
 
-/// The speed label from his reference: the number with a short dashed rule above and below it.
+/// The speed, the reference's way: the number in a thin rounded outline. Replaces the dashed rules
+/// above and below it (owner, 2026-09-29, "make it minimalist").
 private struct SpeedMark: View {
     let text: String
 
     var body: some View {
-        VStack(spacing: 3) {
-            dashes
-            Text(text)
-                .font(.system(size: 13, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .fixedSize()
-            dashes
-        }
-    }
-
-    private var dashes: some View {
-        Line()
-            .stroke(.secondary, style: StrokeStyle(lineWidth: 1, dash: [6, 3]))
-            .frame(width: 24, height: 1)
-    }
-
-    private struct Line: Shape {
-        func path(in rect: CGRect) -> Path {
-            var p = Path()
-            p.move(to: CGPoint(x: rect.minX, y: rect.midY))
-            p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            return p
-        }
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .padding(.horizontal, 4)
+            .frame(minWidth: 26, minHeight: 17)
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(.secondary, lineWidth: 1.2))
     }
 }
 

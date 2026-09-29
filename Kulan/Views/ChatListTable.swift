@@ -564,9 +564,22 @@ final class ChatListSelfSizingTable: UITableView {
     }
 
     override func adjustedContentInsetDidChange() {
+        let oldTop = lastInsetTop
+        lastInsetTop = adjustedContentInset.top
         super.adjustedContentInsetDidChange()
+        // ⛔ THE VOICE BAR KEEPS A LIST AT THE TOP AT THE TOP — owner, 2026-09-29, the playing-note
+        // bar drawn over the "Pinned" heading. The bar is a top inset; this view answered it by
+        // moving the inset and leaving the offset, so the first rows slid under the bar. ONLY while
+        // the bar is coming or going (`VoiceNoteBar.lastToggle`) and only when the list was resting
+        // at its old top: the search transition moves this inset too, and UIKit already corrects
+        // that one itself (see the warning on `ChatListCell` — correcting it twice was build 736).
+        if Date().timeIntervalSince(VoiceNoteBar.lastToggle) < 1,
+           abs(contentOffset.y + oldTop) < 1, !isTracking, !isDecelerating {
+            contentOffset.y = -adjustedContentInset.top
+        }
         updateFooterHeight()
     }
+    private var lastInsetTop: CGFloat = 0
 
     private func updateFooterHeight() {
         // See `suspendFooterUpdates`: during a transition this would move `contentSize` on every
