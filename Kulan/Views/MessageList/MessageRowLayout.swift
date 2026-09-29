@@ -778,7 +778,12 @@ enum MessageRowLayout {
             // — a strip inside it would eat the picture, and their timestamp is already a capsule
             // floating ON the image rather than a line of text to share. Everything else (text, voice,
             // call, cards) has a meta line, and that line is where these belong.
-            let inside = plan.mediaPlan == nil && plan.albumPlan == nil
+            // ⛔ …UNLESS IT HAS A CAPTION — owner, 2026-09-29, a reacted photo with a caption: "the
+            // reaction works like on a bare image; make it enter the bubble like a text message".
+            // A caption is a strip of text under the picture, so its reactions go inside, under the
+            // caption, exactly as a text bubble's do. The time stays in the caption (see `metaJoins`).
+            let captioned = plan.mediaPlan?.caption != nil || plan.albumPlan?.caption != nil
+            let inside = (plan.mediaPlan == nil && plan.albumPlan == nil) || captioned
 
             let shown = Array(b.reactions.prefix(3))
             let extra = b.reactions.count - shown.count
@@ -863,7 +868,9 @@ enum MessageRowLayout {
                 let metaW = BubbleMetrics.metaInlineGap + plan.meta.width
                 let fitsOnRow = padH + total + metaW + padH <= columnW
                 let ownTextRow = plan.metaOnOwnLine && plan.text != .zero
-                let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
+                // A captioned picture's time is drawn in its caption block, not from `plan.meta`, so
+                // it never moves onto the reaction row.
+                let metaJoins = !captioned && fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
 
                 var grown = plan.bubble
                 if metaJoins && ownTextRow { grown.size.height -= BubbleMetrics.metaGap + plan.meta.height }
