@@ -702,7 +702,7 @@ final class CMOverlay: UIView {
             bottom: max(safeAreaInsets.bottom, pad),
             right: max(safeAreaInsets.right, pad)))
 
-        let menuSize = card.sizeThatFits(CGSize(width: 250, height: content.height))
+        var menuSize = card.sizeThatFits(CGSize(width: 250, height: content.height))
         let barSize = bar?.naturalSize ?? .zero
 
         func stack(for preview: CGRect) -> (bar: CGRect?, menu: CGRect, top: CGFloat, bottom: CGFloat) {
@@ -732,6 +732,12 @@ final class CMOverlay: UIView {
         // app's model (actions limited to the height above the input, the message shifted up).
         if let kt = keyboardTop, s.bottom > kt - pad {
             content.size.height = max(0, min(content.maxY, kt - pad) - content.minY)
+            // The list was measured against the whole screen. Above the keys it may not fit even
+            // with the preview shrunk, so it is measured again against what is left (bar, two gaps
+            // and a 44pt preview) and its rows scroll inside the card instead of running under the keys.
+            let reserved = (bar != nil ? barSize.height + gapY : 0) + gapY + 44
+            menuSize = card.sizeThatFits(CGSize(width: 250, height: max(88, content.height - reserved)))
+            s = stack(for: preview)
         }
 
         // Shift up if the group runs past the bottom, then down if past the top.
