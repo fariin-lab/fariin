@@ -414,11 +414,18 @@ enum MessageRowModelBuilder {
         // KEY keeps the original index (`i` below), so every other tile's ring and done mark still
         // match. Never below two while optimistic: the mosaic is built for two and up, and a lone
         // survivor becomes a photo once the send lands (`Message.init`), so the last X'd one just dims.
+        // ⛔ EVEN DOWN TO ONE — owner, 2026-09-29, two photos, one X'd: "it stays blurred until the
+        // other finishes; make it go at once, like the reference". The survivor is drawn alone, as
+        // a one-tile group (`MediaGroupLayout.solve` has a one-item case, full width), exactly what
+        // it becomes when the send lands (`Message.init` reads a one-item album as a photo).
+        var cancelledSome = false
         if optimistic, let cid = m.clientId {
             let kept = visible.filter { !MediaSend.shared.isItemCancelled(MediaSend.itemKey(cid, $0)) }
-            if kept.count >= 2 { visible = kept }
+            if !kept.isEmpty, kept.count < visible.count { visible = kept; cancelledSome = true }
         }
-        let n = max(visible.count, 2)
+        // The two-slot floor is for a receiver's placeholder grid; an X'd optimistic group shows
+        // exactly what is left.
+        let n = cancelledSome ? visible.count : max(visible.count, 2)
         let shown = min(n, 10)          // the album ceiling; the rest rides a "+N" on the last tile
 
         var tiles: [BubbleBody.AlbumBody.Tile] = []
