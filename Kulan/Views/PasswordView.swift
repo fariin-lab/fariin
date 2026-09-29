@@ -150,11 +150,19 @@ struct PasswordView: View {
             }
 
             // Only where there is a password to have forgotten — his rule.
+            // ⛔ A LINK, NOT A CARD — owner, 2026-09-29, with a picture: plain underlined text under
+            // the rules, no rounded row. Clear list background so no card is drawn behind it.
             if !isFirstPassword {
                 Section {
-                    Button("Forgot password?") { Task { await forgot() } }
-                        .disabled(busy)
-                        .foregroundStyle(Color.accentColor)
+                    Button { Task { await forgot() } } label: {
+                        Text("Forgot password?").underline()
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                 }
             }
 
