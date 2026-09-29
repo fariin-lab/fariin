@@ -616,9 +616,12 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             // a player appearing for a sound that is already over. The bar is for a note that was
             // still going when he walked away, so a note that ends inside its own chat closes, and
             // one that ends outside it stays for the replay.
-            let oneTime = transientURL != nil
-            let insideItsChat = cid == (AppRouter.shared.activeChatId ?? "")
-            if oneTime || insideItsChat { hasNote = false }
+            // ⛔ REVERSED ON HIS WORD, 2026-09-29: "hide the bar automatically when the voice finishes".
+            // The 08-13 rule above (stay paused at zero with a play button) is history. A finished
+            // note closes, everywhere — unless the run continues outside the chat (below), where the
+            // next note takes the bar over.
+            let chainsOn = cid != (AppRouter.shared.activeChatId ?? "") && !followOn.isEmpty
+            if !chainsOn { hasNote = false }
             pausedByUser = false     // the note ended by itself; nobody pressed anything
             clearNowPlaying()
             disposeTransient()   // a finished one-time note's bytes do not outlive the listen
