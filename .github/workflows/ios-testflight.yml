@@ -86,11 +86,13 @@ jobs:
 
             ONE-TIME VOICE: opens straight to your voice bubble with its waveform, no loading.
 
+            FORWARD: a message forwarded back into the chat it came from is a normal message, no "Forwarded" label; forwarded to anyone else it says Forwarded (text, photos, videos, voice, files, GIFs, albums).
+
             REACTIONS: tap a reaction, then your own row, to remove it (older messages too).
 
             ALL MEDIA: back and ••• follow light mode.
 
-            PLEASE TEST: open Fariin chat and scroll to the bottom; send in a disappearing chat; wallpaper preview slider then Apply; forward a message; open a one-time voice note; remove an old reaction; All Media in light mode.
+            PLEASE TEST: open Fariin chat and scroll to the bottom; send in a disappearing chat; wallpaper preview slider then Apply; forward a message; open a one-time voice note; forward a message back to the same person and to someone else; remove an old reaction; All Media in light mode.
 
             EARLIER IN THIS ROUND (build 795): LONG PRESS ON THE FARIIN BUTTON MESSAGE, PHOTOS NO LONGER OPEN AFTER A LONG PRESS.
 
