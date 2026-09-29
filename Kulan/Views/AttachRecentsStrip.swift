@@ -218,9 +218,28 @@ struct AttachRecentsStrip: View {
     private let cols = Array(repeating: GridItem(.flexible(), spacing: AttachRecentsStrip.tileGap), count: 3)   // 3 per row (user request)
 
     var body: some View {
-        Group {
-            if showAlbums { albumsList } else { grid }
+        // ⛔ A PAGE SLIDE, SCOPED TO THE PAGES — owner, 2026-09-29: "when I tap a folder there is no
+        // animation, make it slide in from the right", and in the same message the bar and the
+        // Album button vanishing on Album/Back and flickering on an album tap. Both taps flipped
+        // these flags inside `withAnimation`, a transaction that reached every view that changed,
+        // including the bar's and the round button's glass, which re-materialised late (and the
+        // two pages only cross-faded). The animation lives HERE now, on the swap alone: an album
+        // comes in from the right over the list, going back returns it to the right. The bar and
+        // the button are drawn outside this view (ThreadView's overlay) and see no animation.
+        // Each page is opaque so the two never show through each other mid-slide.
+        ZStack {
+            if showAlbums {
+                albumsList
+                    .background(Color(uiColor: .systemBackground))
+                    .transition(.move(edge: .leading))
+            } else {
+                grid
+                    .background(Color(uiColor: .systemBackground))
+                    .transition(.move(edge: .trailing))
+            }
         }
+        .clipped()
+        .animation(.snappy(duration: 0.3), value: showAlbums)
         // ⛔ THE HEADER IS GONE — OWNER, 2026-09-02, with a screenshot: "Photo sheet no header".
         //
         // What went with it: the ✕, the "Recents ▾" title, and the selected-count circle. The way
@@ -430,7 +449,7 @@ struct AttachRecentsStrip: View {
         albumTitle = album.title
         // Tells the parent's round button to stay a back arrow while a real album fills the grid.
         inAlbum = selectedAlbum != nil
-        withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
+        showAlbums = false   // animated by the body's own `.animation(value: showAlbums)`, not a transaction
         load()
     }
 

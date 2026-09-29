@@ -4558,7 +4558,10 @@ struct ThreadView: View {
     /// day the bar changes height, this follows it.
     private var albumButton: some View {
         Button {
-            withAnimation(.snappy(duration: 0.25)) {
+            // ⛔ NO `withAnimation` HERE — owner, 2026-09-29, the bar and this button vanishing on
+            // every tap of it. The transaction reached this button's own glass and the bar's; the
+            // page slide is animated inside the strip now (`AttachRecentsStrip.body`).
+            do {
                 // ⛔ THE ARROW POPS ONE LEVEL, IT DOES NOT JUMP HOME — owner, 2026-09-02: "back
                 // button is jumping recent page when i inside the folder… it must go back albums,
                 // then if i click back again that time go recent".
