@@ -81,29 +81,20 @@ struct GlowIntroSheet: View {
     /// Design" ("Story Ads Illustration", 1104×744, rendered at 3x from his exported HTML, unedited).
     /// This replaces the lit monochrome mark the 09-02 note above describes, on his word. Filled and
     /// clipped to the panel's 190pt, so the sheet's height and everything below are unchanged.
-    /// ⚠️ LIGHT ONLY FOR NOW: the illustration's white ground is part of the picture, so in dark mode
-    /// it would be a white block on a dark sheet. Dark keeps the lit mark until he supplies a dark
-    /// version (asked 2026-09-29).
+    /// ⛔ ALWAYS HIS PICTURE, BOTH APPEARANCES — owner, 2026-09-29: "sometimes the icon, sometimes my
+    /// image; always my image". Dark mode used to keep the lit mark because the first render had a
+    /// white ground; the asset has been transparent since, so it shows on the dark sheet too.
     private var hero: some View {
         Group {
-            if scheme == .dark {
-                ZStack {
-                    RadialGradient(colors: [Color.primary.opacity(0.20), Color.primary.opacity(0)],
-                                   center: .center, startRadius: 2, endRadius: 160)
-                    GlowStyle.mark(76, filled: true)
-                        .foregroundStyle(Color.primary)
-                }
-            } else {
-                // ⛔ NO BACKGROUND, WHOLE PICTURE — owner, 2026-09-29, on 804: "remove the background,
-                // keep only the phones and the design inside them, and zoom out". The asset is his
-                // illustration re-rendered with a transparent ground (the white fade at the bottom is
-                // now a fade to clear), and it FITS the panel instead of filling and cropping it.
-                Image("GlowIntroArt")
-                    .resizable()
-                    .scaledToFit()
-                    .padding(.top, 12)
-                    .accessibilityHidden(true)
-            }
+            // ⛔ NO BACKGROUND, WHOLE PICTURE — owner, 2026-09-29, on 804: "remove the background,
+            // keep only the phones and the design inside them, and zoom out". The asset is his
+            // illustration re-rendered with a transparent ground (the white fade at the bottom is
+            // now a fade to clear), and it FITS the panel instead of filling and cropping it.
+            Image("GlowIntroArt")
+                .resizable()
+                .scaledToFit()
+                .padding(.top, 12)
+                .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 190)
