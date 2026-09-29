@@ -129,6 +129,7 @@ struct StoriesTabView: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
+                .voiceNoteBarSlot()   // under the header (owner, 2026-09-29)
                 .navigationTitle("Stories")
                 // ⛔ INLINE, THE SECOND HALF OF "make the header like this exactly" — his reference
                 // centres a small "Stories" between the ••• and the bell/add capsule, with the

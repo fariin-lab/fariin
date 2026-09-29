@@ -239,6 +239,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .voiceNoteBarSlot(showing: !showPhoto)   // under the header (owner, 2026-09-29); never over the photo
             // The bar titles what you are looking at: the page while it is the page, the picture
             // while the picture is open over it.
             .navigationTitle(showPhoto ? "Profile photo" : "Settings")

@@ -101,16 +101,10 @@ struct MainShell: View {
         // can't use the `Tab` API, so it falls back to the classic `.tabItem` bar with a
         // normal 4th Search tab — same screens, just not the floating/detached styling.
         tabsLandingOnPostedStory
-        // THE VOICE NOTE THAT IS STILL PLAYING, wherever you have walked to.
-        //
-        // `safeAreaInset` rather than an overlay, deliberately: an overlay would sit ON TOP of each
-        // tab's own header, and every screen underneath would keep laying out as though the bar were
-        // not there. An inset makes the room, so nothing is covered and nothing has to know about it.
-        //
-        // Mounted here, on the tab shell, so it survives moving between tabs and pushing into another
-        // chat. It draws nothing at all unless a note is playing outside the chat on screen — see
-        // `VoiceNotePlayer.barVisible`.
-        .safeAreaInset(edge: .top, spacing: 0) { VoiceNoteBar() }
+        // THE VOICE NOTE THAT IS STILL PLAYING is no longer mounted here: owner, 2026-09-29, it goes
+        // UNDER each tab's header (below the search field), so each tab root carries
+        // `voiceNoteBarSlot()` inside its own NavigationStack. A mount on this shell can only ever
+        // sit above every header.
         // (The window dim that used to live here is gone — see the note above `MainShell`. The
         // presenter's own wall covers the tab bar and every tab's content, because it IS a screen
         // over them, and it is driven by the flight's fraction rather than by a bool.)
@@ -718,6 +712,7 @@ struct CallsView: View {
                     .tint(Theme.defaultBubble(dark))
                 }
             }
+            .voiceNoteBarSlot()   // under the search field (owner, 2026-09-29)
             .navigationTitle("Calls")
             .searchable(text: $searchText, prompt: "Search calls")
             .toolbar {
@@ -2229,6 +2224,7 @@ struct ChatsView: View {
             // complexity the stack has to solve, exactly the way the messages chain in ThreadView is
             // erased at its own boundary. No behaviour changes; the same views render.
             AnyView(homeStackC)
+                .voiceNoteBarSlot()   // under the search field (owner, 2026-09-29)
         }
         // Both stores seeded from disk on the SAME line, synchronously, before the first frame.
         // The stories row had a persisted copy all along; it just could not reach the screen in
