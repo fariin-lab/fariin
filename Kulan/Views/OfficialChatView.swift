@@ -1024,6 +1024,12 @@ struct AnnouncementRow: View {
                     .background(Capsule().fill(Color(BubblePalette.accent).opacity(0.18)))
                     .contentShape(Capsule())
                     .onTapGesture { onReactionTap?() }
+                    // ⛔ THE CHAT'S OWN POP — owner, 2026-09-29: "when I react there's no animation,
+                    // add animation like normal chat". `MessageRowView`'s arriving chip: scale from
+                    // 0.01 over `reactionDuration` (0.4s) on `reactionCurve`, opacity over 0.2s;
+                    // a leaving one shrinks and fades the same way.
+                    .transition(.scale(scale: 0.01).combined(with: .opacity))
+                    .id(myReaction)   // a changed emoji pops as a new chip, as in a chat
             }
             Spacer(minLength: 0)
             if announcement.editedAt != nil {
@@ -1035,6 +1041,7 @@ struct AnnouncementRow: View {
         }
         // (No reserved chip height: owner, 2026-09-29, build 797, "the bubble always has an empty
         // area, with or without a reaction". The chip still draws live from the store.)
+        .animation(.timingCurve(0.38, 0.7, 0.125, 1.0, duration: 0.4), value: shownReaction)
     }
 
     private var buttonStack: some View {
