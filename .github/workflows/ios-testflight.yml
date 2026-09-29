@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            WALLPAPER: SWIPE YOUR PHOTOS, CANCEL DOES NOT SAVE, NEW RESET MENUS.
+            FARIIN LIGHT/DARK, HEADER TEXT, CAPTION REACTIONS, ALBUM CANCEL, KEYBOARD ON TAP.
+
+            FARIIN CHAT: never uses a wallpaper, and its posts change with light/dark at once.
+
+            CHAT: the name and "online" in the header change colour right away with light/dark or a new wallpaper. Tapping a message keeps the keyboard open. A photo with a caption: double-tap the caption to react, and reactions sit inside under the caption. A cancelled photo in a group leaves at once, even the last one.
+
+            ATTACH SHEET: Back from the album list is instant.
+
+            DEVICES: bigger icons, and the device sheet is solid light/dark.
+
+            CHAT LIST: the disappearing badge is a little smaller and looks like a notch in the photo.
+
+            PLEASE TEST: switch light/dark in Fariin and in a chat with a wallpaper; tap messages with the keyboard up; react on a caption; send 2 photos and cancel one.
+
+            EARLIER IN THIS ROUND (build 809): WALLPAPER: SWIPE YOUR PHOTOS, CANCEL DOES NOT SAVE, NEW RESET MENUS.
 
             WALLPAPER: tapping a photo you already use opens it without pinch or drag, and you can swipe through all your wallpapers. A photo you pick and close without Apply is not kept. Each page's ... menu shows its own two resets.
 
