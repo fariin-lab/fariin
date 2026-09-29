@@ -16,6 +16,9 @@ enum SessionWipe {
         // A live call does not survive its account (2026-09-24 audit): signing out mid-call left
         // the audio, the call record and CallKit running under nobody.
         if CallService.shared.state != .idle { CallService.shared.hangUp() }
+        // Nor does a voice note (owner, 2026-09-29: "I play a voice message, log out, and it keeps
+        // playing"). The engine outlives every screen on purpose; it must not outlive the account.
+        VoiceNotePlayer.shared.dismiss()
         InAppNotify.shared.reset()
         // The previous account's imported wallpaper photos, per-chat wallpapers and custom colours
         // showed in the next account's pickers (2026-09-24 audit).
