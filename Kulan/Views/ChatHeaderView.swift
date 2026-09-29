@@ -113,6 +113,8 @@ final class ChatHeaderView: UIView {
     /// seeds the measured answer from `WallpaperBlur.headerBackdrop` so the first frame reads
     /// right; from then on the probe alone decides, as in the reference app.
     private var probeHasDecided = false
+    /// The measured seed from the last `configure`, re-applied when the app's appearance flips.
+    private var lastBackdrop: UIUserInterfaceStyle = .unspecified
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -215,6 +217,17 @@ final class ChatHeaderView: UIView {
             }
         )
 
+        // ⛔ THE APP'S OWN LIGHT ↔ DARK STARTS THE DECISION AGAIN — owner, 2026-09-29, a chat in
+        // dark mode after switching from light: "last seen" drawn in light-mode grey on the dark
+        // wallpaper. The probe's answer from before the switch outlived it, and `configure` had
+        // stopped seeding once the probe spoke. The switch re-draws the wallpaper in its other
+        // palette, so the old answer is about a picture that is gone: forget it, take the fresh
+        // measured seed from the next `configure`, and let the probe decide again when it fires.
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: ChatHeaderView, _) in
+            self.probeHasDecided = false
+            self.textRows.overrideUserInterfaceStyle = self.lastBackdrop
+        }
+
         heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
 
         rootStack.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(didTapView)))
@@ -236,7 +249,10 @@ final class ChatHeaderView: UIView {
         // The measured answer is only the SEED for the first frame; once the glass probe has
         // resolved (see init) it alone decides, and this line stops writing. `.unspecified` means
         // no wallpaper, so the app's own appearance stands until the probe says otherwise.
-        if !probeHasDecided, model.backdrop != .unspecified {
+        lastBackdrop = model.backdrop
+        if !probeHasDecided {
+            // `.unspecified` (no wallpaper) hands the labels back to the app's own appearance,
+            // which after a light ↔ dark switch is the one thing they must follow.
             textRows.overrideUserInterfaceStyle = model.backdrop
         }
         // The timer glyph is a template so it re-resolves through `textRows`' style like the labels

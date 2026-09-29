@@ -2268,7 +2268,20 @@ struct ChatsView: View {
             // inherited and can be an override; and only while the chat list itself is on top. A
             // bar scheme set here stays in force for pages pushed over it (the same lesson as the
             // profile over All Media), and the filter pages came up dark.
-            .toolbarColorScheme(path.isEmpty ? PhoneScheme.current : nil, for: .navigationBar)
+            // ⛔ 2026-09-29, two reports from this one line: the search field's grey went blank for
+            // the whole Back swipe and came back only when it ended, and the header's buttons and
+            // search field did not change smoothly with light ↔ dark.
+            //   · `path.isEmpty` flipped nil → scheme at the END of the swipe (the path empties
+            //     only when the pop completes), so the bar re-resolved its scheme right then and
+            //     redrew the field. Held through the first push now: the chat on top follows the
+            //     phone as well (wallpapered chats are no longer pinned dark, 2e38476f), so it is
+            //     the same value underneath and nothing flips when the swipe finishes. Deeper pages
+            //     (the profile, which sets its own) still get nil.
+            //   · `PhoneScheme.current` is a static read nobody observes, so the bar learnt of a
+            //     light ↔ dark switch on some later redraw. `scheme` is this root view's own
+            //     environment (nothing above the chat list overrides it) and changes in the same
+            //     pass as everything else on screen.
+            .toolbarColorScheme(path.count <= 1 ? scheme : nil, for: .navigationBar)
             // ⛔ THE BAR IS STOCK — owner, 2026-09-24: the header is the reference app's on iOS 26,
             // and theirs sets nothing on the bar. No `toolbarBackground`, no
             // `UINavigationBarAppearance` on this page's item (see `ChatListTableController
