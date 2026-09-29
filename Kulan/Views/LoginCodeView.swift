@@ -240,7 +240,9 @@ struct LoginCodeView: View {
             do {
                 try await AuthService.shared.signInWithLoginCode(email: trimmedEmail, code: code)
                 await MainActor.run {
-                    if purpose == .forgot {
+                    // Never a password on Apple's hidden relay address: it could never be typed at
+                    // the sign-in screen (`AuthService.hasTypableAddress`, `passwordIsOnRelay`).
+                    if purpose == .forgot, AuthService.shared.hasTypableAddress {
                         step = .newPassword; error = nil; focused = true
                     } else {
                         onAuthed()
