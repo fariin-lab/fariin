@@ -76,17 +76,19 @@ struct GlowIntroSheet: View {
         return t.isEmpty ? "their" : t + "'s"
     }
 
-    /// The picture panel. His reference fills it with the product's own icons; ours is the Glow mark
-    /// lit from behind, which is the only "image" this feature has and the one he supplied.
+    /// The picture panel.
+    /// ⛔ HIS ILLUSTRATION, NOT THE GLOW MARK — owner, 2026-09-29: "use the image I made in Claude
+    /// Design" ("Story Ads Illustration", 1104×744, rendered at 3x from his exported HTML, unedited).
+    /// This replaces the lit monochrome mark the 09-02 note above describes, on his word. Filled and
+    /// clipped to the panel's 190pt, so the sheet's height and everything below are unchanged.
     private var hero: some View {
-        ZStack {
-            RadialGradient(colors: [Color.primary.opacity(0.20), Color.primary.opacity(0)],
-                           center: .center, startRadius: 2, endRadius: 160)
-            GlowStyle.mark(76, filled: true)
-                .foregroundStyle(Color.primary)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 190)
+        Image("GlowIntroArt")
+            .resizable()
+            .scaledToFill()
+            .frame(maxWidth: .infinity)
+            .frame(height: 190)
+            .clipped()
+            .accessibilityHidden(true)
         .overlay(alignment: .topTrailing) {
             // ⚠️ AN ✕ AND NO DRAG INDICATOR. His reference has the ✕ and the two together are two
             // ways to say the same thing in the same corner of the eye — the attach sheet went
