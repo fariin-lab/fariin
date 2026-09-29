@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            SEARCH BAR ON BACK, HEADER IN LIGHT/DARK, LAST SEEN COLOUR, FARIIN POSTS, NO EDIT ON FORWARDS.
+            SEND LOCATION BUTTON, LOCATION BUBBLE, FARIIN REACTION FACE, FORWARD ROWS, ATTACH SHEET WHITE TILES.
+
+            LOCATION: the whole Send Location button works, not only its words. The location bubble has the place and the time on one row, no empty band.
+
+            FARIIN CHAT: your reaction shows your photo beside the emoji, like a normal chat.
+
+            FORWARD: the chat rows on the Send to page are shorter.
+
+            ATTACH SHEET: pulling the full sheet down no longer turns photo tiles white while they reload.
+
+            PLEASE TEST: send a location by tapping the edge of the button; look at a location bubble; react to a Fariin post; open Forward; open the attach sheet full and pull it down slowly.
+
+            EARLIER IN THIS ROUND (build 798): SEARCH BAR ON BACK, HEADER IN LIGHT/DARK, LAST SEEN COLOUR, FARIIN POSTS, NO EDIT ON FORWARDS.
 
             CHATS: the search field stays grey during the Back swipe from a chat. The header buttons and search field switch with light/dark at the same moment as the rest of the screen.
 
