@@ -422,7 +422,11 @@ final class AuthService: NSObject {
     func setPassword(_ newPassword: String, isFirst: Bool) async throws {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
 
-        if isFirst {
+        // A password credential that already exists is REPLACED, never linked a second time (that
+        // fails with "already linked"). Reached when the page treats an unknowable password as none:
+        // see `passwordIsOnRelay`.
+        let hasPasswordCredential = user.providerData.contains { $0.providerID == "password" }
+        if isFirst && !hasPasswordCredential {
             // ⚠️ `passwordAddress`, NEVER `user.email`. This line read `user.email` directly and that
             // was the actual bug behind the mismatched screen: on an account whose account-level
             // email is unverified it would have linked a password to an UNPROVEN address, handing a
@@ -624,6 +628,18 @@ final class AuthService: NSObject {
     }
 
     func isConnected(_ method: SignInMethod) -> Bool { connectedIdentifier(_: method) != nil }
+
+    /// ⛔ A PASSWORD NOBODY CAN KNOW — owner, 2026-09-29, an Apple account: "it asks my current
+    /// password and says it is wrong; Forgot says this account does not sign in with a password".
+    /// The account had a password credential on Apple's Hide My Email RELAY address. Its current
+    /// password cannot be known (and the relay cannot be typed), and `startPasswordReset` rightly
+    /// refuses relay addresses. The Password page treats such an account as having no password:
+    /// no Current field, no Forgot, re-authenticate with Apple, and `setPassword` replaces it.
+    var passwordIsOnRelay: Bool {
+        guard let e = Auth.auth().currentUser?.providerData
+            .first(where: { $0.providerID == "password" })?.email else { return false }
+        return Self.isRelayAddress(e)
+    }
 
     /// Every door currently attached to this account.
     var connectedMethods: [SignInMethod] { SignInMethod.allCases.filter { isConnected($0) } }

@@ -529,7 +529,8 @@ struct AccountSettingsView: View {
                 if let address = passwordRowAddress {
                     NavigationLink {
                         PasswordView(address: address,
-                                     isFirstPassword: !AuthService.shared.isConnected(.email))
+                                     isFirstPassword: !AuthService.shared.isConnected(.email)
+                                        || AuthService.shared.passwordIsOnRelay)
                     } label: { Text("Password") }
                 }
             } header: {
