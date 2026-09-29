@@ -3390,13 +3390,14 @@ struct DisappearingAvatarBadge: View {
     static let side: CGFloat = 22
 
     var body: some View {
+        // ⛔ BLACK AND WHITE, NOT GREY — owner, 2026-09-29, on 803: "light mode: white badge, black
+        // icon; dark mode: black badge, white icon", and "the icon is small, a bit bigger, badge the
+        // same". `.label` on `.systemBackground` is exactly that pair in both appearances.
         Image(systemName: "timer")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color(uiColor: .systemGray))
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Color(uiColor: .label))
             .frame(width: Self.side, height: Self.side)
-            .background(Circle().fill(Color(uiColor: UIColor { t in
-                t.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
-            })))
+            .background(Circle().fill(Color(uiColor: .systemBackground)))
             .padding(2)
             .background(Circle().fill(Color(uiColor: .systemBackground)))
             .accessibilityLabel("Disappearing messages on")
