@@ -2228,10 +2228,27 @@ enum ChatService {
     // return) so ForwardPicker reports the failure instead of silently dismissing as "sent".
     enum ForwardError: Error { case sourceUnavailable }
 
+    /// ⛔ WHETHER A FORWARDED COPY SAYS "FORWARDED" — owner, 2026-09-29, four cases: Salmo's message
+    /// or mine, forwarded back into the chat with Salmo, is a plain new message from me; either one
+    /// forwarded to anybody else says Forwarded.
+    ///
+    /// The rule underneath all four is the DESTINATION: the label tells the reader "this came from
+    /// another conversation". Back into the very chat it came from, it did not, so there is nothing
+    /// to tell (the reference apps treat that as a re-send). Anywhere else it did. And a message that
+    /// already arrived forwarded stays forwarded wherever it goes, including back into its own chat:
+    /// its words were never either side's, and a forward must not launder that away.
+    ///
+    /// ONE function, read by both the optimistic bubble (`ForwardPicker`) and the real send below,
+    /// so the bubble can never say one thing and the delivered message another.
+    static func isForward(_ m: Message, from sourceCid: String, to targetCid: String) -> Bool {
+        m.forwarded || sourceCid != targetCid
+    }
+
     /// `clientId` matches the optimistic bubble ForwardPicker parked in PendingOutbox, so the echo
     /// REPLACES that bubble rather than landing beside it as a duplicate.
     static func forwardMessage(_ m: Message, from sourceCid: String, to targetCid: String,
                                clientId: String? = nil) async throws {
+        let forwarded = isForward(m, from: sourceCid, to: targetCid)
         if m.isImage {
             let bytes: Data
             if let local = m.localImageData {
@@ -2241,7 +2258,7 @@ enum ChatService {
                       let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta) {
                 bytes = dec
             } else { throw ForwardError.sourceUnavailable }
-            try await sendImage(cid: targetCid, data: bytes, clientId: clientId, caption: m.text, forwarded: true)
+            try await sendImage(cid: targetCid, data: bytes, clientId: clientId, caption: m.text, forwarded: forwarded)
         } else if m.isAlbum {
             // The album forwards as ONE album, grouped like the original — the owner rejected
             // the reference app's break-apart-into-singles ("is broke is send one by one"). Each item
@@ -2282,13 +2299,13 @@ enum ChatService {
             indexed.sort { $0.0 < $1.0 }
             let items = indexed.map(\.1)
             guard !items.isEmpty else { throw ForwardError.sourceUnavailable }
-            try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, clientId: clientId, forwarded: true)
+            try await sendMixedAlbum(cid: targetCid, items: items, caption: m.text, clientId: clientId, forwarded: forwarded)
         } else if m.isAudio {
             guard let s = m.audioUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             else { throw ForwardError.sourceUnavailable }
-            try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform, clientId: clientId, forwarded: true)
+            try await sendAudio(cid: targetCid, data: dec, duration: m.duration ?? 0, waveform: m.waveform, clientId: clientId, forwarded: forwarded)
         } else if m.isVideo {
             // The clip and its poster are two independent fetches and were done one after the other.
             // Started together now. The local copy is still preferred for the clip: the server object
@@ -2310,18 +2327,18 @@ enum ChatService {
             guard let bytes = await clipBytes, let thumb = await thumbBytes
             else { throw ForwardError.sourceUnavailable }
             try await sendVideo(cid: targetCid, video: bytes, thumbnail: thumb, duration: m.duration ?? 0,
-                                width: m.width ?? 720, height: m.height ?? 720, caption: m.text, clientId: clientId, forwarded: true)
+                                width: m.width ?? 720, height: m.height ?? 720, caption: m.text, clientId: clientId, forwarded: forwarded)
         } else if m.isGif {
             guard let gifUrl = m.imageUrl, !gifUrl.isEmpty else { throw ForwardError.sourceUnavailable }
-            try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200, clientId: clientId, forwarded: true)
+            try await sendGif(cid: targetCid, url: gifUrl, width: m.width ?? 200, height: m.height ?? 200, clientId: clientId, forwarded: forwarded)
         } else if m.isFile {
             guard let s = m.fileUrl, let url = URL(string: s), let meta = m.enc,
                   let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let dec = await Crypto.shared.decryptBytes(sourceCid, cipher: cipher, meta: meta)
             else { throw ForwardError.sourceUnavailable }
-            try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File", clientId: clientId, forwarded: true)
+            try await sendFile(cid: targetCid, data: dec, fileName: m.fileName ?? "File", clientId: clientId, forwarded: forwarded)
         } else {
-            try await sendText(cid: targetCid, text: m.text, clientId: clientId, forwarded: true)
+            try await sendText(cid: targetCid, text: m.text, clientId: clientId, forwarded: forwarded)
         }
     }
 

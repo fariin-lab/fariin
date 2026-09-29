@@ -313,7 +313,8 @@ struct ForwardPicker: View {
                 p.authorId = me
                 p.createdAt = Date()
                 p.sendState = .sending
-                p.forwarded = true
+                // The same rule the real send uses, so the bubble never flips when it lands.
+                p.forwarded = ChatService.isForward(m, from: src, to: cid)
                 p.reactions = [:]     // reactions belong to the ORIGINAL message, not this copy
                 p.replyTo = nil       // and so does whatever it was replying to over there
                 if p.localImageData == nil { p.localImageData = posters[m.id] }
