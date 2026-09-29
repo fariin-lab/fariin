@@ -650,7 +650,8 @@ struct OfficialChatInfoView: View {
                 // ⛔ ONE SHORT TEXT, ONE STYLE — owner, 2026-09-28, circled the card: "this text is 3
                 // types, clear all and write only one simple short text". The three paragraphs
                 // (regular, medium, secondary with a tick) are gone.
-                Text("Updates and news from Fariin. We will never ask for your password, login code or money.")
+                // Owner, 2026-09-29: these two lines, word for word.
+                Text("The only official chat from Fariin\nKeep up to date with news & release notes")
             }
             .padding(18)
         }
