@@ -972,9 +972,15 @@ struct OneTimeVoicePill: View {
 enum OneTimeVoicePrefetch {
     private static var tasks: [String: Task<Data?, Never>] = [:]
 
-    static func start(_ message: Message) {
-        guard tasks[message.id] == nil, let s = message.audioUrl, let url = URL(string: s) else { return }
-        tasks[message.id] = Task { try? await MediaSession.shared.data(from: url).0 }
+    static func start(_ message: Message) { start(id: message.id, audioUrl: message.audioUrl) }
+
+    /// ⛔ ALSO STARTED BY THE UIKit LIST — owner, 2026-09-29, again: "one-time voice, loading every
+    /// time". The pill that started this lived only in the SwiftUI fallback bubble; the chat draws
+    /// the UIKit pill (`MessageRowModelBuilder.viewOncePill`), so the fetch never began until the
+    /// page opened. The builder calls this now. Idempotent per id.
+    static func start(id: String, audioUrl: String?) {
+        guard tasks[id] == nil, let s = audioUrl, let url = URL(string: s) else { return }
+        tasks[id] = Task { try? await MediaSession.shared.data(from: url).0 }
     }
 
     /// Hands over the prefetch (finished or still running) and forgets it.
@@ -988,8 +994,8 @@ enum OneTimeVoicePrefetch {
 // MARK: - One-time voice page
 
 // The room where the one listen happens — his order, the reference's model, the view-once photo's
-// architecture: while this page is up the note plays and replays as often as wanted; leaving the
-// page is what burns it (ThreadView's cover marks consumption on dismiss). The decrypted bytes
+// architecture: the note plays ONCE (no replay, no seeking back) and the page closes when it ends
+// (owner, 2026-09-29, reversing "replay freely in the room"); leaving the page is what burns it (ThreadView's cover marks consumption on dismiss). The decrypted bytes
 // live in one tmp file owned by this page and are shredded on the way out — never AudioCache.
 // Playback is a private AVAudioPlayer, not the shared engine: the engine outlives screens by
 // design, and a note that must die with its screen is the one thing it must never hold.
@@ -1105,7 +1111,10 @@ struct OneTimeVoicePage: View {
 
     private func seek(_ pct: Double) {
         guard let p = player, p.duration > 0 else { return }
-        p.currentTime = p.duration * max(0, min(1, pct))
+        // Forward only: dragging back would be a second listen (owner, 2026-09-29, "once").
+        let target = p.duration * max(0, min(1, pct))
+        guard target > p.currentTime else { return }
+        p.currentTime = target
         progress = p.currentTime / p.duration
     }
 
@@ -1132,7 +1141,7 @@ struct OneTimeVoicePage: View {
     private func toggle() {
         guard let p = player else { return }
         if playing { p.pause(); playing = false; return }
-        if progress >= 0.999 { p.currentTime = 0; progress = 0 }   // replay from the top
+        guard progress < 0.999 else { return }   // one listen: no replay (the page closes at the end)
         p.play(); playing = true
         startTicker()
     }
@@ -1178,10 +1187,14 @@ struct OneTimeVoicePage: View {
                 if p.isPlaying {
                     progress = p.duration > 0 ? p.currentTime / p.duration : 0
                 } else if playing {
-                    // Ran to the end: park at the start, ready for a free replay in this room.
+                    // ⛔ RAN TO THE END: THE ROOM CLOSES — owner, 2026-09-29: "the user can listen many
+                    // times; when the voice is complete, close the page automatically, that is what
+                    // once means". Leaving the page is what burns the note (the cover marks it on
+                    // dismiss), so the one listen ends the listen.
                     playing = false
                     progress = 1
                     ticker?.invalidate(); ticker = nil
+                    dismiss()
                 }
             }
         }

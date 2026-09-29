@@ -474,6 +474,11 @@ enum MessageRowModelBuilder {
         let voice = m.isAudio
         let spent = !isMe && ViewedOnce.contains(m.id)
         if voice {
+            // Fetch the sealed bytes while the pill is on screen, so opening only decrypts.
+            if !isMe, !spent, m.sendState == nil {
+                let id = m.id, url = m.audioUrl
+                Task { @MainActor in OneTimeVoicePrefetch.start(id: id, audioUrl: url) }
+            }
             return BubbleBody.PillBody(
                 symbol: spent ? "circle.slash" : "1.circle",
                 label: spent ? "Played" : "Voice message",
