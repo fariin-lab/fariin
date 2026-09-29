@@ -52,6 +52,9 @@ final class ProfileStore {
         if let url = me?.photoUrl, url.hasPrefix("https://"), url.contains("profiles%2F") {
             Task { await self.republishPhoto() }
         }
+        // 2026-09-29: photos uploaded before the audience label existed get it now (see
+        // `photoAudienceTag`). "checked" until the block list has loaded; its load corrects it.
+        Task { await self.syncPhotoAudienceTag() }
     }
 
     /// BRING MY OWN PRIVACY SETTINGS BACK WITH ME (owner 2026-08-04: "after I close the app and sign
@@ -565,8 +568,46 @@ final class ProfileStore {
     private func putJPEG(_ data: Data, path: String) async throws -> String {
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = "image/jpeg"
+        meta.customMetadata = [Self.audienceKey: await photoAudienceTag()]
         _ = try await ref.putDataAsync(data, metadata: meta)
         return ProfilePhotoURLProtocol.reference(path: path, version: Self.nowMs())
+    }
+
+    // MARK: - The photo file's own audience label
+
+    /// ⛔ THE FILE SAYS WHETHER EVERYONE MAY SEE IT — owner, 2026-09-29: "people I chat with can't
+    /// see my profile picture", on a fresh account with the photo set to Everyone. Since 2026-09-25
+    /// every read of `profiles/…` asked Firestore from inside the Storage rules (`canSeePhoto`), and
+    /// that lookup does not work in this project: this rules file has recorded `firestore.get` as
+    /// "unreliable in this project" since August, the Storage agent lacked its role until today, and
+    /// with the role granted and the rules re-released it still refused. Only the owner, whose check
+    /// needs no lookup, could see any photo set since.
+    ///
+    /// So the answer for the common case travels ON THE FILE: `audience = everyone` when my photo is
+    /// Everyone, my Hide From list is empty and I have blocked nobody, which the rules read with no
+    /// lookup at all. Anything narrower is tagged `checked` and still goes through `canSeePhoto`, so
+    /// a restricted photo is never opened by this. Kept current by `syncPhotoAudienceTag`, which
+    /// every change of the three inputs calls.
+    static let audienceKey = "audience"
+
+    func photoAudienceTag() async -> String {
+        let everyoneAndNoHides = await PhotoPrivacy.shared.publishesCover()
+        let noBlocks = BlockList.shared.isLoaded && BlockList.shared.entries.isEmpty
+        return everyoneAndNoHides && noBlocks ? "everyone" : "checked"
+    }
+
+    /// Re-labels my photo files when the label is out of date. Metadata only, never the bytes.
+    func syncPhotoAudienceTag() async {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let tag = await photoAudienceTag()
+        for path in ["profiles/\(uid).jpg", "profiles/\(uid)-poster.jpg"] {
+            let ref = Storage.storage().reference().child(path)
+            guard let current = try? await ref.getMetadata() else { continue }   // no such file
+            guard current.customMetadata?[Self.audienceKey] != tag else { continue }
+            let update = StorageMetadata()
+            update.customMetadata = [Self.audienceKey: tag]
+            _ = try? await ref.updateMetadata(update)
+        }
     }
 
     static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
@@ -823,6 +864,8 @@ final class ProfileStore {
     /// or write, and the photo stayed "hidden" for them. Three tries, 2s and 6s apart. A photo that
     /// is genuinely not there is an answer, not a failure, and ends it.
     func republishPhoto() async {
+        // Every photo-audience or Hide From change comes through here: the file's label follows.
+        defer { Task { await self.syncPhotoAudienceTag() } }
         for delay in [0.0, 2.0, 6.0] {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             if await republishPhotoOnce() { return }

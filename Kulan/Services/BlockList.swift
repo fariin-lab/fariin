@@ -243,6 +243,9 @@ final class BlockList {
         version &+= 1
         ConversationsRepository.shared.blockListChanged()
         NotificationCenter.default.post(name: Self.didChange, object: nil)
+        // My photo file's audience label depends on whether I block anybody (2026-09-29, see
+        // `ProfileStore.photoAudienceTag`): a first block turns "everyone" into "checked" at once.
+        if isLoaded { Task { await ProfileStore.shared.syncPhotoAudienceTag() } }
     }
 
     // MARK: - Blocking

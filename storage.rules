@@ -30,8 +30,18 @@ service firebase.storage {
       // download URL carries a token that skips these rules entirely. Profile photos are now named
       // `fariin-photo://profiles/<file>?v=…` and fetched with the signed-in Storage SDK (see
       // `ProfilePhotoURLProtocol`), and the old tokens were revoked by the one-time migration.
+      // ⛔ 2026-09-29, owner: "people I chat with can't see my profile picture" (photo set to
+      // Everyone). The Firestore lookups in `canSeePhoto` fail in this project for every viewer but
+      // the owner, even with the Storage agent's Firestore role granted. A photo whose owner is on
+      // Everyone, hides it from nobody and blocks nobody is labelled `audience: everyone` ON THE FILE
+      // by the app (`ProfileStore.photoAudienceTag`), and that label is read here with no lookup.
+      // Any other photo is labelled `checked` and goes through `canSeePhoto` exactly as before, so
+      // no restricted photo is opened by this line. Only the owner can write the label (the write
+      // rule below ties the file to its owner).
       allow read: if request.auth != null
-        && (file.matches('group_.*') || canSeePhoto(file.split('[-.]')[0]));
+        && (file.matches('group_.*')
+            || (resource != null && resource.metadata.get('audience', '') == 'everyone')
+            || canSeePhoto(file.split('[-.]')[0]));
       // ⚠️ `file == uid + '.jpg'` ON THE WRITE, and it was missing. The DELETE rule below has always
       // had it; the write rule checked only that you were signed in, the file was under 8 MB, and it
       // was an image. Nothing tied the file to the person uploading it.
