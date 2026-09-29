@@ -141,3 +141,16 @@ jobs:
             PLEASE TEST: long-press and double-tap the Review Devices message; long-press a photo and let go.
 
         run: fastlane beta
+
+      # ⛔ KEEP THE SYMBOLS — 2026-09-29: build 797 crashed on the owner's phone and the report
+      # could not be read. The archive makes a dSYM, the export is told not to send it to Apple
+      # (`uploadSymbols: false`, see the Fastfile for why), and the runner threw it away, so nothing
+      # anywhere could turn the crash's addresses back into function names. Kept here per build.
+      - name: Keep the dSYM for crash reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dSYM-${{ github.sha }}
+          path: "**/*.dSYM.zip"
+          if-no-files-found: warn
+          retention-days: 90
