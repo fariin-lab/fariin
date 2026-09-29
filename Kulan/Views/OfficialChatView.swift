@@ -278,7 +278,12 @@ struct OfficialChatView: View {
     /// fixing a typo has to reach a phone that already has the old words on screen.
     private func signature(_ a: Announcement) -> String {
         // `hasAppStoreUrl`: the Update Link arriving shows the hidden "Update Now" (D-admin-update).
-        "\(a.title.count)|\(a.body.count)|\(store.state.reactions[a.id] ?? "")|\(selecting)|\(wasSelecting)|\(selectedIds.contains(a.id))|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)|\(searching ? searchQuery : "")"
+        // ⛔ `dark` AND THE WALLPAPER — owner, 2026-09-29: "switch light/dark and the Fariin posts do
+        // not change until I leave and come back". The list re-renders a row only when its
+        // signature changes, and nothing here changed with the appearance, so every post kept the
+        // colours it was drawn in (a light card with white text). ThreadView keys its rows on the
+        // same two for the same reason.
+        "\(dark)|\(WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid))|\(a.title.count)|\(a.body.count)|\(store.state.reactions[a.id] ?? "")|\(selecting)|\(wasSelecting)|\(selectedIds.contains(a.id))|\(a.mediaUrl ?? "")|\(a.buttons.count)|\(a.editedAt?.timeIntervalSince1970 ?? 0)|\(OfficialConfig.shared.hasAppStoreUrl)|\(searching ? searchQuery : "")"
     }
 
     private static let cal = Calendar.current
