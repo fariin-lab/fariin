@@ -339,7 +339,7 @@ struct DevicesView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "checkmark.shield.fill")
                                 .font(.system(size: 22))
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.blue)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("No other devices").font(.subheadline.weight(.semibold))
                                 Text("Only this device is signed in to your account.")
@@ -495,8 +495,8 @@ struct DevicesView: View {
         let text = subtitle(s)
         if text == "Active now" {
             HStack(spacing: 5) {
-                Circle().fill(Color.green).frame(width: 7, height: 7)
-                Text(text).font(.caption.weight(.medium)).foregroundStyle(.green)
+                Circle().fill(Color.blue).frame(width: 7, height: 7)
+                Text(text).font(.caption.weight(.medium)).foregroundStyle(.blue)
             }
         } else {
             Text(text).font(.caption).foregroundStyle(.secondary)

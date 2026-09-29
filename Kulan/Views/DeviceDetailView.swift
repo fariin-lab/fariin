@@ -27,9 +27,9 @@ struct DeviceDetailView: View {
                     Text(session.displayName).font(.title2.weight(.bold))
                     if isActive {
                         HStack(spacing: 5) {
-                            Circle().fill(Color.green).frame(width: 7, height: 7)
+                            Circle().fill(Color.blue).frame(width: 7, height: 7)
                             Text(session.isThisDevice ? "This device · Active now" : "Active now")
-                                .font(.subheadline.weight(.medium)).foregroundStyle(.green)
+                                .font(.subheadline.weight(.medium)).foregroundStyle(.blue)
                         }
                     } else {
                         Text("Last active \(session.lastSeenAt.formatted(.relative(presentation: .named)))")
@@ -110,14 +110,14 @@ struct DeviceDetailView: View {
     }
 }
 
-/// The device's picture: green for the phone in your hand, the system's neutral grey for the rest,
+/// The device's picture: blue for the phone in your hand, the system's neutral grey for the rest,
 /// so "which one am I" is answered by colour before any text is read.
 struct DeviceTile: View {
     let session: DeviceSession
     let size: CGFloat
 
     var body: some View {
-        let colour: Color = session.isThisDevice ? .green : Color(.systemGray)
+        let colour: Color = session.isThisDevice ? .blue : Color(.systemGray)
         Image(systemName: session.isPad ? "ipad" : "iphone")
             .font(.system(size: size * 0.5, weight: .medium))
             .foregroundStyle(.white)
@@ -125,6 +125,8 @@ struct DeviceTile: View {
             .background(
                 LinearGradient(colors: [colour.opacity(0.95), colour.opacity(0.7)],
                                startPoint: .top, endPoint: .bottom),
-                in: RoundedRectangle(cornerRadius: size * 0.23, style: .continuous))
+                // ⛔ ROUND AND BLUE — owner, 2026-09-29: "green is not my app's colour, use blue; make
+                // the icons circles". This device is the app's blue; the others stay system grey.
+                in: Circle())
     }
 }
