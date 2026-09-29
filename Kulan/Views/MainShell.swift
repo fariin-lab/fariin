@@ -3387,18 +3387,24 @@ private struct StoryAvatarTap: ViewModifier {
 /// background, so it reads as a notch in the photo in both appearances; the fill is one step up from
 /// the background in dark (the reference's dark grey disc) and white in light.
 struct DisappearingAvatarBadge: View {
-    static let side: CGFloat = 22
+    static let side: CGFloat = 24
+    /// How far the badge hangs past the photo's circle at the lower right (the call site's offset).
+    static let overhang: CGFloat = 5
 
     var body: some View {
-        // ⛔ BLACK AND WHITE, NOT GREY — owner, 2026-09-29, on 803: "light mode: white badge, black
-        // icon; dark mode: black badge, white icon", and "the icon is small, a bit bigger, badge the
-        // same". `.label` on `.systemBackground` is exactly that pair in both appearances.
+        // ⛔ owner, 2026-09-29, on 803: "light mode: white badge, black icon; dark mode: white icon",
+        // and "the icon a bit bigger". Then, with the reference beside ours: "make it exactly like
+        // this, don't change my icon" — the badge hangs past the photo's edge, and in dark mode the
+        // disc is a dark grey inside a black ring. A black disc on the black page swallowed the part
+        // that hangs over, which is why ours read as tucked inside. The icon is unchanged.
         Image(systemName: "timer")
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(Color(uiColor: .label))
             .frame(width: Self.side, height: Self.side)
-            .background(Circle().fill(Color(uiColor: .systemBackground)))
-            .padding(2)
+            .background(Circle().fill(Color(uiColor: UIColor { t in
+                t.userInterfaceStyle == .dark ? .secondarySystemBackground : .systemBackground
+            })))
+            .padding(2.5)
             .background(Circle().fill(Color(uiColor: .systemBackground)))
             .accessibilityLabel("Disappearing messages on")
     }
@@ -3957,7 +3963,7 @@ struct ChatRow: View, Equatable {
                 // reference's list: a small round badge at the photo's lower right, cut out of the
                 // photo by a ring of the page colour. Drawn after the story ring so it sits on top.
                 .overlay(alignment: .bottomTrailing) {
-                    if conv.disappearSeconds > 0 { DisappearingAvatarBadge().offset(x: 3, y: 3) }
+                    if conv.disappearSeconds > 0 { DisappearingAvatarBadge().offset(x: DisappearingAvatarBadge.overhang, y: DisappearingAvatarBadge.overhang) }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
                 .modifier(StoryAvatarTap(active: !storySeen.isEmpty && onStoryTap != nil) { onStoryTap?() })
