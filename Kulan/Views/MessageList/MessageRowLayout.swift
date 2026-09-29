@@ -1805,25 +1805,29 @@ enum MessageRowLayout {
         let pad: CGFloat = 12, gap: CGFloat = 10
         let labelAttr = NSAttributedString(string: l.label, attributes: [
             .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: textColor])
-        let pinW: CGFloat = 22, chevW: CGFloat = 14
+        // ⛔ ONE ROW: PIN · PLACE · TIME — owner, 2026-09-29, two location bubbles circled: the time
+        // on a row of its own under the place left an empty band beside it. The time now ends the
+        // place's own row where the chevron was (the whole card is the tap, so the chevron was
+        // only a hint), and the bubble loses that second row.
+        let pinW: CGFloat = 22
         let labelH = lineSizeOf(labelAttr).height
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
+        let metaSize = BubbleText.lineSize(metaAttr)
         let rowH = max(pinW, labelH)
         let rowTop = innerY + pad
-        let labelW = max(1, bubbleW - pad * 2 - pinW - gap - 6 - chevW)
+        let labelW = max(1, bubbleW - pad * 2 - pinW - gap - gap - metaSize.width)
         let plan = LocationPlan(
             map: map,
             pin: CGRect(x: pad, y: rowTop + (rowH - pinW) / 2, width: pinW, height: pinW),
             label: CGRect(x: pad + pinW + gap, y: rowTop + (rowH - labelH) / 2,
                           width: labelW, height: labelH),
             labelAttr: labelAttr,
-            chevron: CGRect(x: bubbleW - pad - chevW, y: rowTop + (rowH - chevW) / 2,
-                            width: chevW, height: chevW))
-
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
-        let metaSize = BubbleText.lineSize(metaAttr)
-        let metaRect = CGRect(x: bubbleW - pad - metaSize.width, y: rowTop + rowH + 8,
+            chevron: .zero)
+        // On the row's baseline side, like a text bubble's footer on its last line.
+        let metaRect = CGRect(x: bubbleW - pad - metaSize.width,
+                              y: rowTop + rowH - metaSize.height - 1,
                               width: metaSize.width, height: metaSize.height)
-        innerY = metaRect.maxY + pad
+        innerY = rowTop + rowH + pad
 
         let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
                                 y: y, width: bubbleW, height: innerY)

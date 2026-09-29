@@ -1009,9 +1009,17 @@ struct AnnouncementRow: View {
     private var footer: some View {
         HStack(spacing: 4) {
             if let myReaction = shownReaction {
-                Text(myReaction)
-                    .font(.system(size: BubbleMetrics.reactionEmojiFont))
-                    .padding(.horizontal, BubbleMetrics.reactionChipInset)
+                // ⛔ WITH MY FACE, LIKE A CHAT'S CHIP — owner, 2026-09-29: "where's my avatar like
+                // normal chat". `ReactionChipView`'s numbers: emoji at the lead 10, a 24pt face at
+                // the trailing end 6 from the edge, 6 between.
+                HStack(spacing: BubbleMetrics.reactionFaceGap) {
+                    Text(myReaction).font(.system(size: BubbleMetrics.reactionEmojiFont))
+                    AvatarView(name: ProfileStore.shared.me?.name ?? "You",
+                               photoUrl: ProfileStore.shared.me?.photoUrl,
+                               size: BubbleMetrics.reactionFace)
+                }
+                    .padding(.leading, BubbleMetrics.reactionFaceLead)
+                    .padding(.trailing, BubbleMetrics.reactionFaceTrail)
                     .frame(height: BubbleMetrics.reactionChipHeight)
                     .background(Capsule().fill(Color(BubblePalette.accent).opacity(0.18)))
                     .contentShape(Capsule())

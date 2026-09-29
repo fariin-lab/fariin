@@ -214,6 +214,10 @@ struct ForwardPicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // ⛔ TIGHTER ROWS — owner, 2026-09-29, the lines drawn beside each row: "chats have more
+        // space". The list's own top/bottom inset on a two-line row made it ~74pt; the reference's
+        // is ~51. Five above and below, 16 at the sides as before.
+        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
         // The separator starts at the name, not under the photo (the reference's rows).
         .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
     }

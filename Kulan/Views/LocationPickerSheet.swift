@@ -366,6 +366,10 @@ struct LocationPickerSheet: View {
                         .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .liquidGlass(Capsule(), interactive: true, tint: Theme.defaultBubble(false))
+                        // ⛔ THE WHOLE CAPSULE IS THE BUTTON — owner, 2026-09-29: "only works when I
+                        // tap the text". A plain-style button over a glass fill hit-tests only the
+                        // label's drawn pixels; the shape makes the full 50pt capsule answer.
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(sendCoordinate == nil)
