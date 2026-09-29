@@ -555,6 +555,14 @@ enum MessageRowLayout {
                                       senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
                                       forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
                                       y: rectP.maxY)
+            // ⛔ A REACTED PILL IS A BUBBLE, NOT A TALL CAPSULE — owner, 2026-09-29, a one-time
+            // voice with a heart: "the bubble does not look like my bubble design". The reactions
+            // row made the pill taller and it stayed a capsule, so its ends became half of that
+            // height. Grown by its decorations, it takes the chat's own bubble corners.
+            if outP.bubble.height > rectP.height + 0.5 {
+                outP.isCapsule = false
+                outP.radii = b.radii
+            }
             return BubbleResult(plan: outP, totalHeight: bottomP)
         case .media(let m):
             // A media bubble is laid out entirely differently — the picture is flush to the
