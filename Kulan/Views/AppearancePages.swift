@@ -581,8 +581,38 @@ struct WallpaperPreviewScreen: View {
             .font(.system(size: 15))
             .foregroundStyle(mine ? .white : .primary)
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(mine ? myBubbleFill : AnyShapeStyle(.regularMaterial),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background {
+                if mine { myBubbleSurface } else {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.regularMaterial)
+                }
+            }
+    }
+
+    /// ⛔ THE GRADIENT IS THE SCREEN'S, THE BUBBLE SHOWS ITS SLICE — owner, 2026-09-29, the preview's
+    /// "Nice, applying it" drawn red-to-purple inside one small bubble: "not showing the real chat
+    /// colour". A chat paints a gradient chat colour across the whole screen and each bubble shows
+    /// the part behind it (`BubbleSurfaceView.positionGradient`), so a bubble near the bottom is
+    /// the bottom colour. This does the same: the gradient is laid over the full screen at the
+    /// chat's own angle, offset to where this bubble sits, and clipped to it.
+    @ViewBuilder private var myBubbleSurface: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        if let c = ChatColorStore.shared.globalChosenColor ?? wallpaper.pairedColor, c.isGradient {
+            GeometryReader { g in
+                let f = g.frame(in: .global)
+                let screen = UIScreen.main.bounds
+                let a = (ChatColorSpec.angleDegrees(forStops: c.colors) - 180) / 180 * Double.pi
+                let v = CGPoint(x: sin(a), y: -cos(a))
+                let k = 0.5 / max(abs(v.x), abs(v.y))
+                LinearGradient(colors: c.colors.map { Color(hex: $0) },
+                               startPoint: UnitPoint(x: 0.5 + v.x * k, y: 0.5 + v.y * k),
+                               endPoint: UnitPoint(x: 0.5 - v.x * k, y: 0.5 - v.y * k))
+                    .frame(width: screen.width, height: screen.height)
+                    .offset(x: -f.minX, y: -f.minY)
+            }
+            .clipShape(shape)
+        } else {
+            shape.fill(myBubbleFill)
+        }
     }
 
     /// ⛔ THE COLOUR THE CHATS WILL ACTUALLY GET — owner, 2026-09-29: "I selected Auto, but when I
