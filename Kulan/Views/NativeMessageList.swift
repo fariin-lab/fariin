@@ -4309,7 +4309,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // between the tap and the viewer. The old gate excluded media from this path entirely,
             // so the migration silently re-armed it on every picture, video, album and file: slow
             // opens, and a double tap that BOTH opened the viewer and toggled a reaction.
-            if case .bubble(let row)? = rowModels[id]?.content, row.opensOnTap { return false }
+            // …except ON THE CAPTION of a photo or album (owner, 2026-09-29): the caption is text,
+            // opens nothing, and reacts on a double tap like every other text message.
+            if case .bubble(let row)? = rowModels[id]?.content, row.opensOnTap {
+                return cell.hitsMediaCaption(loc, in: collectionView)
+            }
             let p = collectionView.convert(loc, to: cell.previewBubble)
             return cell.previewBubble.bounds.contains(p)
         }

@@ -1515,6 +1515,16 @@ final class MessageRowView: UIView {
         return media.media.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
     }
 
+    /// The caption block of a photo, video or album bubble (never the picture). A double tap there
+    /// reacts like on any text message; on the picture it stays off so a single tap opens at once
+    /// (owner, 2026-09-29: "image with caption, double tap on the caption does not react").
+    func hitsMediaCaption(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body else { return false }
+        let caption = b.mediaPlan?.caption ?? b.albumPlan?.caption
+        guard let c = caption else { return false }
+        return c.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
+    }
+
     /// The map or its label — the whole card opens Maps.
     func hitsLocation(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, b.locationPlan != nil else { return false }

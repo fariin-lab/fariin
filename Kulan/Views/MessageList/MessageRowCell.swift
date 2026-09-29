@@ -50,6 +50,12 @@ final class MessageRowCell: UICollectionViewCell {
     /// bubble still carrying the frame of the last row this cell drew.
     var previewBubble: UIView { rowView.liftTarget }
 
+    /// Is this point (in `view`'s coordinates) on a media bubble's caption? See
+    /// `MessageRowView.hitsMediaCaption`.
+    func hitsMediaCaption(_ point: CGPoint, in view: UIView) -> Bool {
+        rowView.hitsMediaCaption(view.convert(point, to: rowView))
+    }
+
     /// How much this row's bubble just grew (or shrank, negative) from a reaction, read once. The list
     /// uses it to move the rest of the conversation along with the bubble.
     func takeReactionGrowth() -> CGFloat { rowView.takeReactionGrowth() }
