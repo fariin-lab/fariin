@@ -4740,6 +4740,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // special case for exactly that. `keyboardIsUp` would still read true here, because the guide
         // travels with the keys' animation, so this is set flatly rather than asked.
         overlay.presentsAboveKeyboard = keysUp   // (the note above is the 08-27 era; see the top of this block)
+        // The keys' top in window coordinates, so the menu never lays its list under them (owner,
+        // 2026-09-29). `keyboardTracker` is a zero-height view pinned to the keyboard guide's top.
+        overlay.keyboardTop = keysUp ? view.convert(keyboardTracker.frame, to: nil).minY : nil
         overlay.present(in: window, startAtSqueeze: true)
     }
 

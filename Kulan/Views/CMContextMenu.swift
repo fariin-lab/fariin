@@ -329,6 +329,9 @@ final class CMOverlay: UIView {
     /// being fixed. A window only needs `isHidden = false` to be shown and to receive touches; key
     /// status governs where keyboard INPUT is routed, and we want that left exactly where it is.
     var presentsAboveKeyboard = false
+    /// The keyboard's top in window coordinates while the keys are up (nil when they are down).
+    /// `computeFrames` keeps the stack above it when the stack would otherwise reach it.
+    var keyboardTop: CGFloat?
 
     /// The window we made, if we made one. Held until teardown; see `removeFromSuperview`.
     private var hostWindow: UIWindow?
@@ -694,7 +697,7 @@ final class CMOverlay: UIView {
     /// the keys is `presentsAboveKeyboard` — a window problem, solved in a window, not here.
     private func computeFrames(in bounds: CGRect) -> (preview: CGRect, bar: CGRect?, menu: CGRect) {
         let pad: CGFloat = 8
-        let content = bounds.inset(by: UIEdgeInsets(
+        var content = bounds.inset(by: UIEdgeInsets(
             top: max(safeAreaInsets.top, pad), left: max(safeAreaInsets.left, pad),
             bottom: max(safeAreaInsets.bottom, pad),
             right: max(safeAreaInsets.right, pad)))
@@ -719,6 +722,17 @@ final class CMOverlay: UIView {
 
         var preview = sourceFrame
         var s = stack(for: preview)
+
+        // ⛔ THE KEYS ARE THE FLOOR, BUT ONLY WHEN THE MENU WOULD REACH THEM — owner, 2026-09-29,
+        // keyboard up, long-press the LAST message: the action list was drawn under the keyboard.
+        // The whole-screen rule above still holds for everything that clears the keys (a message
+        // higher up opens exactly as with the keyboard down, his "no squeeze" ruling). A stack that
+        // would run into the keyboard takes the keyboard's top as its bottom limit instead, so the
+        // passes below lift the preview and bar until the list sits above the keys — the reference
+        // app's model (actions limited to the height above the input, the message shifted up).
+        if let kt = keyboardTop, s.bottom > kt - pad {
+            content.size.height = max(0, min(content.maxY, kt - pad) - content.minY)
+        }
 
         // Shift up if the group runs past the bottom, then down if past the top.
         if s.bottom > content.maxY {
