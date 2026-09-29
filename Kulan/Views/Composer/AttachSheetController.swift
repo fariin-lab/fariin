@@ -381,10 +381,35 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     }
 
     /// The panel asked for the full height (caption field focused). Their 0.5s keyboard curve.
+    /// ⛔ AN ANIMATED RESIZE KEEPS THE PANEL ON THE SHEET'S BOTTOM EDGE — owner, 2026-09-29: a fast
+    /// swipe on the full sheet threw the attach bar upward and left a black (dark) or white (light)
+    /// band under it until the snap finished; a slow drag was fine.
+    ///
+    /// A drag resizes frame by frame, so SwiftUI follows. A snap puts `setTop` inside an animator:
+    /// the shell animates, but the hosted SwiftUI panel lays out ONCE at the final size, and it
+    /// sat at the shell's top edge, which is still travelling. For the whole snap the panel ended
+    /// short of the shell's bottom (the bar too high) and the shell's own background showed below.
+    ///
+    /// Between rest and full the sheet's BOTTOM never moves (`frame(forTop:)`), so the panel is
+    /// laid out at its final size now, placed so its bottom sits on the shell's bottom, and slides
+    /// to 0 inside the same animation as the shell (`setTop` → `layoutContent`). Its bottom, and
+    /// the bar on it, stay put; its top travels with the sheet's top.
+    private func anchorContentBottom(toward target: CGFloat) {
+        let old = shell.bounds.height
+        let size = frame(forTop: target).size
+        guard abs(old - size.height) > 0.5 else { return }
+        UIView.performWithoutAnimation {
+            layoutContent(size: size)
+            content.frame.origin.y = old - size.height
+            host.view.layoutIfNeeded()
+        }
+    }
+
     func expand() {
         guard phase == .open, !isExpanded, scroll == nil else { return }
         stopAll()
         isExpanded = true
+        anchorContentBottom(toward: expandedTop)
         let a = UIViewPropertyAnimator(duration: 0.5, timingParameters: UICubicTimingParameters(
             controlPoint1: CGPoint(x: 0.23, y: 1), controlPoint2: CGPoint(x: 0.32, y: 1)))
         a.addAnimations { [self] in setTop(expandedTop) }
@@ -627,6 +652,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         isExpanded = expanded
         let target = expanded ? expandedTop : compactTop
         let distance = abs(target - sheetTop)
+        anchorContentBottom(toward: target)
         let a: UIViewPropertyAnimator
         if stay || distance < 0.5 {
             a = easeInOut(0.3) { [self] in setTop(target) }
