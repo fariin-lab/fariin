@@ -898,7 +898,7 @@ struct AnnouncementRow: View {
     ///   post         699px wide = 0.76 of the screen, 16pt from the left edge, every post the
     ///                same width (a channel's column, not a bubble hugging its words)
     ///   corners      ~20pt, all four
-    ///   header       the channel's name and tick on their own row at the top, 17pt semibold
+    ///   header       none (2026-09-29, his word: the chat header already names the channel)
     ///   picture      edge to edge under the header, its own shape, never inset
     ///   words        12pt in from the sides; title semibold directly over the body, both 17pt
     ///   time         bottom-right under the words
@@ -942,15 +942,9 @@ struct AnnouncementRow: View {
 
     private var post: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 5) {
-                Text(OfficialChannel.name).font(.system(size: 17, weight: .semibold))
-                VerifiedTick(size: 16)
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, Self.side)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
-
+            // ⛔ NO NAME ROW — owner, 2026-09-29, build 797: "don't show the Fariin name in the
+            // bubble". The header already says who this chat is. A picture now starts at the
+            // post's top edge; words without one start 10pt in.
             if let localImage {
                 AnnouncementImage(url: "", width: announcement.mediaWidth,
                                   height: announcement.mediaHeight, local: localImage, tallest: 1.25)
@@ -978,7 +972,7 @@ struct AnnouncementRow: View {
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, Self.side)
-            .padding(.top, announcement.mediaUrl != nil || localImage != nil ? 8 : 0)
+            .padding(.top, announcement.mediaUrl != nil || localImage != nil ? 8 : 10)
 
             footer
                 .padding(.horizontal, Self.side)
@@ -1005,8 +999,7 @@ struct AnnouncementRow: View {
     /// ⛔ READ LIVE FROM THE STORE IN THE REAL CHAT — owner, 2026-09-29, build 796: "when I react the
     /// badge appears late". The chip used to wait for the list to notice the row's signature change,
     /// reconfigure the hosted row and re-measure it (the chip made the footer taller). This body
-    /// observes the store itself, so the chip draws in the same frame as the tap; and the footer
-    /// always keeps the chip's height in the real chat, so a reaction never resizes the post.
+    /// observes the store itself, so the chip draws in the same frame as the tap.
     /// The previews pass `myReaction` and have no store state of their own.
     private var shownReaction: String? {
         menuId != nil ? OfficialChannelStore.shared.state.reactions[announcement.id] : myReaction
@@ -1032,7 +1025,8 @@ struct AnnouncementRow: View {
                 .font(Font(BubbleMetrics.metaFont))
                 .foregroundStyle(.secondary)
         }
-        .frame(minHeight: menuId != nil ? BubbleMetrics.reactionChipHeight : nil, alignment: .bottom)
+        // (No reserved chip height: owner, 2026-09-29, build 797, "the bubble always has an empty
+        // area, with or without a reaction". The chip still draws live from the store.)
     }
 
     private var buttonStack: some View {

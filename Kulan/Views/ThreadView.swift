@@ -3990,7 +3990,11 @@ struct ThreadView: View {
     /// editable inside the window; the server holds the same window (firestore.rules
     /// `editAllowedNow`, plus a small clock margin) and the same mute.
     private func canEdit(_ m: Message) -> Bool {
-        m.authorId == me && !iAmMuted && !m.deleted && !m.isAudio && !m.isCall && !m.isSystem
+        // ⛔ NEVER A FORWARDED MESSAGE — owner, 2026-09-29, Edit offered on a forwarded Fariin post:
+        // "never edit a forwarded message". Its words are somebody else's; the copy is mine to
+        // send or delete, not to rewrite. (A forward back into its own chat is a plain message,
+        // `ChatService.isForward`, and stays editable like any other of mine.)
+        m.authorId == me && !m.forwarded && !iAmMuted && !m.deleted && !m.isAudio && !m.isCall && !m.isSystem
             && !m.isFeatureMarker && !m.viewOnce && !m.text.isEmpty && m.sendState == nil
             && Date().timeIntervalSince(m.createdAt) < Limits.editWindowSeconds
     }
