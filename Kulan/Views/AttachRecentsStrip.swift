@@ -23,6 +23,16 @@ import UIKit
         o.isNetworkAccessAllowed = true
         return o
     }()
+    /// ⛔ THE THUMBNAILS THIS SHEET HAS ALREADY DRAWN, kept in memory by asset id — owner, 2026-09-29,
+    /// pulling the full sheet down: rows of the grid went blank-white and filled in again. Resizing the
+    /// sheet makes SwiftUI rebuild the grid's cells, and a rebuilt `RecentThumb` starts with no image
+    /// and waits for the caching manager's callback (asynchronous even on a hit). A tile now draws
+    /// from here on its first frame; the callback still refreshes it.
+    // `nonisolated(unsafe)`: written from the Photos callback. NSCache is thread-safe on its own.
+    nonisolated(unsafe) static let drawn: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>(); c.countLimit = 400; return c
+    }()
+
     static func precache(_ list: [PHAsset]) {
         thumbs.startCachingImages(for: list, targetSize: thumbSize, contentMode: .aspectFill, options: thumbOptions)
     }
@@ -849,10 +859,12 @@ private struct RecentThumb: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
+                if let shown = image ?? RecentsCache.drawn.object(forKey: asset.localIdentifier as NSString) {
+                    Image(uiImage: shown).resizable().scaledToFill()
                 } else {
-                    Rectangle().fill(Color.secondary.opacity(0.12))
+                    // A visible grey, not 12% of the label colour: on the light sheet that read as
+                    // empty white (owner, 2026-09-29).
+                    Rectangle().fill(Color(.systemGray5))
                 }
             }
             // ⛔ SQUARE — owner, 2026-09-02. The 24pt radius is what made these read as cards; the
@@ -927,7 +939,10 @@ private struct RecentThumb: View {
             RecentsCache.thumbs.requestImage(for: asset,
                                              targetSize: RecentsCache.thumbSize,
                                              contentMode: .aspectFill, options: RecentsCache.thumbOptions) { img, _ in
-                if let img { image = img }
+                if let img {
+                    image = img
+                    RecentsCache.drawn.setObject(img, forKey: asset.localIdentifier as NSString)
+                }
             }
         }
     }
