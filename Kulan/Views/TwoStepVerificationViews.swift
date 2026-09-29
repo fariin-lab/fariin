@@ -247,6 +247,11 @@ struct DisableAdditionalPasswordView: View {
     @State private var error: String?
     @State private var recoveryCode = ""
     @State private var recoverySent = false
+    /// ⛔ owner, 2026-09-29: "turn off: no loading, the button does nothing", then two-step was still
+    /// on at his next sign-in. `disableAdditionalPassword` demands a fresh sign-in (`requireFresh`);
+    /// on a session older than that it refused, and this page had no way to sign in again, so the
+    /// tap ended in nothing. The same door every other account page already has (fix-all #203).
+    @State private var needsReauth = false
 
     var body: some View {
         Form {
@@ -254,6 +259,12 @@ struct DisableAdditionalPasswordView: View {
                 SecureField("Additional password", text: $password)
             } footer: {
                 Text("Enter your additional password to turn two-step verification off.")
+            }
+            if needsReauth {
+                SignInAgainSection {
+                    needsReauth = false; error = nil
+                    Task { await turnOff() }
+                }
             }
             Section {
                 Button("I forgot this password") { Task { await startRecovery() } }
@@ -283,15 +294,22 @@ struct DisableAdditionalPasswordView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Turn Off") { Task { await turnOff() } }
-                    .disabled(password.isEmpty || busy)
-                    .foregroundStyle(.red)
+                // A spinner in the button's place while the server works, so a tap always shows.
+                if busy {
+                    ProgressView()
+                } else {
+                    Button("Turn Off") { Task { await turnOff() } }
+                        .disabled(password.isEmpty)
+                        .foregroundStyle(.red)
+                }
             }
         }
+        .interactiveDismissDisabled(busy)
     }
 
     private func turnOff() async {
-        busy = true; error = nil
+        guard !busy else { return }
+        busy = true; error = nil; needsReauth = false
         defer { busy = false }
         do {
             let reply = try await AccountCall.run("disableAdditionalPassword", ["password": password])
@@ -303,7 +321,10 @@ struct DisableAdditionalPasswordView: View {
             }
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
             dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            needsReauth = AccountCall.Failure.isReauth(error)
+            self.error = error.localizedDescription
+        }
     }
 
     private func startRecovery() async {
