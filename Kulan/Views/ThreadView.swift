@@ -1580,6 +1580,12 @@ struct ThreadView: View {
                           // photo when the mirror has none of mine yet.
                           photoFor: { uid in
                               conversation?.photos[uid] ?? (uid == me ? ProfileStore.shared.me?.photoUrl : nil)
+                          },
+                          me: me,
+                          onRemoveMine: {
+                              let live = repo.items.first(where: { $0.id == m.id }) ?? m
+                              guard live.reactions[me] != nil, !live.deleted else { return }   // taking one back is always allowed
+                              sendReaction(messageId: live.id, emoji: nil, toAuthor: live.authorId)
                           })
         }
         // 2026-09-24 feature-audit: a message's earlier versions, in the Reactions sheet's style.
@@ -3267,6 +3273,11 @@ struct ThreadView: View {
     /// THE one answer to "can this message be reacted to", asked by the bar before it appears AND by
     /// the handler before it writes. Two places asking the same question separately is how the two
     /// drifted, and the drift only shows in the window where they can disagree.
+    static func sameEmoji(_ a: String?, _ b: String) -> Bool {
+        guard let a else { return false }
+        return a.replacingOccurrences(of: "\u{FE0F}", with: "") == b.replacingOccurrences(of: "\u{FE0F}", with: "")
+    }
+
     private func canReact(_ m: Message) -> Bool {
         m.sendState == nil && !iAmMuted && !m.isCall && !m.isSystem
             && !m.deleted && m.pinNotice == nil && !m.isUnsupportedFeature
@@ -3280,7 +3291,7 @@ struct ThreadView: View {
         guard canReact(m) else { return }
         // The user's chosen quick reaction, not a hard-coded heart (Settings > Appearance).
         let quick = QuickReaction.current
-        let emoji: String? = m.reactions[me] == quick ? nil : quick
+        let emoji: String? = Self.sameEmoji(m.reactions[me], quick) ? nil : quick
         sendReaction(messageId: m.id, emoji: emoji, toAuthor: m.authorId)
     }
 
@@ -5899,7 +5910,9 @@ struct ThreadView: View {
         // landed while it was up wrote onto the tombstone.
         let live = repo.items.first(where: { $0.id == m.id }) ?? m
         guard canReact(live) else { return }
-        let new = live.reactions[me] == emoji ? nil : emoji
+        // Same emoji with or without the U+FE0F presentation mark (an older ❤ against the bar's ❤️)
+        // is the same reaction, so the tap takes it back instead of re-sending it.
+        let new = Self.sameEmoji(live.reactions[me], emoji) ? nil : emoji
         sendReaction(messageId: live.id, emoji: new, toAuthor: live.authorId)
     }
 

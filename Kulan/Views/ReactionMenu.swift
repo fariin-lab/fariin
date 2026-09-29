@@ -162,6 +162,12 @@ struct ReactorsSheet: View {
     let nameFor: (String) -> String
     /// The reactor's photo url, for the round avatar in front of the name (owner, 2026-09-28).
     var photoFor: (String) -> String? = { _ in nil }
+    /// ⛔ MY ROW TAKES MY REACTION BACK — owner, 2026-09-29: reactions on older messages "sometimes
+    /// cannot be removed". Tapping the chip opens this list, and nothing in it could remove one; the
+    /// long-press bar was the only way. The reference app's list does it: my row reads "Tap to
+    /// remove". Same write as every other removal (`ThreadView.react`).
+    var me: String = ""
+    var onRemoveMine: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var selected: String?  // nil = All
 
@@ -215,13 +221,27 @@ struct ReactorsSheet: View {
                     .listRowSeparator(.hidden)
                 }
                 ForEach(rows, id: \.uid) { r in
+                    let mine = r.uid == me && onRemoveMine != nil
                     HStack(spacing: 12) {
                         // The same avatar and size the message info list uses for its people.
                         AvatarView(name: r.name, photoUrl: photoFor(r.uid), size: 40)
-                        Text(r.name).font(.body)
-                        VerifiedMark(uid: r.uid, size: 13)
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 4) {
+                                Text(r.name).font(.body)
+                                VerifiedMark(uid: r.uid, size: 13)
+                            }
+                            if mine {
+                                Text("Tap to remove").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         Text(r.emoji).font(.title3)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard mine else { return }
+                        onRemoveMine?()
+                        dismiss()
                     }
                 }
             }
