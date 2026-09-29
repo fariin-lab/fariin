@@ -4609,7 +4609,10 @@ struct ThreadView: View {
                     attachInAlbum = false
                     attachShowAlbums = true
                 } else if attachShowAlbums {
-                    attachAlbumsInstant = false   // Back from the list slides
+                    // Back from the album LIST to Recents: no slide either (owner, 2026-09-29, "on the
+                    // album list, Back with no animation; don't touch the other animations"). The
+                    // list ↔ Recents swap is instant both ways; a folder and Back from a folder slide.
+                    attachAlbumsInstant = true
                     attachShowAlbums = false
                 } else {
                     // ⛔ FROM RECENTS THE LIST JUST APPEARS — owner, 2026-09-29, twice: "first time,
