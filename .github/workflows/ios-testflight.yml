@@ -74,42 +74,30 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            LONG PRESS AND DOUBLE-TAP ON THE FARIIN MESSAGE WITH A BUTTON, PHOTOS NO LONGER OPEN AFTER A LONG PRESS.
+            FARIIN CHAT AS A CHANNEL, DISAPPEARING TIMER ICON ORDER, WALLPAPER BRIGHTNESS, NEW FORWARD SHEET, ONE-TIME VOICE PAGE.
+
+            FARIIN CHAT: posts are wide channel cards with "Fariin" and the tick on top, pictures edge to edge, buttons as full rows, and a round forward button beside each post. The last post sits where a message sits above the typing bar. Tap your reaction to see "Tap to remove". About reads "The only official chat from Fariin".
+
+            DISAPPEARING MESSAGES: the icon sits between the time and the tick, on every message sent while the timer is on, from the moment you send.
+
+            WALLPAPER: a brightness slider on the right of the preview; your bubble in the preview shows the Auto colour.
+
+            FORWARD: "Send to" with Frequently contacted and Recent chats; the Forwarding preview is gone.
+
+            ONE-TIME VOICE: opens straight to your voice bubble with its waveform, no loading.
+
+            REACTIONS: tap a reaction, then your own row, to remove it (older messages too).
+
+            ALL MEDIA: back and ••• follow light mode.
+
+            PLEASE TEST: open Fariin chat and scroll to the bottom; send in a disappearing chat; wallpaper preview slider then Apply; forward a message; open a one-time voice note; remove an old reaction; All Media in light mode.
+
+            EARLIER IN THIS ROUND (build 795): LONG PRESS ON THE FARIIN BUTTON MESSAGE, PHOTOS NO LONGER OPEN AFTER A LONG PRESS.
 
             FARIIN CHAT: long press and double-tap to react should work on the "Review Devices" message, the same as on the plain message.
 
             PHOTOS: long-pressing a photo and letting go no longer opens it.
 
             PLEASE TEST: long-press and double-tap the Review Devices message; long-press a photo and let go.
-
-            EARLIER IN THIS ROUND (build 794): ATTACH BAR STAYS, OFFICIAL CHAT LAST MESSAGE, LONG PRESS ON BUTTONS, DISAPPEARING ICON, ALL MEDIA BUTTONS.
-
-            ATTACH: the Camera/GIF/Files/Location bar no longer disappears when you tap the Album button or its back arrow. Scrolling right after opening the sheet moves the sheet, with no black band at the top or bottom.
-
-            OFFICIAL CHAT: the last message stops above the "Only Fariin can send messages" bar.
-
-            LONG PRESS: works on messages that have a button (for example "Review Devices").
-
-            DISAPPEARING MESSAGES: every message sent after you turn it on shows the timer icon beside the time (it used to show a small circle on only some). A reaction no longer runs into it.
-
-            ALSO: the time on photos and GIFs is centred in its pill; All Media's back and ••• buttons are light in light mode.
-
-            PLEASE TEST: tap Album and back in the attach sheet; open the sheet and scroll at once; long-press the Review Devices message; send messages in a disappearing chat and react to one; open All Media in light mode.
-
-            EARLIER IN THIS ROUND (build 793): NEW ATTACH SHEET, OFFICIAL CHAT FIXES, REACT WITH THE KEYBOARD UP, BLOCK NOTICES.
-
-            ATTACH: the + grows into the sheet and the sheet shrinks back into the + (the + stays centred). Tapping during the animation turns it around. The sheet floats with space on the sides and bottom, and pulling the photos down no longer shows a black gap. The Album button is a normal colour.
-
-            OFFICIAL CHAT: Search works inside the chat like a normal chat. Reactions use the normal chip. The last message no longer hides under the bottom bar. Mute and Search sit closer together, and About is one short line.
-
-            REACT WITH THE KEYBOARD UP: long-pressing a message keeps the keyboard open and the menu opens above it.
-
-            REACTION BAR: the swipe row holds 15 emojis; tap + for all the others.
-
-            BLOCK: "You blocked this person." and "You unblocked this person." show in the chat, only to you.
-
-            ALSO: the time on photos and GIFs is centred in its pill; the disappearing-message notice is no longer cut; All Media, Chat Key, Message Requests and Archive have a light top bar in light mode; the pin bar has the new pin icon.
-
-            PLEASE TEST: open and close the attach sheet many times, pull it up and down; with the keyboard up, long-press and react; block and unblock someone; search in the Fariin chat.
 
         run: fastlane beta
