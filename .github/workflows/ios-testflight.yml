@@ -74,13 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FARIIN CHAT AS A CHANNEL, DISAPPEARING TIMER ICON ORDER, WALLPAPER BRIGHTNESS, NEW FORWARD SHEET, ONE-TIME VOICE PAGE.
+            FARIIN SPACING, FARIIN REACTIONS, FARIIN MUTE MENU, WALLPAPER LIGHT/DARK, CHATS WITH A WALLPAPER IN LIGHT MODE.
+
+            FARIIN CHAT: the empty space over the "Only Fariin can send messages" bar is gone. Your reaction appears the moment you tap. Profile > Mute offers 1 hour, 8 hours, 1 day, 1 week and Always, and a timed mute ends by itself.
+
+            WALLPAPER PREVIEW: the slider is replaced by one button, top right: tap for dark, tap again for light. Your bubble shows the real chat colour.
+
+            CHATS WITH A WALLPAPER follow the phone's light or dark mode again.
+
+            PLEASE TEST: open Fariin and look at the bottom; react to a post; Profile > Mute > 1 hour; the wallpaper preview button; a chat with a wallpaper in light mode.
+
+            EARLIER IN THIS ROUND (build 796): FARIIN CHAT AS A CHANNEL, TIMER ICON ORDER, NEW FORWARD SHEET, ONE-TIME VOICE PAGE.
 
             FARIIN CHAT: posts are wide channel cards with "Fariin" and the tick on top, pictures edge to edge, buttons as full rows, and a round forward button beside each post. The last post sits where a message sits above the typing bar. Tap your reaction to see "Tap to remove". About reads "The only official chat from Fariin".
 
             DISAPPEARING MESSAGES: the icon sits between the time and the tick, on every message sent while the timer is on, from the moment you send.
-
-            WALLPAPER: a brightness slider on the right of the preview; your bubble in the preview shows the Auto colour.
 
             FORWARD: "Send to" with Frequently contacted and Recent chats; the Forwarding preview is gone.
 
