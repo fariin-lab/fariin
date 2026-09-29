@@ -104,29 +104,37 @@ struct AppearanceDiagonalHalf: Shape {
 ///   · Reset Chat Color — the Settings colour back to Auto; chats with their own keep it;
 ///   · Reset All Chat Colors — that, and every chat's own colour (the custom library stays).
 /// The two "All" resets ask first.
+/// ⛔ ONE PAGE, ITS OWN TWO — owner, 2026-09-29: "both pages show the same four; make it only":
+/// Set Wallpaper → Reset Wallpaper · Reset Wallpaper and Chat Color; Chat Color → Reset Chat Color ·
+/// Reset Chat Color and Wallpaper. The single reset is this page's Settings value (chats with their
+/// own keep it, as before); the pair resets both Settings values and asks first.
 struct AppearanceResetMenu: ViewModifier {
-    private enum Confirm: Identifiable { case allWallpapers, allColors; var id: Self { self } }
-    @State private var confirm: Confirm?
+    enum Page { case wallpaper, chatColor }
+    let page: Page
+    @State private var confirmBoth = false
+
+    private func resetWallpaper() { WallpaperStore.shared.applyToAllChats(.none) }
+    private func resetColor() { ChatColorStore.shared.applyToAllChats(nil) }
 
     func body(content: Content) -> some View {
         content
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Section {
-                            Button { WallpaperStore.shared.applyToAllChats(.none) } label: {
+                        switch page {
+                        case .wallpaper:
+                            Button { resetWallpaper() } label: {
                                 Label("Reset Wallpaper", systemImage: "photo")
                             }
-                            Button(role: .destructive) { confirm = .allWallpapers } label: {
-                                Label("Reset All Wallpapers", systemImage: "photo.stack")
+                            Button(role: .destructive) { confirmBoth = true } label: {
+                                Label("Reset Wallpaper and Chat Color", systemImage: "arrow.counterclockwise")
                             }
-                        }
-                        Section {
-                            Button { ChatColorStore.shared.applyToAllChats(nil) } label: {
+                        case .chatColor:
+                            Button { resetColor() } label: {
                                 Label("Reset Chat Color", systemImage: "paintpalette")
                             }
-                            Button(role: .destructive) { confirm = .allColors } label: {
-                                Label("Reset All Chat Colors", systemImage: "paintpalette.fill")
+                            Button(role: .destructive) { confirmBoth = true } label: {
+                                Label("Reset Chat Color and Wallpaper", systemImage: "arrow.counterclockwise")
                             }
                         }
                     } label: {
@@ -135,23 +143,14 @@ struct AppearanceResetMenu: ViewModifier {
                     .accessibilityLabel("Reset options")
                 }
             }
-            .confirmationDialog(confirm == .allWallpapers ? "Reset all wallpapers?" : "Reset all chat colors?",
-                                isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
-                                titleVisibility: .visible, presenting: confirm) { which in
-                switch which {
-                case .allWallpapers:
-                    Button("Reset All Wallpapers", role: .destructive) {
-                        WallpaperStore.shared.applyToAllChats(.none, clearingChatPicks: true)
-                    }
-                case .allColors:
-                    Button("Reset All Chat Colors", role: .destructive) { ChatColorStore.shared.resetAllColors() }
-                }
+            // An alert, not a confirmationDialog: on iOS 26 the dialog drops its Cancel (see the note
+            // on the Devices page's sign-out alerts).
+            .alert(page == .wallpaper ? "Reset wallpaper and chat color?" : "Reset chat color and wallpaper?",
+                   isPresented: $confirmBoth) {
+                Button("Reset", role: .destructive) { resetWallpaper(); resetColor() }
                 Button("Cancel", role: .cancel) {}
-            } message: { which in
-                switch which {
-                case .allWallpapers: Text("Every chat goes back to no wallpaper, including chats with their own.")
-                case .allColors: Text("Every chat goes back to Auto and follows its wallpaper's color.")
-                }
+            } message: {
+                Text("Chats go back to no wallpaper and the Auto color. Chats with their own keep it.")
             }
     }
 }
@@ -230,7 +229,7 @@ struct ChatWallpaperPage: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Set Wallpaper")
         .navigationBarTitleDisplayMode(.inline)
-        .modifier(AppearanceResetMenu())   // the resets live in the "⋯" menu (2026-09-27)
+        .modifier(AppearanceResetMenu(page: .wallpaper))   // the resets live in the "⋯" menu (2026-09-27)
         // Pushed page, so the shell's tab bar has no business here — the same miss as the archive
         // page, caught in the same screenshot batch (owner 2026-08-19).
         .toolbar(.hidden, for: .tabBar)
@@ -764,7 +763,7 @@ struct ChatColorPage: View {
             }
             .padding(16)
         }
-        .modifier(AppearanceResetMenu())   // the resets live in the "⋯" menu (2026-09-27)
+        .modifier(AppearanceResetMenu(page: .chatColor))   // the resets live in the "⋯" menu (2026-09-27)
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Chat Color")
         .navigationBarTitleDisplayMode(.inline)
