@@ -2653,6 +2653,13 @@ struct ThreadView: View {
                         // `VoiceBubbleView.controlTouch` for why it is neither the audio session nor
                         // the player that was closing it.
                         guard Date().timeIntervalSince(VoiceBubbleView.controlTouch.last) > 0.4 else { return }
+                        // ⛔ AND THE FINGER LIFTING OFF A LONG PRESS IS NOT A TAP EITHER — owner,
+                        // 2026-09-29: "keyboard open, I try to react, the keyboard closes by itself".
+                        // The menu opens above the keyboard and keeps it (build 793), but this gesture
+                        // also ends when the finger that long-pressed lets go, with the menu already
+                        // on screen, and it closed the keyboard under the reaction bar. While a
+                        // message menu is showing, nothing here counts as a tap on the conversation.
+                        guard CMOverlay.current == nil else { return }
                         inputFocused = false
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                         to: nil, from: nil, for: nil)
