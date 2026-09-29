@@ -316,10 +316,6 @@ enum BubbleBody: Equatable {
         /// The OG card, when one travelled with this message. It sits between the reply quote and
         /// the words, inside the same bubble.
         var linkPreview: LinkPreview? = nil
-        /// How many leading UTF-16 units are a TITLE, drawn semibold: an Official Chat
-        /// announcement's heading line (owner, 2026-09-29, the channel on the chat's own rows).
-        /// 0 on every chat message.
-        var boldPrefix: Int = 0
     }
 }
 
@@ -360,10 +356,6 @@ struct BubbleRow: Equatable {
     var canSwipeToReply: Bool
     var opensOnTap: Bool               // media opens something → no double-tap recogniser
     var canDoubleTapReact: Bool
-    /// ⛔ BUTTONS INSIDE THE BUBBLE, UNDER A HAIRLINE — owner, 2026-09-29: the Official Chat moves
-    /// onto these rows and keeps its "Review Devices" / "Update Now" buttons ("the Link tab"). The
-    /// labels only; the tap reports the index (`onTapRowAction`). Empty on every chat message.
-    var actions: [String] = []
 }
 
 /// A centred capsule notice: the day separator, a system event, a pin notice.

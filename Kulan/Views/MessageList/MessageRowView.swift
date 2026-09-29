@@ -810,7 +810,6 @@ final class MessageRowView: UIView {
         metaLabel.frame = b.meta
         metaLabel.isHidden = b.meta == .zero
 
-        applyActions(b)
         applyMedia(b, model: m, cid: cid)
         applyAlbum(b, model: m, cid: cid)
         applyFile(b, model: m, cid: cid)
@@ -1002,39 +1001,6 @@ final class MessageRowView: UIView {
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
         v.configure(plan, tint: b.textColor)
-    }
-
-    /// Official Chat's in-bubble buttons: a hairline over each row and its label centred in it.
-    /// Plain views reused across configures; the tap is found by `actionIndex(at:)`.
-    private var actionLabels: [UILabel] = []
-    private var actionLines: [UIView] = []
-
-    private func applyActions(_ b: BubblePlan) {
-        while actionLabels.count < b.actionRows.count {
-            let l = UILabel(); l.textAlignment = .center
-            let line = UIView(); line.backgroundColor = UIColor.separator
-            bubbleBox.addSubview(line); bubbleBox.addSubview(l)
-            actionLabels.append(l); actionLines.append(line)
-        }
-        let hair = 1 / max(1, traitCollection.displayScale)
-        for i in actionLabels.indices {
-            let on = i < b.actionRows.count
-            actionLabels[i].isHidden = !on
-            actionLines[i].isHidden = !on
-            guard on else { continue }
-            let r = b.actionRows[i]
-            actionLabels[i].attributedText = b.actionAttrs[i]
-            actionLabels[i].frame = r
-            actionLines[i].frame = CGRect(x: 0, y: r.minY, width: r.width, height: hair)
-            bubbleBox.bringSubviewToFront(actionLines[i])
-            bubbleBox.bringSubviewToFront(actionLabels[i])
-        }
-    }
-
-    /// Which in-bubble button (Official Chat) is under `point`, row coordinates.
-    func actionIndex(at point: CGPoint) -> Int? {
-        guard let p = plan, case .bubble(let b) = p.body, !b.actionRows.isEmpty else { return nil }
-        return b.actionRows.firstIndex { $0.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point) }
     }
 
     /// The pill — a view-once photo or voice note opens on tap.

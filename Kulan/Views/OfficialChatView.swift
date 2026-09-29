@@ -84,24 +84,22 @@ struct OfficialChatView: View {
     /// band under the bar was missing from it and the newest bubble ended that far under the glass.
     /// ⚠️ The gap under the bar is capped at the home-indicator band: with the search keyboard up it
     /// would include the keyboard, which the list already adds on its own.
-    /// ⛔ 2026-09-29: measured from the bar's GLASS, not its container. The list adds the composer's
-    /// own `barTopPad` above whatever is reported (`MessageListController.bottomClearance`), so the
-    /// report is what the composer's container would be: from the top of the visible bar to the
-    /// screen's bottom. The container's top carried the chrome's padding as well, which is the extra
-    /// space he circled. The gap under the glass is capped just past the home-indicator band: with
-    /// the search keyboard up it would include the keyboard, which the list adds on its own.
     private var bottomBar: some View {
         Group {
             if selecting { selectionBar } else if searching { searchNavBar } else { cannotReplyBar }
         }
-    }
-
-    /// Reports `barHeight` from the view it is attached to (the bar's glass). See `bottomBar`.
-    private func barGlassReporter() -> some View {
-        GeometryReader { g in
-            let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
-            let h = g.size.height + max(0, min(under, Self.homeBand + 10))
-            Color.clear.onChange(of: h, initial: true) { _, v in barHeight = v }
+        // ⛔ WRITTEN DIRECTLY, THE WAY THE CHAT'S COMPOSER BAR IS (`ThreadView`, `composerBarHeight`)
+        // — owner, 2026-09-28, build 793: the last message still ran under the bar after the
+        // clearance itself was fixed, and the numbers off his screenshot say the list never
+        // received the new height at all. This bar lives in a `safeAreaBar`, and a preference
+        // raised inside it did not reliably reach `onPreferenceChange`. The chat's own bar has
+        // always reported through `onChange(of:initial:)` on its geometry, and that one works.
+        .background {
+            GeometryReader { g in
+                let under = UIScreen.main.bounds.height - g.frame(in: .global).maxY
+                let h = g.size.height + max(0, min(under, Self.homeBand))
+                Color.clear.onChange(of: h, initial: true) { _, v in barHeight = v }
+            }
         }
     }
 
@@ -121,18 +119,6 @@ struct OfficialChatView: View {
             .sheet(item: Binding(get: { morePickerId.map(ZoomTarget.init) },
                                  set: { morePickerId = $0?.url })) { target in
                 EmojiMorePicker { store.react(target.url, $0) }
-            }
-            // The chat's own reactions list for my chip, "Tap to remove" included.
-            .sheet(item: Binding(get: { reactorsFor.map(ZoomTarget.init) },
-                                 set: { reactorsFor = $0?.url })) { target in
-                ReactorsSheet(reactions: store.state.reactions[target.url].map { [me: $0] } ?? [:],
-                              nameFor: { _ in
-                                  let mine = ProfileStore.shared.me?.name.trimmingCharacters(in: .whitespaces) ?? ""
-                                  return mine.isEmpty ? "You" : mine
-                              },
-                              photoFor: { _ in ProfileStore.shared.me?.photoUrl },
-                              me: me,
-                              onRemoveMine: { store.react(target.url, nil) })
             }
             .alert(deleteTitle, isPresented: Binding(get: { pendingDelete != nil },
                                                     set: { if !$0 { pendingDelete = nil } })) {
@@ -191,7 +177,6 @@ struct OfficialChatView: View {
             // anchored popover and DROPS the cancel button.
             .onAppear {
                 AppRouter.shared.activeChatId = OfficialChannel.cid
-                countReads()
                 store.markRead()
                 NotificationCleaner.clear(cid: OfficialChannel.cid)
             }
@@ -200,96 +185,13 @@ struct OfficialChatView: View {
             }
             // A new announcement landing while the chat is open is read the moment it is on screen —
             // but only if the reader is actually at the bottom looking at it.
-            .onChange(of: store.visible.count) { countReads(); if isAtBottom { store.markRead() } }
-    }
-
-    /// The read count each announcement's admin screen shows. `AnnouncementRow` counted on appear;
-    /// the chat's own rows have no SwiftUI appear, so the chat counts what it holds. Once per person
-    /// per announcement (`AnnouncementStats.countRead` remembers).
-    private func countReads() {
-        for a in store.visible where a.mediaUrl == nil { AnnouncementStats.countRead(a) }
+            .onChange(of: store.visible.count) { if isAtBottom { store.markRead() } }
     }
 
     // MARK: The list
 
-    // MARK: The chat's own rows
-    //
-    // ⛔ THE NORMAL CHAT'S ROWS, NOT A DRAWING OF THEM — owner, 2026-09-29: "use the same existing
-    // message system, scrolling, bottom positioning and reactions instead of building them again".
-    // Every announcement without a picture is handed to the list as a `MessageRowModel` from
-    // `MessageRowModelBuilder`, exactly as a received chat message is: the same bubble, footer,
-    // reaction chip (with my face), long press, double tap and immediate redraw. The two things a
-    // chat message did not have were added to the shared row instead of kept here: the bold title
-    // line (`TextBody.boldPrefix`) and the in-bubble buttons (`BubbleRow.actions`, "the Link tab").
-    // An announcement WITH a picture still draws as `AnnouncementRow`: its picture is a plain
-    // public URL, and the chat's media rows only open end-to-end encrypted media.
-
-    private var me: String { AuthService.shared.uid ?? "" }
-
-    /// The announcement as a received text message: title line, then the body.
-    private func asMessage(_ a: Announcement) -> Message {
-        let text = a.title.isEmpty ? a.body : (a.body.isEmpty ? a.title : a.title + "\n" + a.body)
-        var m = Message(localText: text, authorId: OfficialChannel.cid, clientId: a.id,
-                        replyTo: nil, sendState: .sending)
-        m.sendState = nil
-        m.createdAt = a.sortAt
-        m.edited = a.editedAt != nil
-        if let e = store.state.reactions[a.id] { m.reactions = [me: e] }
-        return m
-    }
-
-    /// The buttons an announcement shows ("Update Now" only once the Update Link is set).
-    private func usableButtons(_ a: Announcement) -> [AnnouncementButton] {
-        a.buttons.filter { $0.isUsable && ($0.action != .appStore || OfficialConfig.shared.hasAppStoreUrl) }
-    }
-
-    private var rowModels: [String: MessageRowModel] {
-        let onWallpaper = WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid)
-        let ctx = MessageRowContext(
-            me: me, cid: OfficialChannel.cid, isGroup: false, dark: dark,
-            selecting: selecting, wasSelecting: wasSelecting, selectedIds: selectedIds,
-            highlightId: nil, firstUnreadId: nil, chatColor: nil,
-            onWallpaper: onWallpaper,
-            wallpaperBlur: WallpaperBlur.state(for: OfficialChannel.cid, dark: dark, frame: WallpaperBlur.windowFrame),
-            otherLastReadMillis: 0, iBlocked: false,
-            searchTerm: searching ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
-            nameFor: { $0 == OfficialChannel.cid ? OfficialChannel.name : "You" },
-            avatarFor: { $0 == me ? ProfileStore.shared.me?.photoUrl : nil },
-            resolveOriginal: { _ in nil })
-        var out: [String: MessageRowModel] = [:]
-        let all = store.visible
-        for (i, a) in all.enumerated() where a.mediaUrl == nil {
-            let newDay = i == 0 || !Self.cal.isDate(all[i - 1].sortAt, inSameDayAs: a.sortAt)
-            guard var model = MessageRowModelBuilder.model(
-                for: asMessage(a), at: i, ctx: ctx,
-                // Every announcement stands alone, as it always has: all four corners round.
-                isFirstInCluster: true, isLastInCluster: true,
-                dateHeader: newDay ? dayLabel(a.sortAt) : nil,
-                topSpacing: newDay ? 0 : 14) else { continue }
-            if case .bubble(var b) = model.content {
-                if case .text(var t) = b.body, !a.title.isEmpty, !a.body.isEmpty {
-                    t.boldPrefix = (a.title as NSString).length
-                    b.body = .text(t)
-                }
-                b.actions = usableButtons(a).map(\.label)
-                model.content = .bubble(b)
-            }
-            out[a.id] = model
-        }
-        return out
-    }
-
-    @State private var reactorsFor: String?
-
     private var list: some View {
-        let models = rowModels
-        // Moves whenever a model can: every row's signature, plus what the context reads.
-        var hasher = Hasher()
-        for a in store.visible { hasher.combine(a.id); hasher.combine(signature(a)) }
-        hasher.combine(dark); hasher.combine(searching ? searchQuery : "")
-        hasher.combine(WallpaperStore.shared.version)
-        let modelsVersion = hasher.finalize()
-        return NativeMessageList(
+        NativeMessageList(
             rowIds: store.visible.map(\.id),
             rowSignatures: Dictionary(uniqueKeysWithValues: store.visible.map { ($0.id, signature($0)) }),
             row: { id in
@@ -314,23 +216,12 @@ struct OfficialChatView: View {
                                         onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid),
                                         onToggle: { toggle(a.id) })))
             },
-            rowModels: models,
-            uikitModelsVersion: modelsVersion,
-            // A link in the words asks first, as the buttons do (see `tap`).
-            onTapLink: { url in pendingLink = url },
-            // My chip opens the chat's own reactions list, where my row takes it back.
-            onTapReactions: { id in reactorsFor = id },
             onToggleSelect: { toggle($0) },
-            onTapRowAction: { id, index in
-                guard let a = store.visible.first(where: { $0.id == id }) else { return }
-                let buttons = usableButtons(a)
-                if buttons.indices.contains(index) { tap(buttons[index]) }
-            },
             // Double tap reacts with the chat's quick reaction, and again takes it off (owner,
             // 2026-09-28). Not on a picture: a picture opens on one tap (his 2026-07-29 rule).
             onUikitDoubleTap: { id in
                 let quick = QuickReaction.current
-                store.react(id, ThreadView.sameEmoji(store.state.reactions[id], quick) ? nil : quick)
+                store.react(id, store.state.reactions[id] == quick ? nil : quick)
             },
             hostedDoubleTap: { id in
                 store.visible.first(where: { $0.id == id }).map { $0.mediaUrl == nil } ?? false
@@ -425,7 +316,6 @@ struct OfficialChatView: View {
                          onDelete: { pendingDelete = liveSelection.map(\.id) },
                          onForward: { forwarding = liveSelection.map(forwardable) })
             .frame(height: 44)
-            .background { barGlassReporter() }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
     }
@@ -503,7 +393,6 @@ struct OfficialChatView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
             .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .background { barGlassReporter() }
             // ⛔ THE INPUT BAR'S OWN INSETS — owner, 2026-08-25. This bar stands where the composer
             // stands, so it is edge-attached SYSTEM CHROME and takes the device's margins and the
             // indicator-band dip, not the 12/6 that used to be written here. See `SystemBarChrome`.
@@ -603,8 +492,6 @@ struct OfficialChatView: View {
                     .liquidGlass(Capsule(), interactive: false)
             }
         }
-        .frame(height: 44)
-        .background { barGlassReporter() }
         .padding(.horizontal, 16).padding(.bottom, 6)
     }
 

@@ -93,7 +93,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
     var onTapPinNotice: (String) -> Void = { _ in }
-    var onTapRowAction: (String, Int) -> Void = { _, _ in }   // an in-bubble button (Official Chat)
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
     /// Rows drawn in SwiftUI that still take the double-tap reaction (the official channel, whose
@@ -271,7 +270,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapSender = onTapSender
         vc.onTapCallRow = onTapCallRow
         vc.onTapPinNotice = onTapPinNotice
-        vc.onTapRowAction = onTapRowAction
         vc.customMenuActions = customMenuActions
         vc.customReactConfig = customReactConfig
         vc.onCustomReact = onCustomReact
@@ -687,7 +685,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
     var onTapPinNotice: (String) -> Void = { _ in }
-    var onTapRowAction: (String, Int) -> Void = { _, _ in }   // an in-bubble button (Official Chat)
     // CUSTOM LONG-PRESS MENU (experiment — CMContextMenu.swift). Fed from SwiftUI like every callback.
     var customMenuActions: (String) -> [CMAction] = { _ in [] }
     var customReactConfig: (String) -> (emojis: [String], selected: String?)? = { _ in nil }
@@ -3540,13 +3537,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // container is collapsed and the clearance comes from the fallback, exactly as it does for
         // the announcements list. See `hideComposer`.
         guard let bar = composerBar, !bar.isHidden else {
-            // ⛔ `barTopPad`, THE COMPOSER'S OWN GAP, not a separate 12 — owner, 2026-09-29: the
-            // Official Chat's last message sat higher over its bar than a chat's over its composer
-            // ("remove the large space… the exact same position as in Normal Chat"). With the
-            // composer the container runs from `barTopPad` above the pill to the screen's bottom;
-            // a bar standing in for it reports from its glass to the screen's bottom, so the same
-            // pad above it lands the last message where the composer would have it.
-            return keyboardOverlap + composerBarH + Self.barTopPad
+            return keyboardOverlap + composerBarH + 12
         }
         guard bottomBarContainer.frame.height > 1 else {
             // ⛔ OUR BAR IS THERE BUT ITS CONTAINER HAS NOT BEEN LAID OUT YET (the first open, a
@@ -5308,11 +5299,6 @@ extension MessageListController: MessageRowCellDelegate {
 
     func rowCellDidTapPinNotice(_ cell: MessageRowCell, jumpTo id: String) {
         onTapPinNotice(id)
-    }
-
-    func rowCell(_ cell: MessageRowCell, didTapAction index: Int) {
-        guard let id = cell.rowId else { return }
-        onTapRowAction(id, index)
     }
 }
 

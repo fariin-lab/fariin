@@ -238,10 +238,6 @@ struct BubblePlan {
     var reactionsFreeform: Bool = false
     /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
     var failBadge: CGRect?
-    /// The buttons at the foot of an Official Chat announcement ("Review Devices"), one full-width
-    /// row each under a hairline, in BUBBLE coordinates. See `BubbleRow.actions`.
-    var actionRows: [CGRect] = []
-    var actionAttrs: [NSAttributedString] = []
 }
 
 struct NoticePlan {
@@ -661,9 +657,6 @@ enum MessageRowLayout {
         else { contentW = max(contentW, inlineMinW) }
         // A link card does not hug: it is drawn full-width, so it takes the bubble to the cap.
         if linkCard != nil { contentW = maxContent }
-        // An action button's label has to fit on its row.
-        let actionAttrs = b.actions.map { Self.actionAttr($0) }
-        for a in actionAttrs { contentW = max(contentW, BubbleText.lineSize(a).width) }
         contentW = min(maxContent, ceil(contentW))
 
         var innerY: CGFloat = vPad
@@ -750,26 +743,7 @@ enum MessageRowLayout {
                         originX: originX, topSpacing: topSpacing, senderNameAttr: senderNameAttr,
                         senderNameSize: senderNameSize, forwardedSize: forwardedSize,
                         forwardedIconW: forwardedIconW, y: y)
-        // The action rows go LAST, under the words, the time and the reactions, at the bubble's
-        // foot: the bubble grows by their height and so does the row.
-        if !actionAttrs.isEmpty {
-            let rowH = BubbleMetrics.actionRowHeight
-            let top = plan.bubble.height
-            plan.actionRows = actionAttrs.indices.map {
-                CGRect(x: 0, y: top + CGFloat($0) * rowH, width: plan.bubble.width, height: rowH)
-            }
-            plan.actionAttrs = actionAttrs
-            plan.bubble.size.height += rowH * CGFloat(actionAttrs.count)
-            y += rowH * CGFloat(actionAttrs.count)
-        }
         return BubbleResult(plan: plan, totalHeight: y)
-    }
-
-    /// An action button's label: the system blue, 16pt medium (the announcement bubble's own).
-    static func actionAttr(_ s: String) -> NSAttributedString {
-        NSAttributedString(string: s, attributes: [
-            .font: UIFont.systemFont(ofSize: 16, weight: .medium),
-            .foregroundColor: UIColor(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255, alpha: 1)])
     }
 
 
