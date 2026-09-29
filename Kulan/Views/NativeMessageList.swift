@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 extension Notification.Name {
     /// "Take me to the newest message." Posted by the down-arrow button, answered by whichever
@@ -814,8 +815,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var lastReportedSide: CGFloat = -1
     private var lastReportedTop: CGFloat = -1
 
+    /// An album tile X'd mid-upload: the bubble drops it now (owner, 2026-09-29), not when the send
+    /// lands. `MessageRowModelBuilder.albumBody` leaves cancelled tiles out; this re-measures and
+    /// redraws the rows on screen when the set changes, which no repository emission would do.
+    private var cancelledTilesWatch: AnyCancellable?
+
     override func viewDidLoad() {
         super.viewDidLoad()
+        cancelledTilesWatch = MediaSend.shared.$cancelledItems
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let ids = self.collectionView.indexPathsForVisibleItems
+                    .compactMap { self.dataSource.itemIdentifier(for: $0) }
+                ids.forEach { self.invalidateRenderedHeight($0) }
+                self.refreshVisible(ids)
+            }
         layout = MessageLayout()
         // ⛔ THE HEIGHT IS RESOLVED THROUGH THE DATA SOURCE, NEVER THROUGH `currentIds` — owner,
         // 2026-08-25, reporting rows that jump and draw on top of each other while scrolling.

@@ -406,9 +406,18 @@ enum MessageRowModelBuilder {
         // optimistic — nothing can have been hidden yet.
         let optimistic = !m.localAlbum.isEmpty
         let count = optimistic ? m.localAlbum.count : m.album.count
-        let visible: [Int] = optimistic
+        var visible: [Int] = optimistic
             ? Array(0..<count)
             : (0..<count).filter { !HiddenMessages.isHidden("\(m.id)-\($0)") }
+        // ⛔ AN X'd TILE LEAVES AT ONCE — owner, 2026-09-29: "send several, cancel one, it stays until
+        // the others finish uploading". The send loop already skips it; the tile only dimmed. Its
+        // KEY keeps the original index (`i` below), so every other tile's ring and done mark still
+        // match. Never below two while optimistic: the mosaic is built for two and up, and a lone
+        // survivor becomes a photo once the send lands (`Message.init`), so the last X'd one just dims.
+        if optimistic, let cid = m.clientId {
+            let kept = visible.filter { !MediaSend.shared.isItemCancelled(MediaSend.itemKey(cid, $0)) }
+            if kept.count >= 2 { visible = kept }
+        }
         let n = max(visible.count, 2)
         let shown = min(n, 10)          // the album ceiling; the rest rides a "+N" on the last tile
 
