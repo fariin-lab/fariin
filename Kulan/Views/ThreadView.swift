@@ -1107,6 +1107,13 @@ struct ThreadView: View {
             showContactInfo = true
         }))
         .toolbar(.hidden, for: .tabBar)
+        // ⛔ THE CHAT NAMES ITS OWN BAR SCHEME — owner, 2026-09-29, phone switched to dark with a
+        // chat open: Back and the call capsule stayed light-mode glass until the chat was reopened.
+        // The bar's scheme came from the chat LIST under this page (`MainShell`, path.count <= 1),
+        // and a page that is not on top does not re-send its toolbar preference when the
+        // environment changes. This page is on top, so its own `scheme` redraws in the same pass as
+        // the switch. Same value the list hands down, so nothing flips during a Back swipe.
+        .toolbarColorScheme(scheme, for: .navigationBar)
         // ⛔ NO BAR BACKGROUND IS DECLARED HERE ANY MORE — owner, 2026-09-24, screenshot of the chat
         // header: a full-width grey-to-purple wash over the wallpaper with a hard bottom edge. That
         // wash was `.toolbarBackground(.visible, for: .navigationBar)` on this line (added
