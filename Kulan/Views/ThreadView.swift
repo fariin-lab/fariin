@@ -3399,6 +3399,17 @@ struct ThreadView: View {
                 // Both view-once kinds take the photo pill's route: through the view-once cover,
                 // whose audio branch is the voice page and whose dismissal is the consumption mark.
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                // ⛔ SPENT ON OPENING, NOT ONLY ON CLOSING — owner, 2026-09-29: "a view-once photo
+                // opens many times". The mark lived only in the cover's onDismiss, fed by the
+                // viewer's onAppear, and a single missed hop in that chain left the pill live for
+                // ever. The local mark (and the repaint) happen here, at the tap, so the pill flips
+                // to Viewed/Played now and cannot open twice. The server burn stays on close
+                // (onDismiss), so the bytes are still there while the one view is happening.
+                if m.viewOnce, m.authorId != me {
+                    pendingViewOnceConsume = m
+                    ViewedOnce.mark(m.id)
+                    viewedOnceTick += 1
+                }
                 MediaPresentGate.present { viewerImage = m }
             },
             // ⛔ THE GALLERY IS ONE SYNTHETIC MESSAGE PER TILE, NOT THE ALBUM MESSAGE. His report,
