@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BLURRED PHOTOS, MENU ABOVE THE KEYBOARD, ONE-TIME MEDIA, SWIPE MUTE, DEVICE LOCATION.
+            PROFILE: ABOUT CARD AND INSIGHTS.
+
+            MY PROFILE: a new About card with your joined date and "Complete your profile" (photo, name, username, bio, link) with a progress bar. Tap it to open Edit. The small Joined pill under the bio moved into this card. The Glowers and Glowing card and Posted stories are unchanged.
+
+            INSIGHTS: a new Insights row under the Glowers card. It is locked until 100 Glowers and shows how far you are. After 100: last 7, 28 or 90 days, story views, reactions, stories posted, views per story with change against the period before, views by day, Glowers gained and lost, top stories including expired ones, and the stories live now.
+
+            PLEASE TEST: open your profile; check the About card and the progress count; tap Complete your profile; tap Insights.
+
+            EARLIER IN THIS ROUND (build 811): BLURRED PHOTOS, MENU ABOVE THE KEYBOARD, ONE-TIME MEDIA, SWIPE MUTE, DEVICE LOCATION.
 
             CHAT: a received photo no longer stays blurred after it has loaded. The long-press menu opens above the keyboard. One-time photos and voice notes are spent the moment they open and cannot be opened again. A photo with a caption and a reaction shows its time beside the reaction. The voice note bar hides when the note finishes.
 
