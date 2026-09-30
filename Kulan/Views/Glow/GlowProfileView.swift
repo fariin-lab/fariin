@@ -195,6 +195,8 @@ struct GlowProfileView: View {
                     header
                     identity
                     statsCard.padding(.horizontal, 16).padding(.top, 18)
+                    insightsCard.padding(.horizontal, 16).padding(.top, 12)
+                    aboutCard
                     postedStoriesCard.padding(.horizontal, 16).padding(.top, 22)
                     Color.clear.frame(height: 32)
                 }
@@ -466,25 +468,10 @@ struct GlowProfileView: View {
             }
             // ⛔ THE PROFILE'S LINKS — owner, 2026-09-11: "if I use a link and then enter my
             // profile, it must be appearing also in my profile". Same capsules as the contact page,
-            // same shared view, directly under the bio and above the Joined pill.
+            // same shared view, directly under the bio.
             ProfileLinkChips(links: profile?.links ?? [], tint: cardColor)
-            // ⛔ "Joined May 2026" — his concept, 2026-09-09, a small pill under the bio and above
-            // the stats card.
-            //
-            // ⚠️ ABSENT WHEN THE DATE IS UNKNOWN, AND THAT IS NOT A BUG. It reads the account
-            // document's own creation stamp. An account written before anything recorded one has
-            // no answer, and a profile page must not invent a joining date — a wrong one is worse
-            // than no line. Month and year only, which is what his picture shows and as much as
-            // this ever needs to say.
-            if let joined = profile?.joinedAt {
-                Text("Joined \(joined.formatted(.dateTime.month(.wide).year()))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(cardColor, in: Capsule())
-                    .padding(.top, 8)
-            }
+            // The "Joined May 2026" pill that sat here (his concept, 2026-09-09) lives in the About
+            // card now — owner, 2026-09-30. See `aboutCard`.
         }
         // The name tucks up into the photograph's fade. With no photograph there is no fade and
         // nothing to tuck into, so the pull-up is proportional to whichever hero is actually there.
@@ -616,6 +603,149 @@ struct GlowProfileView: View {
     /// the squircle rather than the circular arc.
     private enum ProfileCard {
         static let corner: CGFloat = 22
+    }
+
+    // MARK: - Insights and About
+
+    /// THE DOOR TO THE INSIGHTS PAGE — owner, 2026-09-30. One slim row, in the stats card's own
+    /// type and inset, so it reads as part of that group and not as a third big card.
+    ///
+    /// ⛔ THE GLOWERS · GLOWING CARD ABOVE IT IS NOT TOUCHED, his correction the same day: "do NOT
+    /// change, replace, resize, redesign or modify the existing card in any way". The first plan
+    /// folded the two into one card; this is a separate row because of that sentence.
+    private var insightsCard: some View {
+        NavigationLink {
+            GlowInsightsView(stories: stories, title: profile?.handle ?? profile?.name ?? "Glow")
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Insights")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                // Absent while no count is known, for the reason `PostedStory.views` gives: a
+                // confident zero is the worse lie.
+                if let views = totalStoryViews {
+                    Text("\(GlowCount.short(views)) story views")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, StatsPill.padH)
+            .padding(.vertical, AboutCard.rowV)
+            .background(cardColor, in: RoundedRectangle(cornerRadius: ProfileCard.corner,
+                                                        style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Views across the live stories, from the counts the Posted stories card already loaded.
+    private var totalStoryViews: Int? {
+        guard case .loaded(let rows) = stories.state else { return nil }
+        let known = rows.compactMap(\.views)
+        return known.isEmpty ? nil : known.reduce(0, +)
+    }
+
+    /// ABOUT — owner, 2026-09-30: the joined date, and "Complete your profile" with a progress bar
+    /// until all five are done.
+    ///
+    /// ⚠️ THE JOINED LINE IS ABSENT WHEN THE DATE IS UNKNOWN, AND THAT IS NOT A BUG. It reads the
+    /// account document's own creation stamp. An account written before anything recorded one has
+    /// no answer, and a profile page must not invent a joining date. Month and year only.
+    ///
+    /// ⚠️ AND THE WHOLE CARD IS ABSENT WHEN IT HAS NOTHING TO SAY: no date and a finished profile,
+    /// or a profile that has not loaded yet — counting an unloaded profile would flash "0 of 5" at
+    /// somebody who has done all five.
+    @ViewBuilder private var aboutCard: some View {
+        if let p = profile, p.joinedAt != nil || !Self.profileComplete(p) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("About")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .padding(.bottom, 8)
+                if let joined = p.joinedAt {
+                    Label("Joined \(joined.formatted(.dateTime.month(.wide).year()))",
+                          systemImage: "calendar")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if !Self.profileComplete(p) {
+                    if p.joinedAt != nil {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.12))
+                            .frame(height: 1 / UIScreen.main.scale)
+                            .padding(.vertical, AboutCard.rowV)
+                    }
+                    completionRow(p)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, StatsPill.padH)
+            .padding(.vertical, AboutCard.rowV)
+            .background(cardColor, in: RoundedRectangle(cornerRadius: ProfileCard.corner,
+                                                        style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+        }
+    }
+
+    /// Opens the same Edit sheet as the bar's Edit button: every one of the five is set there.
+    private func completionRow(_ p: UserProfile) -> some View {
+        let steps = Self.profileSteps(p)
+        let done = steps.filter { $0.done }.count
+        return Button { showEdit = true } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Complete your profile")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    Text("\(done) of \(steps.count)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                ProgressView(value: Double(done), total: Double(steps.count))
+                    .tint(.white)
+                if let next = steps.first(where: { !$0.done }) {
+                    Text("Next: \(next.hint)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Complete your profile, \(done) of \(steps.count) done")
+    }
+
+    /// His five, in his order: photo, name, username, bio, link.
+    private static func profileSteps(_ p: UserProfile) -> [(hint: String, done: Bool)] {
+        [("Add a profile photo", !(p.photoUrl ?? "").isEmpty),
+         ("Add your name", !p.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+         ("Choose a username", !p.handle.isEmpty),
+         ("Write a bio", !p.about.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+         ("Add a link", !p.links.isEmpty)]
+    }
+
+    private static func profileComplete(_ p: UserProfile) -> Bool {
+        profileSteps(p).allSatisfy { $0.done }
+    }
+
+    private enum AboutCard {
+        /// A little more than the stats pill's 9: these rows are one line of text, and at 9 a
+        /// one-line card comes out shorter than a comfortable touch target.
+        static let rowV: CGFloat = 12
     }
 
     /// ⛔ A CLUSTER, NOT A ROW, AND THE MIDDLE FACE IS THE BIG ONE — owner, 2026-09-11, with two
