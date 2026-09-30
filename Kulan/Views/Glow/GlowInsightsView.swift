@@ -143,7 +143,28 @@ struct GlowInsightsView: View {
     /// Re-runs the load when a story is posted or expires while the page is open.
     private var liveKey: String { live.map(\.id).joined(separator: ",") }
 
+    /// ⛔ LOCKED UNDER 100 GLOWERS — owner, 2026-09-30: "Insights are available after reaching 100
+    /// followers". Counted from my own live glow set, the same number the profile's stats card
+    /// shows, so the two can never disagree about which side of the line the account is on.
+    static let glowersNeeded = 100
+
+    private var unlocked: Bool { glow.displayGlowers.count >= Self.glowersNeeded }
+
     var body: some View {
+        Group {
+            if unlocked { insights } else { locked }
+        }
+        .navigationTitle("Insights")
+        .navigationBarTitleDisplayMode(.inline)
+        // A pushed page is not a tab — see the note in `GlowNotificationsView`.
+        .toolbar(.hidden, for: .tabBar)
+        // Nothing is read for a locked page; crossing the line while it is open starts the load.
+        .task(id: unlocked ? liveKey : "locked") {
+            if unlocked { await loader.load(live) }
+        }
+    }
+
+    private var insights: some View {
         List {
             storySections
             Section("Glow") {
@@ -160,12 +181,27 @@ struct GlowInsightsView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Insights")
-        .navigationBarTitleDisplayMode(.inline)
-        // A pushed page is not a tab — see the note in `GlowNotificationsView`.
-        .toolbar(.hidden, for: .tabBar)
-        .task(id: liveKey) { await loader.load(live) }
         .refreshable { await loader.load(live) }
+    }
+
+    /// The sentence is his; the bar under it says how far there is to go.
+    private var locked: some View {
+        let count = glow.displayGlowers.count
+        return ContentUnavailableView {
+            Label("Insights", systemImage: "lock.fill")
+        } description: {
+            Text("Insights are available after reaching \(Self.glowersNeeded) Glowers.")
+        } actions: {
+            VStack(spacing: 8) {
+                ProgressView(value: Double(min(count, Self.glowersNeeded)),
+                             total: Double(Self.glowersNeeded))
+                    .frame(maxWidth: 220)
+                Text("\(count) of \(Self.glowersNeeded) Glowers")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
     }
 
     // MARK: - Stories

@@ -627,7 +627,14 @@ struct GlowProfileView: View {
                 Spacer(minLength: 8)
                 // Absent while no count is known, for the reason `PostedStory.views` gives: a
                 // confident zero is the worse lie.
-                if let views = totalStoryViews {
+                if glow.displayGlowers.count < GlowInsightsView.glowersNeeded {
+                    // Locked until then, his rule; the page behind the row says how far to go.
+                    Label("At \(GlowInsightsView.glowersNeeded) Glowers", systemImage: "lock.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let views = totalStoryViews {
                     Text("\(GlowCount.short(views)) story views")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
