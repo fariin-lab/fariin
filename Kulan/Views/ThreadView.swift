@@ -1279,10 +1279,9 @@ struct ThreadView: View {
                 // Same fire-and-forget shape as OneTimeVoicePage's consumeOnceVoice call; the
                 // function refuses groups and anything not a view-once image from someone else.
                 // Voice is left out here because its page already makes its own call.
-                if m.type == "image" {
-                    Functions.functions(region: "me-central1").httpsCallable("consumeOnceImage")
-                        .call(["cid": cid, "messageId": m.id]) { _, _ in }
-                }
+                // The viewer already burned it when the picture loaded; this is the second,
+                // harmless call for a viewer that closed before its load finished.
+                if m.type == "image" { ViewedOnce.burnImage(cid: cid, messageId: m.id) }
                 pendingViewOnceConsume = nil
                 viewedOnceTick += 1
             }
@@ -2008,7 +2007,8 @@ struct ThreadView: View {
                                            after: VoiceNotePlayer.shared.messageId)
             repo.stop()
             groupCallListener?.remove(); groupCallListener = nil
-            AppRouter.shared.activeChatId = nil
+            // Only when it is still ours: a chat pushed over this one has already claimed it.
+            if AppRouter.shared.activeChatId == cid { AppRouter.shared.activeChatId = nil }
             broadcastTyping(false)
             // Keep the local flag in step with the broadcast we just sent — leaving it true meant a
             // quick return from an in-chat push never re-broadcast typing for the whole next burst
@@ -2979,6 +2979,11 @@ struct ThreadView: View {
             //     card or says the story is gone, and that is a HEIGHT difference.
             //   hiddenTick — `albumBody` drops tiles hidden "for me", which re-solves the mosaic.
             "\(storiesRepo.storiesVersion)", "\(storiesRepo.didLoad)", "\(hiddenTick)",
+            //   viewedOnceTick — `viewOncePill` reads `ViewedOnce` to decide Viewed/Played and
+            //     whether the pill still opens. It was missing (owner, 2026-09-30: "it does not
+            //     become Viewed at once, I can open it again"): the mark was saved at the tap but
+            //     the pill was only rebuilt when something ELSE moved this key.
+            "\(viewedOnceTick)",
             // The disappearing-message countdown is READ while building a row, so by this file's own
             // rule — stated four times above — it has to be in the key that decides whether the row
             // is rebuilt. It only moves in a chat that actually has messages on a timer.
@@ -3409,6 +3414,8 @@ struct ThreadView: View {
                 // to Viewed/Played now and cannot open twice. The server burn stays on close
                 // (onDismiss), so the bytes are still there while the one view is happening.
                 if m.viewOnce, m.authorId != me {
+                    // Already spent: a pill drawn before the mark landed must not open it again.
+                    guard !ViewedOnce.contains(m.id) else { return }
                     pendingViewOnceConsume = m
                     ViewedOnce.mark(m.id)
                     viewedOnceTick += 1
@@ -3492,7 +3499,10 @@ struct ThreadView: View {
                 Task {
                     guard let user = await ChatService.findByHandle(handle),
                           let openedCid = try? await ChatService.openConversation(other: user) else { return }
-                    await MainActor.run { AppRouter.shared.pendingChatId = openedCid }
+                    await MainActor.run {
+                        AppRouter.shared.pendingChatPush = true   // slide in over this chat
+                        AppRouter.shared.pendingChatId = openedCid
+                    }
                 }
             },
             onTapLocation: { id in
@@ -7703,6 +7713,15 @@ enum ViewedOnce {
         ids.append(id)
         if ids.count > 500 { ids.removeFirst(ids.count - 500) }   // bounded
         UserDefaults.standard.set(ids, forKey: key)
+    }
+
+    /// The server burn for a view-once photo (`consumeOnceImage`: deletes the file and strips the
+    /// message). Called by the viewer the moment the picture is in hand, so the one view is spent
+    /// on the server while it is happening rather than when the viewer closes (owner,
+    /// 2026-09-30). Safe to call twice; the function refuses the author and groups.
+    static func burnImage(cid: String, messageId: String) {
+        Functions.functions(region: "me-central1").httpsCallable("consumeOnceImage")
+            .call(["cid": cid, "messageId": messageId]) { _, _ in }
     }
 }
 

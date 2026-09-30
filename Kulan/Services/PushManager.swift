@@ -235,6 +235,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     var pendingChatId: String?    // a chat to open from a notification tap
     var pendingChatName: String?  // fallback header name when the conv isn't in the cache yet
     var pendingChatPhoto: String? // fallback header photo
+    /// The pending chat is pushed ON TOP of whatever page is showing, with the system's slide,
+    /// instead of replacing the stack. Set by a tap made inside a chat (a profile card's Send
+    /// Message); a notification tap leaves it false. Cleared with the intent.
+    var pendingChatPush = false
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
     /// 2026-09-24 decision D4: a kulan://u/<handle> link, kept like the invite code above until the
     /// app is signed in and on its main screen (RootView opens it then). A link tapped while signed

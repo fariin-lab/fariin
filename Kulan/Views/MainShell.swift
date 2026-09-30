@@ -1052,7 +1052,6 @@ struct ChatsView: View {
     // swipe". The whole highlight is Apple's pressed state now and nothing of ours — see the note at
     // the row's Button.
     @State private var pendingDelete: Conversation?
-    @State private var pendingMute: Conversation?
     // Multi-select edit mode.
     @State private var selecting = false
     @State private var selection = Set<String>()
@@ -1815,28 +1814,6 @@ struct ChatsView: View {
                 set: { if !$0 { CallService.shared.restrictedCallee = nil } })
     }
 
-    private var mutePrompted: Binding<Bool> {
-        Binding(get: { pendingMute != nil }, set: { if !$0 { pendingMute = nil } })
-    }
-
-    private var muteTitle: String {
-        guard let c = pendingMute else { return "Mute" }
-        return "Mute \(c.displayName(me))"
-    }
-
-    @ViewBuilder private var muteActions: some View {
-        if let c = pendingMute {
-            if c.isMuted(me, now: Date().timeIntervalSince1970 * 1000) {
-                Button("Unmute") { Task { await ChatService.setMute(c.id, until: 0) }; pendingMute = nil }
-            }
-            Button("Mute for 1 hour") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(1)) }; pendingMute = nil }
-            Button("Mute for 8 hours") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(8)) }; pendingMute = nil }
-            Button("Mute for 1 week") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(168)) }; pendingMute = nil }
-            Button("Mute Always") { Task { await ChatService.setMute(c.id, until: ChatService.muteUntil(nil)) }; pendingMute = nil }
-        }
-        Button("Cancel", role: .cancel) { pendingMute = nil }
-    }
-
     private var pendingInvite: Binding<InviteCodeItem?> {
         Binding(get: { Flags.groupsEnabled ? router.pendingInviteCode.map { InviteCodeItem(code: $0) } : nil },
                 set: { router.pendingInviteCode = $0?.code })
@@ -1900,10 +1877,10 @@ struct ChatsView: View {
                 Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) }
             },
             onArchive: { conv in Task { await ChatService.setArchived(conv.id, true) } },
-            // Both of these raise the screen's own alert rather than acting — the swipe is the
-            // question, not the answer. `pendingDelete` opens the alert, `pendingMute` the dialog.
+            // Delete raises the screen's own alert rather than acting — the swipe is the question,
+            // not the answer. Mute acts at once (Always); the table only calls it for an unmuted chat.
             onDelete: { pendingDelete = $0 },
-            onMute: { pendingMute = $0 },
+            onMute: { conv in Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) } },
             menuActions: { chatMenuElements($0) },
             // The peek is the same view the SwiftUI `contextMenu(preview:)` showed, in a hosting
             // controller because that is what `UIContextMenuConfiguration` takes.
@@ -2487,9 +2464,6 @@ struct ChatsView: View {
             } message: {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
             }
-            // displayName, not name(for:) — the latter shows a MEMBER's name for groups.
-            .confirmationDialog(muteTitle, isPresented: mutePrompted,
-                                titleVisibility: .visible) { muteActions }
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
             // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
@@ -2550,6 +2524,8 @@ struct ChatsView: View {
         // the app went to the background) rebuilt the path to the same chat, remounting it and
         // throwing away its scroll position and composer state. The foreground-banner path already
         // asks this same question (PushManager, `activeChatId`); the covers above still close.
+        let push = router.pendingChatPush
+        router.pendingChatPush = false
         if cid == router.activeChatId {
             router.pendingChatId = nil
             router.pendingChatName = nil
@@ -2561,9 +2537,16 @@ struct ChatsView: View {
         let conv = repo.conversations.first(where: { $0.id == cid })
         let name = conv?.displayName(me) ?? router.pendingChatName ?? "Chat"
         let photo = conv?.displayPhoto(me) ?? router.pendingChatPhoto
-        var p = NavigationPath()
-        p.append(ChatTarget(id: cid, name: name, photo: photo))
-        path = p
+        if push {
+            // Owner, 2026-09-30: swapping the stack put the new chat on screen with no transition.
+            // Appending is the system push, so it slides in from the right and Back returns to
+            // the chat the card was in.
+            path.append(ChatTarget(id: cid, name: name, photo: photo))
+        } else {
+            var p = NavigationPath()
+            p.append(ChatTarget(id: cid, name: name, photo: photo))
+            path = p
+        }
         router.pendingChatId = nil
         router.pendingChatName = nil
         router.pendingChatPhoto = nil

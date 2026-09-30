@@ -1688,19 +1688,18 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         }
         del.image = ChatListIcon.symbol("trash.fill")
 
-        // Same reasoning as Delete: Mute opens the duration sheet rather than muting outright, so
-        // the row is not finished with when this returns.
         // 2026-09-24 audit: an already-muted chat said "Mute" here while its long-press menu said
-        // "Unmute". It now reads the same state the menu reads, and Unmute acts at once, as the
-        // menu's Unmute does; only Mute needs the duration sheet.
+        // "Unmute". It now reads the same state the menu reads.
+        // Owner, 2026-09-30: the swipe button is a plain toggle. One tap mutes (Always), the next
+        // unmutes; no duration list. The timed choices stay in the long-press menu.
         let muted = c.isMuted(p.me, now: Date().timeIntervalSince1970 * 1000)
         let mute = UIContextualAction(style: .normal, title: muted ? "Unmute" : "Mute") { _, _, done in
             if muted {
                 Task { await ChatService.setMute(c.id, until: 0) }
-                done(true)
             } else {
-                p.onMute(c); done(false)
+                p.onMute(c)
             }
+            done(true)
         }
         mute.image = ChatListIcon.symbol(muted ? "bell.fill" : "bell.slash.fill")
         mute.backgroundColor = .systemIndigo

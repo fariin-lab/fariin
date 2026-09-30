@@ -688,6 +688,11 @@ struct ImageViewerView: View {
            let (cipher, _) = try? await MediaSession.shared.data(from: url),
            let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
             loaded[m.id] = UIImage(data: dec)
+            // A view-once photo from someone else is spent on the server now, with the picture
+            // already in hand, not when this viewer closes.
+            if m.viewOnce, m.authorId != AuthService.shared.uid {
+                ViewedOnce.burnImage(cid: cid, messageId: m.id)
+            }
         }
     }
 

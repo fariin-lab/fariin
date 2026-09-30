@@ -1150,9 +1150,18 @@ struct OneTimeVoicePage: View {
         // The shared engine must not talk over the room.
         VoiceNotePlayer.shared.pause()
         // The pill has usually fetched the sealed bytes already; `take` waits for it or starts it.
-        guard let meta = message.enc,
-              let cipher = await OneTimeVoicePrefetch.take(message),
-              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+        // ⛔ MY OWN NOTE, JUST SENT, HAS NO UPLOAD TO FETCH YET — owner, 2026-09-30: tapping it
+        // straight after sending said "Could not load this voice message". The optimistic message
+        // has no `audioUrl` or `enc` until the upload lands, so the fetch below had nothing to ask
+        // for. The recording is still in hand (on the message, or with the recorder while the send
+        // is in flight — the same two places `resend` looks), so the room plays that.
+        var data = message.localAudioData
+            ?? message.clientId.flatMap { AudioRecorder.inFlightData(clientId: $0) }
+        if data == nil, let meta = message.enc,
+           let cipher = await OneTimeVoicePrefetch.take(message) {
+            data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta)
+        }
+        guard let data else {
             failed = true
             return
         }
@@ -1164,6 +1173,15 @@ struct OneTimeVoicePage: View {
         try? AVAudioSession.sharedInstance().setActive(true)
         player = try? AVAudioPlayer(contentsOf: tmp)
         guard player != nil else { failed = true; return }
+        // THE SERVER BURN, as the room opens — owner, 2026-09-30: "mark it on the server the
+        // moment it is opened, not after closing". The bytes are already decrypted into this
+        // page's own file, so deleting the upload cannot cut the listen short. Only once a player
+        // exists: a page that never managed to load must not delete a note nobody heard.
+        // Fire-and-forget; the function refuses groups and the note's own author.
+        if message.authorId != AuthService.shared.uid {
+            Functions.functions(region: "me-central1").httpsCallable("consumeOnceVoice")
+                .call(["cid": cid, "messageId": message.id]) { _, _ in }
+        }
         if message.waveform.isEmpty {
             Task.detached(priority: .userInitiated) {
                 let b = Self.bars(of: tmp)
@@ -1201,14 +1219,7 @@ struct OneTimeVoicePage: View {
     }
 
     private func teardown() {
-        // THE SERVER BURN, on the way out — leaving the room is the consumption. Gated on the
-        // player having existed: a page that never managed to load must not delete a note nobody
-        // heard. Fire-and-forget; the function refuses groups (device-local there, like the
-        // photo) and refuses everything that is not a one-time audio message from someone else.
-        if player != nil {
-            Functions.functions(region: "me-central1").httpsCallable("consumeOnceVoice")
-                .call(["cid": cid, "messageId": message.id]) { _, _ in }
-        }
+        // (The server burn is made in `load`, as the room opens.)
         ticker?.invalidate(); ticker = nil
         player?.stop(); player = nil
         if let t = tmpURL { try? FileManager.default.removeItem(at: t) }
