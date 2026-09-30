@@ -266,6 +266,9 @@ struct Message: Identifiable, Equatable, Codable {
     var reactions: [String: String]   // uid -> decrypted emoji
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
+    /// Sent while the recipient had the author blocked (written by the server's onNewMessage). It was
+    /// never delivered, so it keeps ONE tick for good, even after an unblock moves the watermarks.
+    var held: Bool = false
     var album: [AlbumItem] = []       // 2+ photos sent together = ONE album message (grid + one caption)
     /// PER-TILE ASPECTS, WRITTEN BEFORE THE TILES EXIST.
     ///
@@ -715,6 +718,7 @@ struct Message: Identifiable, Equatable, Codable {
             } ?? [:]
         self.mentions = data["mentions"] as? [String] ?? []
         self.viewOnce = data["viewOnce"] as? Bool ?? false
+        self.held = data["held"] as? Bool ?? false
         self.album = (data["album"] as? [[String: Any]])?.compactMap { d in
             guard let url = d["imageUrl"] as? String,
                   let enc = (d["enc"] as? [String: Any]).flatMap(EncMeta.init(map:)) else { return nil }
@@ -818,6 +822,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var lastPlayedVoice: [String: Double]
     /// 2026-09-25 delivered ticks: per member, the `updatedAt` (ms) their phone confirmed it had.
     var delivered: [String: Double]
+    /// The newest message was held by a block on the recipient's side (server-written). Its sender
+    /// keeps one tick in the list, whatever `delivered` / `unreadCount` say after an unblock.
+    var lastHeld: Bool
     /// 2026-09-24 decision D13: Mark as Unread is its own per-user flag, not a sign on `unreadCount`.
     /// uid → true while that member has marked the chat unread by hand; cleared when they open it.
     var markedUnread: [String: Bool]
@@ -890,6 +897,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.pinOrder = doubleMap(data["pinOrder"])
         self.lastPlayedVoice = doubleMap(data["lastPlayedVoice"])
         self.delivered = doubleMap(data["delivered"])
+        self.lastHeld = data["lastHeld"] as? Bool ?? false
         self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
@@ -1097,11 +1105,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// reminder would be a lie about them.
     /// My last message reached the other person's phone (1:1 only; a group has no delivered state).
     func lastDeliveredToOther(_ me: String) -> Bool {
-        guard !isGroup, updatedAtMillis > 0 else { return false }
+        guard !isGroup, updatedAtMillis > 0, !lastHeld else { return false }
         return (delivered[otherUid(me)] ?? 0) >= updatedAtMillis
     }
     func lastReadByOther(_ me: String) -> Bool {
         if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 } }
+        if lastHeld { return false }   // unblocking zeroes their unread count; it was never read
         return (unreadCount[otherUid(me)] ?? 0) <= 0
     }
     /// HAS SOMEBODY ELSE PLAYED MY VOICE NOTE? The reference app turns the sender's mic icon blue for exactly

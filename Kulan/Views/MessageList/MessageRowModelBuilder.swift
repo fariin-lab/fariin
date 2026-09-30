@@ -253,6 +253,8 @@ enum MessageRowModelBuilder {
             case .failed: tick = .failed
             case nil where ctx.editPendingIds.contains(msg.id):
                 tick = .sending   // 2026-09-24 feature-audit: an edit still waiting for the server
+            case nil where msg.held:
+                tick = .sent      // held by their block: never delivered, not even after an unblock
             case nil:
                 // A blocked contact's lastRead is ignored, matching what the old path passed in as
                 // `otherLastRead` — or a blocked chat shows ✓✓ on one row class and ✓ on another.

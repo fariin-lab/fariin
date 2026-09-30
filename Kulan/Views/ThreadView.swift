@@ -2581,8 +2581,9 @@ struct ThreadView: View {
                 searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
                 isFirstInCluster: isFirstInCluster(at: index),
                 isLastInCluster: isLastInCluster(at: index),
-                otherLastRead: (msg.authorId == me && !repo.iBlocked) ? repo.otherLastReadMillis : 0,
-                otherDelivered: (msg.authorId == me && !repo.iBlocked) ? repo.otherDeliveredMillis : 0,
+                // A message their block held keeps one tick (`Message.held`).
+                otherLastRead: (msg.authorId == me && !repo.iBlocked && !msg.held) ? repo.otherLastReadMillis : 0,
+                otherDelivered: (msg.authorId == me && !repo.iBlocked && !msg.held) ? repo.otherDeliveredMillis : 0,
                 chatColor: chatColorSpec,
                 isViewedOnce: msg.viewOnce && (viewedOnceTick >= 0) && ViewedOnce.contains(msg.id),
                 editPending: editPendingIds.contains(msg.id)   // 2026-09-24 feature-audit
