@@ -74,7 +74,23 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FARIIN LIGHT/DARK, HEADER TEXT, CAPTION REACTIONS, ALBUM CANCEL, KEYBOARD ON TAP.
+            BLURRED PHOTOS, MENU ABOVE THE KEYBOARD, ONE-TIME MEDIA, SWIPE MUTE, DEVICE LOCATION.
+
+            CHAT: a received photo no longer stays blurred after it has loaded. The long-press menu opens above the keyboard. One-time photos and voice notes are spent the moment they open and cannot be opened again. A photo with a caption and a reaction shows its time beside the reaction. The voice note bar hides when the note finishes.
+
+            CHAT LIST: swipe Mute is one tap (mute, or unmute). The timed choices are still in the long-press menu.
+
+            PROFILE: Share Profile sends the profile card. Send Message on a profile card opens that chat on top, and Back returns to where you were.
+
+            STORIES: posted stories open right after sign-in. The Posted stories card spacing is tidied.
+
+            ATTACH SHEET: the album list and the album slide together.
+
+            DEVICES: each device shows its city and country.
+
+            PLEASE TEST: open a chat with new photos; long-press a message with the keyboard up; open a one-time photo and a one-time voice note twice; swipe Mute in the chat list; Share Profile to a friend; Settings > Devices.
+
+            EARLIER IN THIS ROUND (build 810): FARIIN LIGHT/DARK, HEADER TEXT, CAPTION REACTIONS, ALBUM CANCEL, KEYBOARD ON TAP.
 
             FARIIN CHAT: never uses a wallpaper, and its posts change with light/dark at once.
 
