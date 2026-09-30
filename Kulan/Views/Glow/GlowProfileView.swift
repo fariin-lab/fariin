@@ -196,7 +196,8 @@ struct GlowProfileView: View {
                     identity
                     statsCard.padding(.horizontal, 16).padding(.top, 18)
                     insightsCard.padding(.horizontal, 16).padding(.top, 12)
-                    aboutCard
+                    // The About card (Joined + Complete your profile) is off the page, owner's
+                    // order 2026-09-30. `aboutCard` is kept below, unused.
                     postedStoriesCard.padding(.horizontal, 16).padding(.top, 22)
                     Color.clear.frame(height: 32)
                 }
@@ -613,41 +614,45 @@ struct GlowProfileView: View {
     /// ⛔ THE GLOWERS · GLOWING CARD ABOVE IT IS NOT TOUCHED, his correction the same day: "do NOT
     /// change, replace, resize, redesign or modify the existing card in any way". The first plan
     /// folded the two into one card; this is a separate row because of that sentence.
+    ///
+    /// ⛔ REDESIGNED to his own mock-up, 2026-09-30 evening: a card with "Insights" centred, one
+    /// line under it, and a wide "View Insights" button with an open lock. The whole card opens
+    /// the page.
     private var insightsCard: some View {
         NavigationLink {
             GlowInsightsView(stories: stories, title: profile?.handle ?? profile?.name ?? "Glow")
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+            VStack(spacing: 6) {
                 Text("Insights")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                     .foregroundStyle(.primary)
-                Spacer(minLength: 8)
-                // Absent while no count is known, for the reason `PostedStory.views` gives: a
-                // confident zero is the worse lie.
-                if glow.displayGlowers.count < GlowInsightsView.glowersNeeded {
-                    // Locked until then, his rule; the page behind the row says how far to go.
-                    Label("At \(GlowInsightsView.glowersNeeded) Glowers", systemImage: "lock.fill")
-                        .labelStyle(.titleAndIcon)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else if let views = totalStoryViews {
-                    Text("\(GlowCount.short(views)) story views")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                Group {
+                    if glow.displayGlowers.count < GlowInsightsView.glowersNeeded {
+                        Text("Insights are available after reaching \(GlowInsightsView.glowersNeeded) Glowers.")
+                    } else if let views = totalStoryViews {
+                        // Absent while no count is known: a confident zero is the worse lie.
+                        Text("\(GlowCount.short(views)) story views")
+                    }
                 }
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                Label("View Insights", systemImage: "lock.open")
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.white.opacity(0.12), in: Capsule())
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
             }
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, StatsPill.padH)
-            .padding(.vertical, AboutCard.rowV)
+            .padding(.vertical, 16)
             .background(cardColor, in: RoundedRectangle(cornerRadius: ProfileCard.corner,
                                                         style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: ProfileCard.corner, style: .continuous))
         }
         .buttonStyle(.plain)
     }
