@@ -58,9 +58,7 @@ final class RowImageView: UIImageView {
                    cornerRadius: CGFloat = 0, placeholder: UIImage? = nil) {
         layer.cornerRadius = cornerRadius
         layer.cornerCurve = .continuous
-        token += 1
-        let mine = token
-        guard let url, !url.isEmpty else { currentUrl = nil; image = placeholder; return }
+        guard let url, !url.isEmpty else { token += 1; currentUrl = nil; image = placeholder; return }
         // ⛔ "ALREADY DRAWN" MUST MEAN THE REAL BYTES, NOT ANY IMAGE. The placeholder — an inline
         // thumb or a decoded blurhash — is not nil, so a fetch that failed once left `image` holding
         // the blur, and every later configure with the same url returned here immediately. The photo
@@ -77,7 +75,16 @@ final class RowImageView: UIImageView {
         // `inFlight` is the missing state: a reconfigure while the bytes are coming does nothing, a
         // reconfigure after a failure retries, and a reconfigure after success returns above.
         guard url != loadedUrl, inFlight != url else { return }
+        // ⛔ THE TOKEN MOVES ONLY WHEN A NEW LOAD REALLY STARTS — owner, 2026-09-30: "a received
+        // photo stays blurred after it has loaded; tapping it opens it sharp". It was bumped at the
+        // top, before the guard above, so a reconfigure DURING a download (a tick, a reaction)
+        // returned there having already made the running watcher's token stale. The job finished,
+        // the cache held the sharp picture (hence the viewer), and the watcher dropped the news;
+        // `inFlight` then stayed set and every later configure returned above with the blur up.
+        token += 1
+        let mine = token
         currentUrl = url
+        inFlight = nil
 
         // Synchronous memory hit → the first frame already has the picture, no skeleton flash.
         if let mem = DiskImageCache.shared.memoryImage(url) { image = mem; return }
@@ -129,11 +136,15 @@ final class RowImageView: UIImageView {
                 self.setLoading(false)
                 self.unwatch()
                 Task { @MainActor [weak self] in
-                    guard let self, let img = await DiskImageCache.shared.image(for: url),
-                          self.token == mine else { return }
+                    guard let self else { return }
+                    let img = await DiskImageCache.shared.image(for: url)
+                    guard self.token == mine else { return }
+                    // Cleared even when the read comes back empty, so the next configure asks
+                    // again instead of waiting on a load that is over.
+                    if self.inFlight == url { self.inFlight = nil }
+                    guard let img else { return }
                     self.image = img
                     self.loadedUrl = url
-                    if self.inFlight == url { self.inFlight = nil }
                 }
             case .waitingTap, .failed:
                 // Not in flight any more: a later configure (or the bubble's tap) may ask again.
@@ -223,9 +234,8 @@ final class RowAvatarView: UIView {
         // longer decides anything about how the fallback looks, which is the whole point of the rule.
         accessibilityLabel = name
 
-        token += 1
-        let mine = token
         guard let photoUrl, !photoUrl.isEmpty else {
+            token += 1
             currentUrl = nil
             inFlight = nil
             imageView.image = nil
@@ -234,6 +244,10 @@ final class RowAvatarView: UIView {
         }
         guard photoUrl != currentUrl || imageView.image == nil else { return }
         guard inFlight != photoUrl else { return }
+        // After the guards, as in `RowImageView.configure`: bumped above them, a reconfigure during
+        // the load made the running load's token stale and its photo was thrown away.
+        token += 1
+        let mine = token
         currentUrl = photoUrl
 
         // The synchronous seed, for the same reason the SwiftUI avatar takes it: memory starts empty
