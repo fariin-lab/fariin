@@ -620,14 +620,16 @@ struct GlowProfileView: View {
     /// the page.
     private var insightsCard: some View {
         NavigationLink {
-            GlowInsightsView(stories: stories, title: profile?.handle ?? profile?.name ?? "Glow")
+            GlowInsightsView(stories: stories, title: profile?.handle ?? profile?.name ?? "Glow",
+                             handle: profile?.handle ?? "")
         } label: {
             VStack(spacing: 6) {
                 Text("Insights")
                     .font(.headline)
                     .foregroundStyle(.primary)
                 Group {
-                    if glow.displayGlowers.count < GlowInsightsView.glowersNeeded {
+                    if !GlowInsightsView.isUnlocked(glowers: glow.displayGlowers.count,
+                                                    handle: profile?.handle ?? "") {
                         Text("Insights are available after reaching \(GlowInsightsView.glowersNeeded) Glowers.")
                     } else if let views = totalStoryViews {
                         // Absent while no count is known: a confident zero is the worse lie.

@@ -131,11 +131,14 @@ struct GlowInsightsView: View {
     let stories: PostedStoriesLoader
     /// Whose lists the two glow rows open — the same title the profile's own stats card passes.
     var title: String = ""
+    /// The account's own @handle, for `alwaysOpen`.
+    var handle: String = ""
 
     /// Explicit, for the private-stored-property rule — see the note in `GlowProfileView`.
-    init(stories: PostedStoriesLoader, title: String = "") {
+    init(stories: PostedStoriesLoader, title: String = "", handle: String = "") {
         self.stories = stories
         self.title = title
+        self.handle = handle
     }
 
     @State private var loader = GlowInsightsLoader()
@@ -155,7 +158,17 @@ struct GlowInsightsView: View {
     /// day it is deployed, so an account that reaches 100 opens onto its past, not onto nothing.
     static let glowersNeeded = 100
 
-    private var unlocked: Bool { glow.displayGlowers.count >= Self.glowersNeeded }
+    /// Accounts whose Insights are never locked, at any Glower count (owner, 2026-09-30:
+    /// "dont lock insights this user @realwarya"). ⚠️ Keyed by handle: if this account ever
+    /// changes its username, update the name here.
+    static let alwaysOpen: Set<String> = ["realwarya"]
+
+    /// The one answer both the profile card and this page use.
+    static func isUnlocked(glowers: Int, handle: String) -> Bool {
+        alwaysOpen.contains(handle.lowercased()) || glowers >= glowersNeeded
+    }
+
+    private var unlocked: Bool { Self.isUnlocked(glowers: glow.displayGlowers.count, handle: handle) }
 
     private var report: InsightsReport {
         InsightsReport.build(period: period,
