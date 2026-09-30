@@ -411,11 +411,21 @@ struct SendContactSheet: View {
         // whole selection even when every send had failed. None reached → the existing failure line.
         let order = selected.compactMap { id in repo.conversations.first { $0.id == id } }
         var reached: [String] = []
+        // The profile card travels with the message, as it does when the same link is typed in a
+        // chat. The composer builds it while you type; nothing here did, so the share arrived as a
+        // bare link (owner, 2026-09-30). Built once and reused for everyone picked.
+        var preview: ChatService.OutgoingLinkPreview?
+        if let url = URL(string: link), url.scheme == "https",
+           let d = await LinkPreviewService.shared.draft(for: url) {
+            preview = ChatService.OutgoingLinkPreview(url: d.url.absoluteString, title: d.title,
+                                                      desc: d.desc, imageJPEG: d.imageJPEG)
+        }
         for cid in selected {
             let conv = repo.conversations.first { $0.id == cid }
             do {
                 try await ChatService.sendText(cid: cid, text: contactText,
-                                               group: conv?.isGroup == true ? conv?.users : nil)
+                                               group: conv?.isGroup == true ? conv?.users : nil,
+                                               preview: preview)
                 reached.append(cid)
             } catch {}
         }
