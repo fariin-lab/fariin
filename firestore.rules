@@ -578,6 +578,26 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // ⛔ THE INSIGHTS HISTORY IS THE SERVER'S TO WRITE AND THE OWNER'S ALONE TO READ (2026-09-30).
+      // `insightsDaily/{day}` holds one account's counts for one UTC day (story views, reactions,
+      // stories posted, glowers gained and lost); `insightsStories/{storyId}` is the record of one
+      // story that outlives it. Both are written by the functions in `functions-insights` with
+      // admin rights. A client that could write them could invent its own numbers, and anybody
+      // else reading them would learn what the profile deliberately does not show: how many
+      // people watch this person's stories. `insights/{doc}` is the server's own bookkeeping and
+      // is closed to everyone, the owner included.
+      match /insightsDaily/{day} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+      match /insightsStories/{storyId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+      match /insights/{doc} {
+        allow read, write: if false;
+      }
+
       // Story distribution lists ("My Status" + custom lists) and per-user seen state.
       // Both are private to the owner.
       match /storyLists/{listId} {
