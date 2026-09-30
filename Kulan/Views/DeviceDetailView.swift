@@ -45,6 +45,7 @@ struct DeviceDetailView: View {
                 LabeledContent("Model", value: session.displayName)
                 if !session.os.isEmpty { LabeledContent("System", value: session.os) }
                 if !session.appVersion.isEmpty { LabeledContent("Fariin", value: session.appVersion) }
+                if !session.location.isEmpty { LabeledContent("Location", value: session.location) }
                 if let created = session.createdAt {
                     LabeledContent("Signed in", value: created.formatted(fullDate))
                 }

@@ -3,6 +3,7 @@ import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseMessaging
+import FirebaseFunctions
 
 /// Every phone signed in to this account, as a real list you can act on.
 ///
@@ -118,6 +119,15 @@ final class DeviceRegistry: ObservableObject {
             registered = true
             watchThisDevice()
             startHeartbeat()   // the registration write IS the first beat; this keeps it honest after
+            // "Location: Kampala, Uganda" on the device sheet (owner, 2026-09-30). The SERVER works
+            // it out from the address this request arrives from and writes it on the record; the
+            // phone sends no position and asks for no location permission. Approximate, city
+            // level, and refreshed on each launch. A failure just leaves the row out.
+            let deviceId = Self.thisDeviceId
+            Task {
+                _ = try? await Functions.functions(region: "me-central1")
+                    .httpsCallable("recordDeviceLocation").call(["deviceId": deviceId])
+            }
         } catch {
             // A failed write must NOT arm the watcher: it would see no record and sign the
             // user out of a device that simply never managed to register.
@@ -357,6 +367,9 @@ struct DeviceSession: Identifiable, Hashable {
     let lastSeenAt: Date
     /// "iPhone17,1", written by every build that registers (see `registerThisDevice`).
     let hardware: String
+    /// "Kampala, Uganda", written by the server from the device's network address. Empty until
+    /// the device has launched a build that asks for it.
+    let location: String
 
     var isThisDevice: Bool { id == DeviceRegistry.thisDeviceId }
     /// "iPhone 16 Pro" — owner, 2026-09-25: every row read "iPhone". Falls back to the plain model
@@ -371,6 +384,7 @@ struct DeviceSession: Identifiable, Hashable {
         self.model = d["model"] as? String ?? "Phone"
         self.os = d["os"] as? String ?? ""
         self.appVersion = d["appVersion"] as? String ?? ""
+        self.location = d["location"] as? String ?? ""
         self.createdAt = (d["createdAt"] as? Timestamp)?.dateValue()
         // A record whose server timestamp has not landed yet reads as now, which is true
         // enough: it is being written by a device that is active this second.
