@@ -139,6 +139,8 @@ struct ContactInfoView: View {
     @State private var viewerVideo: Message?   // videos get the PLAYER — the image viewer spun forever
     @State private var showClear = false
     @State private var exportingChat = false
+    /// Export Chat is hidden from the profile menu (owner 2026-09-30). Flip to bring it back.
+    private static let showExportChat = false
     @State private var chatExportFile: ExportFile?
     @State private var chatExportError: String?
     @State private var showBlock = false
@@ -667,7 +669,8 @@ struct ContactInfoView: View {
         // ⛔ EXPORT CHAT — 2026-09-25. Messages left "Your Account Data" (see `DataExport`) and are
         // saved one conversation at a time from here, the way large messengers do it. Only where a
         // real chat exists: not your own profile, not a profile with no conversation behind it.
-        if !isSelf && hasChat {
+        // HIDDEN from this menu on the owner's order 2026-09-30; `exportChat()` is kept for later.
+        if Self.showExportChat && !isSelf && hasChat {
             Button { Task { await exportChat() } } label: {
                 Label("Export Chat", systemImage: "square.and.arrow.down")
             }

@@ -594,17 +594,26 @@ struct ImageViewerView: View {
     // tap any to jump to it. Centered above the bottom bar (reference screenshot).
     // Split into small pieces (thumbCell / thumbImage) — the inline version blew the type-checker budget.
     private var thumbStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            // LAZY, and with no strip-wide animation — both for the swipe's sake. This was an eager
-            // HStack over every photo in the chat, each thumb drawing a full-size UIImage through a
-            // clipShape + strokeBorder (an offscreen pass apiece), and the `.animation(value: current)`
-            // meant all of them ran a 200ms layout animation on the exact frame the page committed.
-            // The per-cell animation below still animates the one thumb whose size actually changes.
-            LazyHStack(spacing: 5) {
-                ForEach(gallery) { m in thumbCell(m) }
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                // LAZY, and with no strip-wide animation — both for the swipe's sake. This was an eager
+                // HStack over every photo in the chat, each thumb drawing a full-size UIImage through a
+                // clipShape + strokeBorder (an offscreen pass apiece), and the `.animation(value: current)`
+                // meant all of them ran a 200ms layout animation on the exact frame the page committed.
+                // The per-cell animation below still animates the one thumb whose size actually changes.
+                LazyHStack(spacing: 5) {
+                    ForEach(gallery) { m in thumbCell(m).id(m.id) }
+                }
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity)   // few thumbs → centered; many → scrolls
             }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity)   // few thumbs → centered; many → scrolls
+            // THE STRIP FOLLOWS THE PAGE (owner 2026-09-30: swiping did not move the strip, and the
+            // framed thumb sat half off the right edge). Centre the current thumb on open and on
+            // every page change, the way the reference viewer's filmstrip tracks the swipe.
+            .onAppear { proxy.scrollTo(current, anchor: .center) }
+            .onChange(of: current) { _, id in
+                withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+            }
         }
         .frame(height: 44)
         .padding(.bottom, 8)

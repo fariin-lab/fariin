@@ -89,10 +89,8 @@ struct NewChatView: View {
                                 Button { showNewGroup = true } label: { actionRow("person.2.fill", "New group") }
                                     .tint(.primary)
                             }
-                            Button { showNewContact = true } label: { actionRow("person.crop.circle.badge.plus", "New contact") }
-                                .tint(.primary)
-                            Button { showScan = true } label: { actionRow("qrcode.viewfinder", "Scan QR code") }
-                                .tint(.primary)
+                            // New contact and Scan QR code rows removed (owner 2026-09-30): scanning
+                            // lives on the top-right button already.
                             ShareLink(item: inviteText, preview: InviteShare.preview) {
                                 actionRow("square.and.arrow.up", "Invite friends")
                             }
@@ -212,7 +210,7 @@ struct NewChatView: View {
 
     private func actionRow(_ icon: String, _ title: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.green).frame(width: 30)
+            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(.primary).frame(width: 30)
             Text(title).foregroundStyle(.primary)
             Spacer(minLength: 0)   // ShareLink's label would otherwise hug its text and centre it
         }

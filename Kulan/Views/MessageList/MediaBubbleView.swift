@@ -1012,7 +1012,11 @@ final class UploadRingView: UIView {
         alpha = settled ? 0 : 1
         guard !settled else { stopSpinning(); return }
 
-        guard let fraction = UploadProgress.shared.fraction(key) else { startSpinning(); return }
+        // ⛔ ZERO IS "WAITING ITS TURN", NOT A FILL (owner 2026-09-30, two album screenshots: some
+        // tiles sat on a still dash while their neighbours finished). Storage reports 0/total the
+        // moment a transfer is queued, long before a byte moves, so a tile queued behind the others
+        // drew the 0.03 hair and nothing more: a ring that looks frozen. Spin until bytes move.
+        guard let fraction = UploadProgress.shared.fraction(key), fraction > 0 else { startSpinning(); return }
         stopSpinning()
         // A hair of ring at zero, so the first determinate frame is still an indicator and not an
         // empty circle.
@@ -1028,7 +1032,10 @@ final class UploadRingView: UIView {
     }
 
     private func startSpinning() {
-        guard !spinning else { return }
+        // ⚠️ THE FLAG ALONE IS NOT ENOUGH. iOS strips a layer's animations when its view leaves the
+        // window (scrolled off, app sent to the background), and `spinning` stayed true, so the
+        // ring came back STILL and this guard refused to restart it. Ask the layer, not the flag.
+        guard !spinning || arc.animation(forKey: "spin") == nil else { return }
         spinning = true
         let open = CABasicAnimation(keyPath: "strokeEnd")
         open.fromValue = 0
@@ -1055,6 +1062,12 @@ final class UploadRingView: UIView {
         spinning = false
         arc.removeAnimation(forKey: "open")
         arc.removeAnimation(forKey: "spin")
+    }
+
+    /// Back on screen: repaint, which restarts a spinner iOS stripped while it was away.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil, !bag.isEmpty { paint() }
     }
 
     override func layoutSubviews() {
