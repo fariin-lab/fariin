@@ -781,7 +781,7 @@ enum MessageRowLayout {
             // ⛔ …UNLESS IT HAS A CAPTION — owner, 2026-09-29, a reacted photo with a caption: "the
             // reaction works like on a bare image; make it enter the bubble like a text message".
             // A caption is a strip of text under the picture, so its reactions go inside, under the
-            // caption, exactly as a text bubble's do. The time stays in the caption (see `metaJoins`).
+            // caption, exactly as a text bubble's do, and the time joins them (see `metaJoins`).
             let captioned = plan.mediaPlan?.caption != nil || plan.albumPlan?.caption != nil
             let inside = (plan.mediaPlan == nil && plan.albumPlan == nil) || captioned
 
@@ -836,7 +836,8 @@ enum MessageRowLayout {
                 // inset), the row sits 3pt under the last line, and the bubble ends ~6pt under the
                 // pills. Ours started the pills 10pt in under text that starts 15pt in (they stuck out
                 // 5pt to the left), 12pt under the text, and 10pt above the bubble's edge.
-                let padH = BubbleMetrics.hPad
+                // A caption's text sits 12 in (`captionBlock`), so its pills and time do too.
+                let padH: CGFloat = captioned ? 12 : BubbleMetrics.hPad
                 // Measured from the old bubble bottom, which already sits `vPad` under the text:
                 // 3 - vPad puts the pills 3pt under the last line.
                 let gapAbove: CGFloat = 3 - BubbleMetrics.vPad
@@ -866,14 +867,24 @@ enum MessageRowLayout {
                 // for a text line, but this row counted only the time, so the chips ran under it.
                 // (The timer icon is inside the footer text now, so `plan.meta.width` counts it.)
                 let metaW = BubbleMetrics.metaInlineGap + plan.meta.width
-                let fitsOnRow = padH + total + metaW + padH <= columnW
-                let ownTextRow = plan.metaOnOwnLine && plan.text != .zero
-                // A captioned picture's time is drawn in its caption block, not from `plan.meta`, so
-                // it never moves onto the reaction row.
-                let metaJoins = !captioned && fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
+                // ⛔ A CAPTION IS A TEXT BUBBLE UNDER A PICTURE, SAME RULE — owner, 2026-09-30, a reacted
+                // photo with a caption: "too much empty space, use my bubble logic". Its time was
+                // pinned to the caption (I had written that it is not drawn from `plan.meta`; it is,
+                // `MessageRowView` places the one footer label from it), so a reaction added a whole
+                // row under a time that already had a row to itself. It joins the pills now, against
+                // the picture's own width, because a captioned bubble may not widen past its picture.
+                let fitsOnRow = padH + total + metaW + padH <= (captioned ? plan.bubble.width : columnW)
+                let ownTextRow = plan.metaOnOwnLine && (plan.text != .zero || captioned)
+                let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
 
                 var grown = plan.bubble
-                if metaJoins && ownTextRow { grown.size.height -= BubbleMetrics.metaGap + plan.meta.height }
+                if metaJoins && ownTextRow {
+                    let freed = BubbleMetrics.metaGap + plan.meta.height
+                    grown.size.height -= freed
+                    // The caption block gives the row back too, so it still ends where the bubble did.
+                    plan.mediaPlan?.caption?.size.height -= freed
+                    plan.albumPlan?.caption?.size.height -= freed
+                }
                 grown.size.height += stripH
 
                 // Widen only if it must, and never past the column the bubble was measured against.
