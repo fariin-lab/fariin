@@ -127,16 +127,14 @@ struct LinkPreviewCard: View {
         opening = true
         openFailure = nil
         Task {
-            guard let user = await ChatService.findByHandle(handle),
-                  let cid = try? await ChatService.openConversation(other: user) else {
-                await MainActor.run {
-                    opening = false
+            let opened = await ProfileCardDoor.open(handle, push: false)
+            await MainActor.run {
+                opening = false
+                if !opened {
                     showOpenFailure(NetworkState.shared.isOnline ? "Couldn't connect"
                                                                  : "No internet connection. Try again.")
                 }
-                return
             }
-            await MainActor.run { opening = false; AppRouter.shared.pendingChatId = cid }
         }
     }
 

@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PROFILE: ABOUT CARD AND INSIGHTS.
+            ONE-TIME PHOTO AND VOICE ARE PROTECTED, SHARE PROFILE AND SEND MESSAGE ARE FAST.
+
+            ONE-TIME PHOTO: no Save, no Share and no edit button. The photo is left out of screenshots and hidden while the screen is recorded.
+
+            ONE-TIME VOICE: the page is left out of screenshots. While the screen is recorded or shared the note does not play, and the page says why.
+
+            SHARE PROFILE: the sheet closes as soon as you tap Send and the card goes to all chats at once.
+
+            PROFILE CARD: Send Message opens the chat right away.
+
+            PLEASE TEST: open a one-time photo, take a screenshot and look at it in Photos; start a screen recording and open a one-time photo and a one-time voice note; Share Profile to two chats; tap Send Message on a profile card.
+
+            EARLIER IN THIS ROUND (build 812): PROFILE: ABOUT CARD AND INSIGHTS.
 
             MY PROFILE: a new About card with your joined date and "Complete your profile" (photo, name, username, bio, link) with a progress bar. Tap it to open Edit. The small Joined pill under the bio moved into this card. The Glowers and Glowing card and Posted stories are unchanged.
 

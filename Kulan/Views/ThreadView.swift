@@ -3137,7 +3137,7 @@ struct ThreadView: View {
 
         // MEDIA STILL UPLOADING: not on the server yet — only Save / Cancel Sending / Select.
         if m.sendState == .sending && (m.isImage || m.isVideo || m.isAlbum || m.isGif) {
-            if m.isImage || m.isAlbum {
+            if (m.isImage || m.isAlbum) && !m.viewOnce {   // a one-time photo is never saved, even my own
                 out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
                     Task { await saveImageToPhotos(m) }
                 })
@@ -3494,16 +3494,9 @@ struct ThreadView: View {
                 guard let m = repo.items.first(where: { $0.rowId == id }), let lp = m.linkPreview,
                       let handle = URL(string: lp.url).flatMap({ LinkPreviewService.profileHandle(in: $0) })
                 else { return }
-                // The same two steps the deep link takes, so a tap here and a tap on the link
-                // itself land in exactly one place.
-                Task {
-                    guard let user = await ChatService.findByHandle(handle),
-                          let openedCid = try? await ChatService.openConversation(other: user) else { return }
-                    await MainActor.run {
-                        AppRouter.shared.pendingChatPush = true   // slide in over this chat
-                        AppRouter.shared.pendingChatId = openedCid
-                    }
-                }
+                // Slides in over this chat. The lookup was started when the card was drawn, and a
+                // chat already in the list opens without asking the server — see `ProfileCardDoor`.
+                Task { await ProfileCardDoor.open(handle, push: true) }
             },
             onTapLocation: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }

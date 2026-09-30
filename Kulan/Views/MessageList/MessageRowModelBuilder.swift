@@ -540,6 +540,8 @@ enum MessageRowModelBuilder {
         if handle != nil, p.desc.isEmpty, p.title == "Unavailable" {
             shape = .profileUnavailable
         } else if let handle {
+            // Looked up now, so the card's Send Message has nothing left to wait for.
+            ProfileCardDoor.prewarm(handle)
             shape = .profile(handle: handle)
         } else {
             shape = .article

@@ -115,6 +115,9 @@ struct SendContactSheet: View {
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(sending)
+        // The profile card is built while he is still choosing who to send it to, so Send has
+        // nothing to wait for. The service keeps it, and `sendAll` asks for the same one.
+        .task { _ = await cardPreview() }
         // ⛔ NO SPINNER (owner 2026-08-22: "when I send, it is loading — no need loading"). A wheel
         // over the faces said "wait" for something nobody is waiting on: the sheet is about to close
         // and the sending is the app's problem, not his. The confirmation now arrives afterwards, on
@@ -410,24 +413,37 @@ struct SendContactSheet: View {
         // 2026-09-24 decision D-composer-5: the toast counts the chats it REALLY reached. It named the
         // whole selection even when every send had failed. None reached → the existing failure line.
         let order = selected.compactMap { id in repo.conversations.first { $0.id == id } }
-        var reached: [String] = []
-        // The profile card travels with the message, as it does when the same link is typed in a
-        // chat. The composer builds it while you type; nothing here did, so the share arrived as a
-        // bare link (owner, 2026-09-30). Built once and reused for everyone picked.
-        var preview: ChatService.OutgoingLinkPreview?
-        if let url = URL(string: link), url.scheme == "https",
-           let d = await LinkPreviewService.shared.draft(for: url) {
-            preview = ChatService.OutgoingLinkPreview(url: d.url.absoluteString, title: d.title,
-                                                      desc: d.desc, imageJPEG: d.imageJPEG)
-        }
-        for cid in selected {
+        let text = contactText
+        let targets: [(cid: String, group: [String]?)] = selected.map { cid in
             let conv = repo.conversations.first { $0.id == cid }
-            do {
-                try await ChatService.sendText(cid: cid, text: contactText,
-                                               group: conv?.isGroup == true ? conv?.users : nil,
-                                               preview: preview)
-                reached.append(cid)
-            } catch {}
+            return (cid: cid, group: conv?.isGroup == true ? conv?.users : nil)
+        }
+        // ⛔ THE SHEET CLOSES NOW, THE SENDING HAPPENS BEHIND IT — owner, 2026-09-30: "when I send
+        // Share Profile it is taking time". The sheet used to stay up until the card had been built
+        // and every chat had answered, one after another. His own 2026-08-22 ruling already says
+        // the sending is the app's problem and the confirmation is read on the page he lands back
+        // on; this makes the sheet behave that way. The toast still reports what really arrived.
+        dismiss()
+        // The profile card travels with the message, as it does when the same link is typed in a
+        // chat (owner, 2026-09-30). Built when the sheet opened, so this is normally a cache read.
+        let preview = await cardPreview()
+        // Every chat at once: the wait is the slowest one, not all of them added together.
+        var reached: [String] = []
+        await withTaskGroup(of: String?.self) { tasks in
+            for target in targets {
+                tasks.addTask {
+                    do {
+                        try await ChatService.sendText(cid: target.cid, text: text,
+                                                       group: target.group, preview: preview)
+                        return target.cid
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+            for await cid in tasks {
+                if let cid { reached.append(cid) }
+            }
         }
         sending = false
         if reached.isEmpty {
@@ -436,7 +452,14 @@ struct SendContactSheet: View {
             let firstName = order.first { reached.contains($0.id) }.map { $0.displayName(me) } ?? "chat"
             onSent(Self.sentMessage(first: firstName, count: reached.count))
         }
-        dismiss()
+    }
+
+    /// The card for the profile this sheet shares, or nil when the text carries no https link.
+    private func cardPreview() async -> ChatService.OutgoingLinkPreview? {
+        guard let url = URL(string: link), url.scheme == "https",
+              let draft = await LinkPreviewService.shared.draft(for: url) else { return nil }
+        return ChatService.OutgoingLinkPreview(url: draft.url.absoluteString, title: draft.title,
+                                               desc: draft.desc, imageJPEG: draft.imageJPEG)
     }
 
     /// "Link sent to Vzet and 5 other chats." — his wording, 2026-08-22.
