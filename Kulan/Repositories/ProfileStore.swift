@@ -610,7 +610,13 @@ final class ProfileStore {
         for path in ["profiles/\(uid).jpg", "profiles/\(uid)-poster.jpg"] {
             let ref = Storage.storage().reference().child(path)
             guard let current = try? await ref.getMetadata() else { continue }   // no such file
-            guard current.customMetadata?[Self.audienceKey] != tag else { continue }
+            let now = current.customMetadata?[Self.audienceKey]
+            guard now != tag else { continue }
+            // The server writes finer labels than this phone can (`except`, `contacts`, each with
+            // its list of people). Writing `checked` over one of those hid the photo from everybody
+            // until the server put its label back, at every launch. `checked` from here only ever
+            // closes an `everyone` or labels an unlabelled file; the server owns the rest.
+            if tag == "checked", let now, now != "everyone" { continue }
             let update = StorageMetadata()
             update.customMetadata = [Self.audienceKey: tag]
             _ = try? await ref.updateMetadata(update)

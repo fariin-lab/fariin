@@ -42,11 +42,17 @@ service firebase.storage {
       // everybody, because any block made the file `checked`. Now Everyone-with-some-blocked is
       // `except`, and the people it is hidden from are listed ON THE FILE (`deny`, uids joined by
       // commas, written by the server's `labelProfilePhoto`). No lookup, so no 2-document cap.
+      // ⛔ `contacts` — owner, 2026-09-30: "on My Chats nobody can see my photo". My Chats went
+      // through `canSeePhoto`, which reads four documents against the cap of two, so it was
+      // refused for everybody. The server now writes the people who MAY see it on the file
+      // (`allow`: my accepted 1:1 chats, less anyone blocked or hidden), and this reads that list.
       allow read: if request.auth != null
         && (file.matches('group_.*')
             || (resource != null && resource.metadata.get('audience', '') == 'everyone')
             || (resource != null && resource.metadata.get('audience', '') == 'except'
                 && !(request.auth.uid in resource.metadata.get('deny', '').split(',')))
+            || (resource != null && resource.metadata.get('audience', '') == 'contacts'
+                && request.auth.uid in resource.metadata.get('allow', '').split(','))
             || canSeePhoto(file.split('[-.]')[0]));
       // ⚠️ `file == uid + '.jpg'` ON THE WRITE, and it was missing. The DELETE rule below has always
       // had it; the write rule checked only that you were signed in, the file was under 8 MB, and it
