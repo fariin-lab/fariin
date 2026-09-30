@@ -1022,9 +1022,52 @@ struct OneTimeVoicePage: View {
         return String(format: "%d:%02d", d / 60, d % 60)
     }
 
+    /// True while the screen is being recorded or mirrored. See `captureChanged`.
+    @State private var capturing = UIScreen.main.isCaptured
+
+    /// ⛔ NOT IN A SCREENSHOT, NOT IN A RECORDING, AND NOT A SOUND INTO A RECORDING — owner,
+    /// 2026-09-30: "voice message: user can't take screenshot, can't record video, can't record
+    /// screen voice". The note's page is inside `CaptureProtected`; the close button and the
+    /// recording notice are deliberately OUTSIDE it, because the protected part is hidden whole
+    /// while a recording runs and the way out must not be hidden with it.
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            CaptureProtected {
+                VStack(spacing: 0) {
+                    // The close button's row, which sits above this layer; keeps the note where it was.
+                    Color.clear.frame(height: 44)
+                    Spacer()
+                    VStack(spacing: 22) {
+                        Image(systemName: "1.circle")
+                            .font(.system(size: 54, weight: .light)).foregroundStyle(.white.opacity(0.9))
+                        Text("One-time voice message")
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                        if failed {
+                            Text("Could not load this voice message.")
+                                .font(.system(size: 14)).foregroundStyle(.white.opacity(0.7))
+                        } else {
+                            bubble
+                        }
+                    }
+                    Spacer()
+                    Text("It's gone when you leave this screen")
+                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.55))
+                        .padding(.bottom, 26)
+                }
+            }
+            if capturing {
+                VStack(spacing: 10) {
+                    Image(systemName: "record.circle")
+                        .font(.system(size: 40, weight: .light)).foregroundStyle(.white.opacity(0.9))
+                    Text("Screen recording is on")
+                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    Text("Stop recording or sharing your screen to listen to this voice message.")
+                        .font(.system(size: 14)).foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 40)
+            }
             VStack(spacing: 0) {
                 HStack {
                     Button { dismiss() } label: {
@@ -1037,26 +1080,23 @@ struct OneTimeVoicePage: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 8)
                 Spacer()
-                VStack(spacing: 22) {
-                    Image(systemName: "1.circle")
-                        .font(.system(size: 54, weight: .light)).foregroundStyle(.white.opacity(0.9))
-                    Text("One-time voice message")
-                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                    if failed {
-                        Text("Could not load this voice message.")
-                            .font(.system(size: 14)).foregroundStyle(.white.opacity(0.7))
-                    } else {
-                        bubble
-                    }
-                }
-                Spacer()
-                Text("It's gone when you leave this screen")
-                    .font(.system(size: 13)).foregroundStyle(.white.opacity(0.55))
-                    .padding(.bottom, 26)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+            captureChanged()
         }
         .task { await load() }
         .onDisappear { teardown() }
+    }
+
+    /// A recording that starts mid-listen stops the note at once; it does not resume by itself
+    /// when the recording ends, the listener presses play.
+    private func captureChanged() {
+        capturing = UIScreen.main.isCaptured
+        if capturing, playing {
+            player?.pause()
+            playing = false
+        }
     }
 
     /// ⛔ THE CHAT'S OWN VOICE BUBBLE, DRAWN ON BLACK — owner, 2026-09-29, with the reference's page:
@@ -1141,6 +1181,7 @@ struct OneTimeVoicePage: View {
     private func toggle() {
         guard let p = player else { return }
         if playing { p.pause(); playing = false; return }
+        guard !capturing else { return }   // never a sound into a screen recording
         guard progress < 0.999 else { return }   // one listen: no replay (the page closes at the end)
         p.play(); playing = true
         startTicker()
@@ -1188,10 +1229,13 @@ struct OneTimeVoicePage: View {
                 await MainActor.run { localBars = b }
             }
         }
-        // The room plays as it opens — nobody opens a one-time note to look at it.
-        player?.play()
-        playing = true
-        startTicker()
+        // The room plays as it opens — nobody opens a one-time note to look at it. Unless the
+        // screen is being recorded: then it waits, and the notice on the page says why.
+        if !capturing {
+            player?.play()
+            playing = true
+            startTicker()
+        }
         // The sender's "Opened" rides the same receipts-gated voice-played signal every ordinary
         // note sends (the gate lives inside; receipts off means the sender learns nothing).
         ChatService.markVoicePlayedThrottled(cid, createdAtMillis: message.createdAt.timeIntervalSince1970 * 1000)

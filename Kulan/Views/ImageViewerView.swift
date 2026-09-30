@@ -498,7 +498,24 @@ struct ImageViewerView: View {
         // this used to render a spinner and only fill in after an async task — even though the bubble
         // you just tapped had already decoded the image into the memory cache. That one-frame-plus gap
         // is what read as "the image opens late".
-        if let img = cachedImage(m) {
+        if let img = cachedImage(m), m.viewOnce {
+            // ⛔ A ONE-TIME PHOTO IS DRAWN INSIDE THE CAPTURE SHIELD — owner, 2026-09-30: "user
+            // can't take screenshot, can't record". It is left out of a screenshot and hidden
+            // while the screen is recorded; what iOS does and does not promise about that is
+            // written down in `CaptureProtected`. No pinch zoom here: the zoom view is a UIKit
+            // scroll view of its own and a photo seen once does not need one.
+            CaptureProtected {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.25)) { chromeHidden.toggle() }
+                    }
+                    .ignoresSafeArea()
+            }
+        } else if let img = cachedImage(m) {
             // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
@@ -557,7 +574,13 @@ struct ImageViewerView: View {
             .liquidGlass(Capsule(), interactive: false)
             Spacer()
             Menu {
-                Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
+                // ⛔ A ONE-TIME PHOTO CANNOT BE SAVED, SHARED OR EDITED — owner, 2026-09-30: "once
+                // view photo has download button ... this is big mistake". Every door out of this
+                // viewer (this item, and Share, the pen and Save in `bottomBar`) is absent for one,
+                // and `save()` and `share()` refuse it themselves.
+                if !message.viewOnce {
+                    Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
+                }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis").font(.title3.weight(.semibold)).foregroundStyle(.primary)
@@ -617,12 +640,15 @@ struct ImageViewerView: View {
     // (Delete own / Save received).
     private var bottomBar: some View {
         HStack {
-            barButton("square.and.arrow.up") { share() }
+            // A one-time photo keeps Delete only — see the note in `header`.
+            if !message.viewOnce {
+                barButton("square.and.arrow.up") { share() }
+            }
             Spacer()
             // PEN (replaces Reply, user spec): opens the pen editor on THIS image; Done lands in the
             // FULL image editor (crop/pen/HD/…) — the same editor as a fresh photo — and Send delivers
             // the edited copy with every modification baked in. Hidden where no send pipeline exists.
-            if onSendEdited != nil {
+            if onSendEdited != nil, !message.viewOnce {
                 barButton("scribble.variable") {
                     // currentImage, not loaded[current] — see the note on currentImage.
                     if let img = currentImage { penEdit = PenEditWrap(image: img) }
@@ -631,7 +657,7 @@ struct ImageViewerView: View {
             Spacer()
             if isMine {
                 barButton("trash", tint: .red) { confirmDelete = true }
-            } else {
+            } else if !message.viewOnce {
                 barButton("square.and.arrow.down") { save() }   // received photo → Save instead of Delete
             }
         }
@@ -709,11 +735,12 @@ struct ImageViewerView: View {
     }
 
     private func share() {
-        guard let image = currentImage else { return }
+        guard !message.viewOnce, let image = currentImage else { return }
         shareItems = [image]
     }
 
     private func save() {
+        guard !message.viewOnce else { return }
         Task {
             // Last resort: a page still decrypting has neither, so fetch it before giving up rather
             // than reporting a failure the user can see is wrong.
