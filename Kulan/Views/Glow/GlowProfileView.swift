@@ -784,8 +784,13 @@ struct GlowProfileView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, PostedCard.pad)
-            .padding(.top, PostedCard.pad)
+            // ⛔ EQUAL TO THE EYE, NOT TO THE TEXT BOX — owner, 2026-09-30, his marks on the card: the
+            // space above "Posted stories" read larger than the space to its left, and the same for
+            // See All against the right edge. Both paddings were 14, but a line of text carries empty
+            // room above its capitals, so 14 to the box was about 18 to the letters.
+            .padding(.leading, PostedCard.pad)
+            .padding(.trailing, PostedCard.seeAllTrailing)
+            .padding(.top, PostedCard.titleTop)
 
             VStack(spacing: 0) {
                 switch stories.state {
@@ -844,6 +849,19 @@ struct GlowProfileView: View {
     /// stray number here shows up as a tile that does not reach the card's edge.
     private enum PostedCard {
         static let pad: CGFloat = 14
+        /// Top padding that puts the heading's CAPITALS `pad` under the card's edge: the box starts
+        /// an ascender above the baseline, the capitals only a cap-height above it.
+        static var titleTop: CGFloat {
+            let f = UIFont.preferredFont(forTextStyle: .headline)
+            return max(0, pad - (f.ascender - f.capHeight))
+        }
+        /// See All shares the heading's baseline in a smaller type, so its capitals start a little
+        /// lower; its right inset grows by the same amount, so its top and right gaps match.
+        static var seeAllTrailing: CGFloat {
+            let title = UIFont.preferredFont(forTextStyle: .headline)
+            let link = UIFont.preferredFont(forTextStyle: .subheadline)
+            return pad + max(0, title.capHeight - link.capHeight)
+        }
         /// The same air the page behind See All puts between two tiles, so the three on the card and
         /// the three at the top of that page are spaced alike.
         static var gap: CGFloat { StoryTileGrid.gap }

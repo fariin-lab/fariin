@@ -528,6 +528,13 @@ struct RootView: View {
         // the Stories tab: an audience that resolves before its own data has landed posts to
         // nobody, and `resolveAudience` treats an empty set as an accepted post.
         GlowService.shared.start(uid: AuthService.shared.uid ?? "")
+        // ⛔ AND THE STORIES THEMSELVES — owner, 2026-09-30: after signing out and back in, his own
+        // story on My Profile did nothing when tapped until he had opened the Stories tab once.
+        // The repository's listeners were attached by its first `load()`, and the only callers of
+        // that were the Stories tab's own views, so on every other tab `mine` was nil (the tap's
+        // guard) and nothing refreshed. Attached here, they are live from sign-in on every tab;
+        // `load()` re-attaches by itself when the account changes and is a cheap regroup otherwise.
+        Task { await StoriesRepository.shared.load() }
     }
 
     #if DEBUG

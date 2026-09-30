@@ -233,15 +233,23 @@ struct AttachRecentsStrip: View {
         // comes in from the right over the list, going back returns it to the right. The bar and
         // the button are drawn outside this view (ThreadView's overlay) and see no animation.
         // Each page is opaque so the two never show through each other mid-slide.
+        // ⛔ EACH PAGE HAS A FIXED PLACE IN THE STACK — owner, 2026-09-30: "the album list disappears
+        // at once, then the album slides in over an empty frame". A ZStack child with no explicit
+        // `zIndex` loses its place the moment it is removed, so its removal transition never draws:
+        // the leaving page was gone on the first frame and only the arriving one moved. With the
+        // order pinned, the list leaves to the left WHILE the album arrives from the right, and
+        // Back runs the same pair in reverse.
         ZStack {
             if showAlbums {
                 albumsList
                     .background(Color(uiColor: .systemBackground))
                     .transition(.move(edge: .leading))
+                    .zIndex(0)
             } else {
                 grid
                     .background(Color(uiColor: .systemBackground))
                     .transition(.move(edge: .trailing))
+                    .zIndex(1)
             }
         }
         // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.

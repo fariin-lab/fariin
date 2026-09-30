@@ -93,7 +93,9 @@ struct VoiceNoteBar: View {
             // bottom edge, clipped by the capsule, the way his reference draws it.
             .overlay(alignment: .bottom) { progressLine }
             .clipShape(Capsule())
-            .liquidGlass(Capsule())
+            // Interactive, so a touch lights and stretches the glass the way the header's own
+            // buttons do (owner, 2026-09-30).
+            .liquidGlass(Capsule(), interactive: true)
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 4)
