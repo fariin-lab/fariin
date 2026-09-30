@@ -4794,8 +4794,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // travels with the keys' animation, so this is set flatly rather than asked.
         overlay.presentsAboveKeyboard = keysUp   // (the note above is the 08-27 era; see the top of this block)
         // The keys' top in window coordinates, so the menu never lays its list under them (owner,
-        // 2026-09-29). `keyboardTracker` is a zero-height view pinned to the keyboard guide's top.
-        overlay.keyboardTop = keysUp ? view.convert(keyboardTracker.frame, to: nil).minY : nil
+        // 2026-09-29).
+        // ⛔ FROM `keyboardOverlap`, NOT FROM `keyboardTracker` — owner, 2026-09-30, third report.
+        // The tracker hangs from the SYSTEM guide, which does not move in this shell (see
+        // `adoptSystemKeyboardGuide`): it sat at the resting strip with the keys up, so the menu
+        // was handed a "keyboard top" near the bottom of the screen and laid out as if there were
+        // no keyboard. `keyboardOverlap` is the height the composer itself rides, measured from
+        // this view's bottom, so the edge is taken in the view and converted.
+        overlay.keyboardTop = keysUp
+            ? view.convert(CGPoint(x: 0, y: view.bounds.maxY - keyboardOverlap), to: nil).y
+            : nil
         overlay.present(in: window, startAtSqueeze: true)
     }
 
