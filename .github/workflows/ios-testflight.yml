@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            INSIGHTS REDESIGN, RESTRICTED CHAT, 120HZ SCROLLING, HEADER BLUR.
+            REACTION PREVIEWS, PROFILE LINKS, ENCRYPTION PAGE, FILE SHARE.
+
+            CHAT LIST: a reaction to a photo shows the real photo (an album up to three); a reaction to a voice note or file shows a real icon, not an emoji.
+
+            USERNAMES: tapping your own name, link or card opens your profile; the person you are chatting with opens their profile; anyone else opens their chat.
+
+            FILES: the file preview has a Share button. A reacted file puts its time on the reaction row.
+
+            ENCRYPTION: a cleaner page, the code and numbers in one card, Scan in glass.
+
+            ALSO: the pin button in the pin bar is glass; Add another account shows Google, Apple and email.
+
+            PLEASE TEST: react to a photo, an album, a voice note and a zip, then look at the chat list; tap your own and the other person's username in a chat; open a file and tap Share.
+
+            EARLIER IN THIS ROUND (build 818): INSIGHTS REDESIGN, RESTRICTED CHAT, 120HZ SCROLLING, HEADER BLUR.
 
             INSIGHTS: three tabs. Overview (tap a figure to chart it), Content (your stories, sort by Latest, Views or Reactions), Audience (Glowers growth with Unglows, top countries, when your stories are watched). The history now loads.
 
