@@ -125,6 +125,8 @@ struct InsightsReport: Equatable {
     let profileViews: InsightsDelta
     let viewsPerStory: InsightsDelta
     let glowersNet: InsightsDelta
+    let gainedDelta: InsightsDelta
+    let lostDelta: InsightsDelta
 
     let glowersGained: Int
     let glowersLost: Int
@@ -250,6 +252,8 @@ struct InsightsReport: Equatable {
             profileViews: compare({ $0.profileViews }),
             viewsPerStory: delta(average(currentStories), average(previousStories)),
             glowersNet: delta(Double(gained - lost), Double(previousNet)),
+            gainedDelta: compare({ $0.glowersGained }),
+            lostDelta: compare({ $0.glowersLost }),
             glowersGained: gained,
             glowersLost: lost,
             glowingGained: total(current, { $0.glowingGained }),

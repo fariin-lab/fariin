@@ -188,24 +188,8 @@ struct GlowInsightsView: View {
         var title: String {
             switch self {
             case .overview: return "Overview"
-            case .content: return "Content"
+            case .content: return "Stories"   // his reference names the tab for what it holds
             case .audience: return "Audience"
-            }
-        }
-    }
-
-    /// The headline figures on Overview. Tapping one charts it below, day by day.
-    enum Metric: CaseIterable, Identifiable {
-        case views, profileViews, reactions, glowers, posted, perStory
-        var id: Self { self }
-        var title: String {
-            switch self {
-            case .views: return "Views"
-            case .profileViews: return "Profile views"
-            case .reactions: return "Reactions"
-            case .glowers: return "Net Glowers"
-            case .posted: return "Stories"
-            case .perStory: return "Views per story"
             }
         }
     }
@@ -220,24 +204,13 @@ struct GlowInsightsView: View {
         }
     }
 
-    enum GrowthView: CaseIterable { case overall, gained, unglows
-        var title: String {
-            switch self {
-            case .overall: return "Overall"
-            case .gained: return "Gained"
-            case .unglows: return "Unglows"
-            }
-        }
-    }
 
     @State private var loader = GlowInsightsLoader()
     @State private var history = InsightsHistoryLoader()
     @State private var countries = InsightsCountriesLoader()
     @State private var period: InsightsPeriod = .month
     @State private var tab: Tab = .overview
-    @State private var metric: Metric = .views
     @State private var sort: StorySort = .latest
-    @State private var growth: GrowthView = .overall
     private var glow = GlowService.shared
 
     private var live: [PostedStory] { stories.state.value ?? [] }
@@ -389,112 +362,110 @@ struct GlowInsightsView: View {
     }
 
     /// The period's heading IS its picker: tap "Last 28 days ⌄" to choose 7, 28 or 90.
+    /// ⛔ HIS LAYOUT — owner, 2026-10-03, three screenshots: the date range on the left, a
+    /// "Last 28 Days ⌄" pill on the right that picks the period, then an "Insights" heading over
+    /// the cards.
     private func periodHeader(_ report: InsightsReport) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Menu {
-                Picker("Period", selection: $period) {
-                    ForEach(InsightsPeriod.allCases) { option in
-                        Text(option.title).tag(option)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("\(Self.dayText(report.start)) - \(Self.dayText(report.end))")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Menu {
+                    Picker("Period", selection: $period) {
+                        ForEach(InsightsPeriod.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
                     }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(period.title).font(.subheadline.weight(.semibold))
+                        Image(systemName: "chevron.down").font(.caption.weight(.bold))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(period.title).font(.title2.weight(.bold))
-                    Image(systemName: "chevron.down").font(.subheadline.weight(.bold))
-                }
-                .foregroundStyle(.primary)
             }
-            Text("\(Self.dayText(report.start)) to \(Self.dayText(report.end))")
-                .font(.subheadline).foregroundStyle(.secondary)
+            Text("Insights").font(.title3.weight(.semibold))
         }
-        .padding(.top, 4)
+        .padding(.top, 8)
+    }
+
+    /// One figure as his reference draws it: the name and the number on the left, "vs Previous N
+    /// Days" and the change on the right, and a chart under a rule when there is one.
+    private func figureCard<Extra: View>(_ title: String, _ value: String, _ delta: InsightsDelta,
+                                         @ViewBuilder chart: () -> Extra) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.subheadline).foregroundStyle(.secondary)
+                    Text(value).font(.title3.weight(.bold)).monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("vs Previous \(period.rawValue) Days").font(.caption).foregroundStyle(.secondary)
+                    let p = Self.percentText(delta)
+                    Text(p.text).font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(p.color)
+                }
+            }
+            .padding(16)
+            chart()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func figureCard(_ title: String, _ value: String, _ delta: InsightsDelta) -> some View {
+        figureCard(title, value, delta) { EmptyView() }
+    }
+
+    /// Bars by day under a rule, inside a figure card.
+    @ViewBuilder private func dayBars(_ points: [(date: Date, value: Int)]) -> some View {
+        if points.count >= 2 {
+            Divider()
+            Chart(points, id: \.date) { p in
+                BarMark(x: .value("Day", Self.chartDate(p.date), unit: .day),
+                        y: .value("Value", p.value))
+                    .foregroundStyle(Color.accentColor.gradient)
+                    .cornerRadius(2)
+            }
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .day, count: max(1, points.count / 3))) {
+                    AxisValueLabel(format: .dateTime.day(.twoDigits).month(.twoDigits))
+                }
+            }
+            .frame(height: 170)
+            .padding(16)
+        }
+    }
+
+    /// "+4.2%" in green, "-0.6%" in grey, "–" when there is no earlier period to compare with
+    /// (see `InsightsDelta`: no percentage over a zero).
+    private static func percentText(_ delta: InsightsDelta) -> (text: String, color: Color) {
+        guard let p = delta.percent else {
+            if let change = delta.change, change != 0 { return (text: signed(change), color: change > 0 ? .green : .secondary) }
+            return (text: "–", color: .secondary)
+        }
+        if abs(p) < 0.0005 { return (text: "0.0%", color: .secondary) }
+        return (text: String(format: "%+.1f%%", p * 100), color: p > 0 ? .green : .secondary)
     }
 
     // MARK: - Overview
 
+    /// ⛔ HIS OVERVIEW (screenshot 1, 2026-10-03): Total Glowers and Profile Views, each a figure
+    /// card with its days in bars.
     @ViewBuilder private func overviewTab(_ report: InsightsReport) -> some View {
         periodHeader(report)
         historyGate(report) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(Metric.allCases) { m in metricTile(m, report) }
-                }
-                .padding(.vertical, 2)
+            figureCard("Total Glowers", GlowCount.short(glow.displayGlowers.count), totalGlowersDelta(report)) {
+                dayBars(report.glowersByDay.map { (date: $0.date, value: $0.value) })
             }
-            .scrollClipDisabled()
-            card(metric.title, footer: overviewFooter(report)) {
-                metricChart(report)
+            figureCard("Profile Views", Self.amount(report.profileViews.current), report.profileViews) {
+                dayBars(report.recordedDays.map { (date: $0.date, value: max(0, $0.day.profileViews)) })
             }
-        }
-        liveCard
-    }
-
-    private func delta(_ m: Metric, _ report: InsightsReport) -> InsightsDelta {
-        switch m {
-        case .views: return report.views
-        case .profileViews: return report.profileViews
-        case .reactions: return report.reactions
-        case .glowers: return report.glowersNet
-        case .posted: return report.posted
-        case .perStory: return report.viewsPerStory
-        }
-    }
-
-    private func metricTile(_ m: Metric, _ report: InsightsReport) -> some View {
-        let d = delta(m, report)
-        let selected = m == metric
-        let value = m == .glowers ? Self.signed(d.current)
-                  : (m == .perStory ? Self.average(d.current) : Self.amount(d.current))
-        return Button {
-            withAnimation(.smooth(duration: 0.25)) { metric = m }
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(m.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                Text(value).font(.title2.weight(.bold)).monospacedDigit().foregroundStyle(.primary)
-                if let change = Self.deltaText(d) {
-                    Text(change.text).font(.footnote.weight(.medium))
-                        .foregroundStyle(change.color).monospacedDigit()
-                } else {
-                    Text(" ").font(.footnote)
-                }
-            }
-            .frame(width: 132, alignment: .leading)
-            .padding(14)
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    /// One bar per recorded day for the picked figure. Views per story has no per-day value of its
-    /// own, so it charts views, which is what it is made of.
-    @ViewBuilder private func metricChart(_ report: InsightsReport) -> some View {
-        let rows = report.recordedDays
-        if rows.count >= 2 {
-            Chart(rows) { row in
-                let value: Int = {
-                    switch metric {
-                    case .views, .perStory: return max(0, row.day.storyViews)
-                    case .profileViews: return max(0, row.day.profileViews)
-                    case .reactions: return row.day.storyReactions
-                    case .glowers: return row.day.glowersGained - row.day.glowersLost
-                    case .posted: return row.day.storiesPosted
-                    }
-                }()
-                BarMark(x: .value("Day", Self.chartDate(row.date), unit: .day),
-                        y: .value(metric.title, value))
-                    .foregroundStyle(value < 0 ? Color.red.gradient : Color.accentColor.gradient)
-                    .cornerRadius(3)
-            }
-            .frame(height: 180)
-        } else {
-            Text("The chart appears after a second day of history.")
-                .font(.subheadline).foregroundStyle(.secondary)
+            Text(overviewFooter(report)).font(.footnote).foregroundStyle(.secondary)
         }
     }
 
@@ -560,8 +531,19 @@ struct GlowInsightsView: View {
 
     // MARK: - Content
 
+    /// ⛔ HIS STORIES TAB (screenshot 2): the story figures as cards, then Latest / Views /
+    /// Reactions and the stories themselves. View time is in his reference and not here: nothing
+    /// in Fariin records how long a story was watched, and a zero would be invented.
     @ViewBuilder private func contentTab(_ report: InsightsReport) -> some View {
         periodHeader(report)
+        historyGate(report) {
+            VStack(spacing: 10) {
+                figureCard("Story Views", Self.amount(report.views.current), report.views)
+                figureCard("Reactions", Self.amount(report.reactions.current), report.reactions)
+                figureCard("Stories Posted", Self.amount(report.posted.current), report.posted)
+                figureCard("Views per Story", Self.average(report.viewsPerStory.current), report.viewsPerStory)
+            }
+        }
         Picker("Sort", selection: $sort) {
             ForEach(StorySort.allCases, id: \.self) { Text($0.title).tag($0) }
         }
@@ -595,9 +577,9 @@ struct GlowInsightsView: View {
                              reactions: row.reactions)
                 }
             }
-        } else {
-            historyGate(report) { EmptyView() }
         }
+        // The history's loading / failed / empty state is already said once, above the figures.
+        liveCard
     }
 
     private func sorted(_ rows: [InsightsStoryRecord]) -> [InsightsStoryRecord] {
@@ -610,45 +592,32 @@ struct GlowInsightsView: View {
 
     // MARK: - Audience
 
+    /// ⛔ HIS AUDIENCE TAB (screenshot 3): a "28 Day Summary" card of figures, each against the
+    /// period before, then the breakdown drawn as rows of a big percentage beside a bar. The age
+    /// breakdown in his reference has no data in Fariin (nobody is asked their age), so the
+    /// breakdown here is the one that exists: Top Countries.
     @ViewBuilder private func audienceTab(_ report: InsightsReport) -> some View {
         periodHeader(report)
-        card {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Glowers").font(.headline)
-                Text(GlowCount.short(glow.displayGlowers.count))
-                    .font(.system(size: 40, weight: .bold)).monospacedDigit()
-                if report.hasHistory, let change = Self.deltaText(report.glowersNet) {
-                    Text("\(change.text) against the \(period.rawValue) days before")
-                        .font(.subheadline).foregroundStyle(change.color)
-                }
-            }
-            NavigationLink {
-                GlowPeopleListView(side: .glowers, title: title)
-            } label: {
-                valueRow("See your Glowers", "")
-            }
-            .foregroundStyle(.primary)
-        }
         historyGate(report) {
-            card("Glower growth") {
-                Picker("Growth", selection: $growth) {
-                    ForEach(GrowthView.allCases, id: \.self) { Text($0.title).tag($0) }
+            VStack(alignment: .leading, spacing: 18) {
+                Text("\(period.rawValue) Day Summary").font(.headline)
+                // Each row opens what it counts where there is a list to open. Unglows has none on
+                // purpose: who stopped glowing you is not shown anywhere in the app.
+                NavigationLink { GlowPeopleListView(side: .glowers, title: title) } label: {
+                    summaryRow("Total Glowers", GlowCount.short(glow.displayGlowers.count), totalGlowersDelta(report))
                 }
-                .pickerStyle(.segmented)
-                growthChart(report)
-                HStack {
-                    // Gained opens the Glowers it added to. Unglows has no list on purpose: who
-                    // stopped glowing you is not shown anywhere in the app.
-                    NavigationLink {
-                        GlowPeopleListView(side: .glowers, title: title)
-                    } label: {
-                        growthFigure("Gained", "+\(GlowCount.short(report.glowersGained))", .green)
-                    }
-                    .buttonStyle(.plain)
-                    growthFigure("Unglows", "−\(GlowCount.short(report.glowersLost))", .red)
-                    growthFigure("Net", Self.signed(Double(report.glowersGained - report.glowersLost)), .primary)
+                .buttonStyle(.plain)
+                NavigationLink { GlowPeopleListView(side: .glowers, title: title) } label: {
+                    summaryRow("Gained", "+" + GlowCount.short(report.glowersGained), report.gainedDelta)
                 }
+                .buttonStyle(.plain)
+                summaryRow("Unglows", GlowCount.short(report.glowersLost), report.lostDelta)
+                summaryRow("Net", Self.signed(Double(report.glowersGained - report.glowersLost)), report.glowersNet)
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         countriesCard
         historyGate(report) { activeTimesCard(report) }
@@ -662,47 +631,32 @@ struct GlowInsightsView: View {
         }
     }
 
-    private func growthFigure(_ label: String, _ value: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.title3.weight(.bold)).monospacedDigit().foregroundStyle(color)
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    /// Glowers now against the count on the first day of the period, once the history reaches back
+    /// that far; before then there is nothing honest to compare with.
+    private func totalGlowersDelta(_ report: InsightsReport) -> InsightsDelta {
+        let start = report.coversPeriod ? report.glowersByDay.first.map { Double($0.value) } : nil
+        return InsightsDelta(current: Double(glow.displayGlowers.count), previous: start)
     }
 
-    @ViewBuilder private func growthChart(_ report: InsightsReport) -> some View {
-        switch growth {
-        case .overall:
-            if report.glowersByDay.count >= 2 {
-                Chart(report.glowersByDay) { point in
-                    LineMark(x: .value("Day", Self.chartDate(point.date)),
-                             y: .value("Glowers", point.value))
-                        .interpolationMethod(.monotone)
-                    AreaMark(x: .value("Day", Self.chartDate(point.date)),
-                             y: .value("Glowers", point.value))
-                        .interpolationMethod(.monotone)
-                        .foregroundStyle(Color.accentColor.opacity(0.12).gradient)
-                }
-                .chartYScale(domain: .automatic(includesZero: false))
-                .frame(height: 170)
-            } else {
-                Text("The chart appears after a second day of history.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+    /// One row of the summary card: name and number left, "vs Previous" and the change right.
+    private func summaryRow(_ title: String, _ value: String, _ delta: InsightsDelta) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline).foregroundStyle(.secondary)
+                Text(value).font(.title3.weight(.bold)).monospacedDigit()
             }
-        case .gained, .unglows:
-            let gained = growth == .gained
-            Chart(report.recordedDays) { row in
-                BarMark(x: .value("Day", Self.chartDate(row.date), unit: .day),
-                        y: .value(growth.title, gained ? row.day.glowersGained : row.day.glowersLost))
-                    .foregroundStyle((gained ? Color.green : Color.red).gradient)
-                    .cornerRadius(3)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("vs Previous \(period.rawValue) Days").font(.caption).foregroundStyle(.secondary)
+                let p = Self.percentText(delta)
+                Text(p.text).font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(p.color)
             }
-            .frame(height: 170)
         }
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder private var countriesCard: some View {
-        card("Top countries",
+        card("Top Countries",
              footer: "From the approximate country of each Glower's phone. Shown once enough Glowers have one, so nobody can be pointed at.") {
             switch countries.phase {
             case .loading:
@@ -720,21 +674,20 @@ struct GlowInsightsView: View {
         }
     }
 
+    /// His breakdown row (screenshot 3): the percentage big on the left, the name beside it with a
+    /// thin bar under the name as long as its share.
     private func shareBar(_ label: String, _ percent: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(label)
-                Spacer()
-                Text("\(percent)%").font(.subheadline.weight(.semibold)).monospacedDigit()
-            }
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color(.tertiarySystemFill))
-                    Capsule().fill(Color.accentColor.gradient)
-                        .frame(width: max(4, g.size.width * CGFloat(percent) / 100))
+        HStack(alignment: .center, spacing: 14) {
+            Text("\(percent)%").font(.title3.weight(.bold)).monospacedDigit()
+                .frame(width: 64, alignment: .leading)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                GeometryReader { g in
+                    Capsule().fill(Color.primary)
+                        .frame(width: max(4, g.size.width * CGFloat(percent) / 100), height: 3)
                 }
+                .frame(height: 3)
             }
-            .frame(height: 8)
         }
         .accessibilityElement(children: .combine)
     }
