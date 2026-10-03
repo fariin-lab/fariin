@@ -876,12 +876,20 @@ enum MessageRowLayout {
                 // row under a time that already had a row to itself. It joins the pills now, against
                 // the picture's own width, because a captioned bubble may not widen past its picture.
                 let fitsOnRow = padH + total + metaW + padH <= (captioned ? plan.bubble.width : columnW)
-                let ownTextRow = plan.metaOnOwnLine && (plan.text != .zero || captioned)
+                // ⛔ A FILE'S TIME ROW IS THE SAME KIND OF ROW — owner, 2026-10-03, a reacted zip: the
+                // time sat alone under the file and the pills hung below it, a whole empty band
+                // between. A file bubble has no text, so it never counted as a text row here; its
+                // footer is still a line of its own under the content, and gives it back the same way.
+                let ownTextRow = plan.metaOnOwnLine
+                    && (plan.text != .zero || captioned || plan.filePlan != nil)
                 let metaJoins = fitsOnRow && (!plan.metaOnOwnLine || ownTextRow)
 
                 var grown = plan.bubble
                 if metaJoins && ownTextRow {
-                    let freed = BubbleMetrics.metaGap + plan.meta.height
+                    // The gap given back is the one that row was laid out with: a text line's footer
+                    // sits `metaGap` under it, a file's sits 4 under the file row (see `file`).
+                    let gapAbove: CGFloat = plan.filePlan != nil ? 4 : BubbleMetrics.metaGap
+                    let freed = gapAbove + plan.meta.height
                     grown.size.height -= freed
                     // The caption block gives the row back too, so it still ends where the bubble did.
                     plan.mediaPlan?.caption?.size.height -= freed
