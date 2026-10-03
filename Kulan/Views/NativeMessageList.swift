@@ -906,6 +906,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // effect covers the whole clearance band above the composer, and our clearance is large.
         // The TOP one stays: it is the header blur he asked for.
         collectionView.bottomEdgeEffect.isHidden = true
+        // ⛔ AND THE TOP ONE TOO, NOW — owner, 2026-10-03: the header blur is ours
+        // (`ChatHeaderBlurView`, added just below), because the system's arrives only after the
+        // push. Both at once would be a blur on a blur.
+        collectionView.topEdgeEffect.isHidden = true
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -914,6 +918,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
+        // The header's blur, part of this page from its first frame (see `ChatHeaderBlurView`).
+        // Over the list, under the composer; sized in `viewDidLayoutSubviews` from the bar.
+        view.addSubview(headerBlur)
 
         bottomBarContainer.translatesAutoresizingMaskIntoConstraints = false
         bottomBarContainer.backgroundColor = .clear
@@ -4229,6 +4236,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        layoutHeaderBlur()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
         // `inputToolbar.ensureTextViewHeight()` and then `updateContentInsets()` synchronously, and
         // that is their entire keyboard handling: when the keyboard moves, UIKit changes
@@ -4959,6 +4967,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// ⚠️ If iOS does not hand over the canvas, the list stays where it is and only the recording
     /// half applies — the failure mode `CaptureProtected` documents.
     private let captureField = UITextField()
+    /// The chat header's blur — see `ChatHeaderBlurView`.
+    private let headerBlur = ChatHeaderBlurView()
+
+    /// From the top of the screen to 24pt below the bar, the reference's reach. `safeAreaInsets.top`
+    /// on this full-screen view is the status bar plus the navigation bar.
+    private func layoutHeaderBlur() {
+        let height = view.safeAreaInsets.top + ChatHeaderBlurView.tailBelowBar
+        let frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: height)
+        if headerBlur.frame != frame { headerBlur.frame = frame }
+        // Above the list, wherever the list is (it moves into the secure canvas and back).
+        let list: UIView = collectionView.superview === view ? collectionView : (collectionView.superview ?? collectionView)
+        if let li = view.subviews.firstIndex(of: list), let hi = view.subviews.firstIndex(of: headerBlur), hi < li {
+            view.insertSubview(headerBlur, aboveSubview: list)
+        }
+    }
     private var captureCanvas: UIView?
     private var captureOn = false
     private var captureObserver: NSObjectProtocol?
@@ -4983,7 +5006,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 collectionView.removeFromSuperview()
                 canvas.removeFromSuperview()
                 view.insertSubview(canvas, at: index)
-                view.insertSubview(canvas, belowSubview: bottomBarContainer)   // never over the composer
                 CaptureProtectedController<EmptyView>.pin(canvas, in: view)
                 CaptureProtectedController<EmptyView>.pin(collectionView, in: canvas)
             }
@@ -4998,9 +5020,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             canvas.removeFromSuperview()
             view.insertSubview(collectionView, at: index)
             CaptureProtectedController<EmptyView>.pin(collectionView, in: view)
-            view.insertSubview(collectionView, belowSubview: bottomBarContainer)   // never over the composer
         }
         view.layoutIfNeeded()
+        layoutHeaderBlur()   // the header blur back above the list's new place
         // The insets first (the composer's clearance, against the list's new place in the tree),
         // then the reader back at the same distance from the newest message.
         updateInsets()
