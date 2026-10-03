@@ -47,6 +47,18 @@ enum BubbleMetrics {
     static let reactionFaceGapSmall: CGFloat = 4
     static let reactionFaceTrailSmall: CGFloat = 3
     static let reactionEmojiFontSmall: CGFloat = 15
+    /// How far each face after the first slides under the one before it, when two or three people
+    /// used the same emoji (owner, 2026-10-03, the reference pill: two faces, overlapping by about a
+    /// third).
+    static let reactionFaceOverlap: CGFloat = 8
+    static let reactionFaceOverlapSmall: CGFloat = 7
+    /// The width of `n` overlapped faces.
+    static func reactionFaceStack(_ n: Int, small: Bool) -> CGFloat {
+        guard n > 0 else { return 0 }
+        let d = small ? reactionFaceSmall : reactionFace
+        let o = small ? reactionFaceOverlapSmall : reactionFaceOverlap
+        return d + CGFloat(n - 1) * (d - o)
+    }
     /// ⛔ THE PILL'S OWN GEOMETRY, READ OFF THE REFERENCE APP'S SOURCE — owner, 2026-09-23: "go read
     /// [the reference] react badge then make it like it, size and color".
     ///

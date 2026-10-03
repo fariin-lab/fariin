@@ -22,14 +22,16 @@ struct ReactionFace: Equatable {
 /// ⛔ A CHIP CARRIES WHO REACTED, NOT ONLY HOW MANY — owner, 2026-09-16, with the reference app's
 /// bubble: each reaction is a pill holding the emoji and the reactor's avatar, inside the bubble.
 ///
-/// ⚠️ `face` IS NIL WHEN MORE THAN ONE PERSON USED THE SAME EMOJI. Their pill shows a count there
-/// instead, and so does ours: stacking faces at this size turns two avatars into a smudge, and the
-/// number is the thing worth reading once it is more than one.
+/// ⛔ UP TO THREE FACES, OVERLAPPED — owner, 2026-10-03, with the reference app's pill: both people
+/// reacted with the same emoji and ours hid the faces behind a "2". Theirs shows every reactor's face
+/// while there are at most three, and only past that a count. `faces` is empty exactly when the count
+/// is shown. (Replaces the single `face`, which was nil from two reactors up.)
 struct ReactionChip: Equatable {
+    static let maxFaces = 3
     var emoji: String
     var count: Int
     var mine: Bool
-    var face: ReactionFace?
+    var faces: [ReactionFace]
 }
 
 /// The sender's name and avatar above/beside a bubble in a group.

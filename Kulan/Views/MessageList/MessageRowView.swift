@@ -109,15 +109,15 @@ final class BubbleQuoteView: UIView {
 // ── A reaction capsule ──
 
 /// ⛔ A PILL HOLDS THE EMOJI AND WHO SENT IT — owner, 2026-09-16, with the reference app's bubble.
-/// The face is only drawn when one person used that emoji; past one, the layout hands over a count
-/// instead and `face` is nil. See `ReactionChip`.
+/// Up to three faces, overlapped; past three the layout hands over a count instead and `faces` is
+/// empty. See `ReactionChip`.
 final class ReactionChipView: UIView {
     private let label = UILabel()
     private let ring = CAShapeLayer()
-    /// Built on the first chip that actually needs one. Most reactions in a 1:1 chat have a face, but
-    /// the media path never does, and a view per chip that is never shown is a view per chip wasted.
-    private var faceView: RowAvatarView?
-    private var hasFace = false
+    /// Built on the first chip that actually needs them, and kept for reuse. A view per chip that is
+    /// never shown is a view per chip wasted.
+    private var faceViews: [RowAvatarView] = []
+    private var faceCount = 0
     private var isFreeform = false
 
     override init(frame: CGRect) {
@@ -150,7 +150,7 @@ final class ReactionChipView: UIView {
     /// stroke at all; ours drew a `.label` outline, which on a wallpapered chat (forced dark, so
     /// `.label` is white) is the bright hoop around the pill in his screenshot. Selected is now the
     /// heavier of the two fills on each side, which is their rule and one less thing on screen.
-    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, face: ReactionFace?,
+    func configure(_ attr: NSAttributedString, mine: Bool, onMyBubble: Bool, faces: [ReactionFace],
                    freeform: Bool = false) {
         label.attributedText = attr
         isFreeform = freeform
@@ -164,16 +164,21 @@ final class ReactionChipView: UIView {
             backgroundColor = BubblePalette.accent.withAlphaComponent(mine ? 0.18 : 0.08)
         }
         ring.strokeColor = UIColor.clear.cgColor
-        hasFace = face != nil
-        if let face {
-            let v = faceView ?? {
-                let a = RowAvatarView()
-                addSubview(a); faceView = a; return a
-            }()
-            v.isHidden = false
-            v.configure(name: face.name, photoUrl: face.photoUrl)
-        } else {
-            faceView?.isHidden = true
+        faceCount = faces.count
+        while faceViews.count < faces.count {
+            // Each new face goes UNDER the ones before it: the first reactor's face is on top, as in
+            // the reference pill.
+            let a = RowAvatarView()
+            if let last = faceViews.last { insertSubview(a, belowSubview: last) } else { addSubview(a) }
+            faceViews.append(a)
+        }
+        for (i, v) in faceViews.enumerated() {
+            if i < faces.count {
+                v.isHidden = false
+                v.configure(name: faces[i].name, photoUrl: faces[i].photoUrl)
+            } else {
+                v.isHidden = true
+            }
         }
         setNeedsLayout()
     }
@@ -182,16 +187,20 @@ final class ReactionChipView: UIView {
         super.layoutSubviews()
         // The emoji keeps the left of the pill and the face sits at its trailing end, which is the
         // order in his screenshot. With no face the label owns the whole pill, as it always did.
-        if hasFace, let faceView {
+        if faceCount > 0 {
             // The small pill on a picture's edge uses the small set (see `MessageRowLayout.decorations`).
             let d = isFreeform ? BubbleMetrics.reactionFaceSmall : BubbleMetrics.reactionFace
             let trail = isFreeform ? BubbleMetrics.reactionFaceTrailSmall : BubbleMetrics.reactionFaceTrail
             let gap = isFreeform ? BubbleMetrics.reactionFaceGapSmall : BubbleMetrics.reactionFaceGap
             let lead = isFreeform ? BubbleMetrics.reactionFaceLeadSmall : BubbleMetrics.reactionFaceLead
-            faceView.frame = CGRect(x: bounds.width - trail - d,
-                                    y: (bounds.height - d) / 2, width: d, height: d)
+            let overlap = isFreeform ? BubbleMetrics.reactionFaceOverlapSmall : BubbleMetrics.reactionFaceOverlap
+            let stackX = bounds.width - trail - BubbleMetrics.reactionFaceStack(faceCount, small: isFreeform)
+            for i in 0..<faceCount {
+                faceViews[i].frame = CGRect(x: stackX + CGFloat(i) * (d - overlap),
+                                            y: (bounds.height - d) / 2, width: d, height: d)
+            }
             label.frame = CGRect(x: lead, y: 0,
-                                 width: max(0, faceView.frame.minX - gap - lead),
+                                 width: max(0, stackX - gap - lead),
                                  height: bounds.height)
         } else {
             label.frame = bounds
@@ -1224,7 +1233,7 @@ final class MessageRowView: UIView {
             v.frame = b.reactions[i].offsetBy(dx: -b.bubble.minX, dy: -b.bubble.minY)
             v.configure(b.reactionAttrs[i], mine: b.reactionMine[i],
                         onMyBubble: b.reactionsOnMyBubble,
-                        face: i < b.reactionFaces.count ? b.reactionFaces[i] : nil,
+                        faces: i < b.reactionFaces.count ? b.reactionFaces[i] : [],
                         freeform: b.reactionsFreeform)
             // Half of a picture's pill lies ON the picture, and the picture view can be created after
             // the pill in a recycled cell, which would draw it over the pill's top half.

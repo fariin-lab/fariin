@@ -225,8 +225,8 @@ struct BubblePlan {
     var reactions: [CGRect]             // one per chip, row coordinates
     var reactionAttrs: [NSAttributedString]
     var reactionMine: [Bool]
-    /// One per chip, aligned with `reactions`. Nil where the chip shows a count instead of a face.
-    var reactionFaces: [ReactionFace?] = []
+    /// One per chip, aligned with `reactions`. Empty where the chip shows a count instead of faces.
+    var reactionFaces: [[ReactionFace]] = []
     /// ⛔ WHICH SIDE'S BUBBLE THESE PILLS SIT ON, carried so the cell can colour them — the
     /// reference app picks a reaction's palette by side before it asks anything else, and the cell
     /// has a `BubblePlan`, not the `BubbleRow` that knows `isMe`. See `ReactionChipView.configure`.
@@ -787,39 +787,41 @@ enum MessageRowLayout {
 
             let shown = Array(b.reactions.prefix(3))
             let extra = b.reactions.count - shown.count
-            var chips: [(NSAttributedString, Bool, ReactionFace?)] = shown.map { chip in
+            var chips: [(NSAttributedString, Bool, [ReactionFace])] = shown.map { chip in
                 let s = NSMutableAttributedString(string: chip.emoji, attributes: [
                     .font: UIFont.systemFont(ofSize: inside ? BubbleMetrics.reactionEmojiFont
                                                             : BubbleMetrics.reactionEmojiFontSmall)])
-                // The count appears only where there is no single face to show — see `ReactionChip`.
-                if chip.count > 1 {
+                // The count appears only where there are no faces to show — see `ReactionChip`.
+                if chip.count > 1, chip.faces.isEmpty {
                     s.append(NSAttributedString(string: " \(chip.count)", attributes: [
                         .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
                         .foregroundColor: chip.mine ? BubblePalette.accent : UIColor.secondaryLabel]))
                 }
-                return (s, chip.mine, chip.face)   // the face on pictures too (owner, 2026-09-27)
+                return (s, chip.mine, chip.faces)   // the faces on pictures too (owner, 2026-09-27)
             }
             if extra > 0 {
                 chips.append((NSAttributedString(string: "+\(extra)", attributes: [
                     .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
-                    .foregroundColor: UIColor.secondaryLabel]), false, nil))
+                    .foregroundColor: UIColor.secondaryLabel]), false, []))
             }
             var widths: [CGFloat] = []
             // ⛔ A FIXED HEIGHT, THEIR NUMBER — see `BubbleMetrics.reactionChipHeight`. It used to be
             // derived from whichever was taller, the text or the face, which made an emoji-only pill
             // and a pill with a count two different heights in the same row.
             let height: CGFloat = inside ? BubbleMetrics.reactionChipHeight : BubbleMetrics.reactionChipHeightSmall
-            for (attr, _, face) in chips {
+            for (attr, _, faces) in chips {
                 let s = BubbleText.size(attr, width: .greatestFiniteMagnitude)
-                // A face: lead, emoji, gap, face, trail (see `BubbleMetrics.reactionFaceLead`).
-                if face == nil {
+                // Faces: lead, emoji, gap, the overlapped faces, trail (see `BubbleMetrics.reactionFaceLead`).
+                if faces.isEmpty {
                     widths.append(s.width + (inside ? BubbleMetrics.reactionChipInset : BubbleMetrics.reactionFaceLeadSmall) * 2)
                 } else if inside {
                     widths.append(BubbleMetrics.reactionFaceLead + s.width + BubbleMetrics.reactionFaceGap
-                                  + BubbleMetrics.reactionFace + BubbleMetrics.reactionFaceTrail)
+                                  + BubbleMetrics.reactionFaceStack(faces.count, small: false)
+                                  + BubbleMetrics.reactionFaceTrail)
                 } else {
                     widths.append(BubbleMetrics.reactionFaceLeadSmall + s.width + BubbleMetrics.reactionFaceGapSmall
-                                  + BubbleMetrics.reactionFaceSmall + BubbleMetrics.reactionFaceTrailSmall)
+                                  + BubbleMetrics.reactionFaceStack(faces.count, small: true)
+                                  + BubbleMetrics.reactionFaceTrailSmall)
                 }
             }
             let total = widths.reduce(0, +)

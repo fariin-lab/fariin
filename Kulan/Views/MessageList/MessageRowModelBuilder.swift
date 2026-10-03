@@ -490,7 +490,8 @@ enum MessageRowModelBuilder {
     private static func viewOncePill(_ m: Message, ctx: MessageRowContext,
                                      isMe: Bool) -> BubbleBody.PillBody {
         let voice = m.isAudio
-        let spent = !isMe && ViewedOnce.contains(m.id)
+        // The sender's own copy is spent by their one view as well (owner, 2026-10-03).
+        let spent = ViewedOnce.contains(m.id)
         if voice {
             // Fetch the sealed bytes while the pill is on screen, so opening only decrypts.
             if !isMe, !spent, m.sendState == nil {
@@ -609,11 +610,10 @@ enum MessageRowModelBuilder {
         return byEmoji.map { emoji, uids in
             // Sorted so the face a chip shows is stable between rebuilds — an avatar that swaps
             // between two reactors on every repaint is worse than no avatar.
-            let first = uids.sorted().first
-            let face = (uids.count == 1 ? first : nil).map {
+            let faces = uids.count > ReactionChip.maxFaces ? [] : uids.sorted().map {
                 ReactionFace(uid: $0, name: ctx.nameFor($0), photoUrl: ctx.avatarFor($0))
             }
-            return ReactionChip(emoji: emoji, count: uids.count, mine: mine == emoji, face: face)
+            return ReactionChip(emoji: emoji, count: uids.count, mine: mine == emoji, faces: faces)
         }
         .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji > $1.emoji }
     }
