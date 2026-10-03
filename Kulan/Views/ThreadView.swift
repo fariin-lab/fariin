@@ -3497,7 +3497,25 @@ struct ThreadView: View {
                 else { return }
                 // Slides in over this chat. The lookup was started when the card was drawn, and a
                 // chat already in the list opens without asking the server — see `ProfileCardDoor`.
-                Task { await ProfileCardDoor.open(handle, push: true) }
+                // ⛔ Owner, 2026-10-03, "Send Message is not working": the card was for the person
+                // whose chat it sat in. That chat is already open, so the shell skipped it and the tap
+                // did nothing. You are already where the button leads, so it opens the keyboard.
+                // Your OWN card (you shared your profile here) is the same: the lookup refuses
+                // yourself, so it used to end in nothing too.
+                let mine = (ProfileStore.shared.me?.handle ?? "").lowercased()
+                let isMine = !mine.isEmpty && handle.trimmingCharacters(in: .whitespaces)
+                    .lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "@")) == mine
+                Task {
+                    if isMine {
+                        inputFocused = true
+                        return
+                    }
+                    if await ProfileCardDoor.chatId(handle) == cid {
+                        inputFocused = true
+                        return
+                    }
+                    await ProfileCardDoor.open(handle, push: true)
+                }
             },
             onTapLocation: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }

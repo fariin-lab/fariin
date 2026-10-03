@@ -2137,9 +2137,11 @@ struct ContactInfoView: View {
     }
 
     // Shareable contact link (opens/starts a chat with this user in Fariin).
+    // Owner, 2026-10-03: the link alone. The card drawn from it already shows the name and photo,
+    // so the "Chat with … on Fariin:" line only repeated it. With no handle there is no link, and
+    // the line is all there is to send.
     private var shareText: String {
-        handle.isEmpty ? "Chat with \(name) on Fariin"
-                       : "Chat with \(name) on Fariin: \(KulanApp.userLink(handle: handle))"
+        handle.isEmpty ? "Chat with \(name) on Fariin" : KulanApp.userLink(handle: handle)
     }
 
     // The most recent real call with this person (nil if none) — drives the call-log card.

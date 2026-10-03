@@ -57,6 +57,13 @@ private let requestedHandles = OSAllocatedUnfairLock(initialState: Set<String>()
         return user
     }
 
+    /// The chat a card for `handle` opens. Reads the lookup made when the card was drawn, so it
+    /// costs nothing on a tap. Nil when the person could not be found.
+    static func chatId(_ handle: String) async -> String? {
+        guard let user = await resolve(handle) else { return nil }
+        return ChatService.convId(AuthService.shared.uid ?? "", user.id)
+    }
+
     /// Opens the chat with the person behind `handle`. False when they could not be reached.
     /// `push` slides the chat in over the current one; without it the chat replaces the stack.
     @discardableResult
