@@ -3344,17 +3344,43 @@ struct ThreadView: View {
     /// forty live cells each carrying their own `confirmationDialog` is forty presentation machines,
     /// and a dialog anchored inside a recycled cell can be torn down under the user's finger.
     private func routeThreadURL(_ url: URL) {
+        // ⛔ A USERNAME LINK OPENS THE CHAT, NOT A WEB PAGE — owner, 2026-10-03: tapping
+        // https://fariin.com/u/kream in a message must open kream's chat in the app, the way the
+        // reference app treats its own username links. Only the old kulan:// form was caught here,
+        // so the https form went to the browser sheet.
+        if let handle = LinkPreviewService.profileHandle(in: url) {
+            openProfileHandle(handle)
+            return
+        }
         guard url.scheme == "kulan", url.host == "u" else {
             tappedLink = url
             return
         }
-        let handle = url.lastPathComponent
+        openProfileHandle(url.lastPathComponent)
+    }
+
+    /// THE ONE DOOR FROM A USERNAME TO ITS CHAT, shared by a username link, a profile card's body and
+    /// its Send Message button, so all three behave the same.
+    ///
+    /// ⛔ Owner, 2026-10-03, "Send Message is not working": a card for the person whose chat it sat
+    /// in, or your OWN card, ended in nothing (the shell skips the chat already open; the lookup
+    /// refuses yourself). You are already where it leads, so it opens the keyboard. Anyone else's
+    /// chat slides in over this one, from the lookup made when the card was drawn
+    /// (`ProfileCardDoor`). A name nobody holds says so.
+    private func openProfileHandle(_ handle: String) {
+        let mine = (ProfileStore.shared.me?.handle ?? "").lowercased()
+        let asked = handle.trimmingCharacters(in: .whitespaces).lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
         Task { @MainActor in
-            if let u = await ChatService.findByHandle(handle) {
-                AppRouter.shared.pendingChatName = u.name
-                AppRouter.shared.pendingChatPhoto = u.photoUrl
-                AppRouter.shared.pendingChatId = ChatService.convId(me, u.id)
-            } else {
+            if !mine.isEmpty, asked == mine {
+                inputFocused = true
+                return
+            }
+            if await ProfileCardDoor.chatId(handle) == cid {
+                inputFocused = true
+                return
+            }
+            if !(await ProfileCardDoor.open(handle, push: true)) {
                 tappedUserNotFound = true
             }
         }
@@ -3500,33 +3526,18 @@ struct ThreadView: View {
             onTapLinkCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }),
                       let lp = m.linkPreview, let u = URL(string: lp.url) else { return }
+                // A profile card's body goes where its button goes (owner, 2026-10-03).
+                if let handle = LinkPreviewService.profileHandle(in: u) {
+                    openProfileHandle(handle)
+                    return
+                }
                 WebLink.open(u)   // the in-app Safari sheet, not a trip out to Safari
             },
             onTapLinkProfile: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let lp = m.linkPreview,
                       let handle = URL(string: lp.url).flatMap({ LinkPreviewService.profileHandle(in: $0) })
                 else { return }
-                // Slides in over this chat. The lookup was started when the card was drawn, and a
-                // chat already in the list opens without asking the server — see `ProfileCardDoor`.
-                // ⛔ Owner, 2026-10-03, "Send Message is not working": the card was for the person
-                // whose chat it sat in. That chat is already open, so the shell skipped it and the tap
-                // did nothing. You are already where the button leads, so it opens the keyboard.
-                // Your OWN card (you shared your profile here) is the same: the lookup refuses
-                // yourself, so it used to end in nothing too.
-                let mine = (ProfileStore.shared.me?.handle ?? "").lowercased()
-                let isMine = !mine.isEmpty && handle.trimmingCharacters(in: .whitespaces)
-                    .lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "@")) == mine
-                Task {
-                    if isMine {
-                        inputFocused = true
-                        return
-                    }
-                    if await ProfileCardDoor.chatId(handle) == cid {
-                        inputFocused = true
-                        return
-                    }
-                    await ProfileCardDoor.open(handle, push: true)
-                }
+                openProfileHandle(handle)   // see the note on it
             },
             onTapLocation: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }
