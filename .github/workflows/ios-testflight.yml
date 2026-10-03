@@ -78,6 +78,8 @@ jobs:
 
             Turning Restricted Chat on or off no longer lifts the messages over the message box, the date and the jump button.
 
+            CHAT HEADER BLUR: messages scrolling under the header are now truly blurred, strongest at the top and fading smoothly to sharp.
+
             PLEASE TEST: in a chat, turn Restricted Chat on, go back to the chat, then turn it off and go back again.
 
             EARLIER IN THIS ROUND (build 822): CHAT HEADER: SMOOTH, AND IT MATCHES YOUR WALLPAPER.
