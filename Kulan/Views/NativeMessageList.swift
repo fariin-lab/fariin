@@ -5016,7 +5016,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func setCaptureProtected(_ on: Bool) {
         guard on != captureOn, isViewLoaded else { return }
         captureOn = on
-        let offset = collectionView.contentOffset
+        // ⛔ THE READER'S PLACE AS A DISTANCE FROM THE NEWEST MESSAGE, NOT A RAW OFFSET — owner,
+        // 2026-10-03: switching Restricted Chat on or off sent the messages up and under the
+        // composer. Moving the list re-runs its layout and inset pass, and writing the OLD offset
+        // back over that left the list short of its own bottom by the composer. Measured from the
+        // bottom, the place survives whatever the insets do.
+        let fromBottom = max(0, maxContentOffsetY - collectionView.contentOffset.y)
         if on {
             if captureCanvas == nil, let canvas = SecureCanvas.of(captureField) {
                 canvas.subviews.forEach { $0.removeFromSuperview() }
@@ -5028,6 +5033,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 collectionView.removeFromSuperview()
                 canvas.removeFromSuperview()
                 view.insertSubview(canvas, at: index)
+                view.insertSubview(canvas, belowSubview: bottomBarContainer)   // never over the composer
                 CaptureProtectedController<EmptyView>.pin(canvas, in: view)
                 CaptureProtectedController<EmptyView>.pin(collectionView, in: canvas)
             }
@@ -5042,9 +5048,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             canvas.removeFromSuperview()
             view.insertSubview(collectionView, at: index)
             CaptureProtectedController<EmptyView>.pin(collectionView, in: view)
+            view.insertSubview(collectionView, belowSubview: bottomBarContainer)   // never over the composer
         }
         view.layoutIfNeeded()
-        collectionView.setContentOffset(offset, animated: false)
+        // The insets first (the composer's clearance, against the list's new place in the tree),
+        // then the reader back at the same distance from the newest message.
+        updateInsets()
+        collectionView.layoutIfNeeded()
+        collectionView.setContentOffset(
+            CGPoint(x: 0, y: max(minContentOffsetY, maxContentOffsetY - fromBottom)), animated: false)
+        recordDistanceFromBottom()
         applyRecordingHide()
     }
 
