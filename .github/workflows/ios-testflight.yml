@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            CHAT HEADER: SMOOTH, AND IT MATCHES YOUR WALLPAPER.
+            RESTRICTED CHAT: MESSAGES NO LONGER COVER THE MESSAGE BOX.
+
+            Turning Restricted Chat on or off no longer lifts the messages over the message box, the date and the jump button.
+
+            PLEASE TEST: in a chat, turn Restricted Chat on, go back to the chat, then turn it off and go back again.
+
+            EARLIER IN THIS ROUND (build 822): CHAT HEADER: SMOOTH, AND IT MATCHES YOUR WALLPAPER.
 
             The top of a chat now fades smoothly with no line. With a wallpaper, the header shows the wallpaper itself, so messages melt into it as they scroll up. Without one it uses the plain page colour.
 
