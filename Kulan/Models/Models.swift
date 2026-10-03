@@ -857,6 +857,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// Sealed words for the message that reaction was on ("Voice message", the start of a text),
     /// so the list can say what was reacted to. Nil on reactions from before 2026-09-26.
     var lastReactionToEnc: String?
+    /// The pictures the reaction was on, up to three (owner, 2026-10-03). Empty for text, and for
+    /// reactions written before this existed.
+    var lastReactionToImages: [ReactionThumb] = []
     var lastReactionBy: String         // who reacted ("" = none)
     var lastReactionToAuthor: String   // author of the reacted-to message
     var lastReactionAtMillis: Double   // 0 = none; previewed only while newer than updatedAt
@@ -930,6 +933,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String
         self.lastReactionToEnc = data["lastReactionToEnc"] as? String
+        self.lastReactionToImages = (data["lastReactionToImages"] as? [[String: Any]] ?? []).prefix(3).compactMap { row in
+            guard let url = row["url"] as? String, !url.isEmpty else { return nil }
+            return ReactionThumb(url: url, enc: (row["enc"] as? [String: Any]).flatMap(EncMeta.init(map:)))
+        }
         self.lastReactionBy = data["lastReactionBy"] as? String ?? ""
         self.lastReactionToAuthor = data["lastReactionToAuthor"] as? String ?? ""
         if let ts = data["lastReactionAt"] as? Timestamp {
@@ -1462,4 +1469,10 @@ extension Message {
         if isFeatureMarker { return "Message" }   // malformed known marker → never leak the raw payload
         return text
     }
+}
+
+/// One picture a chat-list reaction preview shows (see `Conversation.lastReactionToImages`).
+struct ReactionThumb: Hashable {
+    let url: String
+    let enc: EncMeta?
 }

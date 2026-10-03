@@ -2476,7 +2476,8 @@ enum ChatService {
     /// waits and lands on reconnect.
     @discardableResult
     static func setReaction(cid: String, messageId: String, emoji: String?, toAuthor: String,
-                            group: [String]? = nil, targetText: String? = nil) async -> Bool {
+                            group: [String]? = nil, targetText: String? = nil,
+                            targetImages: [(url: String, enc: EncMeta?)] = []) async -> Bool {
         let ref = db.collection("conversations").document(cid)
             .collection("messages").document(messageId)
         let convRef = db.collection("conversations").document(cid)
@@ -2489,6 +2490,7 @@ enum ChatService {
                     "lastReactionEnc": FieldValue.delete(), "lastReactionBy": FieldValue.delete(),
                     "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
                     "lastReactionToEnc": FieldValue.delete(),
+                    "lastReactionToImages": FieldValue.delete(),
                 ])
             }
             return true
@@ -2521,11 +2523,21 @@ enum ChatService {
                 if let members { targetEnc = try? await Crypto.shared.encryptForGroup(snippet, members: members) }
                 else { targetEnc = try? await Crypto.shared.encryptForConversation(cid, snippet) }
             }
+            // ⛔ THE PICTURES IT WAS ON — owner, 2026-10-03: the list shows the real photo, an album
+            // as up to three overlapping. The same url + wrapped-key pair a photo message already
+            // leaves on this document as `lastImageUrl`/`lastImageEnc`, so nothing new is exposed.
+            // 1:1 only: the group rule is an allow-list without this key, and groups are off.
+            let images: [[String: Any]] = (members == nil ? targetImages : []).prefix(3).map { t in
+                var row: [String: Any] = ["url": t.url]
+                if let e = t.enc { row["enc"] = e.asDict }
+                return row
+            }
             try? await convRef.updateData([
                 "lastReactionEnc": enc, "lastReactionBy": uid,
                 "lastReactionToAuthor": toAuthor,
                 "lastReactionAt": FieldValue.serverTimestamp(),
                 "lastReactionToEnc": targetEnc.map { $0 as Any } ?? FieldValue.delete(),
+                "lastReactionToImages": images.isEmpty ? FieldValue.delete() : images,
             ])
         }
         return true
@@ -2843,6 +2855,9 @@ enum ChatService {
             "lastReactionEnc": FieldValue.delete(), "lastReactionBy": FieldValue.delete(),
             "lastReactionToAuthor": FieldValue.delete(), "lastReactionAt": FieldValue.delete(),
             "lastReactionToEnc": FieldValue.delete(),
+            // Deleting a key that is not there changes nothing, so a group's allow-list rule
+            // never sees this one.
+            "lastReactionToImages": FieldValue.delete(),
         ])
     }
 

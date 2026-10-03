@@ -6073,11 +6073,28 @@ struct ThreadView: View {
         if let e = emoji { ReactionRecents.add(e) }
         let members = isGroup ? groupMembers : nil
         // What the reaction is on, in the words a reply quote uses ("🎤 Voice message", the text).
-        let target = repo.items.first(where: { $0.id == messageId }).map { quoteSafeLabel(replyQuoteText($0)) }
+        let targetMessage = repo.items.first(where: { $0.id == messageId })
+        let target = targetMessage.map { quoteSafeLabel(replyQuoteText($0)) }
+        // ⛔ AND ITS PICTURES — owner, 2026-10-03: the chat list said 'reacted ❤️ to "📷 Photos"'
+        // with an icon; he wants the real picture, an album as up to three overlapping. The same
+        // url + key pair the list already uses for a photo message's own thumbnail. Never for a
+        // one-time photo, whose picture must not be copied anywhere.
+        let thumbs: [(url: String, enc: EncMeta?)] = {
+            guard let m = targetMessage, !m.viewOnce else { return [] }
+            if m.isAlbum {
+                return m.album.prefix(3).compactMap { item -> (url: String, enc: EncMeta?)? in
+                    let url = item.imageUrl
+                    return url.isEmpty ? nil : (url: url, enc: Optional(item.enc))
+                }
+            }
+            if m.isImage, let url = m.imageUrl, !url.isEmpty { return [(url: url, enc: m.enc)] }
+            if m.isVideo, let url = m.thumbUrl, !url.isEmpty { return [(url: url, enc: m.thumbEnc)] }
+            return []
+        }()
         Task {
             let ok = await ChatService.setReaction(cid: cid, messageId: messageId, emoji: emoji,
                                                    toAuthor: toAuthor, group: members,
-                                                   targetText: target)
+                                                   targetText: target, targetImages: thumbs)
             if !ok { await MainActor.run { showJumpToast("Couldn't update the reaction") } }
         }
     }

@@ -3594,6 +3594,24 @@ struct ChatRow: View, Equatable {
         return emoji.isEmpty ? nil : emoji
     }
 
+    /// The reaction line in two halves, for the row that draws the reacted-to pictures between them:
+    /// "You reacted ❤️" and the words it was on, without the quote marks or the leading emoji the
+    /// words carry ("📷 Photos" → "Photos"). Nil when the plain line should be used.
+    private var reactionWithPictures: (lead: String, words: String)? {
+        guard !conv.lastReactionToImages.isEmpty, let line = reactionPreview,
+              let range = line.range(of: " to \"") else { return nil }
+        let lead = String(line[..<range.lowerBound])
+        var words = String(line[range.upperBound...])
+        if words.hasSuffix("\"") { words.removeLast() }
+        // The quote label opens with its own emoji; the picture replaces it.
+        // `isEmojiPresentation`, not `isEmoji`: digits count as emoji and "1 day" must stay whole.
+        if let first = words.unicodeScalars.first, first.properties.isEmojiPresentation,
+           let space = words.firstIndex(of: " ") {
+            words = String(words[words.index(after: space)...])
+        }
+        return (lead: lead, words: words)
+    }
+
     // "Reacted 🙏" preview when the newest event in the chat is a reaction.
     private var reactionPreview: String? {
         guard conv.freshReaction(me), let enc = conv.lastReactionEnc,
@@ -3743,6 +3761,26 @@ struct ChatRow: View, Equatable {
                 // 2 lines is the design, but the first layout pass can offer almost no width, and
                 // without a cap the text stacks one letter per line. See the note on timeStr.
                 .font(.subheadline).lineLimit(2).truncationMode(.tail)
+        } else if let r = reactionWithPictures {
+            // ⛔ THE REAL PICTURES — owner, 2026-10-03: 'reacted ❤️ to "📷 Photos"' with an icon
+            // became the photo itself; an album shows up to three, overlapping, like a group's
+            // faces. Each sits on a hairline of the row's own background so the edges read.
+            HStack(spacing: 5) {
+                Text(r.lead + " to").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    .layoutPriority(1)
+                HStack(spacing: -8) {
+                    ForEach(Array(conv.lastReactionToImages.enumerated()), id: \.offset) { i, t in
+                        SecureImageView(imageUrl: t.url, enc: t.enc, cid: conv.id)
+                            .frame(width: 20, height: 20)
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+                            .zIndex(Double(3 - i))   // the first picture on top
+                    }
+                }
+                Text(r.words).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
         } else if let r = reactionPreview {
             Text(r).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)   // the quoted words may wrap
         } else if isPhotoPreview {
