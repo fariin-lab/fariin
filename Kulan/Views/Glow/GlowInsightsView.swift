@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import FirebaseFunctions
 
 /// One live story on the Insights page, with the numbers the page ranks it by.
 struct StoryInsight: Identifiable, Equatable {
@@ -119,14 +120,55 @@ struct StoryInsight: Identifiable, Equatable {
     }
 }
 
+
+/// One country's share of my Glowers, as the server returns it.
+struct InsightsCountryShare: Identifiable, Equatable {
+    let country: String
+    let percent: Int
+    var id: String { country }
+}
+
+/// TOP COUNTRIES — owner, 2026-10-03: "use the country the app already records for each device".
+/// Those records belong to other people and no client may read them, so the server counts them
+/// (`insightsTopCountries` in `functions-insights`) and hands back shares only, never names. It
+/// returns nothing until enough Glowers have a known country to say anything without pointing at
+/// somebody.
+@MainActor @Observable final class InsightsCountriesLoader {
+    enum Phase: Equatable { case loading, loaded, failed }
+    private(set) var phase: Phase = .loading
+    private(set) var countries: [InsightsCountryShare] = []
+
+    func load() async {
+        if phase != .loaded { phase = .loading }
+        do {
+            let result = try await Functions.functions(region: "me-central1")
+                .httpsCallable("insightsTopCountries").call()
+            let data = result.data as? [String: Any] ?? [:]
+            let rows = data["countries"] as? [[String: Any]] ?? []
+            countries = rows.compactMap { row in
+                guard let name = row["country"] as? String,
+                      let percent = (row["percent"] as? NSNumber)?.intValue else { return nil }
+                return InsightsCountryShare(country: name, percent: percent)
+            }
+            phase = .loaded
+        } catch {
+            if phase != .loaded { phase = .failed }
+        }
+    }
+}
+
 /// INSIGHTS — owner, 2026-09-30: one page for the story numbers and the glow counts, opened from
-/// his own profile. First a page of what is live now; the same day he called that "too basic" and
-/// ordered the history behind it, so the page leads with a period (7, 28 or 90 days): each figure
-/// against the period before, views by day, the glower count over time, and the stories of the
-/// period ranked, expired ones included.
+/// his own profile, backed by the server's daily history (7, 28 or 90 days, each figure against the
+/// period before).
 ///
-/// A plain grouped list, the same kind of page as the Glowers list it links to: the profile it is
-/// pushed from is a coloured photograph, and the pages behind it are ordinary system pages.
+/// ⛔ THREE TABS — owner, 2026-10-03, with screenshots of two big apps' insights pages: "take the
+/// experience, don't copy the UI". Overview (headline figures you tap to chart), Content (every
+/// story of the period, sortable) and Audience (Glowers over time with gains and Unglows, top
+/// countries, when stories are watched). Built from system parts: the tab switch is the tab bar's
+/// own glass (`GlassTabSwitch`), the charts are Swift Charts, the cards are grouped backgrounds.
+///
+/// ⚠️ NO GENDER. He asked for "man or women"; the app has never asked anybody, so there is no data,
+/// and a chart of guesses would be a lie stated as a fact. Offered as an optional profile question.
 struct GlowInsightsView: View {
     let stories: PostedStoriesLoader
     /// Whose lists the two glow rows open — the same title the profile's own stats card passes.
@@ -141,9 +183,60 @@ struct GlowInsightsView: View {
         self.handle = handle
     }
 
+    enum Tab: Int, CaseIterable {
+        case overview, content, audience
+        var title: String {
+            switch self {
+            case .overview: return "Overview"
+            case .content: return "Content"
+            case .audience: return "Audience"
+            }
+        }
+    }
+
+    /// The headline figures on Overview. Tapping one charts it below, day by day.
+    enum Metric: CaseIterable, Identifiable {
+        case views, reactions, glowers, posted, perStory
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .views: return "Views"
+            case .reactions: return "Reactions"
+            case .glowers: return "Net Glowers"
+            case .posted: return "Stories"
+            case .perStory: return "Views per story"
+            }
+        }
+    }
+
+    enum StorySort: CaseIterable { case latest, views, reactions
+        var title: String {
+            switch self {
+            case .latest: return "Latest"
+            case .views: return "Views"
+            case .reactions: return "Reactions"
+            }
+        }
+    }
+
+    enum GrowthView: CaseIterable { case overall, gained, unglows
+        var title: String {
+            switch self {
+            case .overall: return "Overall"
+            case .gained: return "Gained"
+            case .unglows: return "Unglows"
+            }
+        }
+    }
+
     @State private var loader = GlowInsightsLoader()
     @State private var history = InsightsHistoryLoader()
+    @State private var countries = InsightsCountriesLoader()
     @State private var period: InsightsPeriod = .month
+    @State private var tab: Tab = .overview
+    @State private var metric: Metric = .views
+    @State private var sort: StorySort = .latest
+    @State private var growth: GrowthView = .overall
     private var glow = GlowService.shared
 
     private var live: [PostedStory] { stories.state.value ?? [] }
@@ -192,20 +285,31 @@ struct GlowInsightsView: View {
             if unlocked { await loader.load(live) }
         }
         .task(id: unlocked) {
-            if unlocked { await history.load() }
+            if unlocked {
+                await history.load()
+                await countries.load()
+            }
         }
     }
 
     private func insights(_ report: InsightsReport) -> some View {
-        List {
-            historySections(report)
-            liveSections(ranked: !report.hasHistory)
-            glowSection(report)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                tabSwitch
+                switch tab {
+                case .overview: overviewTab(report)
+                case .content: contentTab(report)
+                case .audience: audienceTab(report)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 24)
         }
-        .listStyle(.insetGrouped)
+        .background(Color(.systemGroupedBackground))
         .refreshable {
             await history.load()
             await loader.load(live)
+            await countries.load()
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -219,6 +323,21 @@ struct GlowInsightsView: View {
                     Text("\(period.rawValue) days")
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var tabSwitch: some View {
+        let binding = Binding(get: { tab.rawValue }, set: { tab = Tab(rawValue: $0) ?? .overview })
+        if #available(iOS 26.0, *) {
+            GlassTabSwitch(titles: Tab.allCases.map(\.title), selected: binding)
+                .frame(height: 46)
+                .padding(.top, 8)
+        } else {
+            Picker("Section", selection: binding) {
+                ForEach(Tab.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.top, 8)
         }
     }
 
@@ -242,54 +361,140 @@ struct GlowInsightsView: View {
         }
     }
 
-    // MARK: - The period
+    // MARK: - Shared pieces
 
-    @ViewBuilder private func historySections(_ report: InsightsReport) -> some View {
+    /// A titled card: the grouped page's own background, rounded the way its sections are.
+    private func card<Content: View>(_ title: String? = nil, footer: String? = nil,
+                                     @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let title {
+                Text(title).font(.headline)
+            }
+            content()
+            if let footer, !footer.isEmpty {
+                Text(footer).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// The history's own state, shared by every tab: loading, failed, or nothing recorded yet.
+    @ViewBuilder private func historyGate<Content: View>(_ report: InsightsReport,
+                                                          @ViewBuilder _ content: () -> Content) -> some View {
         switch history.phase {
         case .loading:
-            Section(period.title) {
-                ProgressView().frame(maxWidth: .infinity)
-            }
+            card { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 20) }
         case .failed:
-            Section(period.title) {
+            card {
                 Text("Could not load your history").foregroundStyle(.secondary)
                 Button("Try Again") { Task { await history.load() } }
             }
         case .loaded:
             if report.hasHistory {
-                overviewSection(report)
-                viewsSection(report)
-                topStoriesSection(report)
-                detailSection(report)
+                content()
             } else {
-                Section {
+                card(footer: "Your history starts with your next story view or Glow. Trends and comparisons appear here as the days add up.") {
                     Text("Nothing has been recorded yet.").foregroundStyle(.secondary)
-                } header: {
-                    Text(period.title)
-                } footer: {
-                    Text("Your history starts with your next story view or Glow. Trends and comparisons appear here as the days add up.")
                 }
             }
         }
     }
 
-    private func overviewSection(_ report: InsightsReport) -> some View {
-        Section {
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 16) {
-                GridRow {
-                    stat("Story views", Self.amount(report.views.current), report.views)
-                    stat("Reactions", Self.amount(report.reactions.current), report.reactions)
+    private func periodHeader(_ report: InsightsReport) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(period.title).font(.title2.weight(.bold))
+            Text("\(Self.dayText(report.start)) to \(Self.dayText(report.end))")
+                .font(.subheadline).foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: - Overview
+
+    @ViewBuilder private func overviewTab(_ report: InsightsReport) -> some View {
+        periodHeader(report)
+        historyGate(report) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Metric.allCases) { m in metricTile(m, report) }
                 }
-                GridRow {
-                    stat("Stories posted", Self.amount(report.posted.current), report.posted)
-                    stat("Views per story", Self.average(report.viewsPerStory.current), report.viewsPerStory)
+                .padding(.vertical, 2)
+            }
+            .scrollClipDisabled()
+            card(metric.title, footer: overviewFooter(report)) {
+                metricChart(report)
+            }
+        }
+        liveCard
+    }
+
+    private func delta(_ m: Metric, _ report: InsightsReport) -> InsightsDelta {
+        switch m {
+        case .views: return report.views
+        case .reactions: return report.reactions
+        case .glowers: return report.glowersNet
+        case .posted: return report.posted
+        case .perStory: return report.viewsPerStory
+        }
+    }
+
+    private func metricTile(_ m: Metric, _ report: InsightsReport) -> some View {
+        let d = delta(m, report)
+        let selected = m == metric
+        let value = m == .glowers ? Self.signed(d.current)
+                  : (m == .perStory ? Self.average(d.current) : Self.amount(d.current))
+        return Button {
+            withAnimation(.smooth(duration: 0.25)) { metric = m }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(m.title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Text(value).font(.title2.weight(.bold)).monospacedDigit().foregroundStyle(.primary)
+                if let change = Self.deltaText(d) {
+                    Text(change.text).font(.footnote.weight(.medium))
+                        .foregroundStyle(change.color).monospacedDigit()
+                } else {
+                    Text(" ").font(.footnote)
                 }
             }
-            .padding(.vertical, 6)
-        } header: {
-            Text("\(Self.dayText(report.start)) to \(Self.dayText(report.end))")
-        } footer: {
-            Text(overviewFooter(report))
+            .frame(width: 132, alignment: .leading)
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// One bar per recorded day for the picked figure. Views per story has no per-day value of its
+    /// own, so it charts views, which is what it is made of.
+    @ViewBuilder private func metricChart(_ report: InsightsReport) -> some View {
+        let rows = report.recordedDays
+        if rows.count >= 2 {
+            Chart(rows) { row in
+                let value: Int = {
+                    switch metric {
+                    case .views, .perStory: return max(0, row.day.storyViews)
+                    case .reactions: return row.day.storyReactions
+                    case .glowers: return row.day.glowersGained - row.day.glowersLost
+                    case .posted: return row.day.storiesPosted
+                    }
+                }()
+                BarMark(x: .value("Day", Self.chartDate(row.date), unit: .day),
+                        y: .value(metric.title, value))
+                    .foregroundStyle(value < 0 ? Color.red.gradient : Color.accentColor.gradient)
+                    .cornerRadius(3)
+            }
+            .frame(height: 180)
+        } else {
+            Text("The chart appears after a second day of history.")
+                .font(.subheadline).foregroundStyle(.secondary)
         }
     }
 
@@ -306,84 +511,22 @@ struct GlowInsightsView: View {
         return "\(since) These figures count from that day."
     }
 
-    @ViewBuilder private func viewsSection(_ report: InsightsReport) -> some View {
-        if report.viewsByDay.count >= 2 {
-            Section("Story views by day") {
-                Chart(report.viewsByDay) { point in
-                    BarMark(x: .value("Day", Self.chartDate(point.date), unit: .day),
-                            y: .value("Views", point.value))
-                }
-                .frame(height: 160)
-                .padding(.vertical, 6)
-            }
-        }
-    }
-
-    @ViewBuilder private func topStoriesSection(_ report: InsightsReport) -> some View {
-        if !report.topStories.isEmpty {
-            Section("Top stories") {
-                ForEach(report.topStories) { record in
-                    recordRow(record)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private func detailSection(_ report: InsightsReport) -> some View {
-        if report.bestHourUTC != nil || !report.audiences.isEmpty {
-            Section("Details") {
-                if let hour = report.bestHourUTC {
-                    valueRow("Most views around", Self.hourText(hour))
-                }
-                ForEach(report.audiences) { share in
-                    valueRow("Views from \(Self.audience(share.audience))", GlowCount.short(share.views))
-                }
-            }
-        }
-    }
-
     // MARK: - Live now
 
-    @ViewBuilder private func liveSections(ranked: Bool) -> some View {
+    @ViewBuilder private var liveCard: some View {
         if stories.state.isLoading {
-            Section("Live now") {
-                ProgressView().frame(maxWidth: .infinity)
-            }
+            card("Live now") { ProgressView().frame(maxWidth: .infinity) }
         } else if stories.state.isFailed {
-            Section("Live now") {
-                Text("Could not load stories").foregroundStyle(.secondary)
-            }
+            card("Live now") { Text("Could not load stories").foregroundStyle(.secondary) }
         } else if live.isEmpty {
-            Section("Live now") {
-                Text("You have no live stories.").foregroundStyle(.secondary)
-            }
+            card("Live now") { Text("You have no live stories.").foregroundStyle(.secondary) }
         } else if !GlowInsightsLoader.receiptsOn {
-            Section {
+            card("Live now", footer: "Turn on view receipts in Settings > Stories to see who views your stories.") {
                 Text("Story views are turned off.").foregroundStyle(.secondary)
-            } header: {
-                Text("Live now")
-            } footer: {
-                Text("Turn on view receipts in Settings > Stories to see who views your stories.")
             }
         } else {
-            Section {
+            card("Live now", footer: "The stories that are live at this moment. Viewers are different people across all of them.") {
                 liveSummary
-            } header: {
-                Text("Live now")
-            } footer: {
-                Text("The stories that are live at this moment. Viewers are different people across all of them.")
-            }
-            // With a history the period's own list above already ranks these.
-            if ranked {
-                Section("Live stories") {
-                    ForEach(loader.rows) { row in
-                        storyRow(thumb: .url(row.story.thumbUrl),
-                                 isVideo: row.story.isVideo,
-                                 detail: "\(row.story.createdAt.formatted(.relative(presentation: .named))) · \(Self.audience(row.story.audience))",
-                                 views: row.views,
-                                 reactions: row.reactions)
-                    }
-                }
             }
         }
     }
@@ -403,39 +546,218 @@ struct GlowInsightsView: View {
                 stat("Reaction rate", loader.reactionRate.map { String(format: "%.0f%%", $0 * 100) }, nil)
             }
         }
-        .padding(.vertical, 6)
     }
 
-    // MARK: - Glow
+    // MARK: - Content
 
-    private func glowSection(_ report: InsightsReport) -> some View {
-        Section("Glow") {
+    @ViewBuilder private func contentTab(_ report: InsightsReport) -> some View {
+        periodHeader(report)
+        Picker("Sort", selection: $sort) {
+            ForEach(StorySort.allCases, id: \.self) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        if history.phase == .loaded, report.hasHistory {
+            let rows = sorted(report.periodStories)
+            if rows.isEmpty {
+                card {
+                    ContentUnavailableView("No stories in this period",
+                                           systemImage: "rectangle.stack",
+                                           description: Text("Stories you post in the last \(period.rawValue) days appear here with their views and reactions."))
+                }
+            } else {
+                card {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { i, record in
+                        if i > 0 { Divider() }
+                        recordRow(record)
+                    }
+                }
+            }
+        } else if !loader.rows.isEmpty {
+            // No history yet: the live stories are what there is to rank.
+            card("Live stories") {
+                ForEach(Array(loader.rows.enumerated()), id: \.element.id) { i, row in
+                    if i > 0 { Divider() }
+                    storyRow(thumb: .url(row.story.thumbUrl),
+                             isVideo: row.story.isVideo,
+                             detail: "\(row.story.createdAt.formatted(.relative(presentation: .named))) · \(Self.audience(row.story.audience))",
+                             views: row.views,
+                             reactions: row.reactions)
+                }
+            }
+        } else {
+            historyGate(report) { EmptyView() }
+        }
+    }
+
+    private func sorted(_ rows: [InsightsStoryRecord]) -> [InsightsStoryRecord] {
+        switch sort {
+        case .latest: return rows.sorted { $0.createdAt > $1.createdAt }
+        case .views: return rows.sorted { $0.views != $1.views ? $0.views > $1.views : $0.createdAt > $1.createdAt }
+        case .reactions: return rows.sorted { $0.reactions != $1.reactions ? $0.reactions > $1.reactions : $0.createdAt > $1.createdAt }
+        }
+    }
+
+    // MARK: - Audience
+
+    @ViewBuilder private func audienceTab(_ report: InsightsReport) -> some View {
+        card {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Glowers").font(.headline)
+                Text(GlowCount.short(glow.displayGlowers.count))
+                    .font(.system(size: 40, weight: .bold)).monospacedDigit()
+                if report.hasHistory, let change = Self.deltaText(report.glowersNet) {
+                    Text("\(change.text) against the \(period.rawValue) days before")
+                        .font(.subheadline).foregroundStyle(change.color)
+                }
+            }
             NavigationLink {
                 GlowPeopleListView(side: .glowers, title: title)
             } label: {
-                valueRow("Glowers", GlowCount.short(glow.displayGlowers.count))
+                valueRow("See your Glowers", "")
             }
-            if report.hasHistory {
-                valueRow("Gained in \(period.rawValue) days", "+\(GlowCount.short(report.glowersGained))",
-                         change: Self.deltaText(report.glowersNet))
-                valueRow("Lost in \(period.rawValue) days", GlowCount.short(report.glowersLost))
-                if report.glowersByDay.count >= 2 {
-                    Chart(report.glowersByDay) { point in
-                        LineMark(x: .value("Day", Self.chartDate(point.date)),
-                                 y: .value("Glowers", point.value))
-                            .interpolationMethod(.monotone)
-                    }
-                    .chartYScale(domain: .automatic(includesZero: false))
-                    .frame(height: 140)
-                    .padding(.vertical, 6)
+            .foregroundStyle(.primary)
+        }
+        historyGate(report) {
+            card("Glower growth") {
+                Picker("Growth", selection: $growth) {
+                    ForEach(GrowthView.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                growthChart(report)
+                HStack {
+                    growthFigure("Gained", "+\(GlowCount.short(report.glowersGained))", .green)
+                    growthFigure("Unglows", "−\(GlowCount.short(report.glowersLost))", .red)
+                    growthFigure("Net", Self.signed(Double(report.glowersGained - report.glowersLost)), .primary)
                 }
             }
+        }
+        countriesCard
+        historyGate(report) { activeTimesCard(report) }
+        card {
             NavigationLink {
                 GlowPeopleListView(side: .glowing, title: title)
             } label: {
                 valueRow("Glowing", GlowCount.short(glow.displayGlowing.count))
             }
+            .foregroundStyle(.primary)
         }
+    }
+
+    private func growthFigure(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.title3.weight(.bold)).monospacedDigit().foregroundStyle(color)
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func growthChart(_ report: InsightsReport) -> some View {
+        switch growth {
+        case .overall:
+            if report.glowersByDay.count >= 2 {
+                Chart(report.glowersByDay) { point in
+                    LineMark(x: .value("Day", Self.chartDate(point.date)),
+                             y: .value("Glowers", point.value))
+                        .interpolationMethod(.monotone)
+                    AreaMark(x: .value("Day", Self.chartDate(point.date)),
+                             y: .value("Glowers", point.value))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(Color.accentColor.opacity(0.12).gradient)
+                }
+                .chartYScale(domain: .automatic(includesZero: false))
+                .frame(height: 170)
+            } else {
+                Text("The chart appears after a second day of history.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        case .gained, .unglows:
+            let gained = growth == .gained
+            Chart(report.recordedDays) { row in
+                BarMark(x: .value("Day", Self.chartDate(row.date), unit: .day),
+                        y: .value(growth.title, gained ? row.day.glowersGained : row.day.glowersLost))
+                    .foregroundStyle((gained ? Color.green : Color.red).gradient)
+                    .cornerRadius(3)
+            }
+            .frame(height: 170)
+        }
+    }
+
+    @ViewBuilder private var countriesCard: some View {
+        card("Top countries",
+             footer: "From the approximate country of each Glower's phone. Shown once enough Glowers have one, so nobody can be pointed at.") {
+            switch countries.phase {
+            case .loading:
+                ProgressView().frame(maxWidth: .infinity)
+            case .failed:
+                Text("Could not load countries").foregroundStyle(.secondary)
+                Button("Try Again") { Task { await countries.load() } }
+            case .loaded:
+                if countries.countries.isEmpty {
+                    Text("Not enough Glowers with a known country yet.").foregroundStyle(.secondary)
+                } else {
+                    ForEach(countries.countries) { c in shareBar(c.country, c.percent) }
+                }
+            }
+        }
+    }
+
+    private func shareBar(_ label: String, _ percent: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                Spacer()
+                Text("\(percent)%").font(.subheadline.weight(.semibold)).monospacedDigit()
+            }
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(.tertiarySystemFill))
+                    Capsule().fill(Color.accentColor.gradient)
+                        .frame(width: max(4, g.size.width * CGFloat(percent) / 100))
+                }
+            }
+            .frame(height: 8)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Views by three-hour block on the phone's own clock. The server keeps UTC hours.
+    private func localBlocks(_ hoursUTC: [Int: Int]) -> [(label: String, views: Int)] {
+        var blocks = [Int](repeating: 0, count: 8)
+        let midnight = InsightsCalendar.startOfDay(Date())
+        for (hour, views) in hoursUTC {
+            let local = Calendar.current.component(.hour, from: midnight.addingTimeInterval(TimeInterval(hour) * 3600))
+            blocks[local / 3] += views
+        }
+        let labels = ["12a", "3a", "6a", "9a", "12p", "3p", "6p", "9p"]
+        return labels.indices.map { (label: labels[$0], views: blocks[$0]) }
+    }
+
+    @ViewBuilder private func activeTimesCard(_ report: InsightsReport) -> some View {
+        let total = report.hoursUTC.values.reduce(0, +)
+        card("When your stories are watched",
+             footer: "On your phone's time zone (\(TimeZone.current.abbreviation() ?? TimeZone.current.identifier)).") {
+            if total < InsightsReport.bestHourMinimum {
+                Text("Not enough views in this period yet.").foregroundStyle(.secondary)
+            } else {
+                Chart(localBlocks(report.hoursUTC), id: \.label) { block in
+                    BarMark(x: .value("Time", block.label), y: .value("Views", block.views))
+                        .foregroundStyle(Color.accentColor.gradient)
+                        .cornerRadius(6)
+                }
+                .chartYAxis(.hidden)
+                .frame(height: 160)
+                if let hour = report.bestHourUTC {
+                    valueRow("Most views around", Self.hourText(hour))
+                }
+            }
+        }
+    }
+
+    /// "+3" or "−3"; a zero has no sign.
+    private static func signed(_ value: Double) -> String {
+        let n = Int(value.rounded())
+        if n == 0 { return "0" }
+        return (n > 0 ? "+" : "−") + GlowCount.short(abs(n))
     }
 
     // MARK: - Rows

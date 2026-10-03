@@ -134,6 +134,13 @@ struct InsightsReport: Equatable {
     /// The UTC hour with the most views in the period, once there are enough views to mean it.
     let bestHourUTC: Int?
     let audiences: [InsightsAudienceShare]
+    /// Every recorded day of the period with all its figures, for the charts that follow whichever
+    /// headline is picked (2026-10-03 redesign). Days before the history began are left out.
+    let recordedDays: [InsightsDayRow]
+    /// Views in the period by UTC hour, 0 to 23.
+    let hoursUTC: [Int: Int]
+    /// Every story of the period, newest first, for the Content tab's own sorting.
+    let periodStories: [InsightsStoryRecord]
 
     /// True once the history reaches back past the start of this period.
     var coversPeriod: Bool { firstDay.map { $0 <= start } ?? false }
@@ -247,8 +254,18 @@ struct InsightsReport: Equatable {
             glowersByDay: Array(glowersByDay),
             topStories: Array(top.prefix(topCount)),
             bestHourUTC: bestHour,
-            audiences: audiences.count >= 2 ? audiences : [])
+            audiences: audiences.count >= 2 ? audiences : [],
+            recordedDays: recorded.map { InsightsDayRow(date: $0.date, day: $0.day) },
+            hoursUTC: hours,
+            periodStories: currentStories.sorted { $0.createdAt > $1.createdAt })
     }
+}
+
+/// One recorded day of a period: its UTC midnight and its figures.
+struct InsightsDayRow: Identifiable, Equatable {
+    let date: Date
+    let day: InsightsDay
+    var id: Date { date }
 }
 
 /// Reads the history once for the longest period and its comparison, so switching between 7, 28
