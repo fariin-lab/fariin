@@ -616,8 +616,8 @@ struct GlowProfileView: View {
     /// folded the two into one card; this is a separate row because of that sentence.
     ///
     /// ⛔ REDESIGNED to his own mock-up, 2026-09-30 evening: a card with "Insights" centred, one
-    /// line under it, and a wide "View Insights" button with an open lock. The whole card opens
-    /// the page.
+    /// line under it, and a wide "View Insights" button. The whole card opens the page.
+    /// The button's open-lock icon was removed on his order, 2026-10-03: text only.
     private var insightsCard: some View {
         NavigationLink {
             GlowInsightsView(stories: stories, title: profile?.handle ?? profile?.name ?? "Glow",
@@ -631,16 +631,16 @@ struct GlowProfileView: View {
                     if !GlowInsightsView.isUnlocked(glowers: glow.displayGlowers.count,
                                                     handle: profile?.handle ?? "") {
                         Text("Insights are available after reaching \(GlowInsightsView.glowersNeeded) Glowers.")
-                    } else if let views = totalStoryViews {
-                        // Absent while no count is known: a confident zero is the worse lie.
-                        Text("\(GlowCount.short(views)) story views")
+                    } else {
+                        // His wording, 2026-10-03 (was the story-views count).
+                        Text("Explore insights from your Stories and Glowers")
                     }
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                Label("View Insights", systemImage: "lock.open")
+                Text("View Insights")
                     .font(.body)
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity)
@@ -657,13 +657,6 @@ struct GlowProfileView: View {
             .contentShape(RoundedRectangle(cornerRadius: ProfileCard.corner, style: .continuous))
         }
         .buttonStyle(.plain)
-    }
-
-    /// Views across the live stories, from the counts the Posted stories card already loaded.
-    private var totalStoryViews: Int? {
-        guard case .loaded(let rows) = stories.state else { return nil }
-        let known = rows.compactMap(\.views)
-        return known.isEmpty ? nil : known.reduce(0, +)
     }
 
     /// ABOUT — owner, 2026-09-30: the joined date, and "Complete your profile" with a progress bar
