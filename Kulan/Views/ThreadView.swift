@@ -150,6 +150,7 @@ struct ThreadView: View {
     @State private var showLibrary = false
     @State private var showVideoSoon = false
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
+    @State private var showMyProfile = false     // my own username tapped in a message → my profile
     @State private var showEncryptionInfo = false   // empty-chat notice → the safety-number screen
     /// The requester's @username, fetched once for the message-request card. Empty until it lands,
     /// and the line simply is not drawn until then rather than showing a placeholder.
@@ -1183,6 +1184,12 @@ struct ThreadView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
                 })
             }
+        }
+        // My own username or profile card tapped in a message (see `openProfileHandle`).
+        .navigationDestination(isPresented: $showMyProfile) {
+            GlowProfileView(uid: me,
+                            initialName: ProfileStore.shared.me?.name ?? "",
+                            initialPhoto: ProfileStore.shared.me?.photoUrl)
         }
         // "Learn more" on the empty-chat notice. The screen already exists and is already reachable
         // from Contact Info; this is a second door onto the same one, not a new screen.
@@ -3395,13 +3402,19 @@ struct ThreadView: View {
         let mine = (ProfileStore.shared.me?.handle ?? "").lowercased()
         let asked = handle.trimmingCharacters(in: .whitespaces).lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        // ⛔ A PROFILE, NOT THE KEYBOARD — owner, 2026-10-03, later the same day: the keyboard was
+        // the wrong answer. As in the reference app, your own name opens your own profile, and the
+        // name of the person this chat is with opens their profile page; there is no chat to go to
+        // in either case, so the door goes to the person.
         Task { @MainActor in
             if !mine.isEmpty, asked == mine {
-                inputFocused = true
+                inputFocused = false
+                showMyProfile = true
                 return
             }
             if await ProfileCardDoor.chatId(handle) == cid {
-                inputFocused = true
+                inputFocused = false
+                showContactInfo = true
                 return
             }
             if !(await ProfileCardDoor.open(handle, push: true)) {
