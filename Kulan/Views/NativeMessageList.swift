@@ -3987,7 +3987,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         attachHeaderEdgeEffectForTransition()
-        if isMovingToParent { showPushHeaderBlur() }
         if isMovingToParent || !didRegisterOnAppearing {
             didRegisterOnAppearing = true
             registerAsContentScrollView()
@@ -4017,53 +4016,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         interaction.edge = .top
         bar.addInteraction(interaction)
         pushEdgeInteraction = interaction
-    }
-
-    /// ⛔ THE OTHER SOLUTION — owner, 2026-10-03, third report on build 819: "the chat header blur
-    /// still comes late, do another solution". Both attempts above try to make the SYSTEM link its
-    /// edge blur to this list before the push ends (the container interaction on the bar, and the
-    /// chat list letting go of the bar), and on device it still links only once the push has
-    /// finished. So the push no longer waits for it: for the length of the push this list carries
-    /// its own band under the header, the system's own material with a soft bottom edge like the
-    /// iOS 26 one, and when the push ends and the bar's real edge effect has the list, the band
-    /// fades out over it. Only on the way IN (`isMovingToParent`); the system effect owns everything
-    /// after that, including the pop.
-    private var pushHeaderBlur: UIVisualEffectView?
-
-    private func showPushHeaderBlur() {
-        guard pushHeaderBlur == nil, isViewLoaded else { return }
-        let band = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-        band.isUserInteractionEnabled = false
-        let fade = CAGradientLayer()
-        fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
-        fade.locations = [0, 0.62, 1]
-        band.layer.mask = fade
-        // Over the list (or its secure canvas), under the composer.
-        let list: UIView = collectionView.superview === view ? collectionView : (collectionView.superview ?? collectionView)
-        view.insertSubview(band, aboveSubview: list)
-        pushHeaderBlur = band
-        layoutPushHeaderBlur()
-    }
-
-    private func layoutPushHeaderBlur() {
-        guard let band = pushHeaderBlur else { return }
-        // The bar's own height plus a soft tail below it, as the system's edge effect reaches.
-        let height = view.safeAreaInsets.top + 22
-        band.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: height)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        band.layer.mask?.frame = band.bounds
-        CATransaction.commit()
-    }
-
-    private func hidePushHeaderBlur() {
-        guard let band = pushHeaderBlur else { return }
-        pushHeaderBlur = nil
-        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState]) {
-            band.alpha = 0
-        } completion: { _ in
-            band.removeFromSuperview()
-        }
     }
 
     private func detachHeaderEdgeEffectForTransition() {
@@ -4104,7 +4056,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         detachHeaderEdgeEffectForTransition()   // the bar's own link has the list now
-        hidePushHeaderBlur()                    // ...so the stand-in for the push steps aside
         isDisappearing = false
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
@@ -4278,7 +4229,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        layoutPushHeaderBlur()   // the header's height arrives with the safe area, during the push
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
         // `inputToolbar.ensureTextViewHeight()` and then `updateContentInsets()` synchronously, and
         // that is their entire keyboard handling: when the keyboard moves, UIKit changes
