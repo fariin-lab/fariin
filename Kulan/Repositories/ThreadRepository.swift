@@ -1310,6 +1310,44 @@ final class ThreadRepository {
         }
     }
 
+    // MARK: - One repository per open chat
+
+    /// ⛔ SWIFTUI RUNS `ThreadView.init` MANY TIMES; ONLY THE FIRST REPOSITORY IS EVER KEPT — owner,
+    /// 2026-10-03: "the chat takes too long to open and the row stays grey". `State(initialValue:)`
+    /// keeps the first value and drops the rest, but the init that builds each one still runs: every
+    /// redraw of the shell during the push (and every conversation update while the chat is open)
+    /// built a new repository, seeded it from the cache and rebuilt every row, on the main thread, to
+    /// throw it away. This hands every init the one already alive for the chat.
+    private struct WeakRef { weak var value: ThreadRepository? }
+    private static var live: [String: WeakRef] = [:]
+
+    /// The live repository for `cid`, or a new one. Previews do not come here: they own their own.
+    static func forChat(_ cid: String) -> ThreadRepository {
+        if let r = live[cid]?.value { return r }
+        let r = ThreadRepository(cid: cid)
+        live[cid] = WeakRef(value: r)
+        return r
+    }
+
+    /// Screens showing this chat. Two at once only when the same chat is reopened while its old
+    /// screen is still leaving; the leaving one must not stop the listeners the new one runs on.
+    @ObservationIgnored private var holders = 0
+
+    /// A screen starts showing this chat.
+    func open() {
+        holders += 1
+        start()
+    }
+
+    /// A screen stops showing this chat. The last one out stops it and frees the slot, so the next
+    /// visit starts from a fresh repository, as before.
+    func close() {
+        holders = max(0, holders - 1)
+        guard holders == 0 else { return }
+        stop()
+        if Self.live[cid]?.value === self { Self.live[cid] = nil }
+    }
+
     func stop() {
         listener?.remove(); listener = nil
         if let outboxObserver { NotificationCenter.default.removeObserver(outboxObserver) }

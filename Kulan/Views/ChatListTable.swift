@@ -905,6 +905,30 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // for no gain. `didMove(toParent:)` has always done the real registration.
         if tableView.window == nil { registerAsContentScrollView() }
         isInTransition = true
+        clearOpenedRow(animated: animated)
+    }
+
+    /// ⛔ THE OPENED ROW FADES ON THE WAY BACK, ALONGSIDE THE POP — owner, 2026-10-03, against the
+    /// reference app: "the pressed state stays too long while the chat opens". The tap used to
+    /// deselect at once, but that fade is an animation and it could not start until the chat had
+    /// been built, so the grey froze on screen through the whole wait. The reference (and the
+    /// system's own `clearsSelectionOnViewWillAppear`) leaves the row selected while the chat slides
+    /// in, and clears it here, riding the back transition, so an interactive swipe that is
+    /// cancelled puts the selection back.
+    private func clearOpenedRow(animated: Bool) {
+        guard !tableView.isEditing, let ip = tableView.indexPathForSelectedRow else { return }
+        if let tc = transitionCoordinator {
+            tc.animate(alongsideTransition: { [weak self] _ in
+                self?.tableView.deselectRow(at: ip, animated: true)
+            }, completion: { [weak self] ctx in
+                guard ctx.isCancelled, let self, !self.tableView.isEditing,
+                      ip.section < self.tableView.numberOfSections,
+                      ip.row < self.tableView.numberOfRows(inSection: ip.section) else { return }
+                self.tableView.selectRow(at: ip, animated: false, scrollPosition: .none)
+            })
+        } else {
+            tableView.deselectRow(at: ip, animated: animated)
+        }
     }
 
     /// ⛔ REGISTERED WHERE THE PARENT CHAIN IS WHOLE — owner, 2026-09-27: after Back, the search
@@ -944,6 +968,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // The arrival has settled: let the footer resize again and replay whatever the transition
         // held back, in one pass rather than one per frame.
         isInTransition = false
+        // The safety net for `clearOpenedRow`: an arrival with no transition to ride must still
+        // never leave a grey row behind.
+        if !tableView.isEditing, let ip = tableView.indexPathForSelectedRow {
+            tableView.deselectRow(at: ip, animated: animated)
+        }
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
@@ -2049,14 +2078,21 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             return
         }
 
-        tableView.deselectRow(at: indexPath, animated: true)
+        // NOT deselected here: the row stays selected while the chat slides in and fades on the way
+        // back, riding the pop. See `clearOpenedRow`.
         // A stranger from the search opens — and creates — the chat with them.
         if ChatListSection(rawValue: indexPath.section) == .people {
-            guard let id = rowId(at: indexPath), let u = host?.person(id) else { return }
+            guard let id = rowId(at: indexPath), let u = host?.person(id) else {
+                tableView.deselectRow(at: indexPath, animated: true)   // nothing opens: no row left grey
+                return
+            }
             host?.parent.onOpenPerson(u)
             return
         }
-        guard let c = conversation(at: indexPath) else { return }
+        guard let c = conversation(at: indexPath) else {
+            tableView.deselectRow(at: indexPath, animated: true)
+            return
+        }
         host?.parent.onOpen(c)
     }
 

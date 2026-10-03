@@ -424,7 +424,8 @@ struct ThreadView: View {
         self.title = title
         self.photoUrl = photoUrl
         self.preview = preview
-        let r = ThreadRepository(cid: cid)
+        // One repository per open chat, not one per init — see `ThreadRepository.forChat`.
+        let r = preview ? ThreadRepository(cid: cid) : ThreadRepository.forChat(cid)
         _repo = State(initialValue: r)
         // ALWAYS start hidden — even a warm cache hit. Video showed the bug: when revealed started true
         // (cache hit), the chat was visible DURING the push transition at a not-yet-bottom position, then
@@ -1883,7 +1884,9 @@ struct ThreadView: View {
                              onFirstLoad: sweepOnFirstLoad))
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
-            repo.start()
+            // A preview owns its repository; a real chat shares the live one (`forChat`), so it
+            // counts itself in and out rather than stopping a run another screen may be using.
+            if preview { repo.start() } else { repo.open() }
             // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
             // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
             // nothing else competing for the network. No-op once the key is on the phone, which is
@@ -2005,7 +2008,7 @@ struct ThreadView: View {
             // themselves.
             VoiceNotePlayer.shared.handOff(followOn: repo.items,
                                            after: VoiceNotePlayer.shared.messageId)
-            repo.stop()
+            repo.close()
             groupCallListener?.remove(); groupCallListener = nil
             // Only when it is still ours: a chat pushed over this one has already claimed it.
             if AppRouter.shared.activeChatId == cid { AppRouter.shared.activeChatId = nil }
