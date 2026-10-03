@@ -1536,7 +1536,7 @@ struct ThreadView: View {
         // .ignoresSafeArea stretched the preview edge-to-edge, hiding the grabber and any Done chrome —
         // and since file content scrolls, swipe-down scrolled the text instead of dismissing ("can't
         // close it"). PDFs get the same sheet look instead of a bare full page.
-        .sheet(item: $filePreview) { FilePreviewSheet(url: $0.url) }
+        .sheet(item: $filePreview) { FilePreviewSheet(url: $0.url, canShare: savingAllowed) }
     }
 
     // Fifth slice of the picker chain (link/not-found/pdf/reaction/forward/group/info), erased boundary.
@@ -10351,9 +10351,29 @@ struct PDFDocWrap: Identifiable { let id = UUID(); let url: URL; let title: Stri
 // eats the swipe-down — the bare preview was unclosable).
 struct FilePreviewSheet: View {
     let url: URL
+    /// Off in a Restricted chat (No Saving).
+    var canShare: Bool = true
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         FilePreview(url: url)
+            // ⛔ SHARE THE FILE — owner, 2026-10-03, a zip open with only the ✕: "no option to share
+            // the file". QuickLook's own share button lives in the bar that does not render inside
+            // this sheet, so the system share sheet is offered here, with the real file: Save to
+            // Files, AirDrop, other apps. Same glass circle as the ✕, on the other side.
+            .overlay(alignment: .topLeading) {
+                if canShare {
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
+                            .frame(width: 40, height: 40)
+                            .liquidGlass(Circle(), interactive: true)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 10).padding(.leading, 12)
+                    .accessibilityLabel("Share")
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
