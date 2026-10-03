@@ -2324,7 +2324,11 @@ struct ThreadView: View {
                         .frame(width: MenuIcon.standard, height: MenuIcon.standard)
                         .foregroundStyle(.primary)
                         .frame(width: 36, height: 36)
-                        .overlay(Circle().strokeBorder(.primary.opacity(0.35), lineWidth: 1.5))
+                        // ⛔ LIQUID GLASS, NOT A DRAWN RING — owner, 2026-10-03, the button ringed:
+                        // "make it liquid glass like the reference app". The system's interactive
+                        // glass circle (`liquidGlass` is `glassEffect` on iOS 26), so it presses and
+                        // shimmers like every other glass button; the hand-drawn 1.5pt stroke is gone.
+                        .liquidGlass(Circle(), interactive: true)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
