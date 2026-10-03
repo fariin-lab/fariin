@@ -3612,6 +3612,38 @@ struct ChatRow: View, Equatable {
         return (lead: lead, words: words)
     }
 
+    /// The reaction line with a REAL ICON where the quote's emoji was — owner, 2026-10-03, two
+    /// screenshots: 'to "🎤 Voice message"' and 'to "📄 Archive.zip"' wore emoji. The same symbols the
+    /// list already draws for those messages themselves (`previewBadge`), and a file's by its kind.
+    /// Nil for plain text, which keeps its quote marks.
+    private var reactionWithIcon: (lead: String, icon: String, words: String)? {
+        guard conv.lastReactionToImages.isEmpty, let line = reactionPreview,
+              let range = line.range(of: " to \"") else { return nil }
+        let lead = String(line[..<range.lowerBound])
+        var quoted = String(line[range.upperBound...])
+        if quoted.hasSuffix("\"") { quoted.removeLast() }
+        if quoted == "GIF" { return (lead: lead, icon: "ic_gif", words: "GIF") }
+        let marks: [(String, String)] = [("🎤 ", "mic.fill"), ("🎥 ", "video.fill"), ("📷 ", "photo"),
+                                         ("📹 ", "video.fill"), ("📞 ", "phone.fill"),
+                                         ("🎬 ", "photo.on.rectangle.angled")]
+        for (mark, icon) in marks where quoted.hasPrefix(mark) {
+            return (lead: lead, icon: icon, words: String(quoted.dropFirst(mark.count)))
+        }
+        if quoted.hasPrefix("📄 ") {
+            let name = String(quoted.dropFirst("📄 ".count))
+            let ext = (name as NSString).pathExtension.lowercased()
+            let icon: String
+            switch ext {
+            case "zip", "rar", "7z", "gz", "tar": icon = "doc.zipper"
+            case "pdf", "doc", "docx", "pages", "txt", "rtf": icon = "doc.richtext"
+            case "mp3", "m4a", "wav", "aac": icon = "music.note"
+            default: icon = "doc.fill"
+            }
+            return (lead: lead, icon: icon, words: name)
+        }
+        return nil
+    }
+
     // "Reacted 🙏" preview when the newest event in the chat is a reaction.
     private var reactionPreview: String? {
         guard conv.freshReaction(me), let enc = conv.lastReactionEnc,
@@ -3778,6 +3810,22 @@ struct ChatRow: View, Equatable {
                             .zIndex(Double(3 - i))   // the first picture on top
                     }
                 }
+                Text(r.words).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+        } else if let r = reactionWithIcon {
+            HStack(spacing: 5) {
+                Text(r.lead + " to").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    .layoutPriority(1)
+                Group {
+                    if r.icon.hasPrefix("ic_") {
+                        Image(r.icon).renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: r.icon).font(.system(size: 13))
+                    }
+                }
+                .foregroundStyle(.secondary)
                 Text(r.words).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             .accessibilityElement(children: .combine)
