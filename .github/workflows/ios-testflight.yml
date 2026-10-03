@@ -74,7 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            REACTION PREVIEWS, PROFILE LINKS, ENCRYPTION PAGE, FILE SHARE.
+            INSIGHTS: NEW LAYOUT, PROFILE VIEWS, APPLE TABS.
+
+            INSIGHTS: date range and a Last 28 Days pill at the top. Every figure is a card with its change against the previous period. Overview: Total Glowers and Profile Views with daily bars. Stories: views, reactions, stories posted, views per story, then your stories. Audience: a summary with Gained and Unglows, and top countries. Items open what they count.
+
+            PROFILE VIEWS: opening someone's profile now counts as one view for them, once a day per person. Only the number is shown, never who.
+
+            TABS: Insights and Glowers/Glowing use Apple's own glass segmented control.
+
+            PINNED ALBUM: the second photo now peeks out behind the first.
+
+            PLEASE TEST: open Insights and each tab, change the period; open a friend's profile from another phone and check Profile Views the next day; look at a pinned album.
+
+            EARLIER IN THIS ROUND (build 819): REACTION PREVIEWS, PROFILE LINKS, ENCRYPTION PAGE, FILE SHARE.
 
             CHAT LIST: a reaction to a photo shows the real photo (an album up to three); a reaction to a voice note or file shows a real icon, not an emoji.
 
