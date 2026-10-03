@@ -2240,9 +2240,29 @@ struct ThreadView: View {
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 } else if let m = msg, m.isAlbum, let first = m.album.first {
-                    SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
-                        .frame(width: 32, height: 32)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    // ⛔ A PINNED ALBUM IS A STACK — owner, 2026-10-03, with his screenshot: the second
+                    // photo peeks out behind on the left, the first sits in front with a thin edge in
+                    // the bar's own colour so the two read apart. One photo stays one tile.
+                    if m.album.count > 1 {
+                        let second = m.album[1]
+                        ZStack(alignment: .trailing) {
+                            SecureImageView(imageUrl: second.imageUrl, enc: second.enc, cid: cid)
+                                .frame(width: 28, height: 28)
+                                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                .offset(x: -9)
+                            SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
+                                .frame(width: 32, height: 32)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .padding(1.5)
+                                .background(Color(.systemBackground),
+                                            in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
+                        }
+                        .frame(width: 44, height: 35, alignment: .trailing)
+                    } else {
+                        SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
+                            .frame(width: 32, height: 32)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
                 } else if let m = msg, m.isGif, let url = m.imageUrl {
                     AnimatedGifView(url: url)
                         .frame(width: 32, height: 32)
