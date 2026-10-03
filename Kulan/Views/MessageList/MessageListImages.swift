@@ -88,9 +88,12 @@ final class RowImageView: UIImageView {
 
         // Synchronous memory hit → the first frame already has the picture, no skeleton flash.
         if let mem = DiskImageCache.shared.memoryImage(url) { image = mem; return }
-        // Small images opt into the synchronous DISK read: memory is empty on every launch, so a
-        // thumbnail that IS on disk would otherwise appear a beat late.
-        if let warm = DiskImageCache.shared.smallImageSync(url) { image = warm; return }
+        // ⛔ NO SYNCHRONOUS DISK READ HERE — owner, 2026-10-03: "scroll up and down chats feels lag".
+        // `smallImageSync` stood on this line. It reads the file, decodes it and scales it down to
+        // 2048px, all on the main thread, and this view draws full chat photos and every album
+        // tile, not thumbnails. A nine-photo album scrolling in did that nine times inside one
+        // frame. `smallImageSync`'s own comment forbids it for full-size photos. A disk hit now
+        // takes the Task below, which decodes off the main thread, behind the placeholder.
         image = placeholder
         inFlight = url
 
