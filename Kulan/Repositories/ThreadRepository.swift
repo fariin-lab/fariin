@@ -638,11 +638,14 @@ final class ThreadRepository {
                 self.myBlockClearedAtMillis = newClearedAt
                 self.pinnedMessageIds       = newPinned
                 self.disappearSeconds       = newDisappear
-                let newNoShots = d?["noScreenshots"] as? Bool ?? false
+                // Restricted while ANYONE'S own switch is on (`restrictedBy`), or an older build's
+                // shared fields still say so — the same rule `Conversation` reads.
+                let anyone = ((d?["restrictedBy"] as? [String: Any]) ?? [:]).values.contains { ($0 as? Bool) == true }
+                let newNoShots = anyone || (d?["noScreenshots"] as? Bool ?? false)
                 if newNoShots != self.noScreenshots { self.noScreenshots = newNoShots }
-                let newNoForward = d?["noForwarding"] as? Bool ?? false
+                let newNoForward = anyone || (d?["noForwarding"] as? Bool ?? false)
                 if newNoForward != self.noForwarding { self.noForwarding = newNoForward }
-                let newNoSave = d?["noSaving"] as? Bool ?? false
+                let newNoSave = anyone || (d?["noSaving"] as? Bool ?? false)
                 if newNoSave != self.noSaving { self.noSaving = newNoSave }
                 // Only when the list actually changed: this snapshot also fires for every typing
                 // flicker and every read receipt.

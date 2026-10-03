@@ -308,6 +308,9 @@ struct Message: Identifiable, Equatable, Codable {
     /// can word the line for its own reader ("You set…" / "<name> set…") instead of showing the
     /// writer's baked-in sentence. nil on every other message, including older notices.
     var disappearSeconds: Int? = nil
+    /// A "<name> asked to turn off Restricted chat" notice (2026-10-03). Tapping it lets the person
+    /// it was asked of accept or decline, while the request on the chat is still pending.
+    var isRestrictRequest = false
     var edited: Bool = false                // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
@@ -700,6 +703,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.callVideo = data["callVideo"] as? Bool ?? false
         self.callDuration = (data["callDuration"] as? NSNumber)?.intValue
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue
+        self.isRestrictRequest = data["restrictRequest"] as? Bool ?? false
         self.edited = data["edited"] as? Bool ?? false
         self.deleted = data["deleted"] as? Bool ?? false
         self.deletedBy = data["deletedBy"] as? String   // 2026-09-24 feature-audit
@@ -835,6 +839,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var noScreenshots = false
     var noForwarding = false
     var noSaving = false
+    /// uid → true for each person who has switched Restricted Chat on for this chat.
+    var restrictedBy: [String: Bool] = [:]
+    /// A pending request to turn it off (the reference app's consent step): who asked, and when.
+    var restrictRequestBy: String?
+    var restrictRequestAt: Date?
     var convType: String              // "group" = group chat; "" / "direct" = 1:1
     var title: String                  // group name (groups only)
     var groupDescription: String       // group description / "about" (groups only)
@@ -909,9 +918,19 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
-        self.noScreenshots = data["noScreenshots"] as? Bool ?? false
-        self.noForwarding = data["noForwarding"] as? Bool ?? false
-        self.noSaving = data["noSaving"] as? Bool ?? false
+        // ⛔ EACH PERSON'S OWN SWITCH — owner, 2026-10-03, the reference app's private-chat rule:
+        // `restrictedBy[uid]` is set by that person alone; the chat is restricted while ANYONE'S is
+        // on. The three older fields (one shared switch, 2026-10-03 morning) still count until a
+        // newer build clears them. See `ChatRestrictions`.
+        self.restrictedBy = (data["restrictedBy"] as? [String: Any] ?? [:]).compactMapValues { $0 as? Bool }
+            .filter { $0.value }
+        let anyone = !self.restrictedBy.isEmpty
+        self.noScreenshots = anyone || (data["noScreenshots"] as? Bool ?? false)
+        self.noForwarding = anyone || (data["noForwarding"] as? Bool ?? false)
+        self.noSaving = anyone || (data["noSaving"] as? Bool ?? false)
+        let request = data["restrictRequest"] as? [String: Any]
+        self.restrictRequestBy = request?["by"] as? String
+        self.restrictRequestAt = (request?["at"] as? Timestamp)?.dateValue()
         self.convType = data["type"] as? String ?? ""
         self.title = data["title"] as? String ?? ""
         self.groupDescription = data["desc"] as? String ?? ""

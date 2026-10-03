@@ -660,6 +660,9 @@ enum MessageRowModelBuilder {
 
     // ── System notices ──
 
+    /// The notice tap target that means "the Restricted chat request", not a message to jump to.
+    static let restrictRequestTarget = "restrict-request"
+
     private static func systemNotice(_ m: Message, ctx: MessageRowContext) -> NoticeRow {
         // The disappearing-timer notice is worded HERE, per reader, from the value the writer
         // attached: "You" when I set it, the person's name when they did. The stored sentence (with
@@ -671,7 +674,10 @@ enum MessageRowModelBuilder {
                 return NoticeRow(text: " " + m.text, symbol: symbol, style: .pill, tapTargetId: nil,
                                  onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
             }
-            return NoticeRow(text: m.text, symbol: nil, style: .pill, tapTargetId: nil,
+            // A request to turn Restricted chat off answers from its own notice, as in the
+            // reference app (`ThreadView` reads this target and offers Turn Off / Keep On).
+            return NoticeRow(text: m.text, symbol: nil, style: .pill,
+                             tapTargetId: m.isRestrictRequest ? Self.restrictRequestTarget : nil,
                              onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
         }
         let who = ctx.nameFor(m.authorId)

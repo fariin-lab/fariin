@@ -151,6 +151,7 @@ struct ThreadView: View {
     @State private var showVideoSoon = false
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
     @State private var showMyProfile = false     // my own username tapped in a message → my profile
+    @State private var showRestrictAnswer = false   // their request to turn Restricted chat off
     @State private var showEncryptionInfo = false   // empty-chat notice → the safety-number screen
     /// The requester's @username, fetched once for the message-request card. Empty until it lands,
     /// and the line simply is not drawn until then rather than showing a placeholder.
@@ -1184,6 +1185,12 @@ struct ThreadView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
                 })
             }
+        }
+        .confirmationDialog("\(title) asked you to turn off Restricted chat",
+                            isPresented: $showRestrictAnswer, titleVisibility: .visible) {
+            Button("Turn Off") { Task { await ChatService.answerUnrestrict(cid, accept: true) } }
+            Button("Keep On") { Task { await ChatService.answerUnrestrict(cid, accept: false) } }
+            Button("Cancel", role: .cancel) {}
         }
         // My own username or profile card tapped in a message (see `openProfileHandle`).
         .navigationDestination(isPresented: $showMyProfile) {
@@ -3642,6 +3649,17 @@ struct ThreadView: View {
             },
             onTapPinNotice: { id in
                 pendingKeyboardDismiss = false
+                // "<name> asked to turn off Restricted chat": answered from the notice, by the
+                // person it was asked of, while it is still open (see `ChatRestrictions`).
+                if id == MessageRowModelBuilder.restrictRequestTarget {
+                    let c = ConversationsRepository.shared.conversations.first { $0.id == cid }
+                    if let by = c?.pendingRestrictRequestBy, by != me, c?.restrictedByMe(me) == true {
+                        showRestrictAnswer = true
+                    } else {
+                        showJumpToast("This request is no longer open")
+                    }
+                    return
+                }
                 Task {
                     await repo.ensureLoaded(id)
                     await MainActor.run {

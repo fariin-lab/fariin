@@ -1532,6 +1532,22 @@ service cloud.firestore {
             && request.resource.data.users.hasAll(resource.data.users)
             && resource.data.users.hasAll(request.resource.data.users)
             && request.resource.data.users.size() == 2
+            // ⛔ RESTRICTED CHAT: EACH PERSON'S SWITCH IS THEIR OWN (2026-10-03, the reference app's
+            // private-chat rule). `restrictedBy` may change only at the writer's own key, so nobody
+            // can turn off the other person's protection; they can only ask (`restrictRequest`),
+            // which they may file only in their own name. The three older shared fields may only
+            // be switched OFF, which the newer app does on its first write, so they cannot be used
+            // to switch protection on behind the per-person keys either.
+            && (!('restrictedBy' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.get('restrictedBy', {}).diff(resource.data.get('restrictedBy', {}))
+                     .affectedKeys().hasOnly([request.auth.uid]))
+            && (!('restrictRequest' in request.resource.data)
+                || !('restrictRequest' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.restrictRequest.get('by', '') == request.auth.uid)
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['noScreenshots', 'noForwarding', 'noSaving'])
+                || (request.resource.data.get('noScreenshots', false) == false
+                    && request.resource.data.get('noForwarding', false) == false
+                    && request.resource.data.get('noSaving', false) == false))
             // ONE MESSAGE, AND ONLY ONE. While a request is unanswered, the person who sent it may
             // not touch the fields that would let them take a second turn: `lastSender` (which the
             // message rule below reads to decide), `lastMessage`, and `accepted` (nobody accepts

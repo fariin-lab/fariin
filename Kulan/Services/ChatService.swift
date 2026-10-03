@@ -3309,16 +3309,50 @@ enum ChatService {
     /// Restricted chat (owner, 2026-10-03): ONE switch for BOTH members that sets every restriction
     /// together (his second ruling the same day: one switch, not three). Never silent, for the
     /// timer's reason above: both sides get a notice naming who changed it.
-    static func setRestricted(_ cid: String, on: Bool) async {
+    ///
+    /// ⛔ EACH PERSON'S OWN SWITCH — owner, 2026-10-03, the reference app's private-chat rule, read
+    /// from its API and client: `restrictedBy[me]` is mine alone (the rules refuse a write to the
+    /// other key), and the chat is restricted while either is on. Turning MINE off is immediate;
+    /// theirs can only be asked for (`requestUnrestrict`). The three older shared fields are cleared
+    /// on the way, so an older build's switch does not outlive this one.
+    static func setMyRestriction(_ cid: String, on: Bool) async {
         let ref = db.collection("conversations").document(cid)
         let data = (try? await ref.getDocument())?.data() ?? [:]
-        let current = ChatRestriction.allCases.allSatisfy { data[$0.rawValue] as? Bool ?? false }
-        guard current != on else { return }
-        var fields: [String: Any] = [:]
-        for r in ChatRestriction.allCases { fields[r.rawValue] = on }
-        try? await ref.setData(fields, merge: true)
+        let mine = ((data["restrictedBy"] as? [String: Any])?[uid] as? Bool) ?? false
+        guard mine != on else { return }
+        var fields: [String: Any] = ["restrictedBy.\(uid)": on ? true : FieldValue.delete()]
+        for r in ChatRestriction.allCases where data[r.rawValue] != nil { fields[r.rawValue] = false }
+        // Turning mine on answers any request I had made of them: it is moot now.
+        if on, (data["restrictRequest"] as? [String: Any])?["by"] as? String == uid {
+            fields["restrictRequest"] = FieldValue.delete()
+        }
+        guard (try? await ref.updateData(fields)) != nil else { return }
         let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
         try? await writeSystemMessage(cid: cid, text: "\(name) turned \(on ? "on" : "off") Restricted chat.")
+    }
+
+    /// The reference app's consent step: they switched it on, so I can only ASK them to turn it off.
+    /// One pending request per chat, which they accept or decline (`answerUnrestrict`); it lapses
+    /// after `ChatRestrictions.requestLifetime` if they do neither.
+    static func requestUnrestrict(_ cid: String) async {
+        let ref = db.collection("conversations").document(cid)
+        let request: [String: Any] = ["by": uid, "at": FieldValue.serverTimestamp()]
+        guard (try? await ref.updateData(["restrictRequest": request])) != nil else { return }
+        let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
+        try? await writeSystemMessage(cid: cid, text: "\(name) asked to turn off Restricted chat.",
+                                      extra: ["restrictRequest": true])
+    }
+
+    /// Their request, answered by me. Accepting turns MY switch off (theirs, if any, stays theirs);
+    /// declining keeps it on. Either way the request is closed and the chat says what happened.
+    static func answerUnrestrict(_ cid: String, accept: Bool) async {
+        let ref = db.collection("conversations").document(cid)
+        var fields: [String: Any] = ["restrictRequest": FieldValue.delete()]
+        if accept { fields["restrictedBy.\(uid)"] = FieldValue.delete() }
+        guard (try? await ref.updateData(fields)) != nil else { return }
+        let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
+        try? await writeSystemMessage(cid: cid, text: accept ? "\(name) turned off Restricted chat."
+                                                             : "\(name) kept Restricted chat on.")
     }
 
     /// Returns false when the write was refused, so a caller can say so (2026-09-24 audit).
