@@ -237,6 +237,9 @@ struct ForwardPicker: View {
     }
 
     private func sendAll() {
+        // Disable Sharing › No Forwarding (owner, 2026-10-03): every Forward button hides already;
+        // this is the last door, for a sheet opened just before the switch was turned on.
+        guard !ChatRestrictions.isOn(.noForwarding, cid: sourceCid) else { return }
         let targets = selected
         let note = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         // Oldest first so forwarded messages land in the same order they were sent.

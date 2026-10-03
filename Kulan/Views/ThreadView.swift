@@ -3081,9 +3081,12 @@ struct ThreadView: View {
                                              : UIImage(named: "ic_pin_menu")?.withRenderingMode(.alwaysTemplate)) { _ in
             togglePin(m)
         })
-        items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
-            UIPasteboard.general.string = m.text
-        })
+        if savingAllowed {
+            items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
+                guard savingAllowed else { return }   // switched on while the menu was open
+                UIPasteboard.general.string = m.text
+            })
+        }
         // Same `canForward` as the other two paths. Today every row that reaches this menu already
         // passes it (uikitBubbleModel filters out undelivered, view-once, calls, and tombstones via
         // their empty text), so this changes nothing — it just stops the next guard added to
@@ -3141,7 +3144,7 @@ struct ThreadView: View {
 
         // MEDIA STILL UPLOADING: not on the server yet — only Save / Cancel Sending / Select.
         if m.sendState == .sending && (m.isImage || m.isVideo || m.isAlbum || m.isGif) {
-            if (m.isImage || m.isAlbum) && !m.viewOnce {   // a one-time photo is never saved, even my own
+            if (m.isImage || m.isAlbum) && !m.viewOnce && savingAllowed {   // a one-time photo is never saved, even my own
                 out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
                     Task { await saveImageToPhotos(m) }
                 })
@@ -3210,10 +3213,11 @@ struct ThreadView: View {
                 forwardTarget = live
             })
         }
-        if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
+        if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Copy", icon: "doc.on.doc") {
                 // The words as they are NOW: an edit or a delete arriving while the menu is open
-                // must not be copied around it.
+                // must not be copied around it. Same for No Saving switched on meanwhile.
+                guard savingAllowed else { return }
                 guard let live = repo.items.first(where: { $0.id == m.id }), !live.deleted else {
                     showJumpToast("That message is no longer available")
                     return
@@ -3236,7 +3240,7 @@ struct ThreadView: View {
         if m.edited && !m.deleted {   // 2026-09-24 feature-audit: earlier versions, either side
             out.append(CMAction(title: "Edit History", icon: "clock.arrow.circlepath") { editHistoryTarget = m })
         }
-        if m.isImage && !m.viewOnce {
+        if m.isImage && !m.viewOnce && savingAllowed {
             out.append(CMAction(title: "Save Image", icon: "square.and.arrow.down") {
                 Task { await saveImageToPhotos(m) }
             })
@@ -3711,7 +3715,8 @@ struct ThreadView: View {
             cid: cid,
             // ⛔ LIFTED 2026-09-29 (see `dark`): a wallpapered chat follows the phone again, so the
             // UIKit half is no longer pinned either.
-            forceDark: false
+            forceDark: false,
+            noScreenshots: repo.noScreenshots   // Disable Sharing (2026-10-03)
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
@@ -4042,7 +4047,11 @@ struct ThreadView: View {
     ///   guard Reply, Edit, Pin and Info already share, for the reason written above the menu.
     private func canForward(_ m: Message) -> Bool {
         m.sendState == nil && !m.isCall && !m.isSystem && !m.deleted && !m.viewOnce
+            && !repo.noForwarding   // Disable Sharing (2026-10-03), from this chat's own listener
     }
+
+    /// Disable Sharing › No Saving: no Copy, no Save, no Share in this chat (owner, 2026-10-03).
+    private var savingAllowed: Bool { !repo.noSaving }
 
     /// 2026-09-24 feature-audit: THE ONE EDIT RULE, read by both long-press menus and again at Save.
     /// The native menu used to check only author + window, so it offered Edit on bare media, voice
@@ -5529,6 +5538,9 @@ struct ThreadView: View {
 
     // Save a chat photo to the camera roll (decrypts if needed) with a success haptic.
     @MainActor private func saveImageToPhotos(_ m: Message) async {
+        // Disable Sharing › No Saving, re-checked here so a menu opened before it was switched on
+        // cannot save through it.
+        guard savingAllowed else { return }
         // A still-UPLOADING album keeps its bytes in localAlbum — the single-image paths below are
         // all nil for it, so the menu's Save Image silently did nothing (audit). Save its photos
         // (video items skipped) with one shared authorization pass.

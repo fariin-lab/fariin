@@ -178,6 +178,11 @@ final class ThreadRepository {
     var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
     var disappearSeconds = 0
+    /// Disable Sharing, from this chat's own listener, so the chat screen reads them without
+    /// observing every chat in the list. See `ChatRestrictions`.
+    var noScreenshots = false
+    var noForwarding = false
+    var noSaving = false
     /// Bumped by every expiry sweep while this chat holds anything on a timer, so the footer's
     /// countdown rings re-render. Read into the row-model cache key; see `sweepExpired`.
     private(set) var expiryTick = 0
@@ -633,6 +638,12 @@ final class ThreadRepository {
                 self.myBlockClearedAtMillis = newClearedAt
                 self.pinnedMessageIds       = newPinned
                 self.disappearSeconds       = newDisappear
+                let newNoShots = d?["noScreenshots"] as? Bool ?? false
+                if newNoShots != self.noScreenshots { self.noScreenshots = newNoShots }
+                let newNoForward = d?["noForwarding"] as? Bool ?? false
+                if newNoForward != self.noForwarding { self.noForwarding = newNoForward }
+                let newNoSave = d?["noSaving"] as? Bool ?? false
+                if newNoSave != self.noSaving { self.noSaving = newNoSave }
                 // Only when the list actually changed: this snapshot also fires for every typing
                 // flicker and every read receipt.
                 if pinsChanged { self.syncPinnedPreviews() }

@@ -872,7 +872,9 @@ struct MediaGalleryView: View {
 
     @ViewBuilder private func itemMenu(_ m: Message) -> some View {
         Button { goToChat(m) } label: { goToChatLabel }
-        Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
+        if !ChatRestrictions.isOn(.noSaving, cid: cid) {   // Disable Sharing › No Saving
+            Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
+        }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
         // Delete-for-everyone is only for MY OWN media â€” received media can't be deleted from the server.
         // Not offered on album CHILDREN: the server only knows the album message, and a per-item delete
@@ -1001,6 +1003,7 @@ struct MediaGalleryView: View {
     }
 
     private func share(_ m: Message) {
+        guard !ChatRestrictions.isOn(.noSaving, cid: cid) else { return }
         if let url = Self.firstURL(in: m.text) { shareItems = [url]; return }
         let cid = self.cid
         Task {
@@ -1010,7 +1013,7 @@ struct MediaGalleryView: View {
     }
     private func shareSelected() {
         // Share the decrypted images among the selection (the shareable representation we can build here).
-        guard !preparingShare else { return }
+        guard !preparingShare, !ChatRestrictions.isOn(.noSaving, cid: cid) else { return }
         let picked = all.filter { selection.contains($0.id) }
         let cid = self.cid
         preparingShare = true

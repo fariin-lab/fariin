@@ -830,7 +830,12 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var markedUnread: [String: Bool]
     var pinnedMessageId: String        // a pinned message in this chat ("" = none)
     var disappearSeconds: Int          // auto-delete timer (0 = off), shared by both members
-    var convType: String               // "group" = group chat; "" / "direct" = 1:1
+    /// Restricted chat (owner, 2026-10-03). Shared by both members, like the timer: either may set
+    /// them and they bind both. See `ChatRestrictions`.
+    var noScreenshots = false
+    var noForwarding = false
+    var noSaving = false
+    var convType: String              // "group" = group chat; "" / "direct" = 1:1
     var title: String                  // group name (groups only)
     var groupDescription: String       // group description / "about" (groups only)
     var avatarUrl: String?             // group photo (groups only)
@@ -901,6 +906,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
+        self.noScreenshots = data["noScreenshots"] as? Bool ?? false
+        self.noForwarding = data["noForwarding"] as? Bool ?? false
+        self.noSaving = data["noSaving"] as? Bool ?? false
         self.convType = data["type"] as? String ?? ""
         self.title = data["title"] as? String ?? ""
         self.groupDescription = data["desc"] as? String ?? ""

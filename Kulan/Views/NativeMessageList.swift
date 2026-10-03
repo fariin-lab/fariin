@@ -193,6 +193,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// ⚠️ Declared LAST, so the memberwise init's argument order at the call site is unchanged for
     /// everything above it.
     var forceDark: Bool = false
+    /// Disable Sharing › No Screenshots: the list draws inside the secure canvas (owner, 2026-10-03).
+    /// Declared after `forceDark` for the same argument-order reason.
+    var noScreenshots: Bool = false
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -207,6 +210,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        vc.setCaptureProtected(noScreenshots)
         // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
         // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
         // following the system again rather than being pinned the other way.
@@ -4085,6 +4089,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     deinit {
         // Belt for the case the controller dies without a disappear pass.
         hookedPopGesture?.removeTarget(self, action: nil)
+        if let captureObserver { NotificationCenter.default.removeObserver(captureObserver) }
     }
 
     @objc private func popGestureChanged(_ g: UIGestureRecognizer) {
@@ -4941,6 +4946,60 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // 0.1s one-shot timer on the COMMON runloop mode: scrollViewDidScroll itself stays cheap and never
         // mutates state that re-enters layout inline.
         scheduleScrollWorkTimer()
+    }
+
+    // MARK: - Disable Sharing › No Screenshots
+
+    /// ⛔ THE LIST MOVES INTO THE SECURE CANVAS WHILE NO SCREENSHOTS IS ON — owner, 2026-10-03.
+    /// The canvas of a secure text field is left out of screenshots and recordings, and a view inside
+    /// it inherits that: the one-time photo's mechanism (`CaptureProtected`), applied to the list in
+    /// place so nothing about how it scrolls or lays out changes. Moved on a change only, and the
+    /// offset is put back, because a scroll view re-parented mid-read must not jump.
+    /// Screen recording is the guaranteed half: the list is hidden while `UIScreen.isCaptured`.
+    /// ⚠️ If iOS does not hand over the canvas, the list stays where it is and only the recording
+    /// half applies — the failure mode `CaptureProtected` documents.
+    private let captureField = UITextField()
+    private var captureCanvas: UIView?
+    private var captureOn = false
+    private var captureObserver: NSObjectProtocol?
+
+    func setCaptureProtected(_ on: Bool) {
+        guard on != captureOn, isViewLoaded else { return }
+        captureOn = on
+        let offset = collectionView.contentOffset
+        if on {
+            if captureCanvas == nil, let canvas = SecureCanvas.of(captureField) {
+                canvas.subviews.forEach { $0.removeFromSuperview() }
+                canvas.isUserInteractionEnabled = true
+                captureCanvas = canvas
+            }
+            if let canvas = captureCanvas, collectionView.superview === view {
+                let index = view.subviews.firstIndex(of: collectionView) ?? 0
+                collectionView.removeFromSuperview()
+                canvas.removeFromSuperview()
+                view.insertSubview(canvas, at: index)
+                CaptureProtectedController<EmptyView>.pin(canvas, in: view)
+                CaptureProtectedController<EmptyView>.pin(collectionView, in: canvas)
+            }
+            if captureObserver == nil {
+                captureObserver = NotificationCenter.default.addObserver(
+                    forName: UIScreen.capturedDidChangeNotification, object: nil, queue: .main
+                ) { [weak self] _ in self?.applyRecordingHide() }
+            }
+        } else if let canvas = captureCanvas, collectionView.superview === canvas {
+            let index = view.subviews.firstIndex(of: canvas) ?? 0
+            collectionView.removeFromSuperview()
+            canvas.removeFromSuperview()
+            view.insertSubview(collectionView, at: index)
+            CaptureProtectedController<EmptyView>.pin(collectionView, in: view)
+        }
+        view.layoutIfNeeded()
+        collectionView.setContentOffset(offset, animated: false)
+        applyRecordingHide()
+    }
+
+    private func applyRecordingHide() {
+        collectionView.isHidden = captureOn && UIScreen.main.isCaptured
     }
 
     private func scheduleScrollWorkTimer() {

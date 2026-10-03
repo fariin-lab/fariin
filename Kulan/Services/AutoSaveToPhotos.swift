@@ -57,6 +57,10 @@ enum AutoSaveToPhotos {
         guard m.isImage || m.isVideo || m.isAlbum else { return }
         guard claim(m.id) else { return }
         Task.detached(priority: .utility) {
+            // DISABLE SHARING › NO SAVING (owner, 2026-10-03; the reference's "can't save media from
+            // this chat to their device gallery automatically"). The id stays claimed, so switching
+            // the restriction off later does not pour the chat's old media into the roll.
+            if await MainActor.run(body: { ChatRestrictions.isOn(.noSaving, cid: cid) }) { return }
             // PERMISSION FIRST, bytes second. The other order downloads and decrypts the whole
             // photo and only then discovers the library is off limits — and since a refusal
             // releases the id so it can retry if you grant access later, that would re-download

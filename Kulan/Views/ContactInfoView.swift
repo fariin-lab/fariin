@@ -169,6 +169,12 @@ struct ContactInfoView: View {
     @State private var showAllMedia = false
     @State private var showVerify = false
     @State private var showDisappear = false
+    @State private var showDisableSharing = false
+    /// Any of the three Disable Sharing switches on, read live from the chat list.
+    private var sharingRestricted: Bool {
+        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return false }
+        return ChatRestriction.allCases.contains { c.isOn($0) }
+    }
     @State private var disappearSeconds = 0
     @State private var showRename = false
     @State private var showSounds = false
@@ -1130,6 +1136,7 @@ struct ContactInfoView: View {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
+            .navigationDestination(isPresented: $showDisableSharing) { DisableSharingView(cid: cid) }
             // ⛔ ONLY THE GIVE PATH REACHES THIS — see `glowActionButton`. The sheet's own button is
             // what performs the give, so backing out of it with the ✕ or a swipe leaves the
             // relationship exactly as it was.
@@ -1446,6 +1453,12 @@ struct ContactInfoView: View {
     private var settingsCard: some View {
         VStack(spacing: 0) {
             infoRow("Disappearing Messages", "ic_disappearing", value: disappearLabel) { showDisappear = true }
+            rowDivider
+            // Restricted chat (owner, 2026-10-03). Beside the timer: both are rules for the chat
+            // that bind both people. See `ChatRestrictions`.
+            infoRow("Disable Sharing", "hand.raised", value: sharingRestricted ? "On" : "Off") {
+                showDisableSharing = true
+            }
             rowDivider
             // The same glyph Settings uses for its Notifications row (owner: reuse that one).
             infoRow("Sounds & Notifications", "ic_notifications", value: muted ? "Muted" : "On") { showSounds = true }

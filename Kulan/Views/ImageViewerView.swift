@@ -516,6 +516,22 @@ struct ImageViewerView: View {
                     .ignoresSafeArea()
             }
         } else if let img = cachedImage(m) {
+            // Disable Sharing › No Screenshots (owner, 2026-10-03): the same shield as a one-time
+            // photo, around the zoom view so pinch still works.
+            if ChatRestrictions.isOn(.noScreenshots, cid: cid) {
+                // Both sides ignore the safe area: the shield hosts its content in a controller of
+                // its own, which would otherwise inset the photo away from the edges.
+                CaptureProtected { zoomPage(img, m).ignoresSafeArea() }.ignoresSafeArea()
+            } else {
+                zoomPage(img, m)
+            }
+        } else {
+            ProgressView().tint(.white)
+                .task { await load(m) }
+        }
+    }
+
+    private func zoomPage(_ img: UIImage, _ m: Message) -> some View {
             // Inner UIKit dismiss-pan DISABLED here — the drag-to-close is driven at the CONTAINER level
             // so it can't fight the TabView pager (the 2-day bug). ZoomImageView keeps only pinch-zoom.
             ZoomImageView(image: img,
@@ -537,10 +553,11 @@ struct ImageViewerView: View {
                           },
                           zoomOutToken: zoomOutToken,
                           imageKey: m.id)   // reload on a new PHOTO, never on a new UIImage of the same one
-        } else {
-            ProgressView().tint(.white)
-                .task { await load(m) }
-        }
+    }
+
+    /// One-time photo, or Disable Sharing › No Saving on this chat: no Share, no Save.
+    private var savingLocked: Bool {
+        message.viewOnce || ChatRestrictions.isOn(.noSaving, cid: cid)
     }
 
     private var chromeLayer: some View {
@@ -578,7 +595,7 @@ struct ImageViewerView: View {
                 // view photo has download button ... this is big mistake". Every door out of this
                 // viewer (this item, and Share, the pen and Save in `bottomBar`) is absent for one,
                 // and `save()` and `share()` refuse it themselves.
-                if !message.viewOnce {
+                if !savingLocked {
                     Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
                 }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
@@ -650,7 +667,7 @@ struct ImageViewerView: View {
     private var bottomBar: some View {
         HStack {
             // A one-time photo keeps Delete only — see the note in `header`.
-            if !message.viewOnce {
+            if !savingLocked {
                 barButton("square.and.arrow.up") { share() }
             }
             Spacer()
@@ -666,7 +683,7 @@ struct ImageViewerView: View {
             Spacer()
             if isMine {
                 barButton("trash", tint: .red) { confirmDelete = true }
-            } else if !message.viewOnce {
+            } else if !savingLocked {
                 barButton("square.and.arrow.down") { save() }   // received photo → Save instead of Delete
             }
         }
@@ -744,12 +761,12 @@ struct ImageViewerView: View {
     }
 
     private func share() {
-        guard !message.viewOnce, let image = currentImage else { return }
+        guard !savingLocked, let image = currentImage else { return }
         shareItems = [image]
     }
 
     private func save() {
-        guard !message.viewOnce else { return }
+        guard !savingLocked else { return }
         Task {
             // Last resort: a page still decrypting has neither, so fetch it before giving up rather
             // than reporting a failure the user can see is wrong.

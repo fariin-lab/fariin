@@ -67,7 +67,7 @@ final class CaptureProtectedController<Content: View>: UIViewController {
         field.isUserInteractionEnabled = false
 
         addChild(host)
-        if let canvas = Self.secureCanvas(of: field) {
+        if let canvas = SecureCanvas.of(field) {
             canvas.subviews.forEach { $0.removeFromSuperview() }
             canvas.isUserInteractionEnabled = true
             Self.pin(canvas, in: view)
@@ -90,20 +90,7 @@ final class CaptureProtectedController<Content: View>: UIViewController {
         host.view.isHidden = UIScreen.main.isCaptured
     }
 
-    /// The secure field's canvas. By its class name where that is recognisable, otherwise the view
-    /// behind the field's first layer, which is where `CaptureShield` finds the same canvas.
-    private static func secureCanvas(of field: UITextField) -> UIView? {
-        field.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
-        field.layoutIfNeeded()
-        if let named = field.subviews.first(where: {
-            String(describing: type(of: $0)).contains("CanvasView")
-        }) {
-            return named
-        }
-        return field.layer.sublayers?.first?.delegate as? UIView
-    }
-
-    private static func pin(_ child: UIView, in parent: UIView) {
+    static func pin(_ child: UIView, in parent: UIView) {
         child.translatesAutoresizingMaskIntoConstraints = false
         parent.addSubview(child)
         NSLayoutConstraint.activate([
@@ -112,5 +99,24 @@ final class CaptureProtectedController<Content: View>: UIViewController {
             child.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
             child.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
         ])
+    }
+}
+
+/// The secure text field's canvas, shared by `CaptureProtected` and the chat's message list
+/// (Disable Sharing › No Screenshots). By its class name where that is recognisable, otherwise the
+/// view behind the field's first layer, which is where `CaptureShield` finds the same canvas. The
+/// field must be kept alive for as long as the canvas is in use.
+enum SecureCanvas {
+    static func of(_ field: UITextField) -> UIView? {
+        field.isSecureTextEntry = true
+        field.isUserInteractionEnabled = false
+        field.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+        field.layoutIfNeeded()
+        if let named = field.subviews.first(where: {
+            String(describing: type(of: $0)).contains("CanvasView")
+        }) {
+            return named
+        }
+        return field.layer.sublayers?.first?.delegate as? UIView
     }
 }

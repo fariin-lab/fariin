@@ -195,12 +195,17 @@ struct VideoPlayerScreen: View {
         VideoCache.url(for: message.id) ?? message.localMediaURL.map { URL(fileURLWithPath: $0) }
     }
 
+    /// Disable Sharing (owner, 2026-10-03): No Saving takes Save and Share, No Forwarding takes Forward.
+    private var savingLocked: Bool { ChatRestrictions.isOn(.noSaving, cid: cid) }
+    private var forwardingLocked: Bool { ChatRestrictions.isOn(.noForwarding, cid: cid) }
+
     private func share() {
-        guard let url = localVideoURL else { return }
+        guard !savingLocked, let url = localVideoURL else { return }
         shareItems = [url]
     }
 
     private func save() {
+        guard !savingLocked else { return }
         Task {
             guard let url = localVideoURL else { await MainActor.run { saveError = true }; return }
             let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
@@ -368,7 +373,9 @@ struct VideoPlayerScreen: View {
             Spacer(minLength: 8)
             // Theirs: Save and Delete live in the menu; Share and Forward are the bottom row's buttons.
             Menu {
-                Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
+                if !savingLocked {
+                    Button { save() } label: { Label("Save Video", systemImage: "square.and.arrow.down") }
+                }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
@@ -389,7 +396,8 @@ struct VideoPlayerScreen: View {
         VStack(spacing: 24) {
             scrubberCapsule
             HStack {
-                panelButton("square.and.arrow.up", label: "Share", enabled: localVideoURL != nil) { share() }
+                panelButton("square.and.arrow.up", label: "Share",
+                            enabled: localVideoURL != nil && !savingLocked) { share() }
                 Spacer()
                 Button { togglePlay() } label: {
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
@@ -405,7 +413,8 @@ struct VideoPlayerScreen: View {
                 Spacer()
                 panelButton("arrowshape.turn.up.right", label: "Forward",
                             enabled: localVideoURL != nil && message.sendState == nil
-                                     && !message.deleted && !message.viewOnce) {
+                                     && !message.deleted && !message.viewOnce && !forwardingLocked) {
+                    guard !forwardingLocked else { return }
                     forwarding = message
                 }
             }

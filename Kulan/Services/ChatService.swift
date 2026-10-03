@@ -3291,6 +3291,17 @@ enum ChatService {
         try? await writeSystemMessage(cid: cid, text: text, extra: ["disappearSeconds": seconds])
     }
 
+    /// Restricted chat (owner, 2026-10-03): switch one restriction for BOTH members. Never silent,
+    /// for the timer's reason above: both sides get a notice naming who changed it.
+    static func setRestriction(_ cid: String, _ r: ChatRestriction, on: Bool) async {
+        let ref = db.collection("conversations").document(cid)
+        let current = (try? await ref.getDocument())?.data()?[r.rawValue] as? Bool ?? false
+        guard current != on else { return }
+        try? await ref.setData([r.rawValue: on], merge: true)
+        let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
+        try? await writeSystemMessage(cid: cid, text: "\(name) turned \(on ? "on" : "off") \(r.title).")
+    }
+
     /// Returns false when the write was refused, so a caller can say so (2026-09-24 audit).
     /// ⚠️ Blocking someone you never chatted with was a silent no-op: there is no conversation doc,
     /// this merge write would CREATE one without `users`, the create rule refuses it, and `try?`
