@@ -5048,18 +5048,40 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // Show the day of the topmost visible row while scrolling; fade ~1.2s after it stops. Runs entirely in
     // UIKit â€” no binding write, so scrolling never re-runs the SwiftUI conversation tree.
+    // ⚠️ THIS RUNS ON EVERY SCROLL FRAME (owner, 2026-10-03, "scrolling has lag"), so it does no
+    // work a frame does not need: the day is formatted only when the top row changes, and the fade
+    // is ONE pending timer that re-checks the last touch when it fires, instead of a timer cancelled
+    // and re-armed 120 times a second.
     private func updateDatePill(topId: String?) {
-        guard didReveal, let topId, let label = dayLabelFor(topId) else { return }
-        if topId != lastDateId { lastDateId = topId; dateLabel.text = label }
+        guard didReveal, let topId else { return }
+        if topId != lastDateId {
+            guard let label = dayLabelFor(topId) else { return }
+            lastDateId = topId
+            dateLabel.text = label
+        }
         if datePill.alpha < 1 {
             UIView.animate(withDuration: 0.15) { self.datePill.alpha = 1 }
         }
-        dateFadeWork?.cancel()
+        lastDateTouch = CACurrentMediaTime()
+        if dateFadeWork == nil { scheduleDateFade(after: Self.dateFadeDelay) }
+    }
+
+    private static let dateFadeDelay: CFTimeInterval = 1.2
+    private var lastDateTouch: CFTimeInterval = 0
+
+    private func scheduleDateFade(after delay: CFTimeInterval) {
         let work = DispatchWorkItem { [weak self] in
-            UIView.animate(withDuration: 0.35) { self?.datePill.alpha = 0 }
+            guard let self else { return }
+            self.dateFadeWork = nil
+            let idle = CACurrentMediaTime() - self.lastDateTouch
+            if idle < Self.dateFadeDelay {
+                self.scheduleDateFade(after: Self.dateFadeDelay - idle)   // still scrolling: wait out the rest
+                return
+            }
+            UIView.animate(withDuration: 0.35) { self.datePill.alpha = 0 }
         }
         dateFadeWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     // MARK: - Screenshot recovery
@@ -5581,9 +5603,11 @@ enum RxTrace {
         if start == nil || Date().timeIntervalSince(start!) > 2 { start = Date() }
         log("BEGIN " + what)
     }
-    static func log(_ what: String) {
+    /// `@autoclosure`: `scrollViewDidScroll` calls this on every frame, and the message is only built
+    /// inside the two-second trace window, not 120 times a second for nothing (2026-10-03).
+    static func log(_ what: @autoclosure () -> String) {
         guard let s = start, Date().timeIntervalSince(s) <= 2 else { return }
-        NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what)
+        NSLog("[RX] +%4.0fms %@", Date().timeIntervalSince(s) * 1000, what())
     }
 }
 

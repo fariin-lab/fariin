@@ -50,6 +50,12 @@ targets:
         # surface already said Fariin — caught by the owner in a screenshot. Rename stage 1 changed
         # the label and missed this. Apple wants 15 characters or fewer here.
         CFBundleName: Fariin
+        # ⛔ 120Hz ON PRO IPHONES — owner, 2026-10-03: "scrolling chats up and down has lag". Without
+        # this key iOS holds an app's Core Animation work (the list's animations, display links) to
+        # 60Hz on a ProMotion screen, so next to apps that set it everything reads as a half-rate
+        # judder. Both reference apps set it. It only lifts the cap; iOS still lowers the rate when
+        # nothing moves.
+        CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
