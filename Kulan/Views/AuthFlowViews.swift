@@ -546,7 +546,19 @@ struct AuthMethodView: View {
                 Text("Add another account")
                     .font(.body.weight(.medium))
                     .lineLimit(1)
+                    // The words win the width: the badges are what gives way (owner, 2026-09-27:
+                    // the badges wrapped this line, which is why they once came out).
+                    .layoutPriority(1)
                 Spacer(minLength: 8)
+                // ⛔ THE THREE DOORS, BACK AND SMALLER — owner, 2026-10-03, with a reference: Google,
+                // Apple and email as overlapping circles at the end of the row, saying what the
+                // tap leads to without a word.
+                HStack(spacing: -7) {
+                    doorBadge { Image("google-g").resizable().scaledToFit().frame(width: 14, height: 14) }
+                    doorBadge { Image(systemName: "apple.logo").font(.system(size: 13, weight: .medium)) }
+                    doorBadge { Image(systemName: "envelope").font(.system(size: 11, weight: .medium)) }
+                }
+                .accessibilityHidden(true)
             }
             .foregroundStyle(.primary)
             .padding(.horizontal, 16).frame(height: 72)
@@ -556,6 +568,16 @@ struct AuthMethodView: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
+    }
+
+    /// One small round badge in the "Add another account" row: the page's own background with a
+    /// hairline, so the three overlap cleanly on any appearance.
+    private func doorBadge<Icon: View>(@ViewBuilder _ icon: () -> Icon) -> some View {
+        icon()
+            .foregroundStyle(.primary)
+            .frame(width: 28, height: 28)
+            .background(Color(.systemBackground), in: Circle())
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.14), lineWidth: 1))
     }
 
     /// ⛔ ONE TAP, NO QUESTIONS — owner, 2026-09-25. The account's device key first
