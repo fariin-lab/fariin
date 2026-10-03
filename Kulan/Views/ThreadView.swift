@@ -3414,10 +3414,14 @@ struct ThreadView: View {
                 // ever. The local mark (and the repaint) happen here, at the tap, so the pill flips
                 // to Viewed/Played now and cannot open twice. The server burn stays on close
                 // (onDismiss), so the bytes are still there while the one view is happening.
-                if m.viewOnce, m.authorId != me {
+                if m.viewOnce {
                     // Already spent: a pill drawn before the mark landed must not open it again.
                     guard !ViewedOnce.contains(m.id) else { return }
-                    pendingViewOnceConsume = m
+                    // ⛔ THE SENDER GETS ONE VIEW TOO — owner, 2026-10-03. Only the LOCAL mark: the
+                    // server burn (`pendingViewOnceConsume`) stays the recipient's, or the sender
+                    // looking at their own photo would destroy the copy the other person has not
+                    // opened yet.
+                    if m.authorId != me { pendingViewOnceConsume = m }
                     ViewedOnce.mark(m.id)
                     viewedOnceTick += 1
                 }
