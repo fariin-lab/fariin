@@ -74,7 +74,23 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            DISABLE SHARING, FASTER CHATS, REACTION FACES.
+            INSIGHTS REDESIGN, RESTRICTED CHAT, 120HZ SCROLLING, HEADER BLUR.
+
+            INSIGHTS: three tabs. Overview (tap a figure to chart it), Content (your stories, sort by Latest, Views or Reactions), Audience (Glowers growth with Unglows, top countries, when your stories are watched). The history now loads.
+
+            RESTRICTED CHAT: one switch on a contact's page (was Disable Sharing). Blocks screenshots and screen recording, forwarding, copying and saving for both people.
+
+            SCROLLING: the app may now run at 120Hz on Pro iPhones.
+
+            HEADER BLUR: opening a chat from the chat list should show the header blur from the start of the slide, as it does from Archive.
+
+            LINKS: tapping fariin.com/u/name in a message opens that chat in the app.
+
+            PINNED ALBUM: the pin bar shows two stacked photos. GLOWERS PAGE: the Glowers/Glowing switch is the tab bar's glass.
+
+            PLEASE TEST: open Insights and each tab; turn on Restricted Chat and try a screenshot; scroll a long chat; open a chat from the list and watch the header blur; tap a fariin.com/u/ link.
+
+            EARLIER IN THIS ROUND (build 817): DISABLE SHARING, FASTER CHATS, REACTION FACES.
 
             DISABLE SHARING: on a contact's page, under Disappearing Messages. No Screenshots, No Forwarding and No Saving, for both people in the chat. The chat shows who turned each one on or off.
 
