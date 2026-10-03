@@ -4970,12 +4970,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// The chat header's blur — see `ChatHeaderBlurView`.
     private let headerBlur = ChatHeaderBlurView()
 
-    /// From the top of the screen to 24pt below the bar, the reference's reach. `safeAreaInsets.top`
-    /// on this full-screen view is the status bar plus the navigation bar.
+    /// From the top of the screen to 34pt below the bar and never under 100pt, the reference chat's
+    /// reach. `safeAreaInsets.top` on this full-screen view is the status bar plus the bar.
     private func layoutHeaderBlur() {
-        let height = view.safeAreaInsets.top + ChatHeaderBlurView.tailBelowBar
+        let height = max(ChatHeaderBlurView.minHeight, view.safeAreaInsets.top + ChatHeaderBlurView.tailBelowBar)
         let frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: height)
         if headerBlur.frame != frame { headerBlur.frame = frame }
+        // The chat's own background, lined up with the screen (see `ChatHeaderBlurView`).
+        headerBlur.update(cid: cid, screenSize: view.bounds.size)
         // Above the list, wherever the list is (it moves into the secure canvas and back).
         let list: UIView = collectionView.superview === view ? collectionView : (collectionView.superview ?? collectionView)
         if let li = view.subviews.firstIndex(of: list), let hi = view.subviews.firstIndex(of: headerBlur), hi < li {

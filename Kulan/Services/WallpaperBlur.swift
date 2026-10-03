@@ -239,6 +239,29 @@ import UIKit
     /// The wallpaper as the chat draws it, at 1×, WITHOUT the photo scrim. Theirs blurs the
     /// undimmed content view and does the darkening in the wash below; blurring a scrim in first
     /// would darken twice.
+    /// The chat's wallpaper as it stands on screen, UNBLURRED and at screen scale, for the chat
+    /// header (`ChatHeaderBlurView`): the reference app's header over a wallpaper is a copy of the
+    /// wallpaper itself, lined up with it and faded out, so messages dissolve into the picture.
+    /// Nil when the chat has no picture. Cached per chat, mode, size and wallpaper version.
+    private static var headerCache: [String: UIImage] = [:]
+
+    static func headerPicture(for cid: String, dark: Bool, size: CGSize) -> UIImage? {
+        let store = WallpaperStore.shared
+        guard store.hasWallpaper(for: cid), size.width > 1, size.height > 1 else { return nil }
+        let key = "\(cid)|\(dark)|\(Int(size.width))x\(Int(size.height))|\(store.version)"
+        if let hit = headerCache[key] { return hit }
+        let view = ChatWallpaperBackground(cid: cid, pictureSize: size)
+            .frame(width: size.width, height: size.height)
+            .environment(\.colorScheme, dark ? .dark : .light)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = UIScreen.main.scale
+        renderer.isOpaque = true
+        guard let image = renderer.uiImage else { return nil }
+        if headerCache.count >= 4 { headerCache.removeAll() }
+        headerCache[key] = image
+        return image
+    }
+
     private static func renderWallpaper(cid: String, dark: Bool, size: CGSize) -> UIImage? {
         // `pictureSize` is the size being rendered at, so this picture is cropped exactly the way
         // the chat's own wallpaper is — the slices the bubbles show are cut from the picture that
