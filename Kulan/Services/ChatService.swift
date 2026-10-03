@@ -3291,15 +3291,19 @@ enum ChatService {
         try? await writeSystemMessage(cid: cid, text: text, extra: ["disappearSeconds": seconds])
     }
 
-    /// Restricted chat (owner, 2026-10-03): switch one restriction for BOTH members. Never silent,
-    /// for the timer's reason above: both sides get a notice naming who changed it.
-    static func setRestriction(_ cid: String, _ r: ChatRestriction, on: Bool) async {
+    /// Restricted chat (owner, 2026-10-03): ONE switch for BOTH members that sets every restriction
+    /// together (his second ruling the same day: one switch, not three). Never silent, for the
+    /// timer's reason above: both sides get a notice naming who changed it.
+    static func setRestricted(_ cid: String, on: Bool) async {
         let ref = db.collection("conversations").document(cid)
-        let current = (try? await ref.getDocument())?.data()?[r.rawValue] as? Bool ?? false
+        let data = (try? await ref.getDocument())?.data() ?? [:]
+        let current = ChatRestriction.allCases.allSatisfy { data[$0.rawValue] as? Bool ?? false }
         guard current != on else { return }
-        try? await ref.setData([r.rawValue: on], merge: true)
+        var fields: [String: Any] = [:]
+        for r in ChatRestriction.allCases { fields[r.rawValue] = on }
+        try? await ref.setData(fields, merge: true)
         let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
-        try? await writeSystemMessage(cid: cid, text: "\(name) turned \(on ? "on" : "off") \(r.title).")
+        try? await writeSystemMessage(cid: cid, text: "\(name) turned \(on ? "on" : "off") Restricted chat.")
     }
 
     /// Returns false when the write was refused, so a caller can say so (2026-09-24 audit).

@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// ⛔ RESTRICTED CHAT — owner, 2026-10-03: "No Screenshots, No Forwarding, No Saving", with the
-/// reference app's per-chat switch as the model for how it behaves (not how it looks).
+/// ⛔ RESTRICTED CHAT — owner, 2026-10-03. First built as "Disable Sharing" with three switches; the
+/// same day he renamed it and made it ONE switch, with the reference app's restricted-chat page as
+/// the model for the page (not copied): one toggle, then what it stops.
 ///
 /// HOW IT BEHAVES, AND WHY:
-///   • ONE SETTING FOR THE CHAT, NOT FOR ONE PERSON. Each switch is a field on the conversation, so
-///     either member may set it and it binds both. A restriction only one side honours protects
-///     nothing.
-///   • NEVER SILENT. Every change posts a notice naming who made it (`ChatService.setRestriction`),
-///     the disappearing timer's rule: nobody turns these on or off behind the other's back.
+///   • ONE SETTING FOR THE CHAT, NOT FOR ONE PERSON. It is stored on the conversation, so either
+///     member may set it and it binds both. A restriction only one side honours protects nothing.
+///   • ONE SWITCH, THREE FIELDS UNDER IT. `noScreenshots`, `noForwarding` and `noSaving` are kept
+///     apart because each is enforced in a different place; `ChatService.setRestricted` writes all
+///     three together, so they only ever move as one.
+///   • NEVER SILENT. Every change posts a notice naming who made it, the disappearing timer's rule:
+///     nobody turns this on or off behind the other's back.
 ///   • ENFORCED WHERE THE ACTION IS OFFERED. Forward, Copy, Save and Share disappear from every
 ///     menu and viewer in the chat, and each action re-checks before it runs, so a menu opened just
 ///     before the switch flipped cannot slip one through.
@@ -24,31 +27,6 @@ enum ChatRestriction: String, CaseIterable, Identifiable {
     case noScreenshots, noForwarding, noSaving
 
     var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .noScreenshots: return "No Screenshots"
-        case .noForwarding: return "No Forwarding"
-        case .noSaving: return "No Saving"
-        }
-    }
-
-    /// His wording, 2026-10-03.
-    var detail: String {
-        switch self {
-        case .noScreenshots: return "Disable screenshots and screen recordings in this chat."
-        case .noForwarding: return "Disable forwarding messages to other chats."
-        case .noSaving: return "Disable copying text and saving photos or videos."
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .noScreenshots: return "camera.metering.none"
-        case .noForwarding: return "arrowshape.turn.up.right"
-        case .noSaving: return "square.and.arrow.down"
-        }
-    }
 }
 
 @MainActor enum ChatRestrictions {
@@ -70,48 +48,63 @@ extension Conversation {
         case .noSaving: return noSaving
         }
     }
+
+    /// The one switch. On when any part is on, so a chat left half-set by an earlier build still
+    /// reads as restricted and one tap turns all of it off.
+    var isRestricted: Bool { ChatRestriction.allCases.contains { isOn($0) } }
 }
 
-/// The page behind Disable Sharing on a contact's info.
-struct DisableSharingView: View {
+/// The page behind Restricted Chat on a contact's info.
+struct RestrictedChatView: View {
     let cid: String
     @State private var repo = ConversationsRepository.shared
     /// What was tapped, shown at once while the write travels; the live value takes over after.
-    @State private var pending: [ChatRestriction: Bool] = [:]
+    @State private var pending: Bool?
 
-    private func value(_ r: ChatRestriction) -> Bool {
-        if let p = pending[r] { return p }
-        return repo.conversations.first(where: { $0.id == cid })?.isOn(r) ?? false
+    private var isOn: Bool {
+        pending ?? (repo.conversations.first(where: { $0.id == cid })?.isRestricted ?? false)
     }
+
+    /// What the switch stops, in the order a person would try it.
+    private static let effects: [(icon: String, text: String)] = [
+        ("camera.metering.none", "Can't take screenshots or record the screen in this chat"),
+        ("arrowshape.turn.up.right", "Can't forward messages to other chats"),
+        ("doc.on.doc", "Can't copy text from this chat"),
+        ("square.and.arrow.down", "Can't save or share photos and videos from this chat"),
+        ("photo", "Can't save media from this chat to their device gallery automatically"),
+    ]
 
     var body: some View {
         Form {
             Section {
-                ForEach(ChatRestriction.allCases) { r in
-                    Toggle(isOn: Binding(get: { value(r) }, set: { on in
-                        pending[r] = on
-                        Task {
-                            await ChatService.setRestriction(cid, r, on: on)
-                            pending[r] = nil
-                        }
-                    })) {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(r.title)
-                                Text(r.detail)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } icon: {
-                            Image(systemName: r.icon)
+                Toggle("Restricted chat", isOn: Binding(get: { isOn }, set: { on in
+                    pending = on
+                    Task {
+                        await ChatService.setRestricted(cid, on: on)
+                        pending = nil
+                    }
+                }))
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("If this is on, people:")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    ForEach(Self.effects, id: \.text) { e in
+                        HStack(alignment: .firstTextBaseline, spacing: 14) {
+                            Image(systemName: e.icon)
+                                .font(.system(size: 17))
+                                .frame(width: 26)
+                            Text(e.text)
+                                .font(.subheadline)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
+                .padding(.vertical, 6)
             } footer: {
-                Text("These apply to both of you. Either of you can change them, and the chat shows who did.")
+                Text("This applies to both of you. Either of you can change it, and the chat shows who did.")
             }
         }
-        .navigationTitle("Disable Sharing")
+        .navigationTitle("Restricted chat")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

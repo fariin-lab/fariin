@@ -169,11 +169,10 @@ struct ContactInfoView: View {
     @State private var showAllMedia = false
     @State private var showVerify = false
     @State private var showDisappear = false
-    @State private var showDisableSharing = false
-    /// Any of the three Disable Sharing switches on, read live from the chat list.
-    private var sharingRestricted: Bool {
-        guard let c = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) else { return false }
-        return ChatRestriction.allCases.contains { c.isOn($0) }
+    @State private var showRestricted = false
+    /// Restricted chat on, read live from the chat list.
+    private var chatRestricted: Bool {
+        ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.isRestricted ?? false
     }
     @State private var disappearSeconds = 0
     @State private var showRename = false
@@ -1136,7 +1135,7 @@ struct ContactInfoView: View {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
-            .navigationDestination(isPresented: $showDisableSharing) { DisableSharingView(cid: cid) }
+            .navigationDestination(isPresented: $showRestricted) { RestrictedChatView(cid: cid) }
             // ⛔ ONLY THE GIVE PATH REACHES THIS — see `glowActionButton`. The sheet's own button is
             // what performs the give, so backing out of it with the ✕ or a swipe leaves the
             // relationship exactly as it was.
@@ -1456,8 +1455,8 @@ struct ContactInfoView: View {
             rowDivider
             // Restricted chat (owner, 2026-10-03). Beside the timer: both are rules for the chat
             // that bind both people. See `ChatRestrictions`.
-            infoRow("Disable Sharing", "hand.raised", value: sharingRestricted ? "On" : "Off") {
-                showDisableSharing = true
+            infoRow("Restricted Chat", "lock.shield", value: chatRestricted ? "On" : "Off") {
+                showRestricted = true
             }
             rowDivider
             // The same glyph Settings uses for its Notifications row (owner: reuse that one).
