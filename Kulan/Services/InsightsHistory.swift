@@ -22,6 +22,8 @@ struct InsightsDay: Equatable {
     /// Added minus removed that day, so it can be negative; sums are floored at zero.
     var storyReactions = 0
     var storiesPosted = 0
+    /// People who opened this profile that day, one per person (2026-10-03, `insightsProfileViewed`).
+    var profileViews = 0
     var glowersGained = 0
     var glowersLost = 0
     var glowingGained = 0
@@ -120,6 +122,7 @@ struct InsightsReport: Equatable {
     let views: InsightsDelta
     let reactions: InsightsDelta
     let posted: InsightsDelta
+    let profileViews: InsightsDelta
     let viewsPerStory: InsightsDelta
     let glowersNet: InsightsDelta
 
@@ -244,6 +247,7 @@ struct InsightsReport: Equatable {
             views: compare({ $0.storyViews }),
             reactions: compare({ $0.storyReactions }),
             posted: compare({ $0.storiesPosted }),
+            profileViews: compare({ $0.profileViews }),
             viewsPerStory: delta(average(currentStories), average(previousStories)),
             glowersNet: delta(Double(gained - lost), Double(previousNet)),
             glowersGained: gained,
@@ -322,6 +326,7 @@ struct InsightsDayRow: Identifiable, Equatable {
         day.storyViews = number(data["storyViews"])
         day.storyReactions = number(data["storyReactions"])
         day.storiesPosted = number(data["storiesPosted"])
+        day.profileViews = number(data["profileViews"])
         day.glowersGained = number(data["glowersGained"])
         day.glowersLost = number(data["glowersLost"])
         day.glowingGained = number(data["glowingGained"])

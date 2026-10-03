@@ -164,8 +164,8 @@ struct InsightsCountryShare: Identifiable, Equatable {
 /// ⛔ THREE TABS — owner, 2026-10-03, with screenshots of two big apps' insights pages: "take the
 /// experience, don't copy the UI". Overview (headline figures you tap to chart), Content (every
 /// story of the period, sortable) and Audience (Glowers over time with gains and Unglows, top
-/// countries, when stories are watched). Built from system parts: the tab switch is the tab bar's
-/// own glass (`GlassTabSwitch`), the charts are Swift Charts, the cards are grouped backgrounds.
+/// countries, when stories are watched). Built from system parts: the tab switch is Apple's own
+/// segmented control (`NativeSegments`), the charts are Swift Charts, the cards are grouped backgrounds.
 ///
 /// ⚠️ NO GENDER. He asked for "man or women"; the app has never asked anybody, so there is no data,
 /// and a chart of guesses would be a lie stated as a fact. Offered as an optional profile question.
@@ -196,11 +196,12 @@ struct GlowInsightsView: View {
 
     /// The headline figures on Overview. Tapping one charts it below, day by day.
     enum Metric: CaseIterable, Identifiable {
-        case views, reactions, glowers, posted, perStory
+        case views, profileViews, reactions, glowers, posted, perStory
         var id: Self { self }
         var title: String {
             switch self {
             case .views: return "Views"
+            case .profileViews: return "Profile views"
             case .reactions: return "Reactions"
             case .glowers: return "Net Glowers"
             case .posted: return "Stories"
@@ -311,34 +312,18 @@ struct GlowInsightsView: View {
             await loader.load(live)
             await countries.load()
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Period", selection: $period) {
-                        ForEach(InsightsPeriod.allCases) { option in
-                            Text(option.title).tag(option)
-                        }
-                    }
-                } label: {
-                    Text("\(period.rawValue) days")
-                }
-            }
-        }
+        // (No "28 days" button in the bar any more — owner, 2026-10-03: "remove that side, put it
+        // in the header". The period is chosen beside the period's own heading, `periodHeader`.)
     }
 
-    @ViewBuilder private var tabSwitch: some View {
-        let binding = Binding(get: { tab.rawValue }, set: { tab = Tab(rawValue: $0) ?? .overview })
-        if #available(iOS 26.0, *) {
-            GlassTabSwitch(titles: Tab.allCases.map(\.title), selected: binding)
-                .frame(height: 46)
-                .padding(.top, 8)
-        } else {
-            Picker("Section", selection: binding) {
-                ForEach(Tab.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-            }
-            .pickerStyle(.segmented)
+    /// Apple's own segmented control — owner, 2026-10-03: "make it real Apple liquid glass". See
+    /// the note on `GlowPeopleListView.tabs`; the same control at the same 46pt.
+    private var tabSwitch: some View {
+        NativeSegments(titles: Tab.allCases.map(\.title),
+                       selected: Binding(get: { tab.rawValue }, set: { tab = Tab(rawValue: $0) ?? .overview }))
+            .frame(maxWidth: .infinity)
+            .frame(height: 46)
             .padding(.top, 8)
-        }
     }
 
     /// The sentence is his; the bar under it says how far there is to go.
@@ -403,9 +388,22 @@ struct GlowInsightsView: View {
         }
     }
 
+    /// The period's heading IS its picker: tap "Last 28 days ⌄" to choose 7, 28 or 90.
     private func periodHeader(_ report: InsightsReport) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(period.title).font(.title2.weight(.bold))
+            Menu {
+                Picker("Period", selection: $period) {
+                    ForEach(InsightsPeriod.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(period.title).font(.title2.weight(.bold))
+                    Image(systemName: "chevron.down").font(.subheadline.weight(.bold))
+                }
+                .foregroundStyle(.primary)
+            }
             Text("\(Self.dayText(report.start)) to \(Self.dayText(report.end))")
                 .font(.subheadline).foregroundStyle(.secondary)
         }
@@ -434,6 +432,7 @@ struct GlowInsightsView: View {
     private func delta(_ m: Metric, _ report: InsightsReport) -> InsightsDelta {
         switch m {
         case .views: return report.views
+        case .profileViews: return report.profileViews
         case .reactions: return report.reactions
         case .glowers: return report.glowersNet
         case .posted: return report.posted
@@ -481,6 +480,7 @@ struct GlowInsightsView: View {
                 let value: Int = {
                     switch metric {
                     case .views, .perStory: return max(0, row.day.storyViews)
+                    case .profileViews: return max(0, row.day.profileViews)
                     case .reactions: return row.day.storyReactions
                     case .glowers: return row.day.glowersGained - row.day.glowersLost
                     case .posted: return row.day.storiesPosted
@@ -525,10 +525,20 @@ struct GlowInsightsView: View {
                 Text("Story views are turned off.").foregroundStyle(.secondary)
             }
         } else {
-            card("Live now", footer: "The stories that are live at this moment. Viewers are different people across all of them.") {
-                liveSummary
+            // ⛔ TAPPABLE — owner, 2026-10-03: "the names shown in Insights should be tappable and
+            // work". Live now opens the stories it counts.
+            NavigationLink { postedStories } label: {
+                card("Live now", footer: "The stories that are live at this moment. Viewers are different people across all of them.") {
+                    liveSummary
+                }
             }
+            .buttonStyle(.plain)
         }
+    }
+
+    /// Where a story figure leads: my own Posted stories, the page that opens each one.
+    private var postedStories: some View {
+        PostedStoriesView(uid: AuthService.shared.uid ?? "", isMe: true, title: title)
     }
 
     private var liveSummary: some View {
@@ -568,7 +578,8 @@ struct GlowInsightsView: View {
                 card {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { i, record in
                         if i > 0 { Divider() }
-                        recordRow(record)
+                        NavigationLink { postedStories } label: { recordRow(record) }
+                            .buttonStyle(.plain)
                     }
                 }
             }
@@ -600,6 +611,7 @@ struct GlowInsightsView: View {
     // MARK: - Audience
 
     @ViewBuilder private func audienceTab(_ report: InsightsReport) -> some View {
+        periodHeader(report)
         card {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Glowers").font(.headline)
@@ -625,7 +637,14 @@ struct GlowInsightsView: View {
                 .pickerStyle(.segmented)
                 growthChart(report)
                 HStack {
-                    growthFigure("Gained", "+\(GlowCount.short(report.glowersGained))", .green)
+                    // Gained opens the Glowers it added to. Unglows has no list on purpose: who
+                    // stopped glowing you is not shown anywhere in the app.
+                    NavigationLink {
+                        GlowPeopleListView(side: .glowers, title: title)
+                    } label: {
+                        growthFigure("Gained", "+\(GlowCount.short(report.glowersGained))", .green)
+                    }
+                    .buttonStyle(.plain)
                     growthFigure("Unglows", "−\(GlowCount.short(report.glowersLost))", .red)
                     growthFigure("Net", Self.signed(Double(report.glowersGained - report.glowersLost)), .primary)
                 }

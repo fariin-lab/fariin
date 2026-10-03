@@ -318,6 +318,8 @@ struct GlowProfileView: View {
         // on a guess from a machine that cannot build the app.
         .background(RestoreSwipeBack())
         .task { await load() }
+        // Insights › Profile views. `record` skips my own profile.
+        .onAppear { ProfileViews.record(uid) }
         // Keyed on the relationship, so the faces appear the moment the listeners deliver rather
         // than only if they happened to be there on the first frame. See `faceKey`.
         .task(id: faceKey) { await loadFaces() }

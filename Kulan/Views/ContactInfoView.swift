@@ -1014,6 +1014,8 @@ struct ContactInfoView: View {
         // are pinned to white just below so they do not follow it. Nothing else on the page moves:
         // the page's own `\.colorScheme` is still dark, which is the rule that matters.
         .toolbarColorScheme(barColorScheme, for: .navigationBar)
+        // Insights › Profile views: one view for them, at most once a day per person.
+        .onAppear { ProfileViews.record(otherUid) }
         .task {
             // ⛔ NO CONVERSATION, NO SHARED MEDIA. In preview there is no chat between me and myself,
             // and every one of these reads builds a Firestore path out of `cid` — which throws an

@@ -2253,10 +2253,14 @@ struct ThreadView: View {
                     if m.album.count > 1 {
                         let second = m.album[1]
                         ZStack(alignment: .trailing) {
+                            // ⛔ 18, NOT 9 — owner, 2026-10-03, his picture beside ours: only a 2pt
+                            // sliver of the second photo showed. The front tile is 35 wide with its
+                            // edge and this one 28, so a 9 shift hid all but 2pt; 18 shows ~11pt,
+                            // about a third of it, as in his reference.
                             SecureImageView(imageUrl: second.imageUrl, enc: second.enc, cid: cid)
                                 .frame(width: 28, height: 28)
                                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                .offset(x: -9)
+                                .offset(x: -18)
                             SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
                                 .frame(width: 32, height: 32)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -2264,7 +2268,7 @@ struct ThreadView: View {
                                 .background(Color(.systemBackground),
                                             in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
                         }
-                        .frame(width: 44, height: 35, alignment: .trailing)
+                        .frame(width: 46, height: 35, alignment: .trailing)
                     } else {
                         SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
                             .frame(width: 32, height: 32)
