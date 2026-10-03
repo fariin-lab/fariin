@@ -949,6 +949,33 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if page.contentScrollView(for: .top) !== tableView { registerAsContentScrollView() }
     }
 
+    /// ⛔ LET GO OF THE BAR WHEN A CHAT SLIDES OVER — owner, 2026-10-03: from the Archive the chat's
+    /// header blur is there for the whole push, from this list it arrives only once the chat has
+    /// opened. Same stock bar and edge effect both times; the difference is which list it is tied
+    /// to during the slide. Archive is a SwiftUI List that SwiftUI hands over by itself. This table
+    /// ties itself to its page by hand (`registerAsContentScrollView`) and never untied, so the bar
+    /// kept answering to this table until the push finished and the chat's list took over.
+    ///
+    /// Released only when something is pushed OVER the list (not when the list itself leaves), and
+    /// `viewIsAppearing` already re-ties it on the way back, before the first frame of the pop, which
+    /// is the 2026-09-27 fix for the search field and is left as it is.
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        guard !isMovingFromParent, !isBeingDismissed else { return }
+        releaseContentScrollView()
+    }
+
+    private func releaseContentScrollView() {
+        var page: UIViewController = self
+        while let up = page.parent, !(up is UINavigationController), !(up is UITabBarController) {
+            page = up
+        }
+        if contentScrollView(for: .top) === tableView { setContentScrollView(nil, for: .all) }
+        if page !== self, page.contentScrollView(for: .top) === tableView {
+            page.setContentScrollView(nil, for: .all)
+        }
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         isInTransition = false
