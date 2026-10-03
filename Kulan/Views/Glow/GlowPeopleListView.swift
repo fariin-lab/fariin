@@ -98,7 +98,19 @@ struct GlowPeopleListView: View {
     /// ⛔ 44pt — owner, 2026-09-25. SwiftUI's segmented `Picker` ignores a height, so this is the
     /// same native control from UIKit (`UISegmentedControl`), which takes one. Still the system
     /// control with its own glass, thumb and animation, just at the height he asked for.
-    private var tabs: some View {
+    @ViewBuilder private var tabs: some View {
+        if #available(iOS 26.0, *) {
+            GlassTabSwitch(titles: [Side.glowers.title, Side.glowing.title],
+                           selected: Binding(get: { tab == .glowers ? 0 : 1 },
+                                             set: { tab = $0 == 0 ? .glowers : .glowing }))
+                .frame(height: 46)
+        } else {
+            segmentedTabs
+        }
+    }
+
+    /// iOS 18 and earlier: the native segmented control, as before.
+    private var segmentedTabs: some View {
         NativeSegments(titles: [Side.glowers.title, Side.glowing.title],
                        selected: Binding(get: { tab == .glowers ? 0 : 1 },
                                          set: { tab = $0 == 0 ? .glowers : .glowing }))
@@ -445,5 +457,51 @@ private struct NativeSegments: UIViewRepresentable {
         var parent: NativeSegments
         init(_ p: NativeSegments) { parent = p }
         @objc func changed(_ c: UISegmentedControl) { parent.selected = c.selectedSegmentIndex }
+    }
+}
+
+/// ⛔ THE TAB BAR'S GLASS, NOT THE SEGMENTED CONTROL'S — owner, 2026-10-03, the Glowers/Glowing bar
+/// ringed: "make it the other type of liquid glass, like the bottom nav bar, no custom, use native".
+///
+/// iOS 26 has no ready-made control with the tab bar's look, so this is built only from the system's
+/// own Liquid Glass: the track is `glassEffect` in a capsule, and the selected side is a second
+/// glass capsule that lives in the same `GlassEffectContainer` and carries one `glassEffectID`, so
+/// the SYSTEM morphs it from one half to the other the way the tab bar's bubble moves. No fill,
+/// stroke or shadow is chosen here; the selected label takes the tint, as a tab bar's does.
+@available(iOS 26.0, *)
+struct GlassTabSwitch: View {
+    let titles: [String]
+    @Binding var selected: Int
+    @Namespace private var glass
+
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 0) {
+                ForEach(titles.indices, id: \.self) { i in
+                    Button {
+                        withAnimation(.smooth(duration: 0.35)) { selected = i }
+                    } label: {
+                        Text(titles[i])
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(i == selected ? Color.accentColor : Color.primary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Capsule())
+                            .background {
+                                if i == selected {
+                                    Color.clear
+                                        .glassEffect(.regular.interactive(), in: Capsule())
+                                        .glassEffectID("selected", in: glass)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(i == selected ? .isSelected : [])
+                }
+            }
+        }
+        // The track's glass sits OUTSIDE the container: inside it, the system blends nearby glass
+        // into one shape, and the bubble would melt into the track instead of riding on it.
+        .padding(4)
+        .glassEffect(.regular, in: Capsule())
     }
 }
