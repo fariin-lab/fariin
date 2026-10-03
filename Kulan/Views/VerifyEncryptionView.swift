@@ -52,11 +52,20 @@ struct VerifyEncryptionView: View {
                 } else if number.isEmpty {
                     ProgressView().padding(.top, 60)
                 } else {
-                    qrCard
-                    numberCard
+                    // ⛔ ONE CARD FOR THE CODE AND THE NUMBER — owner, 2026-10-03: "make it
+                    // minimalist, like the reference app but different". They are the same fact in
+                    // two forms (the code is the number, for a camera), so they sit together.
+                    VStack(spacing: 22) {
+                        qrCard
+                        numberCard
+                    }
+                    .padding(.vertical, 24)
+                    .padding(.horizontal, 18)
+                    .frame(maxWidth: .infinity)
+                    .background(cardColor, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
                     VStack(spacing: 14) {
-                        scanButton
                         note
+                        scanButton
                         // 2026-09-24 fix-all #212: shown from the cached key while offline, so say
                         // it could not be checked against the server.
                         if offline {
@@ -109,28 +118,34 @@ struct VerifyEncryptionView: View {
     // MARK: - Sections
 
     private var header: some View {
-        VStack(spacing: 16) {
-            // ⚠️ THE FACES ARE SMALLER AND CLOSER, and the lock between them is a mark rather than a
-            // third circle. It used to be a 22pt glyph on a 44pt filled disc, which made a row of
-            // three round objects out of two people and a status — the eye counted three faces. At
-            // 26pt with no disc it reads as what it is: the state of the line BETWEEN them.
-            HStack(spacing: 16) {
-                avatarLabel(myName, myPhoto, "You")
+        VStack(spacing: 14) {
+            // ⛔ THE TWO FACES OVERLAP, AND THE LOCK SITS WHERE THEY MEET — 2026-10-03 minimalist
+            // redesign. Two people and the line between them in one small mark, instead of a wide row
+            // of two captioned faces with a glyph floating between. Still both faces, still the lock
+            // that turns into a seal when verified.
+            ZStack(alignment: .bottom) {
+                HStack(spacing: -12) {
+                    AvatarView(name: myName, photoUrl: myPhoto, size: 52)
+                        .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 3))
+                    AvatarView(name: peerName, photoUrl: peerPhotoUrl, size: 52)
+                        .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 3))
+                }
                 Image(systemName: verified ? "checkmark.seal.fill" : "lock.fill")
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(verified ? Color.accentColor : .secondary)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(verified ? Color.accentColor : .primary)
                     .contentTransition(.symbolEffect(.replace))
-                    // Lifted onto the avatars' own centre line rather than the column's: the labels
-                    // under the faces are part of those columns and would otherwise drag the lock
-                    // down below the pictures it sits between.
-                    .offset(y: -11)
-                avatarLabel(peerName, peerPhotoUrl, peerName)
+                    .frame(width: 26, height: 26)
+                    .liquidGlass(Circle())
+                    .offset(y: 10)
             }
-            VStack(spacing: 8) {
-                Text(verified ? "This chat is verified" : "This chat is end-to-end encrypted")
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("You and \(peerName)")
+            VStack(spacing: 6) {
+                Text(verified ? "This chat is verified" : "End-to-end encrypted")
                     .font(.system(size: 20, weight: .semibold))
                     .multilineTextAlignment(.center)
-                Text("Messages and calls with \(peerName) are secured with end-to-end encryption. No one outside this chat, not even Fariin, can read them.")
+                Text("Only you and \(peerName) can read these messages and hear these calls. Not even Fariin.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -160,14 +175,6 @@ struct VerifyEncryptionView: View {
         }
     }
 
-    private func avatarLabel(_ name: String, _ photo: String?, _ caption: String) -> some View {
-        VStack(spacing: 8) {
-            AvatarView(name: name, photoUrl: photo, size: 56)
-            Text(caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-        }
-        .frame(maxWidth: 110)
-    }
-
     /// ⛔ ONE PANEL, NOT TWO. The QR was a white card inside a grey card — a frame around a frame,
     /// and the outer one carried no information at all. The white stays because a QR has to be read
     /// off white in both appearances; what holds it to the page in light mode is a hairline of the
@@ -175,15 +182,13 @@ struct VerifyEncryptionView: View {
     private var qrCard: some View {
         Group {
             if let img = qrImage(SafetyNumber.qrPayload(number)) {
+                // White because a QR has to be read off white in both appearances; inside the card
+                // it is the card's centrepiece rather than a second box on the page.
                 Image(uiImage: img)
                     .interpolation(.none).resizable().scaledToFit()
-                    .frame(width: 208, height: 208)
-                    .padding(20)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .strokeBorder(cardColor, lineWidth: dark ? 0 : 1)
-                    }
+                    .frame(width: 184, height: 184)
+                    .padding(14)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
         }
     }
@@ -214,18 +219,21 @@ struct VerifyEncryptionView: View {
 
     private var scanButton: some View {
         Button { showScanner = true } label: {
+            // ⛔ LIQUID GLASS, NOT A SOLID BLACK SLAB — 2026-10-03 minimalist redesign. The system's
+            // interactive glass capsule, so the one action on the page is clear without being the
+            // heaviest thing on it.
             Label(verified ? "Scan again" : "Scan their code", systemImage: "qrcode.viewfinder")
                 .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity).frame(height: 52)
-                .background(Color.accentColor, in: Capsule())
-                // Accent IS `.primary` app-wide, so this capsule is white at night and a hardcoded
-                // white label vanished into it. `onAccent` is that colour's declared inverse.
-                .foregroundStyle(Theme.onAccent(dark))
+                .contentShape(Capsule())
+                .liquidGlass(Capsule(), interactive: true)
         }
+        .buttonStyle(.plain)
     }
 
     private var note: some View {
-        Text("To verify, ask \(peerName) to open Encryption on their device, then scan their code, or read the numbers aloud to check they match.")
+        Text("Compare these numbers with \(peerName)'s phone, or scan the code on it. If they match, nobody is in between.")
             .font(.caption).foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
