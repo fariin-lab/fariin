@@ -84,6 +84,8 @@ jobs:
 
             PINNED ALBUM: the second photo now peeks out behind the first.
 
+            HEADER BLUR: opening a chat should show the header blur from the first moment of the slide.
+
             PLEASE TEST: open Insights and each tab, change the period; open a friend's profile from another phone and check Profile Views the next day; look at a pinned album.
 
             EARLIER IN THIS ROUND (build 819): REACTION PREVIEWS, PROFILE LINKS, ENCRYPTION PAGE, FILE SHARE.
