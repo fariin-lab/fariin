@@ -5007,9 +5007,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 let index = view.subviews.firstIndex(of: collectionView) ?? 0
                 collectionView.removeFromSuperview()
                 canvas.removeFromSuperview()
-                view.insertSubview(canvas, at: index)
                 CaptureProtectedController<EmptyView>.pin(canvas, in: view)
                 CaptureProtectedController<EmptyView>.pin(collectionView, in: canvas)
+                // ⛔ BACK TO ITS OWN LAYER AFTER `pin` — owner, 2026-10-03, second report: the
+                // bubbles drew OVER the composer after Restricted Chat was switched. `pin` calls
+                // `addSubview`, which puts the view on TOP of the page, above the composer, the date
+                // pill and the jump button. Re-inserting at the saved index after it is what keeps
+                // the list where it was. (An earlier fix put it "below the composer" instead, which
+                // hid this, and was then removed as unneeded: that is how the bug came back.)
+                view.insertSubview(canvas, at: index)
             }
             if captureObserver == nil {
                 captureObserver = NotificationCenter.default.addObserver(
@@ -5020,8 +5026,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let index = view.subviews.firstIndex(of: canvas) ?? 0
             collectionView.removeFromSuperview()
             canvas.removeFromSuperview()
-            view.insertSubview(collectionView, at: index)
             CaptureProtectedController<EmptyView>.pin(collectionView, in: view)
+            view.insertSubview(collectionView, at: index)   // after `pin`, which puts it on top — see above
         }
         view.layoutIfNeeded()
         layoutHeaderBlur()   // the header blur back above the list's new place
