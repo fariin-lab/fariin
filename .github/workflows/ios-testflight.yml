@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            RESTRICTED CHAT RULES, CHAT HEADER BLUR.
+            CHAT HEADER: SMOOTH, AND IT MATCHES YOUR WALLPAPER.
+
+            The top of a chat now fades smoothly with no line. With a wallpaper, the header shows the wallpaper itself, so messages melt into it as they scroll up. Without one it uses the plain page colour.
+
+            PLEASE TEST: scroll a chat with no wallpaper, with a photo wallpaper and with a gradient; check light and dark mode.
+
+            EARLIER IN THIS ROUND (build 821): RESTRICTED CHAT RULES, CHAT HEADER BLUR.
 
             RESTRICTED CHAT: each person has their own switch. The chat is restricted while either of you has it on. You can turn yours off, but not theirs: you can ask them, and they choose Turn Off or Keep On from the notice in the chat or from the Restricted Chat page. Requests lapse after a day.
 
