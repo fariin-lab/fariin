@@ -74,7 +74,25 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            ONE-TIME PHOTO AND VOICE ARE PROTECTED, SHARE PROFILE AND SEND MESSAGE ARE FAST.
+            DISABLE SHARING, FASTER CHATS, REACTION FACES.
+
+            DISABLE SHARING: on a contact's page, under Disappearing Messages. No Screenshots, No Forwarding and No Saving, for both people in the chat. The chat shows who turned each one on or off.
+
+            OPENING A CHAT: starts sooner, and the grey row fades when you come back instead of staying stuck while the chat loads.
+
+            SCROLLING: photos no longer load on the main thread, so scrolling past albums should be smooth.
+
+            REACTIONS: when both of you use the same emoji, both faces show (up to three), not a number.
+
+            ONE-TIME PHOTO AND VOICE: the sender can open their own once too.
+
+            PROFILE CARD: Send Message on your own card, or in that person's chat, opens the keyboard. Share Profile sends the link only.
+
+            INSIGHTS CARD: no lock icon; from 100 Glowers it says "Explore insights from your Stories and Glowers".
+
+            PLEASE TEST: turn on each Disable Sharing switch and try a screenshot, Forward, Copy and Save in that chat; open chats from the list; scroll a chat with albums; react with the same emoji on both phones; open your own one-time photo twice.
+
+            EARLIER IN THIS ROUND (build 813): ONE-TIME PHOTO AND VOICE ARE PROTECTED, SHARE PROFILE AND SEND MESSAGE ARE FAST.
 
             ONE-TIME PHOTO: no Save, no Share and no edit button. The photo is left out of screenshots and hidden while the screen is recorded.
 
