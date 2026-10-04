@@ -716,31 +716,13 @@ struct CallContainer<Content: View>: View {
     @StateObject private var stage = CallCoverStage()
 
     var body: some View {
-        VStack(spacing: 0) {
-            // ONGOING GROUP CALL, swiped down: a live call (mic possibly hot) must NEVER be invisible.
-            // Green return bar at root level — tap re-presents the group call screen from HERE, so it
-            // works from any screen, not just the chat that started it.
-            if group.isActive && group.minimized {
-                HStack(spacing: 8) {
-                    Image(systemName: group.isVideo ? "video.fill" : "phone.fill")
-                        .font(.system(size: 13, weight: .bold))
-                    Text(group.callTitle.isEmpty ? "Group call" : group.callTitle)
-                        .font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                    Spacer()
-                    Text("Return to call").font(.system(size: 13, weight: .semibold)).opacity(0.9)
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).frame(height: 40)
-                .frame(maxWidth: .infinity)
-                .background(LiveCallBarBackground())   // same living sweep as the 1:1 bar
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    group.minimized = false
-                    showGroupRestore = true
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-            content
+        content
+        // ONGOING MULTI-PERSON CALL, swiped down: a live call (mic possibly hot) must NEVER be
+        // invisible. It gets the same floating card a 1:1 call does (owner, 2026-10-04: the green
+        // full-width "Return to call" bar was the old UI). Tapping it clears `minimized`, and the
+        // onChange below re-presents the call screen from HERE, so it works from any screen.
+        .overlay {
+            if group.isActive && group.minimized { GroupFloatingCallWindow() }
         }
         .overlay {
             if showsFloatingCall {

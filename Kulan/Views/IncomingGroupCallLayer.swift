@@ -48,7 +48,7 @@ struct IncomingGroupCallLayer: View {
         .fullScreenCover(isPresented: $showRoom, onDismiss: {
             service.presentsRoomScreen = false
             if service.isActive {
-                service.minimized = true   // swiped away, not ended: the return bar takes over
+                service.minimized = true   // swiped away, not ended: the floating card takes over
             } else if service.waitingForApproval {
                 service.end()              // nobody let me in yet; closing the screen is leaving
             }

@@ -103,7 +103,7 @@ struct GroupCallView: View {
     private var header: some View {
         HStack {
             Button {
-                service.minimized = true   // NOT ending the call: the green return bar takes over
+                service.minimized = true   // NOT ending the call: the floating card takes over
                 dismiss()
             } label: {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)
