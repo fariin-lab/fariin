@@ -25,7 +25,11 @@ struct IncomingGroupCallLayer: View {
             guard want else { showRoom = false; return }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 600_000_000)
-                if service.presentsRoomScreen { showRoom = true }
+                // Hard cut, no slide-up: the reference app swaps to its call window instantly.
+                if service.presentsRoomScreen {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { showRoom = true }
+                }
             }
         }
         // Nothing rings during a 1:1. Once it is over, look again, after the handover to a

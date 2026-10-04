@@ -709,11 +709,10 @@ struct CallContainer<Content: View>: View {
     // itself. The list carries the words ("Active call", green, top row) and the card carries the
     // faces and the controls, which is the split the reference app uses.
     private var showsFloatingCall: Bool { isActive && call.minimized }
-    /// Should the full call screen be up? The cover itself follows `coverUp`, which trails this by
-    /// the length of the out-animation so the screen can fade away before it is removed.
+    /// Should the full call screen be up? The cover follows it through `coverUp`, set inside a
+    /// no-animation transaction so the cut is instant both ways.
     private var wantsCover: Bool { isActive && !call.minimized }
     @State private var coverUp = false
-    @StateObject private var stage = CallCoverStage()
 
     var body: some View {
         content
@@ -771,13 +770,16 @@ struct CallContainer<Content: View>: View {
             // profile, Calls tab, card restore, incoming answer) lands here, and nothing about the
             // way in depends on where the tap came from.
             //
-            // The motion is the reference app's, read from its source: the cover is presented with
-            // NO system animation, and the whole call screen arrives as ONE layer, scaling 1.04 -> 1.0
-            // over 0.3s while fading in over 0.2s, ease-in-out, no spring. Leaving is the same run
-            // backwards before the cover is removed. See `CallCoverStage`.
+            // ⛔ NO MOTION AT ALL, AND THAT IS THE REFERENCE APP'S PRESENTATION (owner, 2026-10-04,
+            // second report: "still not like" it). Read from its source (WindowManager.startCall,
+            // CallUIAdapter): the call screen is pushed `animated: false` into a call WINDOW of its
+            // own, which is made key and visible while the app's window is hidden in the same beat.
+            // There is no fade, no scale and no slide: the app is simply replaced by the black call
+            // screen. The first attempt here (scale 1.04 + fade, from another messenger) was the
+            // wrong reference. The cover goes up and down inside a transaction with animations
+            // disabled, which is that same hard cut.
             CallView()
-                .modifier(CallCoverStageEffect(stage: stage))
-                .presentationBackground(.clear)
+                .presentationBackground(.black)
         }
         .onAppear { if wantsCover { presentCover() } }
         .onChange(of: wantsCover) { _, want in
@@ -794,61 +796,30 @@ struct CallContainer<Content: View>: View {
         // the group call forward the same way the bar's tap does. Only `disconnect()` also clears it,
         // and by then the call is no longer active.
         .onChange(of: group.minimized) { _, minimized in
-            if !minimized, group.isActive, !showGroupRestore { showGroupRestore = true }
+            // Same hard cut as the 1:1 cover (the reference app uses one call window for both).
+            if !minimized, group.isActive, !showGroupRestore {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { showGroupRestore = true }
+            }
         }
         // A multi-person (ad-hoc or link) call's FIRST screen is put up by `IncomingGroupCallLayer`
         // (it follows `presentsRoomScreen`). This root only re-presents it from the return bar.
     }
 
-    /// Put the cover up with the system's slide switched off; the screen animates itself in.
+    /// Hard cut in: the system's slide switched off, nothing of ours in its place. The keyboard is
+    /// put away first, as the reference app does by hiding the whole app window.
     private func presentCover() {
-        guard !coverUp else { stage.show(); return }   // a dismiss still fading out: just come back
+        guard !coverUp else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        stage.reset()
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { coverUp = true }
     }
 
-    /// Run the in-motion backwards, THEN take the cover down without a system animation.
+    /// Hard cut out, the same way.
     private func dismissCover() {
         guard coverUp else { return }
-        stage.hide()
-        DispatchQueue.main.asyncAfter(deadline: .now() + CallCoverStage.outDuration) {
-            guard !wantsCover else { stage.show(); return }   // came back during the fade
-            var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { coverUp = false }
-        }
-    }
-}
-
-// MARK: - The call screen's way in and out
-
-/// The reference app's call presentation, from its source: the whole screen is one layer that
-/// scales 1.04 -> 1.0 over 0.3s and fades 0 -> 1 over 0.2s (ease-in-out, no spring), and leaves by
-/// the same motion reversed over 0.3s. Held at the root so the dismiss can be played BEFORE the
-/// cover is removed; the cover itself never animates.
-final class CallCoverStage: ObservableObject {
-    static let outDuration: Double = 0.3
-    @Published fileprivate(set) var shown = false
-    @Published fileprivate(set) var leaving = false
-    func reset() { shown = false; leaving = false }
-    func show() { leaving = false; shown = true }
-    func hide() { leaving = true; shown = false }
-}
-
-private struct CallCoverStageEffect: ViewModifier {
-    @ObservedObject var stage: CallCoverStage
-    func body(content: Content) -> some View {
-        content
-            .scaleEffect(stage.shown ? 1 : 1.04)
-            .animation(.easeInOut(duration: 0.3), value: stage.shown)
-            // One layer: without the group, every view inside would fade on its own and the
-            // overlapping ones would show through each other mid-fade.
-            .compositingGroup()
-            .opacity(stage.shown ? 1 : 0)
-            .animation(.easeInOut(duration: stage.leaving ? CallCoverStage.outDuration : 0.2), value: stage.shown)
-            // Once per presentation: `reset()` runs before every cover goes up.
-            .onAppear { DispatchQueue.main.async { stage.show() } }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { coverUp = false }
     }
 }
 
