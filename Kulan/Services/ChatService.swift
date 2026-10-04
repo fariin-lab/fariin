@@ -3498,21 +3498,44 @@ enum ChatService {
         }
     }
 
-    /// ⚠️ NO PREFIX SEARCH. THIS IS DELIBERATE AND IT MUST NOT BE PUT BACK.
+    /// ⛔ PREFIX SEARCH IS BACK, ON THE SERVER — owner, 2026-10-04: "global search like the reference
+    /// app". The reference sends every query to its server's people search (20 results) and shows
+    /// them under the local ones.
     ///
-    /// This used to take two letters and return twenty accounts ordered by username. That is a public
-    /// directory: type `ab`, get twenty people, walk the alphabet, and you have everybody. It is the
-    /// exact thing another mainstream messenger describes when they say spammers cannot "search random
-    /// words or scrape a public directory to find you" — and we had it switched on.
+    /// ⚠️ WHY IT WAS REMOVED STILL HOLDS, AND THIS IS HOW IT IS ANSWERED. The old version was a
+    /// CLIENT prefix query over profiles: two letters, twenty accounts, walk the alphabet at Firestore
+    /// speed, and it needed `list` on every profile. Now `usernames` stays `list: false`, and the
+    /// server's `searchUsernames` answers one prefix at a time: 3 characters at least, 20 names at
+    /// most, 30 searches a minute per account, uids and handles only. Each profile is then read
+    /// through the normal `users/{uid}` get, with the same deletion filter `findByHandle` applies.
+    /// Do not move the query back onto the client.
     ///
-    /// It is now an exact lookup that returns at most one person, so the search screen still works
-    /// for somebody who was given a full username. Kept as a list-returning function rather than
-    /// deleted so its callers do not change shape, and so this comment sits where anybody restoring
-    /// "search suggestions" will read it first. Restoring the prefix query also means restoring
-    /// `list` permission on every profile; the two are the same decision.
+    /// Server unreachable or refusing (old functions, rate limit): falls back to the exact lookup.
     static func searchUsers(prefix: String) async -> [UserProfile] {
-        guard let one = await findByHandle(prefix) else { return [] }
-        return [one]
+        var q = prefix.trimmingCharacters(in: .whitespaces).lowercased()
+        if q.hasPrefix("@") { q.removeFirst() }
+        guard q.count >= 3 else { return [] }
+        guard let res = try? await Functions.functions(region: "me-central1")
+                .httpsCallable("searchUsernames").call(["query": q]),
+              let rows = (res.data as? [String: Any])?["results"] as? [[String: Any]] else {
+            return (await findByHandle(q)).map { [$0] } ?? []
+        }
+        let uids = rows.compactMap { $0["uid"] as? String }.filter { $0 != uid }
+        // In the server's order (exact handle first), fetched together.
+        let found = await withTaskGroup(of: (Int, UserProfile?).self) { group in
+            for (i, owner) in uids.enumerated() {
+                group.addTask {
+                    guard let d = try? await db.collection("users").document(owner).getDocument(),
+                          let data = d.data() else { return (i, nil) }
+                    let u = UserProfile(id: d.documentID, data: data)
+                    return (i, u.isAwaitingDeletion ? nil : u)
+                }
+            }
+            var out = [(Int, UserProfile)]()
+            for await (i, u) in group { if let u { out.append((i, u)) } }
+            return out.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        return found.map { ProfileStore.indexed($0) }   // warms photo / privacy / verification, as findByHandle does
     }
 }
 

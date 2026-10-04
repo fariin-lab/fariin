@@ -31,6 +31,17 @@ enum ChatSearch {
         return out
     }
 
+    /// ⛔ THE REFERENCE APP'S NAME MATCH — owner, 2026-10-04. Their local people search tokenises the
+    /// name and the query into words (case and accents folded) and keeps a peer only when EVERY query
+    /// word is the START of some name word, in any order: "abd" and "abdi ad" find "Adnan Abdi",
+    /// "bdi" does not. (Was: the whole query anywhere inside the name.)
+    static func namePrefixMatch(query: String, name: String) -> Bool {
+        let q = normalize(query).split(separator: " ")
+        guard !q.isEmpty else { return true }
+        let words = normalize(name).split(separator: " ")
+        return q.allSatisfy { part in words.contains { $0.hasPrefix(part) } }
+    }
+
     /// A message's searchable tokens (compute ONCE per message when the corpus is built, not per keystroke).
     /// Each word is indexed whole AND split into its letter/digit runs, the same way `queryTerms` splits
     /// the query, so a word like "abc123" is indexed as "abc123", "abc" and "123" — matching a query for

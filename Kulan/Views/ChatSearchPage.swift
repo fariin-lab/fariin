@@ -202,7 +202,7 @@ struct ChatSearchOverlay: View {
 /// One row of the search page. Deliberately just a KIND and a KEY: the row's content is looked up
 /// live when the cell is built, so a row never carries a frozen copy of a conversation.
 struct SearchPageRow: Identifiable, Equatable {
-    enum Kind: String, CaseIterable, Equatable { case chat, group, person, recentChat, recentPerson }
+    enum Kind: String, CaseIterable, Equatable { case chat, group, person, recentChat, recentPerson, showMore }
     let kind: Kind
     /// Conversation id for a chat or a group, uid for a person.
     let key: String
@@ -267,6 +267,10 @@ struct ChatSearchPage: View {
     /// A recent person's profile fetch failed (offline, or the account is gone) and there was no
     /// existing chat with them to fall back to, so tapping the row did nothing to open on.
     @State private var recentPersonOpenFailed = false
+    /// Show More tapped on the Global Search section; collapses again when the query changes.
+    @State private var showAllPeople = false
+    /// Global results shown before Show More (the reference collapses its global section past 3).
+    static let globalCollapsed = 3
 
     init(query: String, me: String, dark: Bool, searching: Bool,
          chats: @escaping () -> [Conversation],
@@ -309,6 +313,7 @@ struct ChatSearchPage: View {
             }
         }
         .onAppear { recents.start() }
+        .onChange(of: query) { _, _ in showAllPeople = false }
         .alert("Couldn't open", isPresented: $recentPersonOpenFailed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -390,10 +395,30 @@ struct ChatSearchPage: View {
             personRows.append(SearchPageRow(kind: .person, key: u.id))
         }
 
+        // ⛔ THE REFERENCE APP'S ORDER — owner, 2026-10-04. (1) Things you searched before and
+        // still match come first (theirs pulls recently-searched peers out of the local list and
+        // shows them on top); the rest keep the chat list's newest-first order. (2) The server's
+        // people go under a "Global Search" heading, after everything local, and only the first 3
+        // show until Show More (theirs collapses the global section past 3; local never collapses).
+        let recentRank = Dictionary(recents.entries.enumerated().map { ($1.key, $0) }, uniquingKeysWith: { a, _ in a })
+        func recentFirst(_ rows: [SearchPageRow]) -> [SearchPageRow] {
+            rows.enumerated().sorted { a, b in
+                let ra = recentRank[a.element.key] ?? Int.max, rb = recentRank[b.element.key] ?? Int.max
+                return ra != rb ? ra < rb : a.offset < b.offset
+            }.map(\.element)
+        }
+        chatRows = recentFirst(chatRows)
+        groupRows = recentFirst(groupRows)
+        personRows = recentFirst(personRows)
+        if !showAllPeople, personRows.count > Self.globalCollapsed {
+            personRows = Array(personRows.prefix(Self.globalCollapsed))
+                + [SearchPageRow(kind: .showMore, key: "global")]
+        }
+
         var out: [SearchPageSection] = []
         if !chatRows.isEmpty { out.append(SearchPageSection(title: "Chats", rows: chatRows)) }
         if !groupRows.isEmpty { out.append(SearchPageSection(title: "Groups", rows: groupRows)) }
-        if !personRows.isEmpty { out.append(SearchPageSection(title: "People", rows: personRows)) }
+        if !personRows.isEmpty { out.append(SearchPageSection(title: "Global Search", rows: personRows)) }
         m.sections = out
         return m
     }
@@ -416,6 +441,13 @@ struct ChatSearchPage: View {
             if let e = m.recents[row.key] {
                 RecentPersonRow(uid: e.key, title: e.title, handle: e.handle)
             }
+        case .showMore:
+            HStack {
+                Text("Show More").foregroundStyle(Color.accentColor)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .contentShape(Rectangle())
         }
     }
 
@@ -434,6 +466,8 @@ struct ChatSearchPage: View {
     /// pretend it is their behaviour.
     private func select(_ row: SearchPageRow, _ m: PageModel) {
         switch row.kind {
+        case .showMore:
+            showAllPeople = true
         case .chat, .group, .recentChat:
             guard let c = m.chats[row.key] else { return }
             recents.record(chat: c, me: me)

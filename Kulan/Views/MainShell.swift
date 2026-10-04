@@ -1027,6 +1027,8 @@ struct ChatsView: View {
     // (2026-08-03): "highlight only while the user's finger is touching it… never during the back
     // swipe". The whole highlight is Apple's pressed state now and nothing of ours — see the note at
     // the row's Button.
+    /// Answers per query for this session, so retyping or deleting back to a query is instant.
+    @State private var peopleCache: [String: [UserProfile]] = [:]
     @State private var pendingDelete: Conversation?
     // Multi-select edit mode.
     @State private var selecting = false
@@ -1222,8 +1224,7 @@ struct ChatsView: View {
     /// Name only. The previews are ciphertext until a row decrypts them, so matching on those
     /// would search whatever subset happened to be decrypted and silently miss the rest.
     private func searchMatches(_ c: Conversation) -> Bool {
-        let q = ChatSearch.normalize(chatSearch)
-        return q.isEmpty || ChatSearch.normalize(c.displayName(me)).contains(q)
+        ChatSearch.namePrefixMatch(query: chatSearch, name: c.displayName(me))
     }
 
     /// The query, once. Read from four places in a body that re-runs on every typing dot.
@@ -1325,11 +1326,17 @@ struct ChatsView: View {
     /// query they have moved on from.
     private func lookUpPeople(_ raw: String) async {
         let q = raw.trimmingCharacters(in: .whitespaces)
-        guard q.count >= 2 else { userHits = []; searchingUsers = false; return }
+        // The server's minimum (`searchUsernames`): under it there is no global half to wait for.
+        guard q.count >= 3 else { userHits = []; searchingUsers = false; return }
+        // ⛔ THE REFERENCE APP'S TIMING — owner, 2026-10-04. A query answered before is answered again
+        // at once with no request (theirs keeps one context per query); a new one waits 0.4s, and
+        // `.task(id:)` cancels it on the next keystroke, so a request is only ever sent for the query
+        // the typist stopped on. Meanwhile the previous answer stays on screen (theirs does the same),
+        // and the rows already shown are not cleared under the finger.
+        let key = q.lowercased()
+        if let cached = peopleCache[key] { userHits = cached; searchingUsers = false; return }
         searchingUsers = true
-        // 2026-09-24 decision D3: wait 300ms first, as lookupHandle does. `.task(id:)` cancels this on
-        // the next keystroke, so a typed name costs one server lookup instead of one per character.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        try? await Task.sleep(nanoseconds: 400_000_000)
         if Task.isCancelled { return }
         var found = await ChatService.searchUsers(prefix: q)
         if found.isEmpty, let exact = await ChatService.findByHandle(q) { found = [exact] }
@@ -1338,6 +1345,7 @@ struct ChatsView: View {
         searchingUsers = false
     }
 
+        peopleCache[key] = found
     /// The two halves of `visible`, for the "Pinned" / "Chats" sections.
     ///
     /// ⚠️ ONE PROPERTY RETURNING BOTH, AND THAT IS NOT TIDINESS. `visible` filters and SORTS the
