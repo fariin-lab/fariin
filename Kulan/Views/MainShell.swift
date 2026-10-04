@@ -1131,6 +1131,8 @@ struct NewCallView: View {
                     }
                 }
                 .listStyle(.insetGrouped)   // grouped cards (matches the reference)
+                .listSectionSpacing(.compact)              // owner 2026-10-04: "spaces look big"
+                .environment(\.defaultMinListRowHeight, 44)
                 .overlay(alignment: .trailing) {
                     if query.isEmpty && indexLetters.count > 1 {
                         VStack(spacing: 1) {
@@ -1166,23 +1168,28 @@ struct NewCallView: View {
         }
     }
 
+    /// ⛔ TIGHTER — owner, 2026-10-04: "spaces look big". 36pt avatar, rows 6pt top and bottom
+    /// (about 50pt, the system contact-row height), the two call glyphs side by side with their
+    /// 40pt hit areas touching, regular-weight name.
     private func callRow(_ c: Conversation) -> some View {
         HStack(spacing: 12) {
-            AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 42)
-            Text(c.displayName(me)).font(.system(size: 17, weight: .medium)).lineLimit(1)
-            Spacer()
-            Button { call(c, video: false) } label: {
-                Image(systemName: "phone").font(.system(size: 19)).foregroundStyle(.primary)
+            AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 36)
+            Text(c.displayName(me)).font(.system(size: 17)).lineLimit(1)
+            Spacer(minLength: 8)
+            HStack(spacing: 0) {
+                Button { call(c, video: false) } label: {
+                    Image(systemName: "phone").font(.system(size: 18)).foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain).frame(width: 40, height: 40).contentShape(Rectangle())
+                .disabled(!callsEnabled)
+                Button { call(c, video: true) } label: {
+                    Image(systemName: "video").font(.system(size: 18)).foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain).frame(width: 40, height: 40).contentShape(Rectangle())
+                .disabled(!callsEnabled)
             }
-            .buttonStyle(.plain).frame(width: 44, height: 44).contentShape(Rectangle())
-            .disabled(!callsEnabled)
-            Button { call(c, video: true) } label: {
-                Image(systemName: "video").font(.system(size: 19)).foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain).frame(width: 44, height: 44).contentShape(Rectangle())
-            .disabled(!callsEnabled)
         }
-        .padding(.vertical, 2)
+        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 8))
     }
 
     /// 2026-09-24 audit: same gate as the chat header (ThreadView). `startCall` refuses silently
