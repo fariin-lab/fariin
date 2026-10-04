@@ -24,6 +24,9 @@ import UIKit
 final class ChatHeaderBlurView: UIView {
     /// Their numbers (the chat's wallpaper edge, `ChatControllerNode`).
     static let tailBelowBar: CGFloat = 34
+    /// ⛔ Owner, 2026-10-04: the 34pt reach is right when a pinned bar shows under the header; with
+    /// no pinned bar it reached too far down, so it stops closer to the bar. Nothing else differs.
+    static let tailBelowBarNoPin: CGFloat = 16
     static let minHeight: CGFloat = 100
     static let maxEdgeSize: CGFloat = 80
     /// Alpha by background kind: photo, single colour (and the plain page), gradient.
@@ -38,7 +41,8 @@ final class ChatHeaderBlurView: UIView {
     /// ProgressiveBlurHeader. Its engine (`VariableBlurUIView`) at that package's default strength, 5:
     /// strongest at the top, easing to nothing at the bottom, so what scrolls under the header is
     /// truly blurred with no edge. The faded background below sits on top of it.
-    static let blurRadius: CGFloat = 5
+    /// Owner, 2026-10-04: "ending too strongly, slightly lighter, not too faint" → 4 (was 5).
+    static let blurRadius: CGFloat = 4
     private let blur = VariableBlurUIView(maxBlurRadius: ChatHeaderBlurView.blurRadius)
 
     /// The faded layer, holding either the page colour or the wallpaper picture.

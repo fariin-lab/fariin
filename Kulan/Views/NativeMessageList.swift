@@ -3872,6 +3872,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         topOverlayHeight = h
         datePillTop?.constant = 6 + h
         updateInsets()
+        layoutHeaderBlur()   // pin / unpin changes how far the header blur reaches
     }
 
     // MARK: - Keyboard
@@ -4973,7 +4974,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// From the top of the screen to 34pt below the bar and never under 100pt, the reference chat's
     /// reach. `safeAreaInsets.top` on this full-screen view is the status bar plus the bar.
     private func layoutHeaderBlur() {
-        let height = max(ChatHeaderBlurView.minHeight, view.safeAreaInsets.top + ChatHeaderBlurView.tailBelowBar)
+        // A pinned bar keeps the full reach; without one the blur stops closer to the bar.
+        let tail = topOverlayHeight > 0.5 ? ChatHeaderBlurView.tailBelowBar : ChatHeaderBlurView.tailBelowBarNoPin
+        let height = max(ChatHeaderBlurView.minHeight, view.safeAreaInsets.top + tail)
         let frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: height)
         if headerBlur.frame != frame { headerBlur.frame = frame }
         // The chat's own background, lined up with the screen (see `ChatHeaderBlurView`).
