@@ -4466,6 +4466,20 @@ struct ThreadView: View {
                 showAlbums: $attachShowAlbums,
                 inAlbum: $attachInAlbum,
                 albumsInstant: $attachAlbumsInstant)
+                // ⛔ SWIPE BACK OUT OF A FOLDER — owner, 2026-10-04: "inside a folder the only way back
+                // is the back button; add going back when my finger swipes right". The system's own
+                // rule: a drag that starts at the left edge and travels right. Same result as the
+                // round button's arrow from a folder (back to the album list, with the slide).
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 20).onEnded { g in
+                        guard attachInAlbum, g.startLocation.x < 30,
+                              g.translation.width > 60,
+                              g.translation.width > abs(g.translation.height) * 2 else { return }
+                        attachAlbumsInstant = false
+                        attachInAlbum = false
+                        attachShowAlbums = true
+                    }
+                )
                 // ⛔ NO TOP PADDING — owner, 2026-09-02, "no header". This 10 held the sheet's own
                 // header clear of the grabber. With the header gone it is a strip of empty sheet
                 // above the photos, which is the exact thing he has rejected twice before.
