@@ -89,11 +89,15 @@ final class ChatHeaderBlurView: UIView {
             picture.isHidden = false
             picture.frame = CGRect(origin: .zero, size: screenSize)
             content.backgroundColor = .clear
+            let base: CGFloat
             switch kind {
-            case .photo: content.alpha = Self.photoAlpha
-            case .color: content.alpha = Self.colorAlpha
-            default: content.alpha = Self.gradientAlpha
+            case .photo: base = Self.photoAlpha
+            case .color: base = Self.colorAlpha
+            default: base = Self.gradientAlpha
             }
+            // ⛔ Owner, 2026-10-04: "with a black wallpaper the blur feels too dark". A near-black
+            // copy at 0.7 over bright bubbles reads as a dark wash, so a dark top edge gets less.
+            content.alpha = Self.isDark(image, topHeight: Self.minHeight) ? base * Self.darkScale : base
         } else {
             // No wallpaper: the background is the plain page colour, a single colour.
             picture.image = nil
@@ -101,6 +105,27 @@ final class ChatHeaderBlurView: UIView {
             content.backgroundColor = .systemBackground
             content.alpha = Self.colorAlpha
         }
+    }
+
+    /// How much of the alpha a dark wallpaper edge keeps (0.7 → 0.5 for a photo).
+    static let darkScale: CGFloat = 0.72
+    /// Average brightness of the top `topHeight` points under this, below which it counts as dark.
+    static let darkLuminance: CGFloat = 0.2
+
+    /// The top strip's average colour, from a 1×1 redraw; run once per wallpaper change.
+    private static func isDark(_ image: UIImage, topHeight: CGFloat) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        let strip = CGRect(x: 0, y: 0, width: cg.width,
+                           height: min(cg.height, Int(topHeight * image.scale)))
+        guard let top = cg.cropping(to: strip) else { return false }
+        var px = [UInt8](repeating: 0, count: 4)
+        guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+        ctx.interpolationQuality = .medium
+        ctx.draw(top, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        let lum = (0.2126 * CGFloat(px[0]) + 0.7152 * CGFloat(px[1]) + 0.0722 * CGFloat(px[2])) / 255
+        return lum < darkLuminance
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
