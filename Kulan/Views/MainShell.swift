@@ -864,7 +864,12 @@ struct CallsView: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { showNew = true } label: { Image(systemName: "phone.badge.plus") }
+                        // The owner's own new-call glyph (2026-10-04), a template SVG like his others.
+                        Button { showNew = true } label: {
+                            Image("ic_new_call").renderingMode(.template).resizable().scaledToFit()
+                                .frame(width: 22, height: 22)
+                        }
+                        .accessibilityLabel("New Call")
                     }
                 }
             }
