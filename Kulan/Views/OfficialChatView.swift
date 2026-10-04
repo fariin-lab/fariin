@@ -856,10 +856,9 @@ struct VerifiedTick: View {
     var size: CGFloat = 16
 
     var body: some View {
-        Image(systemName: "checkmark.seal.fill")
-            .font(.system(size: size * 0.82, weight: .semibold))
+        // A flat picture, not a symbol: iOS 26 can recolour a symbol white (see `VerifiedMark.badge`).
+        Image(uiImage: VerifiedMark.badge(size: size * 0.82, blue: UIColor(Color(hex: 0x0A84FF)), weight: .semibold))
             .frame(width: size, height: size)
-            .foregroundStyle(.white, Color(hex: 0x0A84FF))
             .accessibilityLabel("Verified official account")
     }
 }

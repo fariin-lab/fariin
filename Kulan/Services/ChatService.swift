@@ -2888,7 +2888,7 @@ enum ChatService {
         // instead, the same way "GIF" and "📷 Photo" already ride this field un-encrypted.
         let deletedNewest = d["deleted"] as? Bool == true
         var update: [String: Any] = [
-            "lastMessage": deletedNewest ? "This message was deleted" : (d["text"] as? String ?? ""),
+            "lastMessage": deletedNewest ? "This message was deleted" : summaryText(d),
             "lastSender": d["authorId"] as? String ?? "",
         ]
         // Carry the new newest message's thumbnail, or drop the stale one.
@@ -2900,6 +2900,29 @@ enum ChatService {
             update["lastImageEnc"] = FieldValue.delete()
         }
         return update
+    }
+
+    /// ⛔ A MEDIA MESSAGE IS NEVER A BLANK SUMMARY — owner, 2026-10-04, a chat with an unread
+    /// message reading "Say hello". A photo's `text` is its caption, usually empty, and the
+    /// recompute copied that empty text, which the list reads as a brand-new chat. Media without a
+    /// caption gets the same plaintext label its send path writes.
+    private static func summaryText(_ d: [String: Any]) -> String {
+        let text = d["text"] as? String ?? ""
+        let type = d["type"] as? String ?? ""
+        let viewOnce = d["viewOnce"] as? Bool == true
+        // A view-once caption is never shown, and a caption otherwise wins, as at send.
+        if !text.isEmpty, !viewOnce || type == "text" || type.isEmpty { return text }
+        switch type {
+        case "image": return viewOnce ? "View-once photo" : "📷 Photo"
+        case "album":
+            let n = (d["album"] as? [Any])?.count ?? 0
+            return n > 1 ? "📷 \(n) Photos" : "📷 Photo"
+        case "video": return "🎥 Video"
+        case "audio": return viewOnce ? "🎤 One-time voice message" : "🎤 Voice message"
+        case "file": return "📄 File"
+        case "gif": return "GIF"
+        default: return text
+        }
     }
 
     /// Write a recomputed chat-list summary only if nothing newer landed while it was computed.

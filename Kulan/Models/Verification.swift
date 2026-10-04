@@ -310,11 +310,24 @@ struct VerifiedMark: View {
         }
     }
 
+    /// ⛔ A PLAIN BITMAP, NOT A SYMBOL — owner, 2026-10-04: "on iOS 26 the verified badge looks
+    /// white in the chat list". iOS 26 can re-render a symbol as one colour, palette or not (the
+    /// chat header hit this on 09-27, `ChatHeaderView.verifiedMark`). Drawn once into a picture,
+    /// there is no symbol left to recolour, so it stays a white tick on blue everywhere.
     private var mark: some View {
-        Image(systemName: "checkmark.seal.fill")
-            .font(.system(size: size))
-            .foregroundStyle(.white, Color(hex: 0x3DA1FD))
-            .symbolRenderingMode(.palette)
+        Image(uiImage: Self.badge(size: size, blue: UIColor(Color(hex: 0x3DA1FD)), weight: .regular))
+    }
+
+    /// The seal as a flat picture at `size` points.
+    static func badge(size: CGFloat, blue: UIColor, weight: UIImage.SymbolWeight) -> UIImage {
+        let config = UIImage.SymbolConfiguration(paletteColors: [.white, blue])
+            .applying(UIImage.SymbolConfiguration(pointSize: size, weight: weight))
+        guard let symbol = UIImage(systemName: "checkmark.seal.fill", withConfiguration: config) else { return UIImage() }
+        let fmt = UIGraphicsImageRendererFormat.preferred()
+        fmt.opaque = false
+        return UIGraphicsImageRenderer(size: symbol.size, format: fmt)
+            .image { _ in symbol.draw(at: .zero) }
+            .withRenderingMode(.alwaysOriginal)
     }
 }
 
