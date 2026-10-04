@@ -809,13 +809,42 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// to the bottom of the load window rather than restoring a row.
     private func reportReadingPosition() {
         guard didFirstLand, !isDisappearing else { return }
-        if isAtNewest { onReadingPosition(nil); return }
+        if isAtNewest || rowsHiddenBelow(atMost: Self.meaningfulScrollRows) < Self.meaningfulScrollRows {
+            onReadingPosition(nil); return
+        }
         guard let ip = viewportIndexPaths().first,
               let id = dataSource.itemIdentifier(for: ip),
               let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
         let viewportTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
         onReadingPosition(ChatReadingPosition(rowId: id,
                                               offsetFromTop: attr.frame.minY - viewportTop))
+    }
+
+    /// ⛔ A SMALL SCROLL IS NOT A READING POSITION — owner, 2026-10-04: "a ~50px scroll near the
+    /// bottom is kept exactly when I come back; it must not be. 2-3 messages out of view, keep it;
+    /// one message partly hidden, don't". Measured in messages, not points: the rows lying wholly
+    /// below the visible area. Under this many, the chat reopens at the newest, as if left there;
+    /// at or over it, the saved position is restored exactly as before.
+    static let meaningfulScrollRows = 2
+
+    /// How many rows sit entirely below the visible area, counted from the newest up and stopping
+    /// at `cap` (only "fewer than the threshold or not" is asked, so it never walks the whole list).
+    private func rowsHiddenBelow(atMost cap: Int) -> Int {
+        let viewportBottom = collectionView.contentOffset.y + collectionView.bounds.height
+            - collectionView.adjustedContentInset.bottom
+        var hidden = 0
+        var section = collectionView.numberOfSections - 1
+        while section >= 0, hidden < cap {
+            var item = collectionView.numberOfItems(inSection: section) - 1
+            while item >= 0, hidden < cap {
+                guard let attr = collectionView.layoutAttributesForItem(at: IndexPath(item: item, section: section)),
+                      attr.frame.minY >= viewportBottom else { return hidden }
+                hidden += 1
+                item -= 1
+            }
+            section -= 1
+        }
+        return hidden
     }
     private let dateLabel = UILabel()
     private var dateFadeWork: DispatchWorkItem?
