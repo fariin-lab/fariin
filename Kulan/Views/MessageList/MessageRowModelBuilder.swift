@@ -34,6 +34,9 @@ struct MessageRowContext {
     var nameFor: (String) -> String
     var avatarFor: (String) -> String?
     var resolveOriginal: (String) -> Message?
+    /// The quoted message was sent while I had its author blocked: never shown, so a reply to it
+    /// says "Not available" instead of the copy of its words the reply carries.
+    var quoteHiddenByBlock: (String) -> Bool = { _ in false }
     /// Is this story still live? A reply to one that has expired shows "Story unavailable" rather
     /// than an empty frame, and the card stops being a door.
     var storyIsLive: (_ storyId: String, _ author: String) -> Bool = { _, _ in true }
@@ -296,11 +299,12 @@ enum MessageRowModelBuilder {
         var quote: QuoteChrome?
         if let reply = msg.replyTo, !reply.isStatus, !msg.deleted {
             let original = ctx.resolveOriginal(reply.id)
+            let blocked = ctx.quoteHiddenByBlock(reply.id)
             quote = QuoteChrome(
                 targetId: reply.id,
                 authorLine: reply.authorId == ctx.me ? "You" : ctx.nameFor(reply.authorId),
-                snippet: replyLabel(reply: reply, original: original),
-                thumb: replyThumb(original),
+                snippet: blocked ? "Not available" : replyLabel(reply: reply, original: original),
+                thumb: blocked ? .none : replyThumb(original),
                 isStatus: false)
         }
 

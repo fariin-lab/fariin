@@ -3061,6 +3061,7 @@ struct ThreadView: View {
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
             resolveOriginal: { id in repo.items.first { $0.id == id } },
+            quoteHiddenByBlock: { repo.isHiddenByBlock(id: $0) },
             storyIsLive: { storyId, author in
                 // Unknown until the stories repo has loaded: assume live, so a reply does not flash
                 // "unavailable" on the way in and then correct itself.
@@ -3966,10 +3967,14 @@ struct ThreadView: View {
         pendingKeyboardDismiss = false
         // Already in the window: nothing to load, and nothing to narrate.
         if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id); return }
+        // ⛔ Sent while I had its author blocked — owner, 2026-10-04: say "Not available", never
+        // fetch or show it. It stays hidden after the unblock, as it always has.
+        if repo.isHiddenByBlock(id: id) { showJumpToast("Not available"); return }
         Task {
             await repo.ensureLoaded(id)
             await MainActor.run {
                 if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
+                else if repo.isHiddenByBlock(id: id) { showJumpToast("Not available") }
                 else { showJumpToast("Original message isn't loaded") }
             }
         }

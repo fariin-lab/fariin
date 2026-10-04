@@ -1239,6 +1239,12 @@ final class ThreadRepository {
         return t > myBlockedAtMillis && t <= myBlockClearedAtMillis
     }
 
+    /// Is `id` a message the block window hides? A reply quoting one shows "Not available" and its
+    /// tap does not try to reach it (owner, 2026-10-04). Answers for messages fetched so far.
+    func isHiddenByBlock(id: String) -> Bool {
+        byId[id].map(hiddenByBlock) ?? false
+    }
+
     /// My block list changed (here, on another screen, or on another of my devices).
     private func blockStateChanged() {
         iBlocked = legacyBlocked || (cid.contains("_") && BlockList.snapshot.contains(otherUid))
