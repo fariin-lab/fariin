@@ -465,7 +465,20 @@ final class CallService: NSObject {
     ]
     // Filled by refreshIceServers() from the `iceServers` Cloud Function (real TURN creds live
     // server-side, never in this public repo). Read on every new peer connection.
-    private var fetchedIceServers: [RTCIceServer]?
+    private var fetchedIceServers: [RTCIceServer]? {
+        get { iceServersFetchedAt.map { Date().timeIntervalSince($0) < Self.iceServersMaxAge } == true ? iceServersCache : nil }
+        set { iceServersCache = newValue; iceServersFetchedAt = newValue == nil ? nil : Date() }
+    }
+    /// ⛔ RELAY CREDENTIALS EXPIRE, AND A LIST HELD PAST THAT IS WORSE THAN NONE. The server mints
+    /// them for two hours (`iceServers`, ttl 7200). This list used to be fetched once and trusted
+    /// for the life of the process, so a call placed from an app left open overnight offered TURN
+    /// with dead credentials: the relay refuses them silently and the call fails on exactly the
+    /// networks the relay exists for. The reference app expires its cached list at the server's TTL;
+    /// here it is treated as gone after 90 minutes, which leaves any call started on it a 30-minute
+    /// margin, and the next call fetches fresh (`awaitIceServers`).
+    private static let iceServersMaxAge: TimeInterval = 90 * 60
+    private var iceServersCache: [RTCIceServer]?
+    private var iceServersFetchedAt: Date?
 
     /// WHO IS ALLOWED TO SEE MY IP ADDRESS.
     ///
@@ -553,6 +566,10 @@ final class CallService: NSObject {
         c.continualGatheringPolicy = .gatherContinually
         c.bundlePolicy = .maxBundle
         c.rtcpMuxPolicy = .require
+        // Keep the BACKUP candidate pairs warm: pinged every 2s instead of libwebrtc's ~25s, so when
+        // the path in use dies (Wi-Fi drops while mobile data is up) a working pair is already proven
+        // and the switch takes a moment instead of a fresh search. Costs a few tiny STUN packets.
+        c.iceBackupCandidatePairPingInterval = 2000
         return c
     }
 
@@ -563,12 +580,17 @@ final class CallService: NSObject {
         guard let res = try? await Functions.functions(region: "me-central1")
             .httpsCallable("iceServers").call(),
               let arr = (res.data as? [String: Any])?["iceServers"] as? [[String: Any]] else { return }
-        let servers: [RTCIceServer] = arr.compactMap { s in
-            guard let urls = s["urls"] as? [String] ?? (s["urls"] as? String).map({ [$0] }) else { return nil }
-            if let user = s["username"] as? String, let cred = s["credential"] as? String {
-                return RTCIceServer(urlStrings: urls, username: user, credential: cred)
+        // ONE RTCIceServer PER URL (the reference app does the same): a server entry carrying both
+        // the UDP route and the TLS-on-443 route is otherwise one unit, and each route should be
+        // gathered, and fail, on its own.
+        let servers: [RTCIceServer] = arr.flatMap { s -> [RTCIceServer] in
+            guard let urls = s["urls"] as? [String] ?? (s["urls"] as? String).map({ [$0] }) else { return [] }
+            return urls.map { url -> RTCIceServer in
+                if let user = s["username"] as? String, let cred = s["credential"] as? String {
+                    return RTCIceServer(urlStrings: [url], username: user, credential: cred)
+                }
+                return RTCIceServer(urlStrings: [url])
             }
-            return RTCIceServer(urlStrings: urls)
         }
         if !servers.isEmpty { fetchedIceServers = servers }
     }
@@ -821,10 +843,26 @@ final class CallService: NSObject {
                 // Only restart when the cap actually MOVED — a restart costs a ~200ms black frame on
                 // the other side, so reacting to every notification would be worse than the heat.
                 guard thermalCaps.fps != appliedThermalFps else { return }
-                let front = usingFrontCamera
-                videoCapturer?.stopCapture { [weak self] in
-                    DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: front) }
+                // HOTTER steps down at once. COOLER waits 10s and must still be cooler then: a phone
+                // sitting right on a thermal boundary flips state back and forth, and each flip was
+                // a black frame for the other person.
+                thermalStepUpWork?.cancel(); thermalStepUpWork = nil
+                if thermalCaps.fps < appliedThermalFps { restartCaptureForThermal(); return }
+                let w = DispatchWorkItem { [weak self] in
+                    guard let self, self.cameraOn, !self.cameraPausedByBackground, self.videoCapturer != nil,
+                          self.thermalCaps.fps > self.appliedThermalFps else { return }
+                    self.restartCaptureForThermal()
                 }
+                thermalStepUpWork = w
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: w)
+        }
+    }
+    private var thermalStepUpWork: DispatchWorkItem?
+
+    private func restartCaptureForThermal() {
+        let front = usingFrontCamera
+        videoCapturer?.stopCapture { [weak self] in
+            DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: front) }
         }
     }
 
@@ -1520,6 +1558,51 @@ final class CallService: NSObject {
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 self?.updateAudioRoute()
         }
+        startAudioRecoveryObservation()
+    }
+
+    // MARK: - Audio recovery
+
+    private var audioInterruptionObserver: NSObjectProtocol?
+    private var mediaResetObserver: NSObjectProtocol?
+
+    /// A SAFETY NET UNDER CALLKIT, not a replacement for it. Normally CallKit hands the audio session
+    /// back after Siri, an alarm or another app's sound (`didActivate` re-fires and CallKitManager
+    /// restarts audio). When it does not, the call stays connected with NO SOUND either way, which
+    /// is the worst kind of failure because nothing on screen says anything is wrong. The reference
+    /// app only logs these two events; this re-arms our audio when they end.
+    ///
+    /// The media-services reset is the harsher one: the system audio daemon restarted, every audio
+    /// unit in the app is dead, and the session must be rebuilt, so the RTC audio unit is cycled.
+    private func startAudioRecoveryObservation() {
+        guard audioInterruptionObserver == nil else { return }
+        audioInterruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+                guard let self, self.inLiveCall,
+                      let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+                // Give CallKit its turn first; only step in if audio is still off after it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    // Not while on hold: there the silence is deliberate and CallKit owns the unhold.
+                    guard self.inLiveCall, !self.isHeld,
+                          !RTCAudioSession.sharedInstance().isAudioEnabled else { return }
+                    RTCAudioSession.sharedInstance().isAudioEnabled = true
+                    try? AVAudioSession.sharedInstance().overrideOutputAudioPort(self.isSpeaker ? .speaker : .none)
+                }
+        }
+        mediaResetObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.inLiveCall else { return }
+                let rtc = RTCAudioSession.sharedInstance()
+                rtc.isAudioEnabled = false
+                rtc.isAudioEnabled = true
+                try? AVAudioSession.sharedInstance().overrideOutputAudioPort(self.isSpeaker ? .speaker : .none)
+        }
+    }
+
+    private func stopAudioRecoveryObservation() {
+        if let o = audioInterruptionObserver { NotificationCenter.default.removeObserver(o); audioInterruptionObserver = nil }
+        if let o = mediaResetObserver { NotificationCenter.default.removeObserver(o); mediaResetObserver = nil }
     }
 
     private func updateAudioRoute() {
@@ -2195,6 +2278,17 @@ final class CallService: NSObject {
                 let d = doc.data()
                 // H3: ignore zombie ringing docs (caller crashed mid-ring) so they don't re-ring forever.
                 if let ts = (d["createdAt"] as? Timestamp)?.dateValue(), Date().timeIntervalSince(ts) > 60 { return }
+                // THE SAME PERSON CALLING AGAIN WHILE WE ARE CONNECTED TO THEM means their side of our
+                // call is gone (app killed, phone restarted, network lost long enough to give up),
+                // and only ours is still holding on. Answering that with "busy" left them unable to
+                // reach us until our side timed out. The reference engine's rule ("ReCall"): drop the
+                // old call quietly and take the new one. Only while connected: a ring-time crossing
+                // is glare and is settled below.
+                if self.state == .active || self.state == .reconnecting,
+                   doc.documentID != self.callId,
+                   let redialer = d["caller"] as? String, !redialer.isEmpty, redialer == self.otherUid {
+                    self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+                }
                 // H4: already in a LIVE call → send this new caller a busy signal instead of dropping
                 // them silently. `.ended` is NOT a live call: it is a cosmetic 1-2s tail before idle
                 // (see finishCall), and treating it as busy meant an instant redial — or a third
@@ -2938,7 +3032,13 @@ final class CallService: NSObject {
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
 
     private func addOrBuffer(_ candidate: RTCIceCandidate) {
-        guard let pc, pc.remoteDescription != nil else { pendingRemoteCandidates.append(candidate); return }
+        guard let pc, pc.remoteDescription != nil else {
+            // Capped (the reference engine keeps at most 30 early messages): a remote description
+            // that never arrives must not let this grow for the life of a stuck call. Oldest go first.
+            if pendingRemoteCandidates.count >= 100 { pendingRemoteCandidates.removeFirst() }
+            pendingRemoteCandidates.append(candidate)
+            return
+        }
         pc.add(candidate) { err in if let err { print("call: addIceCandidate failed:", err) } }
     }
 
@@ -2997,7 +3097,23 @@ final class CallService: NSObject {
         guard let col = myCandidatesCollection, !localCandidateBuffer.isEmpty else { return }
         let buffered = localCandidateBuffer
         localCandidateBuffer = []
-        buffered.forEach { col.addDocument(data: $0) }
+        buffered.forEach { writeCandidate($0, to: col) }
+    }
+
+    /// One local candidate to the other side, RETRIED. The write used to be fire-and-forget, so a
+    /// candidate written in the second a network was dropping (exactly when a new path is being
+    /// found) was lost without a trace, and with it maybe the only route that would have worked.
+    /// The reference engine queues every signalling message and re-sends what failed. Up to three
+    /// tries a second apart, and only while it is still the same call.
+    private func writeCandidate(_ data: [String: Any], to col: CollectionReference, attempt: Int = 1) {
+        let id = callId
+        col.addDocument(data: data) { [weak self] err in
+            guard err != nil, attempt < 3 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let self, self.callId == id, id != nil else { return }
+                self.writeCandidate(data, to: col, attempt: attempt + 1)
+            }
+        }
     }
 
     // MARK: - Hang up / cleanup
@@ -3132,6 +3248,7 @@ final class CallService: NSObject {
         // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
         // screen behaviour — with no call in progress at all.
         if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
+        stopAudioRecoveryObservation()
         if let obs = thermalObserver { NotificationCenter.default.removeObserver(obs); thermalObserver = nil }
         stopHeartbeat()
         stopPathMonitor()
@@ -3214,7 +3331,7 @@ extension CallService: RTCPeerConnectionDelegate {
             self.mark("firstCandidate")
             if isRelay { self.mark("firstRelayCandidate") }
             // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
-            if self.callDocCreated, let col = self.myCandidatesCollection { col.addDocument(data: data) }
+            if self.callDocCreated, let col = self.myCandidatesCollection { self.writeCandidate(data, to: col) }
             else { self.localCandidateBuffer.append(data) }
         }
     }
