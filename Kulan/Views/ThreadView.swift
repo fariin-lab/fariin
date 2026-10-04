@@ -1036,20 +1036,22 @@ struct ThreadView: View {
         // The UIKit bar lives in the list's controller, so the preview's empty `bottomBarContent`
         // never hid it: `nil` state here is what takes it out (`hideComposer`). See `showsJumpButton`.
         !preview && !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
-            && !repo.iBlocked && requestStance != .incoming && requestStance != .awaitingReply
-            && !cannotMessageThem
+            && !repo.iBlocked && requestStance != .incoming
+            // ⛔ A CORRECT CHAT KEY OPENS THE COMPOSER AT ONCE — owner, 2026-10-04: "don't show Chat
+            // Key accepted, open the text bar automatically". The server has already accepted the
+            // key when `keyAccepted` goes up (it writes `accepted`); only this phone's snapshot of
+            // the chat lags, so the two locked states are lifted from that moment.
+            && (requestStance != .awaitingReply || keyAccepted)
+            && (!cannotMessageThem || keyAccepted)
             && !otherAccountDeleted   // 2026-09-24 decision D15
-            // ...and not while the key-accepted notice holds the slot, or the phone would draw the
-            // composer and that panel at once — the exact disagreement this property exists to stop.
-            && !keyAccepted
     }
 
     /// 2026-09-24 decision D-composer-5: the reasons in `canShowComposer` that mean "you cannot send
     /// here now" (not selection, search or the key notice, which are only a moment).
     private var sendingClosed: Bool {
         notAMember || cannotSendAnnouncement || iAmMuted || repo.iBlocked
-            || requestStance == .incoming || requestStance == .awaitingReply
-            || cannotMessageThem || otherAccountDeleted
+            || requestStance == .incoming || (requestStance == .awaitingReply && !keyAccepted)
+            || (cannotMessageThem && !keyAccepted) || otherAccountDeleted
     }
 
     @ViewBuilder private var bottomBarContent: some View {
@@ -1074,14 +1076,9 @@ struct ThreadView: View {
                 deletedAccountBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if requestStance == .incoming {
                 requestBar.transition(.opacity.combined(with: .move(edge: .bottom)))
-            } else if keyAccepted {
-                // The acknowledgement stands in the bar's own slot for the few seconds between the
-                // server accepting the key and the conversation's snapshot landing — audit U4. Both
-                // locked bars below would otherwise still be drawn over a chat that is now open.
-                keyAcceptedBar.transition(.opacity.combined(with: .move(edge: .bottom)))
-            } else if requestStance == .awaitingReply {
+            } else if requestStance == .awaitingReply && !keyAccepted {
                 awaitingReplyBar.transition(.opacity.combined(with: .move(edge: .bottom)))
-            } else if cannotMessageThem {
+            } else if cannotMessageThem && !keyAccepted {
                 cannotMessageBar.transition(.opacity.combined(with: .move(edge: .bottom)))
             } else {
                 composerArea.transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1428,11 +1425,13 @@ struct ThreadView: View {
             // The banner is the acknowledgement, and it is deliberately not an optimistic unlock:
             // the composer's gate is the conversation's own `accepted`, and faking that locally
             // would let somebody type into a chat the rules have not opened yet.
+            // ⛔ NO "ACCEPTED" BANNER — owner, 2026-10-04. The composer opens and takes the keyboard
+            // as the sheet closes; `keyAccepted` stays up, the snapshot catches up behind it.
             ChatPinEntrySheet(uid: otherUid, name: title) { _ in
                 keyAccepted = true
                 Task {
-                    try? await Task.sleep(nanoseconds: 4_000_000_000)
-                    keyAccepted = false
+                    try? await Task.sleep(nanoseconds: 450_000_000)   // the sheet's own exit
+                    inputFocused = true
                 }
             }
         }
@@ -6792,20 +6791,6 @@ struct ThreadView: View {
 
     /// MY request, unanswered. One message is the whole allowance, so there is nothing to type into —
     /// a live composer here would only let someone write a second message and watch it fail.
-    /// "Chat Key accepted" — the few seconds between the server saying yes and the conversation's
-    /// own snapshot arriving. See the sheet's success handler (audit U4).
-    private var keyAcceptedBar: some View {
-        composerNotice {
-            VStack(spacing: 3) {
-                Label("Chat Key accepted", systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                Text("Opening your chat with \(title)…")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-        }
-    }
-
     static func dismissKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
