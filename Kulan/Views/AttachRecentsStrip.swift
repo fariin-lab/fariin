@@ -206,6 +206,8 @@ struct AttachRecentsStrip: View {
     /// writes it.
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
+    /// ["folder"] while an album is pushed over the album list, [] otherwise.
+    @State private var folderPath: [String] = []
     @State private var albums: [AttachAlbum] = []
 
     /// ⛔ **THE GRID IS EDGE TO EDGE — owner, 2026-09-02: "now images Is Runded cornders and Laft and
@@ -239,23 +241,39 @@ struct AttachRecentsStrip: View {
         // the leaving page was gone on the first frame and only the arriving one moved. With the
         // order pinned, the list leaves to the left WHILE the album arrives from the right, and
         // Back runs the same pair in reverse.
-        ZStack {
-            if showAlbums {
-                albumsList
-                    .background(Color(uiColor: .systemBackground))
-                    .transition(.move(edge: .leading))
-                    .zIndex(0)
-            } else {
+        // The root page (Recents grid or the album list) inside a NavigationStack with no visible
+        // bar, so a folder can be PUSHED over the list and left with the system's back swipe
+        // (owner, 2026-10-04). See `selectAlbum`.
+        NavigationStack(path: $folderPath) {
+            ZStack {
+                if showAlbums {
+                    albumsList
+                        .background(Color(uiColor: .systemBackground))
+                        .transition(.move(edge: .leading))
+                        .zIndex(0)
+                } else {
+                    grid
+                        .background(Color(uiColor: .systemBackground))
+                        .transition(.move(edge: .trailing))
+                        .zIndex(1)
+                }
+            }
+            // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.
+            // A clip cuts at this view's frame, which stops at the safe area, and the grid is meant to
+            // scroll on under the bar to the sheet's edge. The sheet's shell already clips the slide.
+            .animation(albumsInstant ? nil : .snappy(duration: 0.3), value: showAlbums)
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: String.self) { _ in
                 grid
                     .background(Color(uiColor: .systemBackground))
-                    .transition(.move(edge: .trailing))
-                    .zIndex(1)
+                    .toolbar(.hidden, for: .navigationBar)
+                    .background(NativeBackSwipe())
             }
         }
-        // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.
-        // A clip cuts at this view's frame, which stops at the safe area, and the grid is meant to
-        // scroll on under the bar to the sheet's edge. The sheet's shell already clips the slide.
-        .animation(albumsInstant ? nil : .snappy(duration: 0.3), value: showAlbums)
+        // The folder page left by the system swipe: the round button must stop being a Back arrow.
+        .onChange(of: folderPath) { _, path in
+            if path.isEmpty, inAlbum { inAlbum = false }
+        }
         // ⛔ THE HEADER IS GONE — OWNER, 2026-09-02, with a screenshot: "Photo sheet no header".
         //
         // What went with it: the ✕, the "Recents ▾" title, and the selected-count circle. The way
@@ -465,9 +483,18 @@ struct AttachRecentsStrip: View {
         albumTitle = album.title
         // Tells the parent's round button to stay a back arrow while a real album fills the grid.
         inAlbum = selectedAlbum != nil
-        albumsInstant = false   // a folder always slides in
-        showAlbums = false   // animated by the body's own `.animation(value: showAlbums)`, not a transaction
-        load()
+        albumsInstant = false
+        if selectedAlbum != nil {
+            // ⛔ A FOLDER IS A PUSHED PAGE — owner, 2026-10-04 on 825: "don't use a custom swipe, use
+            // the native Apple swipe". The list stays the root page and the folder is pushed over it,
+            // so the system's own back swipe follows the finger, locks the vertical scroll while it
+            // runs, and shows the list underneath (the custom offset showed black there).
+            load()
+            folderPath = ["folder"]
+        } else {
+            showAlbums = false   // Recents is the root grid itself, not a page
+            load()
+        }
     }
 
     /// The parent lowering `inAlbum` MEANS "back to Recents" — the round button's arrow tap. The
@@ -476,9 +503,16 @@ struct AttachRecentsStrip: View {
     /// Recents, with `selectedAlbum` already nil) does not re-run a load that just ran.
     private func exitAlbumIfNeeded(_ nowInAlbum: Bool) {
         guard !nowInAlbum, selectedAlbum != nil else { return }
-        selectedAlbum = nil
-        albumTitle = "Recents"
-        load()
+        // The round button's Back while the folder page is up: pop it the system way, and swap the
+        // grid's photos back to Recents only once the page has left, so they never change under it.
+        let popping = !folderPath.isEmpty
+        if popping { folderPath = [] }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (popping ? 0.45 : 0)) {
+            guard !inAlbum else { return }   // another folder was opened meanwhile
+            selectedAlbum = nil
+            albumTitle = "Recents"
+            load()
+        }
     }
 
     private func accessTile(_ text: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -980,6 +1014,46 @@ private struct RecentThumb: View {
                     RecentsCache.drawn.setObject(img, forKey: asset.localIdentifier as NSString)
                 }
             }
+        }
+    }
+}
+
+/// Keeps the SYSTEM back swipe working on a pushed page whose navigation bar is hidden. UIKit turns
+/// `interactivePopGestureRecognizer` off when the bar is hidden (its delegate refuses to begin); the
+/// standard cure is to clear that delegate on this page's own navigation controller, nothing global.
+/// The gesture itself is Apple's: it follows the finger, locks out vertical scrolling while it runs,
+/// and shows the page underneath. Used by the attach sheet's folder page (owner, 2026-10-04).
+struct NativeBackSwipe: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Probe { Probe() }
+    func updateUIViewController(_ vc: Probe, context: Context) { vc.enable() }
+
+    final class Probe: UIViewController {
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            enable()
+        }
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            enable()
+        }
+        func enable() {
+            guard let nav = navigationController else { return }
+            nav.interactivePopGestureRecognizer?.delegate = PopOnlyWhenDeep.shared
+            nav.interactivePopGestureRecognizer?.isEnabled = true
+        }
+    }
+
+    /// Lets the swipe begin only when there is a page to go back TO. A nil delegate would also let
+    /// it begin on the root page, which is the known way to freeze a navigation controller.
+    final class PopOnlyWhenDeep: NSObject, UIGestureRecognizerDelegate {
+        static let shared = PopOnlyWhenDeep()
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            (Self.navOf(g.view)?.viewControllers.count ?? 0) > 1
+        }
+        private static func navOf(_ v: UIView?) -> UINavigationController? {
+            var r: UIResponder? = v
+            while let cur = r { if let n = cur as? UINavigationController { return n }; r = cur.next }
+            return nil
         }
     }
 }

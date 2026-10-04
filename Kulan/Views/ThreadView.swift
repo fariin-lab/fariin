@@ -137,8 +137,6 @@ struct ThreadView: View {
     /// picked; written FALSE by the round button's arrow to mean "back to Recents". See the
     /// binding's note in `AttachRecentsStrip`.
     @State private var attachInAlbum = false
-    /// How far a back-swipe has carried the open folder to the right (0 at rest).
-    @State private var attachSwipeX: CGFloat = 0
     @State private var attachAlbumsInstant = false   // Album-from-Recents opens without the slide
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
@@ -4452,36 +4450,9 @@ struct ThreadView: View {
                 showAlbums: $attachShowAlbums,
                 inAlbum: $attachInAlbum,
                 albumsInstant: $attachAlbumsInstant)
-                // ⛔ SWIPE BACK OUT OF A FOLDER — owner, 2026-10-04: "inside a folder the only way back
-                // is the back button; add going back when my finger swipes right". The system's own
-                // rule: a drag that starts at the left edge and travels right. Same result as the
-                // round button's arrow from a folder (back to the album list, with the slide).
-                //
-                // ⛔ IT FOLLOWS THE FINGER — owner, 2026-10-04 on build 824: "the swipe is not real
-                // time". The folder now moves with the drag, frame by frame; let go past a third of
-                // the width (or with a flick) and it goes back, otherwise it springs home.
-                .offset(x: attachInAlbum ? attachSwipeX : 0)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 10)
-                        .onChanged { g in
-                            guard attachInAlbum, g.startLocation.x < 44,
-                                  g.translation.width > abs(g.translation.height) else { return }
-                            attachSwipeX = max(0, g.translation.width)
-                        }
-                        .onEnded { g in
-                            guard attachInAlbum, attachSwipeX > 0 else { return }
-                            let width = UIScreen.main.bounds.width
-                            let flick = g.predictedEndTranslation.width - g.translation.width > 120
-                            if attachSwipeX > width / 3 || flick {
-                                attachSwipeX = 0   // the album list slides in in its place
-                                attachAlbumsInstant = false
-                                attachInAlbum = false
-                                attachShowAlbums = true
-                            } else {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { attachSwipeX = 0 }
-                            }
-                        }
-                )
+                // (The back swipe out of a folder is the SYSTEM's now: the folder is a page pushed
+                // inside the strip — owner, 2026-10-04, "use the native Apple swipe". See
+                // `AttachRecentsStrip.selectAlbum` and `NativeBackSwipe`.)
                 // ⛔ NO TOP PADDING — owner, 2026-09-02, "no header". This 10 held the sheet's own
                 // header clear of the grabber. With the header gone it is a strip of empty sheet
                 // above the photos, which is the exact thing he has rejected twice before.
