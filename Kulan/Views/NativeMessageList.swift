@@ -2659,7 +2659,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // THE SEND / RECEIVE GLIDE. At the newest message a new row appends below the viewport; nothing
         // the reader can see moves, and the list then animates down to reveal it. The bubble itself
         // never animates, only the scroll does.
-        let glide = wasAtNewest && newlyNewest == 1 && scrollTarget == nil && !isUserScrolling
+        // ⛔ MY OWN SEND ALWAYS GOES DOWN — owner, 2026-10-04: "sometimes when I send an image,
+        // message, GIF, file or voice, the auto scroll doesn't work". The glide asked for exactly ONE
+        // new row with the reader exactly at the newest. A send that lands two rows in one emission
+        // (an album and its caption, a send batched with an incoming message) or a reader a few
+        // points up skipped it, and the new bubble stayed parked under the composer. Now any new
+        // row of mine at the end glides to the newest from wherever the reader is, as the reference
+        // app does for outgoing messages. (Not keyed to the Send tap: photo, GIF, file and voice
+        // sends never bump `sendTick`, which is the text path's.)
+        // `ids.count > oldSet.count`: the list GREW. A pending bubble swapped for its confirmed copy
+        // (same count, new id) is not a new send and must not pull a reader who has scrolled away.
+        let ownSendLanded = newlyNewest > 0 && ids.count > oldSet.count
+            && ids.suffix(newlyNewest).contains { id in
+                switch rowModels[id]?.content {
+                case .bubble(let b)?: return b.isMe
+                case .call(let c)?: return c.mine
+                default: return false
+                }
+            }
+        let glide = ((wasAtNewest && newlyNewest == 1) || ownSendLanded)
+            && scrollTarget == nil && !isUserScrolling
         if glide { sendAnimating = true }
         // The row this send was waiting for has landed: the hold is over, and `sendAnimating` (or,
         // for a row that does not glide, the ordinary path) owns the offset from here. Cleared for
