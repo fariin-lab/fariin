@@ -50,6 +50,7 @@ struct CallView: View {
     // the screen again the moment someone closes their camera.
     @State private var controlsVisible = true
     @State private var hideTask: DispatchWorkItem?
+    @State private var showAddPeople = false   // "…" › Add people
     private static let autoHideAfter: TimeInterval = 5
 
     private var autoHideEnabled: Bool { call.everVideo && connectedCall }
@@ -256,6 +257,15 @@ struct CallView: View {
             // top-left chevron-down button (so a stray swipe can never minimize/break the call).
         }
         .ignoresSafeArea()
+        .sheet(isPresented: $showAddPeople) {
+            AddPeopleSheet(alreadyIn: [AuthService.shared.uid ?? "", call.otherUid]) { people in
+                // The sheet closes itself first; the move tears this screen down, so let the sheet
+                // finish leaving before the cover under it goes too.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    CallService.shared.moveToGroup(adding: people)
+                }
+            }
+        }
         .onDisappear {
             // Tear down native PiP only when the call is actually OVER — minimize must keep it available.
             if call.state == .idle || call.state == .ended { CallPiPController.shared.teardown() }
@@ -379,6 +389,10 @@ struct CallView: View {
             // No "Minimize" here: the chevron on the left already does it, and two controls for the
             // same thing on one bar just read as one of them being broken.
             Menu {
+                // Only once the call is really connected: moving a ringing call onto a
+                // multi-person one would invite people to a conversation that never started.
+                Button { showAddPeople = true } label: { Label("Add people", systemImage: "person.badge.plus") }
+                    .disabled(!(call.state == .active && call.connectedDate != nil))
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -695,9 +709,11 @@ struct CallContainer<Content: View>: View {
     // itself. The list carries the words ("Active call", green, top row) and the card carries the
     // faces and the controls, which is the split the reference app uses.
     private var showsFloatingCall: Bool { isActive && call.minimized }
-    /// Held at the root because the cover is declared here; handed to the buttons through the
-    /// environment. See `CallZoomNamespaceKey`.
-    @Namespace private var callZoom
+    /// Should the full call screen be up? The cover itself follows `coverUp`, which trails this by
+    /// the length of the out-animation so the screen can fade away before it is removed.
+    private var wantsCover: Bool { isActive && !call.minimized }
+    @State private var coverUp = false
+    @StateObject private var stage = CallCoverStage()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -744,7 +760,8 @@ struct CallContainer<Content: View>: View {
                 FloatingCallWindow()
             }
         }
-        .environment(\.callZoomNamespace, callZoom)
+        // An invite to a multi-person call, over whatever screen is open. Last overlay = top-most.
+        .overlay { IncomingGroupCallLayer() }
         // ⛔ THE SETTER SWALLOWED THE DISMISS, AND THAT LOST THE CALL.
         //
         // The comment below says this screen "is left by a button", and that stopped being true the
@@ -759,36 +776,30 @@ struct CallContainer<Content: View>: View {
         // A swipe now means what the X means. Guarded on `isActive` so the dismissal that happens
         // because the call ENDED does not mark a finished call as minimized on its way out.
         .fullScreenCover(isPresented: Binding(
-            get: { isActive && !call.minimized },
+            get: { coverUp },
             set: { presented in
-                guard !presented, isActive else { return }
-                call.minimized = true   // no withAnimation: the zoom owns this motion
+                guard !presented else { return }
+                coverUp = false
+                if isActive { call.minimized = true }   // any other way out means minimize
             }
         )) {
-            // GROWS OUT OF THE BUTTON THAT WAS PRESSED (owner, 2026-08-20), rather than sliding up
-            // from the bottom edge. `call.isVideo` is already decided by the time this presents, so
-            // it names the matching source of the two.
+            // ⛔ ONE WAY IN FOR EVERY CALL (owner, 2026-10-04: "do not make the call page appear as if
+            // it is expanding directly from the Call button"). This REPLACES the 2026-08-20 zoom that
+            // grew the screen out of whichever button was pressed. Every dial site (chat header,
+            // profile, Calls tab, card restore, incoming answer) lands here, and nothing about the
+            // way in depends on where the tap came from.
             //
-            // ⚠️ Safe here in a way it was NOT on the media viewer, and the difference is worth
-            // stating: the system zoom brings its own dismiss pan, which fought that screen's
-            // MediaDismissHost drag. This screen has no drag of its own, so there is nothing for it
-            // to fight.
-            //
-            // It does NOT follow that this screen is only ever left by a button — that is what the
-            // note used to claim and it is why the dismiss was thrown away above. The zoom's pan is
-            // a second way out, and it has to mean the same thing the button means.
-            // ⚠️ THE SOURCE SWITCHES ONCE THE CARD HAS EXISTED (owner, 2026-08-23 — he asked whether
-            // closing the big screen into the small card was a matched transition; it was not, the
-            // cover just faded while the card popped in separately). Before the first minimize the
-            // source is the button that placed the call, which is what he asked for on 2026-08-20.
-            // After it, the source is the card: the screen shrinks into the card and grows back out
-            // of the same card on the way in. A zoom whose source is not on screen falls back to the
-            // ordinary presentation on its own, so ending a call is no worse than it was.
+            // The motion is the reference app's, read from its source: the cover is presented with
+            // NO system animation, and the whole call screen arrives as ONE layer, scaling 1.04 -> 1.0
+            // over 0.3s while fading in over 0.2s, ease-in-out, no spring. Leaving is the same run
+            // backwards before the cover is removed. See `CallCoverStage`.
             CallView()
-                .navigationTransition(.zoom(sourceID: call.everMinimized
-                                                ? CallZoomSource.card
-                                                : CallZoomSource.id(video: call.isVideo),
-                                            in: callZoom))
+                .modifier(CallCoverStageEffect(stage: stage))
+                .presentationBackground(.clear)
+        }
+        .onAppear { if wantsCover { presentCover() } }
+        .onChange(of: wantsCover) { _, want in
+            if want { presentCover() } else { dismissCover() }
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
         // GroupCallView's own swipe-down sets `minimized` back to true, but a swipe on the COVER
@@ -803,40 +814,60 @@ struct CallContainer<Content: View>: View {
         .onChange(of: group.minimized) { _, minimized in
             if !minimized, group.isActive, !showGroupRestore { showGroupRestore = true }
         }
+        // A multi-person (ad-hoc or link) call's FIRST screen is put up by `IncomingGroupCallLayer`
+        // (it follows `presentsRoomScreen`). This root only re-presents it from the return bar.
+    }
+
+    /// Put the cover up with the system's slide switched off; the screen animates itself in.
+    private func presentCover() {
+        guard !coverUp else { stage.show(); return }   // a dismiss still fading out: just come back
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        stage.reset()
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { coverUp = true }
+    }
+
+    /// Run the in-motion backwards, THEN take the cover down without a system animation.
+    private func dismissCover() {
+        guard coverUp else { return }
+        stage.hide()
+        DispatchQueue.main.asyncAfter(deadline: .now() + CallCoverStage.outDuration) {
+            guard !wantsCover else { stage.show(); return }   // came back during the fade
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { coverUp = false }
+        }
     }
 }
 
-// MARK: - The zoom source
+// MARK: - The call screen's way in and out
 
-/// ⛔ THE NAMESPACE THE CALL SCREEN GROWS OUT OF, CARRIED IN THE ENVIRONMENT.
-///
-/// A zoom transition needs the source and the presentation to share one `Namespace`, and these two
-/// are nowhere near each other: the button is in the profile, and the cover that answers it is
-/// declared once at the root so a call can be restored from any screen. Neither can hold the
-/// namespace for the other, so the root holds it and hands it down.
-///
-/// Nil is a working configuration and most callers are exactly that. The Calls tab, the chat header
-/// and an incoming call have no button to grow out of, and a zoom with no source falls back to the
-/// ordinary presentation on its own.
-private struct CallZoomNamespaceKey: EnvironmentKey {
-    static let defaultValue: Namespace.ID? = nil
+/// The reference app's call presentation, from its source: the whole screen is one layer that
+/// scales 1.04 -> 1.0 over 0.3s and fades 0 -> 1 over 0.2s (ease-in-out, no spring), and leaves by
+/// the same motion reversed over 0.3s. Held at the root so the dismiss can be played BEFORE the
+/// cover is removed; the cover itself never animates.
+final class CallCoverStage: ObservableObject {
+    static let outDuration: Double = 0.3
+    @Published fileprivate(set) var shown = false
+    @Published fileprivate(set) var leaving = false
+    func reset() { shown = false; leaving = false }
+    func show() { leaving = false; shown = true }
+    func hide() { leaving = true; shown = false }
 }
 
-extension EnvironmentValues {
-    var callZoomNamespace: Namespace.ID? {
-        get { self[CallZoomNamespaceKey.self] }
-        set { self[CallZoomNamespaceKey.self] = newValue }
+private struct CallCoverStageEffect: ViewModifier {
+    @ObservedObject var stage: CallCoverStage
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(stage.shown ? 1 : 1.04)
+            .animation(.easeInOut(duration: 0.3), value: stage.shown)
+            // One layer: without the group, every view inside would fade on its own and the
+            // overlapping ones would show through each other mid-fade.
+            .compositingGroup()
+            .opacity(stage.shown ? 1 : 0)
+            .animation(.easeInOut(duration: stage.leaving ? CallCoverStage.outDuration : 0.2), value: stage.shown)
+            // Once per presentation: `reset()` runs before every cover goes up.
+            .onAppear { DispatchQueue.main.async { stage.show() } }
     }
-}
-
-/// One id per button, because there are two of them side by side and the page has to grow out of
-/// the one that was pressed — not out of whichever was registered last.
-enum CallZoomSource {
-    static func id(video: Bool) -> String { video ? "call.video" : "call.voice" }
-    /// The floating card. Once a call has been minimized ONCE, the card is the thing the screen
-    /// belongs to and the button that started it is usually not even on screen any more — so from
-    /// then on the screen shrinks into the card and grows back out of it. See `everMinimized`.
-    static let card = "call.card"
 }
 
 // MARK: - FloatingCallWindow
@@ -845,10 +876,6 @@ enum CallZoomSource {
 // plus the corner tile, following the same big/small choice as the call screen. Tap it to go back.
 struct FloatingCallWindow: View {
     private var call: CallService { CallService.shared }
-    /// The card is the call screen's zoom partner: the screen shrinks into it and grows back out of
-    /// it. Nil namespace is a working configuration — the zoom just falls back to a plain
-    /// presentation — so this never has to be guaranteed, only offered.
-    @Environment(\.callZoomNamespace) private var zoomNamespace
     // NOT @State. See CallService.cardOffset: this view dies on every restore, and @State handed the
     // card back to the bottom-right corner each time instead of leaving it where it was dropped.
     private var offset: CGSize {
@@ -955,7 +982,7 @@ struct FloatingCallWindow: View {
                 // ⛔ THE TRANSFORM SITS ON `window`, INSIDE THE GESTURE, which is where the smooth
                 // build had it. Hung on the outside it moves the very view the drag is measured on,
                 // so the finger's own reference frame travels with the card.
-                morphAnchored(zoomAnchored(window.offset(dragLive)))
+                morphAnchored(window.offset(dragLive))
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
@@ -1142,21 +1169,6 @@ struct FloatingCallWindow: View {
     /// changing the shape of the tree.
     private func morphAnchored(_ content: some View) -> some View {
         content.matchedGeometryEffect(id: Self.morphID, in: morph)
-    }
-
-    /// Marks the card as the shape the call screen flies into and out of. Same shape as the call
-    /// buttons' own modifier, and for the same reason: `matchedTransitionSource` needs a real
-    /// namespace, and on a screen that does not host the cover's environment there is not one.
-    ///
-    /// Its `dragging` branch is gone too, and for the reason written on the morph above: the branch
-    /// itself was the cost. The remaining one keys on the namespace, which cannot change while a
-    /// finger is down.
-    @ViewBuilder private func zoomAnchored(_ content: some View) -> some View {
-        if let zoomNamespace {
-            content.matchedTransitionSource(id: CallZoomSource.card, in: zoomNamespace)
-        } else {
-            content
-        }
     }
 
     // How far the card may travel from its top-right home: LEFT as negative x, DOWN as positive y.

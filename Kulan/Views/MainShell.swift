@@ -508,6 +508,10 @@ struct CallsView: View {
     @State private var showDeleteCalls = false
     @State private var searchText = ""
     @State private var pendingCall: PendingCall?   // confirm before dialing (thread-view parity)
+    @State private var groupInfoTarget: CallEntry?   // (i) on a multi-person row → Call info
+    @State private var linkTarget: SavedCallLink?    // a saved call link row → its details page
+    @State private var showCreateLink = false
+    @State private var linkService = CallLinkService.shared
 
     private var shown: [CallEntry] {
         var list = filter == 1 ? repo.calls.filter { $0.missedIncoming } : repo.calls
@@ -529,6 +533,7 @@ struct CallsView: View {
             if let last = runs.last?.latest,
                last.otherUid == e.otherUid, last.mine == e.mine,
                last.missed == e.missed, last.video == e.video,
+               last.adhoc?.roomId == e.adhoc?.roomId,   // never merge two different rooms
                Calendar.current.isDate(last.date, inSameDayAs: e.date) {
                 runs[runs.count - 1].entries.append(e)
             } else {
@@ -578,6 +583,105 @@ struct CallsView: View {
         selecting = false; selection = []
     }
 
+    /// One history row: a multi-person call draws its own row, a 1:1 call the row it always had.
+    @ViewBuilder
+    private func historyRow(_ run: CallRun) -> some View {
+        let call = run.latest
+        if let info = call.adhoc {
+            GroupCallHistoryRow(
+                call: call,
+                info: info,
+                count: run.entries.count,
+                onInfo: { groupInfoTarget = call },
+                onCall: {   // the ROW: a new call with the same people, same kind, no confirm
+                    if bringLiveCallForward() { return }
+                    info.callAgain(video: info.video)
+                }
+            )
+        } else {
+            CallHistoryRow(
+                call: call,
+                count: run.entries.count,
+                onProfile: { profileTarget = call },
+                onCall: {   // the ROW: call back the same way (video stays video), no confirm
+                    if bringLiveCallForward() { return }   // 2026-09-24 decision D26
+                    CallService.shared.startCall(to: call.otherUid, name: call.name,
+                                                 photo: call.photoUrl, video: call.video)
+                }
+            )
+        }
+    }
+
+    // MARK: Call links
+
+    /// Saved links are not calls, so the Missed filter leaves them out; search matches their title.
+    private var shownLinks: [SavedCallLink] {
+        guard filter == 0 else { return [] }
+        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        let links = linkService.links
+        return q.isEmpty ? links : links.filter { linkTitle($0).lowercased().contains(q) }
+    }
+    private func linkTitle(_ l: SavedCallLink) -> String { l.name.isEmpty ? "Kulan Call" : l.name }
+
+    private var createLinkRow: some View {
+        Button { showCreateLink = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "link")
+                    .font(.system(size: 20, weight: .medium))
+                    .frame(width: 46, height: 46)
+                Text("Create a Call Link").font(.headline)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Color.primary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+    }
+
+    private func linkRow(_ link: SavedCallLink) -> some View {
+        HStack(spacing: 12) {
+            Button { linkTarget = link } label: {
+                HStack(spacing: 12) {
+                    CallLinkAvatar(key: link.key, size: 46)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(linkTitle(link))
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Image(systemName: "link").font(.system(size: 11, weight: .semibold))
+                            Text("Call Link").font(.system(size: 14)).lineLimit(1)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Join straight from the list, on video, the way the link's own card joins.
+            Button {
+                if bringLiveCallForward() { return }
+                Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
+            } label: {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Color(uiColor: .tertiarySystemFill)))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 2)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -585,31 +689,34 @@ struct CallsView: View {
                     // Shimmer only for an account with history on this device — a fresh sign-up goes
                     // straight to the empty state instead of fake rows (same rule as the chat list).
                     CallListSkeleton()
-                } else if !repo.hasLoaded || repo.calls.isEmpty {
-                    EmptyStateView(title: "No Calls Yet", icon: "phone",
-                                   text: "Your call history will appear here.")
-                } else if shownRuns.isEmpty && !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    // 2026-09-24 audit: a search with no match drew a blank list. Same view the
-                    // other searches in the app use.
-                    ContentUnavailableView.search(text: searchText)
-                } else if shownRuns.isEmpty {
-                    // 2026-09-24 audit: Missed with no missed calls drew a blank list too.
-                    EmptyStateView(title: "No Missed Calls", icon: "phone",
-                                   text: "Missed calls will appear here.")
                 } else {
                     List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
+                        // Call links sit on top of the history, the create row first, and step aside
+                        // while rows are being picked (they are not calls and cannot be deleted here).
+                        if !selecting {
+                            createLinkRow
+                            ForEach(shownLinks) { link in linkRow(link) }
+                        }
+                        // The empty states live INSIDE the list now, so the create row above them is
+                        // always there, even before the first call.
+                        if !repo.hasLoaded || repo.calls.isEmpty {
+                            EmptyStateView(title: "No Calls Yet", icon: "phone",
+                                           text: "Your call history will appear here.")
+                                .callsPlaceholderRow()
+                        } else if shownRuns.isEmpty && !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                            // 2026-09-24 audit: a search with no match drew a blank list. Same view the
+                            // other searches in the app use.
+                            ContentUnavailableView.search(text: searchText)
+                                .callsPlaceholderRow()
+                        } else if shownRuns.isEmpty {
+                            // 2026-09-24 audit: Missed with no missed calls drew a blank list too.
+                            EmptyStateView(title: "No Missed Calls", icon: "phone",
+                                           text: "Missed calls will appear here.")
+                                .callsPlaceholderRow()
+                        }
                         ForEach(shownRuns) { run in
                             let call = run.latest
-                            CallHistoryRow(
-                                call: call,
-                                count: run.entries.count,
-                                onProfile: { profileTarget = call },
-                                onCall: {   // the ROW: call back the same way (video stays video), no confirm
-                                    if bringLiveCallForward() { return }   // 2026-09-24 decision D26
-                                    CallService.shared.startCall(to: call.otherUid, name: call.name,
-                                                                 photo: call.photoUrl, video: call.video)
-                                }
-                            )
+                            historyRow(run)
                             // In edit mode the row's own buttons stayed live, so tapping the name or
                             // avatar pushed a profile and the round button dialled — instead of
                             // selecting the row. The chat list got this exact fix; this list didn't.
@@ -658,20 +765,33 @@ struct CallsView: View {
                             // `.tint(.primary)` is a SwiftUI value that never reaches it: white
                             // lettering, system-blue glyphs. See `MenuIcon.ink`.
                             .contextMenu {
-                                Button {
-                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
-                                } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
-                                .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
-                                Button {
-                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
-                                } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
-                                .disabled(!callsEnabled)
-                                Button {
-                                    AppRouter.shared.pendingChatName = call.name
-                                    AppRouter.shared.pendingChatPhoto = call.photoUrl
-                                    AppRouter.shared.pendingChatId = call.cid
-                                } label: {
-                                    Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat", ink: .label) }
+                                if let info = call.adhoc {
+                                    // A multi-person call has no one chat to open; voice and video start
+                                    // a new call with the same people.
+                                    Button { info.callAgain(video: false) } label: {
+                                        Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) }
+                                    }
+                                    .disabled(!callsEnabled || GroupCallService.shared.isActive)
+                                    Button { info.callAgain(video: true) } label: {
+                                        Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) }
+                                    }
+                                    .disabled(!callsEnabled || GroupCallService.shared.isActive)
+                                } else {
+                                    Button {
+                                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
+                                    } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
+                                    .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
+                                    Button {
+                                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
+                                    } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
+                                    .disabled(!callsEnabled)
+                                    Button {
+                                        AppRouter.shared.pendingChatName = call.name
+                                        AppRouter.shared.pendingChatPhoto = call.photoUrl
+                                        AppRouter.shared.pendingChatId = call.cid
+                                    } label: {
+                                        Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat", ink: .label) }
+                                    }
                                 }
                                 Button {
                                     withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
@@ -750,7 +870,8 @@ struct CallsView: View {
             }
             .connectionTitle(suppressed: selecting)   // 2026-09-24 fix-all #173
             .task { await repo.load() }
-            .refreshable { await repo.load(force: true) }
+            .task { await linkService.load() }
+            .refreshable { await repo.load(force: true); await linkService.load() }
             .confirmationDialog("Delete \(selection.count) call\(selection.count == 1 ? "" : "s")?",
                                 isPresented: $showDeleteCalls, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelectedCalls() }
@@ -761,6 +882,9 @@ struct CallsView: View {
             .navigationDestination(item: $profileTarget) { c in
                 ContactInfoView(cid: c.cid, name: c.name, photoUrl: c.photoUrl, source: .calls)
             }
+            .navigationDestination(item: $groupInfoTarget) { c in GroupCallInfoView(entry: c) }
+            .navigationDestination(item: $linkTarget) { l in CallLinkDetailsView(link: l) }
+            .createCallLinkFlow(isPresented: $showCreateLink)
             .sheet(isPresented: $showNew) { NewCallView() }
             // Same native confirm the thread view uses — never dial on a stray tap.
             .alert(pendingCall?.video == true ? "Video call" : "Voice call",
@@ -775,6 +899,90 @@ struct CallsView: View {
                 Text("\(c.video ? "Video call" : "Call") \(c.name)?")
             }
         }
+    }
+}
+
+private extension View {
+    /// An empty state drawn as a row of the calls list (so the call-link rows stay above it).
+    func callsPlaceholderRow() -> some View {
+        self.frame(maxWidth: .infinity)
+            .padding(.top, 48)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
+/// A multi-person call in the history: the people's names, two overlapping avatars, the same
+/// direction line as a 1:1 row. The row starts a new call with the same people; (i) opens Call info.
+private struct GroupCallHistoryRow: View {
+    let call: CallEntry
+    let info: AdhocCallInfo
+    var count: Int = 1
+    var onInfo: () -> Void
+    var onCall: () -> Void
+
+    private var me: String { AuthService.shared.uid ?? "" }
+    private var directionIcon: String {
+        call.video ? (call.mine ? "arrow.up.right.video.fill" : "arrow.down.left.video.fill")
+                   : (call.mine ? "arrow.up.right" : "arrow.down.left")
+    }
+    private var directionText: String { call.mine ? "Outgoing" : (call.missed ? "Missed" : "Incoming") }
+    private var durationText: String? {
+        guard count == 1, !call.missed, call.durationSec > 0 else { return nil }
+        let secs = call.durationSec
+        if secs < 60 { return "\(secs) sec" }
+        let mins = secs / 60
+        if mins < 60 { return "\(mins) min" }
+        let hours = mins / 60, rest = mins % 60
+        return rest == 0 ? "\(hours) hr" : "\(hours) hr \(rest) min"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onCall) {
+                HStack(spacing: 12) {
+                    GroupCallAvatars(info: info, me: me, size: 46)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(count > 1 ? "\(call.name) (\(count))" : call.name)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(call.missedIncoming ? Color.red : Color.primary)
+                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Image(systemName: directionIcon).font(.system(size: 11, weight: .semibold))
+                            Text(durationText.map { "\(directionText) (\($0))" } ?? directionText)
+                                .font(.system(size: 14))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Text(timeLabel(call.date)).font(.system(size: 14)).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onInfo) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 21))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 2)
+    }
+
+    // Same day/weekday/date rule as CallHistoryRow.
+    private func timeLabel(_ d: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return d.formatted(date: .omitted, time: .shortened) }
+        if cal.isDateInYesterday(d) { return "Yesterday" }
+        if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 7 {
+            return d.formatted(.dateTime.weekday(.wide))
+        }
+        return d.formatted(.dateTime.month(.abbreviated).day())
     }
 }
 
@@ -1022,13 +1230,13 @@ struct ChatsView: View {
     /// and finds nobody when you type three letters of it.
     @State private var userHits: [UserProfile] = []
     @State private var searchingUsers = false
+    /// Answers per query for this session, so retyping or deleting back to a query is instant.
+    @State private var peopleCache: [String: [UserProfile]] = [:]
     @State private var path = NavigationPath()
     // NO "CURRENTLY OPEN CHAT" HIGHLIGHT. There was one here, and it is gone on the owner's word
     // (2026-08-03): "highlight only while the user's finger is touching it… never during the back
     // swipe". The whole highlight is Apple's pressed state now and nothing of ours — see the note at
     // the row's Button.
-    /// Answers per query for this session, so retyping or deleting back to a query is instant.
-    @State private var peopleCache: [String: [UserProfile]] = [:]
     @State private var pendingDelete: Conversation?
     // Multi-select edit mode.
     @State private var selecting = false
@@ -1340,12 +1548,12 @@ struct ChatsView: View {
         if Task.isCancelled { return }
         var found = await ChatService.searchUsers(prefix: q)
         if found.isEmpty, let exact = await ChatService.findByHandle(q) { found = [exact] }
+        peopleCache[key] = found
         guard chatSearch.trimmingCharacters(in: .whitespaces) == q else { return }
         userHits = found
         searchingUsers = false
     }
 
-        peopleCache[key] = found
     /// The two halves of `visible`, for the "Pinned" / "Chats" sections.
     ///
     /// ⚠️ ONE PROPERTY RETURNING BOTH, AND THAT IS NOT TIDINESS. `visible` filters and SORTS the

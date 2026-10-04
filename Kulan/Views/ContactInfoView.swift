@@ -1988,11 +1988,8 @@ struct ContactInfoView: View {
             // them, not theirs about me, and a button that says "you blocked this person" is not
             // information anybody needs on their own screen.
             if !isSelf && !blocked {
-                // THE CALL SCREEN GROWS OUT OF THE CALL CIRCLE (owner, 2026-08-20). The cover itself
-                // is declared at the root so a call can be restored from any screen, so the
-                // namespace it zooms in comes down through the environment — see
-                // `CallZoomNamespaceKey`. The id is per call KIND, and `callMenuButton` explains
-                // which kind this one circle now carries.
+                // The call screen opens the same way from here as from anywhere else (2026-10-04):
+                // one presentation in `CallContainer`, no zoom out of this circle.
                 // ⛔ GLOW TOOK THE VOICE-CALL BUTTON'S PLACE — owner, 2026-09-02: "remove voice call
                 // button to change Glow button". Glow is the thing he wants people to reach on
                 // somebody's profile, and the row keeps its five circles rather than growing a
@@ -2057,12 +2054,8 @@ struct ContactInfoView: View {
         }
         .tint(.primary)
         .accessibilityLabel("Call")
-        // ⚠️ THE ZOOM SOURCE STAYS ON VIDEO, because a source is registered per call KIND and there
-        // is one circle here for two kinds. Video keeps the id this button has always carried, so
-        // the video call still grows out of the circle under his thumb. A voice call from the menu
-        // gets the ordinary presentation, which is what voice has had from every other dial site in
-        // the app since Glow took the voice circle — nothing regressed, it simply is not zoomed.
-        .modifier(CallZoomSourceModifier(video: true))
+        // No zoom source any more (2026-10-04): every call opens through the one presentation in
+        // `CallContainer`, the same from here as from the chat header.
     }
 
     /// GIVE OR TAKE BACK A GLOW, from the profile — his 2026-09-02 design, and the only place in
@@ -2687,22 +2680,3 @@ struct ProfilePhotoViewer: View {
 }
 
 
-/// Marks a call button as the thing the call screen grows out of.
-///
-/// A modifier rather than the call written inline twice, because it has a condition in it: the
-/// namespace is nil on any screen that does not host the cover's environment, and
-/// `matchedTransitionSource` needs a real one. Nil simply means no zoom source, and a zoom with no
-/// source falls back to the ordinary presentation.
-private struct CallZoomSourceModifier: ViewModifier {
-    let video: Bool
-    @Environment(\.callZoomNamespace) private var namespace
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if let namespace {
-            content.matchedTransitionSource(id: CallZoomSource.id(video: video), in: namespace)
-        } else {
-            content
-        }
-    }
-}

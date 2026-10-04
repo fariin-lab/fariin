@@ -31,6 +31,7 @@ enum SessionWipe {
         ConversationsRepository.shared.reset()
         StoriesRepository.shared.reset()
         CallsRepository.shared.reset()
+        CallLinkService.shared.reset()   // saved call links are per account
         // The official channel and the admin rights that go with it are per-account: the next person
         // to sign in on this phone must not inherit the last one's read watermark, their mute, or —
         // the sharp one — their admin permissions, which would put a live Send Announcement screen in

@@ -102,7 +102,7 @@ final class CallService: NSObject {
                 restartRequestsSent = 0; restartRequestsSeen = 0
                 stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
-                everMinimized = false   // the NEXT call grows out of its own button again
+                everMinimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 micDenied = false
                 // ⚠️ RESET WITH EVERYTHING ELSE. A timeline left standing would measure the second
@@ -2821,6 +2821,15 @@ final class CallService: NSObject {
         let l = ref.addSnapshotListener { [weak self] snap, _ in
             guard let self, let d = snap?.data() else { return }
 
+            // MOVED ONTO A MULTI-PERSON CALL ("Add people" on the other side). Read before the
+            // "ended" branch below: the same write carries `status: ended`, and taken as an end it
+            // would play the tone and show "Call ended" over a call that is carrying on elsewhere.
+            if let roomId = d["moveTo"] as? String, roomId.hasPrefix("adhoc_"),
+               self.state != .ended, self.state != .idle {
+                self.followMove(to: roomId)
+                return
+            }
+
             // Remote ended (hang up / decline / unreachable) — play the matching tone,
             // then tear down. Do this first and bail.
             if (d["status"] as? String) == "ended", self.state != .ended, self.state != .idle {
@@ -3002,6 +3011,46 @@ final class CallService: NSObject {
     private func remoteEnded(reason: EndReason) {
         endReason = reason
         finishCall(updateRemote: false, clearCallKit: true, localUser: false)
+    }
+
+    // MARK: - Move to a multi-person call
+
+    /// "Add people" on a connected 1:1 call: both of us move onto a new ad-hoc multi-person call
+    /// with the people picked, and the 1:1 closes quietly on both sides (no tone, no "ended" label).
+    ///
+    /// ⚠️ THE ORDER IS FORCED. `GroupCallService.startAdhoc` refuses while this service is not idle
+    /// (decision D25), so the 1:1 has to be torn down locally FIRST, with what we still need kept in
+    /// locals. The teardown must not write `status: ended` itself (`updateRemote: false`): the peer
+    /// would see a plain hang-up before the room exists. `moveTo` and `status` go in ONE write once
+    /// the room is up, so the peer's listener reads the move before it can read the end.
+    /// The chat row is still written as an answered call by `finishCall`, as for any connected call.
+    func moveToGroup(adding people: [CallMember]) {
+        guard state == .active, connectedDate != nil, let oldId = callId, !otherUid.isEmpty else { return }
+        let myUid = me
+        let other = CallMember(uid: otherUid, name: otherName, photoUrl: otherPhotoUrl)
+        // startAdhoc adds me itself; everyone else, de-duplicated, with the peer first.
+        var seen: Set<String> = [myUid, other.uid]
+        let invited = [other] + people.filter { seen.insert($0.uid).inserted }
+        let video = cameraOn   // my camera carries over into the new call
+        finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+        let ref = db.collection("calls").document(oldId)
+        Task { @MainActor in
+            guard let roomId = await GroupCallService.shared.startAdhoc(with: invited, video: video) else {
+                // The room could not be made. The 1:1 is already gone here, so end it for the peer
+                // the ordinary way rather than leave them talking to nobody.
+                try? await ref.updateData(["status": "ended", "endReason": EndReason.hangup.rawValue])
+                return
+            }
+            try? await ref.updateData(["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue])
+        }
+    }
+
+    /// The peer's half of `moveToGroup`: close the 1:1 the same quiet way and join the room.
+    /// Only an ad-hoc id is followed; anything else in `moveTo` is ignored and the normal end runs.
+    private func followMove(to roomId: String) {
+        let video = cameraOn
+        finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+        Task { @MainActor in await GroupCallService.shared.joinAdhoc(roomId: roomId, video: video) }
     }
 
     private func finishCall(updateRemote: Bool, clearCallKit: Bool, localUser: Bool) {

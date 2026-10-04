@@ -105,6 +105,8 @@ struct KulanApp: App {
             // door, onboarding or the two-step page) the lookup has no session and the link was lost;
             // RootView opens it once the app reaches its main screen, the invite code's pattern.
             AppRouter.shared.pendingUserHandle = handle
+        case .call(let key):
+            joinCallLink(key: key)
         case .story:
             // Deliberately nothing yet, and the shape is still parsed on purpose — see `DeepLink`.
             // Doing nothing is the right behaviour until the site serves these: a half-built handler
@@ -113,12 +115,31 @@ struct KulanApp: App {
         }
     }
 
+    /// A call link joins straight away, the reference app's lobby-less path: no "Join call?" step.
+    /// Not over a live call (the busy alert says why), and not before there is a session — a cold
+    /// launch from the link reaches here before `AuthService.bootstrap` has set the uid, so this
+    /// waits up to ten seconds for it rather than dropping the link. Signed out, it is dropped.
+    private func joinCallLink(key: String) {
+        Task { @MainActor in
+            for _ in 0..<40 where AuthService.shared.uid == nil {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard AuthService.shared.uid != nil else { return }
+            guard !GroupCallService.shared.isActive, !GroupCallService.shared.connecting,
+                  CallService.shared.state == .idle else {
+                GroupCallService.presentOverTop(GroupCallService.busyNotice)
+                return
+            }
+            await GroupCallService.shared.joinLink(key: key, video: true)
+        }
+    }
+
     /// ⚠️ `story` CARRIES AN ID THE APP CAN LOOK UP, which is the whole point of the shape — see
     /// `storyLink`. Nothing consumes it yet: opening a shared story inside the app needs the site to
     /// serve `/s/<id>` and the apple-app-site-association file on fariin.com to claim that path, and
     /// neither is done. Parsed now so a link shared today is a link the app already understands the
     /// day those two land, rather than one it has to be taught to recognise afterwards.
-    enum DeepLink: Equatable { case user(String), group(String), story(String) }
+    enum DeepLink: Equatable { case user(String), group(String), story(String), call(key: String) }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -170,6 +191,15 @@ struct KulanApp: App {
             let host = (url.host ?? "").lowercased()
             guard host == "fariin.com" || host == "www.fariin.com" else { return nil }
             let parts = url.pathComponents.filter { $0 != "/" }
+            // A CALL LINK carries its key in the fragment, not the path: /call/#key=bcdf-ghkm-…
+            // The fragment never reaches the web server, which is why the key lives there. Only a
+            // key that parses is accepted; anything else is not ours to act on.
+            if parts == ["call"] {
+                let pairs = (url.fragment ?? "").split(separator: "&")
+                guard let raw = pairs.first(where: { $0.hasPrefix("key=") })?.dropFirst(4),
+                      let key = CallLinkKey(text: String(raw)) else { return nil }
+                return .call(key: key.text)
+            }
             guard parts.count >= 2 else { return nil }
             kind = parts[0]
             value = parts[1]

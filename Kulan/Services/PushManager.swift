@@ -149,6 +149,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         let content = notification.request.content
+        // A multi-person call invitation while the app is open: the full-screen invitation
+        // (IncomingGroupCallLayer) is already up from the live listener, so no banner on top of it.
+        if content.userInfo["type"] as? String == "adhoccall" { return [] }
         let cid = content.userInfo["cid"] as? String
         if let cid, cid == AppRouter.shared.activeChatId { return [] }
         // A CHAT notification gets OUR banner, not the system one. The iOS drop-down reads as
@@ -193,6 +196,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     // MainShell consumes the pending route once the conversation list is loaded).
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
+        // An invitation into a multi-person call opens the invitation, not a chat (it has none).
+        let info = response.notification.request.content.userInfo
+        if info["type"] as? String == "adhoccall", let roomId = info["roomId"] as? String {
+            await Task { @MainActor in await GroupCallService.shared.showInvite(roomId: roomId) }.value
+            return
+        }
         // A cid becomes a Firestore document id in ThreadView, where an empty or slashed one raises
         // an uncatchable exception (audit, 2026-09-24). Our own pushes never carry one; refuse it anyway.
         if let cid = response.notification.request.content.userInfo["cid"] as? String,

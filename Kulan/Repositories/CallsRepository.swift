@@ -15,6 +15,9 @@ struct CallEntry: Identifiable, Hashable {
     let video: Bool         // placed as a video call (old records default to voice)
     let durationSec: Int
     let date: Date
+    /// Set only on a multi-person (ad-hoc) call; nil on every 1:1 row. For those rows `id` and `cid`
+    /// are the room id, `callerUid` is whoever started it, and `name` is the people's title.
+    var adhoc: AdhocCallInfo? = nil
 
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
     /// A live row still reading "ringing" after 120s is a call nobody finalised (both phones died
@@ -27,6 +30,67 @@ struct CallEntry: Identifiable, Hashable {
     /// Red/badge-worthy only when THEY called and I didn't pick up — my own
     /// unanswered outgoing call is just "Outgoing" (standard call-history rule).
     var missedIncoming: Bool { missed && !mine }
+}
+
+/// The people on a multi-person call, read from groupCalls/{roomId} (kind == "adhoc").
+struct AdhocCallInfo: Hashable {
+    let roomId: String
+    let members: [String]            // everyone invited, starter included
+    let names: [String: String]
+    let photos: [String: String]
+    let joined: [String]             // everyone who actually connected
+    let startedBy: String
+    let video: Bool
+    let active: Bool
+    let startedAt: Date
+    let endedAt: Date?
+
+    func name(_ uid: String) -> String { names[uid] ?? "Unknown" }
+    func photo(_ uid: String) -> String? { photos[uid].flatMap { $0.isEmpty ? nil : $0 } }
+    func others(_ me: String) -> [String] { members.filter { $0 != me } }
+    func joinedOthers(_ me: String) -> [String] { joined.filter { $0 != me && members.contains($0) } }
+    /// Who the row is named after: the people who joined, or everyone invited when nobody did.
+    func titleUids(_ me: String) -> [String] {
+        let j = joinedOthers(me)
+        return j.isEmpty ? others(me) : j
+    }
+
+    init?(id: String, data: [String: Any]) {
+        guard data["kind"] as? String == "adhoc" else { return nil }
+        roomId = id
+        members = data["members"] as? [String] ?? []
+        names = data["names"] as? [String: String] ?? [:]
+        photos = data["photos"] as? [String: String] ?? [:]
+        joined = data["joined"] as? [String] ?? []
+        startedBy = data["startedBy"] as? String ?? ""
+        video = data["video"] as? Bool ?? false
+        active = data["active"] as? Bool ?? false
+        startedAt = (data["startedAt"] as? Timestamp)?.dateValue() ?? Date(timeIntervalSince1970: 0)
+        endedAt = (data["endedAt"] as? Timestamp)?.dateValue()
+    }
+
+    /// The call as I saw it. Started by me and nobody else came → my unanswered outgoing call.
+    /// I joined → answered. Invited and never joined → missed. While the room is still live and I
+    /// have not joined it reads "ringing", which CallEntry.missed ages into a miss after 120s,
+    /// the same rule the 1:1 rows use for a call nobody finalised.
+    func entry(me: String, title: String) -> CallEntry {
+        let outcome: String
+        if startedBy == me {
+            outcome = !joinedOthers(me).isEmpty ? "answered" : (active && endedAt == nil ? "ringing" : "missed")
+        } else if joined.contains(me) {
+            outcome = "answered"
+        } else {
+            outcome = active && endedAt == nil ? "ringing" : "missed"
+        }
+        var duration = 0
+        if outcome == "answered", let end = endedAt { duration = max(0, Int(end.timeIntervalSince(startedAt))) }
+        let first = titleUids(me).first ?? ""
+        return CallEntry(
+            id: roomId, cid: roomId,
+            name: title, photoUrl: photo(first), otherUid: first,
+            callerUid: startedBy, outcome: outcome, video: video,
+            durationSec: duration, date: startedAt, adhoc: self)
+    }
 }
 
 // Aggregates call records across all of my conversations into one history list.
@@ -72,6 +136,11 @@ final class CallsRepository {
         let myGeneration = await MainActor.run { generation }   // see `generation`
         let database = db
 
+        // Multi-person calls I was part of, read alongside the chats. `members` array-contains is the
+        // automatic single-field index; kind is filtered client-side so no composite index is needed.
+        async let adhocSnap = database.collection("groupCalls")
+            .whereField("members", arrayContains: me).getDocuments()
+
         // Safety net: never leave the shimmer skeleton up forever if a query stalls on bad network.
         Task { try? await Task.sleep(nanoseconds: 8_000_000_000)
             await MainActor.run { if !self.hasLoaded { self.hasLoaded = true; self.loading = false } } }
@@ -114,6 +183,15 @@ final class CallsRepository {
             }
             for await chunk in group { all.append(contentsOf: chunk) }
         }
+        let adhocInfos = ((try? await adhocSnap)?.documents ?? [])
+            .compactMap { AdhocCallInfo(id: $0.documentID, data: $0.data(with: .estimate)) }
+        // The title comes from GroupCallService, which lives on the main actor.
+        let adhocEntries = await MainActor.run {
+            adhocInfos.map { info in
+                info.entry(me: me, title: GroupCallService.title(for: info.titleUids(me).map { info.name($0) }))
+            }
+        }
+        all.append(contentsOf: adhocEntries)
         all.removeAll { HiddenMessages.isHidden($0.id) }   // locally deleted entries stay gone
         all.sort { $0.date > $1.date }
         await MainActor.run {
@@ -129,6 +207,7 @@ final class CallsRepository {
     // record too, or, if the rules refuse a delete of a doc the other side authored, did nothing at
     // all and the row came straight back on the next load. Every standard messenger hides call-log
     // entries per user, which is what HiddenMessages already does for messages.
+    // A multi-person row's id is its room id, so the same hide covers those too.
     func delete(_ entry: CallEntry) async {
         await MainActor.run {
             HiddenMessages.hide(entry.id)
