@@ -10413,7 +10413,11 @@ final class SingleFilePreviewController: QLPreviewController, QLPreviewControlle
         fileURL = url
         super.init(nibName: nil, bundle: nil)
         dataSource = self
-        modalPresentationStyle = .fullScreen
+        // OVER the chat, not instead of it — owner, 2026-10-04 on 825: closing a file sometimes
+        // landed on the chat list. `.fullScreen` takes the presenting screens out of the window, the
+        // chat page reads that as being left, and the navigation went back with it. With
+        // `.overFullScreen` the chat stays exactly where it was underneath.
+        modalPresentationStyle = .overFullScreen
     }
     required init?(coder: NSCoder) { fatalError() }
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
