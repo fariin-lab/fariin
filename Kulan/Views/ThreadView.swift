@@ -2256,35 +2256,12 @@ struct ThreadView: View {
                         .frame(width: 32, height: 32)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 } else if let m = msg, m.isAlbum, let first = m.album.first {
-                    // ⛔ A PINNED ALBUM IS A STACK — owner, 2026-10-03, with his screenshot: the second
-                    // photo peeks out behind on the left, the first sits in front with a thin edge in
-                    // the bar's own colour so the two read apart. One photo stays one tile.
-                    if m.album.count > 1 {
-                        let second = m.album[1]
-                        ZStack(alignment: .trailing) {
-                            // ⛔ SAME SIZE, WHITE EDGES — owner, 2026-10-04, his picture: "both the
-                            // same size, the one under looks small", and the edge "white in dark
-                            // mode, white in light mode too" (the page-coloured edge drew a black
-                            // square line in dark). Both tiles 32 + a 1.5 white edge = 35; the back
-                            // one shifted 11 shows ~11pt of it, as in his picture.
-                            SecureImageView(imageUrl: second.imageUrl, enc: second.enc, cid: cid)
-                                .frame(width: 32, height: 32)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .padding(1.5)
-                                .background(Color.white, in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
-                                .offset(x: -11)
-                            SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
-                                .frame(width: 32, height: 32)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .padding(1.5)
-                                .background(Color.white, in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
-                        }
-                        .frame(width: 46, height: 35, alignment: .trailing)
-                    } else {
-                        SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
-                            .frame(width: 32, height: 32)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
+                    // ⛔ ONE PICTURE, AS IT WAS — owner, 2026-10-04: "make it how it looked before when I
+                    // pinned multiple images, always use one image preview". The two-photo stack
+                    // (10-03) is gone; an album shows its first photo, like a single photo does.
+                    SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 } else if let m = msg, m.isGif, let url = m.imageUrl {
                     AnimatedGifView(url: url)
                         .frame(width: 32, height: 32)
