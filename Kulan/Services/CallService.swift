@@ -4,6 +4,7 @@ import AVFoundation
 import UIKit   // app-lifecycle notification (foreground backstop for the background camera)
 import UserNotifications   // "sharing video" note when their camera comes on while we're backgrounded
 import CoreMedia
+import Network   // NWPathMonitor: notice a Wi-Fi <-> cellular switch before ICE does
 import WebRTC
 import FirebaseAuth
 import FirebaseFirestore
@@ -86,6 +87,7 @@ final class CallService: NSObject {
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 startHeartbeat()             // prove we're alive; detect a force-quit on the other side
                 startLinkMonitor()           // weak link -> drop to audio rather than starve it
+                startPathMonitor()           // Wi-Fi <-> cellular -> ICE restart before the path dies
                 // Answered while you were already out of the call screen: the card is up, so the
                 // talking monitor has to start HERE too, not only when you minimize.
                 startVoiceMonitor()
@@ -96,6 +98,8 @@ final class CallService: NSObject {
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
+                stopPathMonitor()
+                restartRequestsSent = 0; restartRequestsSeen = 0
                 stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 everMinimized = false   // the NEXT call grows out of its own button again
@@ -431,6 +435,11 @@ final class CallService: NSObject {
     private var acceptedConnectWork: DispatchWorkItem? // outgoing: they ACCEPTED but the answer never landed -> Failed fast
     private var iceRestartWork: DispatchWorkItem?    // delayed ICE restart after a drop
     private var reconnectGiveUpWork: DispatchWorkItem? // hard cap: can't recover -> Failed
+    private var iceRestartRetryWork: DispatchWorkItem? // re-offer every few seconds while still reconnecting
+    private var pathMonitor: NWPathMonitor?            // network switch watcher, live while a call is up
+    private var lastPathKey: String?                   // last interface set seen, to spot a real change
+    private var restartRequestsSent = 0                // callee -> caller "please restart ICE" counter
+    private var restartRequestsSeen = 0                // caller side: highest request already served
     private var negotiationVersion = 0               // bumps each ICE restart / media renegotiation (caller)
     private var pendingOffer: [String: String]?      // cached incoming offer → answer without a server round-trip
     private var appliedRemoteRestart = 0             // last restart version we applied
@@ -650,7 +659,20 @@ final class CallService: NSObject {
     // the saver is active on the current network. Audio ~24 kbps still sounds fine for
     // speech; video drops to 300 kbps at half resolution.
     private func applyDataSaver(to connection: RTCPeerConnection?) {
-        guard let connection, UseLessDataPage.activeNow else { return }
+        guard let connection else { return }
+        guard UseLessDataPage.activeNow else {
+            // Saver off: video still gets a CEILING (2026-10-04, the reference engine's numbers).
+            // Uncapped, the encoder ramps until the link queues, and on a weak link that queue is
+            // the voice breaking up. 2 Mbps normally; 1 Mbps when the call is relay-only (a
+            // stranger), because every relayed bit is paid for twice and crosses an extra hop.
+            let cap = peerIsEstablishedContact ? 2_000_000 : 1_000_000
+            for sender in connection.senders where sender.track?.kind == "video" {
+                let params = sender.parameters
+                params.encodings.forEach { $0.maxBitrateBps = NSNumber(value: cap) }
+                sender.parameters = params
+            }
+            return
+        }
         for sender in connection.senders {
             let params = sender.parameters
             for enc in params.encodings {
@@ -718,30 +740,23 @@ final class CallService: NSObject {
             // headroom it frees is the difference between a call holding and a call breaking up on a
             // 2G leg. Budget for roughly double on the wire when RED is also on, since every packet
             // then carries the previous frame as well.
-            if !lines[i].contains("maxaveragebitrate") { lines[i] += ";maxaveragebitrate=24000" }
-        }
-
-        // libwebrtc offers red directly AFTER opus, which gets it negotiated but never used: the send
-        // codec is the first one in the list, so red has to move in front of opus. This is exactly what
-        // setCodecPreferences does in a browser, and only the m-line order matters (attributes are
-        // looked up by payload type), so the rtpmap/fmtp lines are left where they are.
-        if let red = payloadType(of: "red/48000/2"), let i = fmtpLine(for: red) {
-            // red's own fmtp has to list this exact opus payload (a=fmtp:63 111/111). Red WITHOUT a
-            // valid RFC 2198 line is the M95 shape that fails to negotiate, and preferring that would
-            // take the whole audio stream down with it.
-            let carried = lines[i].dropFirst(("a=fmtp:\(red) ").count).split(separator: "/")
-            var pts = lines[mLine].split(separator: " ").map(String.init)
-            // 0...2 are "m=audio", the port and the proto; the payload list starts at 3. Searching only
-            // from there is what stops a port number that happens to read like a payload type matching.
-            if !carried.isEmpty, carried.allSatisfy({ $0.trimmingCharacters(in: .whitespaces) == opus }),
-               pts.count > 4,
-               let redAt = pts[3...].firstIndex(of: red),
-               let opusAt = pts[3...].firstIndex(of: opus), redAt > opusAt {
-                pts.remove(at: redAt)
-                pts.insert(red, at: opusAt)
-                lines[mLine] = pts.joined(separator: " ")
+            // 2026-10-04: the reference engine's measured voice profile, which it tuned with loss
+            // simulations: 32 kbps CONSTANT bitrate, in-band FEC, 60 ms packets. CBR keeps packet
+            // sizes steady under congestion control; FEC lets the next packet rebuild a lost one;
+            // 60 ms packets are a third of the per-packet header overhead of 20 ms, which matters
+            // most on exactly the weak links this is for. Was 24 kbps VBR with 20 ms packets.
+            if !lines[i].contains("maxaveragebitrate") { lines[i] += ";maxaveragebitrate=32000" }
+            if !lines[i].contains("cbr=") { lines[i] += ";cbr=1" }
+            if !lines[i].contains("useinbandfec") { lines[i] += ";useinbandfec=1" }
+            // a=ptime is the packet length this side wants to RECEIVE; both ends munge, so both
+            // send 60 ms. Placed right after the fmtp line, inside the audio section.
+            if !lines[audio].contains(where: { $0.hasPrefix("a=ptime:") }) {
+                lines.insert("a=ptime:60", at: i + 1)
             }
         }
+        // RED is NOT preferred any more (2026-10-04). It sends every frame twice, doubling audio on
+        // the wire, and the reference engine relies on FEC alone. With FEC + CBR above, RED would
+        // push a 2G leg from 32 to 64 kbps. Left in the codec list (harmless), just not first.
         return lines.joined(separator: eol)
     }
 
@@ -1769,6 +1784,7 @@ final class CallService: NSObject {
         noAnswerWork?.cancel(); noAnswerWork = nil
         acceptedConnectWork?.cancel(); acceptedConnectWork = nil
         iceRestartWork?.cancel(); iceRestartWork = nil
+        iceRestartRetryWork?.cancel(); iceRestartRetryWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
         // A pending ringback fallback must die with the call, or a call that ends inside its 1.2s
         // window would start a ringback nothing is left to stop.
@@ -1793,21 +1809,78 @@ final class CallService: NSObject {
             reconnectGiveUpWork = g
             DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: g)
         }
-        // The caller drives the ICE restart (avoids glare).
-        guard isCaller else { return }
+        // The caller drives the ICE restart (avoids glare). The callee used to just wait for the
+        // caller's own ICE to notice, which it may not for many seconds when only the CALLEE's
+        // network moved; now it asks, and the caller restarts at once (see `requestIceRestart`).
+        guard isCaller else { requestIceRestart(); return }
         iceRestartWork?.cancel()
         let r = DispatchWorkItem { [weak self] in
             guard let self, self.state == .reconnecting else { return }
             self.restartIce()
+            self.scheduleIceRestartRetry()
         }
         iceRestartWork = r
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: r)
     }
 
+    /// One restart offer can be lost (signalling write on a dying network, or the answer never
+    /// comes back). Re-offer every 8s while still reconnecting, up to the 30s give-up cap, instead
+    /// of sitting out the whole cap on a single attempt.
+    private func scheduleIceRestartRetry() {
+        iceRestartRetryWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.state == .reconnecting else { return }
+            self.restartIce()
+            self.scheduleIceRestartRetry()
+        }
+        iceRestartRetryWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: w)
+    }
+
+    /// Callee side: ask the caller for an ICE restart. A counter, not a flag, so every request is a
+    /// new value the caller's listener can tell apart from the last one it served.
+    private func requestIceRestart() {
+        guard !isCaller, let id = callId, state == .active || state == .reconnecting else { return }
+        restartRequestsSent += 1
+        db.collection("calls").document(id).updateData(["restartRequest": restartRequestsSent])
+    }
+
     private func recovered() {
         iceRestartWork?.cancel(); iceRestartWork = nil
+        iceRestartRetryWork?.cancel(); iceRestartRetryWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
         if state == .reconnecting { state = .active }
+    }
+
+    // MARK: - Network switch watcher
+
+    /// ICE only learns a path died after its own checks time out, several seconds of silence on a
+    /// Wi-Fi -> cellular walk-out. The OS knows the moment the interface changes, so restart ICE
+    /// then, while the old path may still be carrying audio. A restart does not drop media: the
+    /// old pair keeps flowing until a new one is nominated, so there is no "Reconnecting" flash.
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let m = NWPathMonitor()
+        m.pathUpdateHandler = { [weak self] path in
+            // Which interfaces are usable, in order. Same key = same network, nothing to do.
+            let key = path.status == .satisfied
+                ? path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
+                : "none"
+            DispatchQueue.main.async {
+                guard let self else { return }
+                defer { self.lastPathKey = key }
+                guard let last = self.lastPathKey, last != key, key != "none",
+                      self.state == .active || self.state == .reconnecting else { return }
+                if self.isCaller { self.restartIce() } else { self.requestIceRestart() }
+            }
+        }
+        m.start(queue: DispatchQueue(label: "call.path"))
+        pathMonitor = m
+    }
+
+    private func stopPathMonitor() {
+        pathMonitor?.cancel(); pathMonitor = nil
+        lastPathKey = nil
     }
 
     // Caller-only: renegotiate ICE (new credentials + candidates), media keeps flowing
@@ -2830,6 +2903,13 @@ final class CallService: NSObject {
                     }
                 }
             }
+            // Callee asked for an ICE restart (its network moved or its ICE dropped first).
+            if self.isCaller, let rq = (d["restartRequest"] as? NSNumber)?.intValue,
+               rq > self.restartRequestsSeen,
+               self.state == .active || self.state == .reconnecting {
+                self.restartRequestsSeen = rq
+                self.restartIce()
+            }
             // Caller applies the ICE-restart ANSWER.
             if self.isCaller, let ra = d["restartAnswer"] as? [String: Any],
                let sdp = ra["sdp"] as? String,
@@ -3005,6 +3085,7 @@ final class CallService: NSObject {
         if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
         if let obs = thermalObserver { NotificationCenter.default.removeObserver(obs); thermalObserver = nil }
         stopHeartbeat()
+        stopPathMonitor()
         // The camera used to keep capturing through the whole 1-2s .ended tail, because teardown only
         // happened at .idle. Nobody can see those frames; stop them the moment the call is over.
         videoCapturer?.stopCapture()
@@ -3104,7 +3185,8 @@ extension CallService: RTCPeerConnectionDelegate {
                 self.recovered()                          // back to a healthy media path
                 self.beginConnectedCallIfAccepted()
             case .disconnected:
-                self.enterReconnecting(restartAfter: 3)   // may self-heal; force a restart in 3s
+                // May self-heal, but 3s of dead air was the old wait; 1s is enough to skip a blip.
+                self.enterReconnecting(restartAfter: 1)
             case .failed:
                 self.enterReconnecting(restartAfter: 0)   // won't self-heal; restart now
             case .closed:
