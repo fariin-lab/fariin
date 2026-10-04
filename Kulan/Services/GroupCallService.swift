@@ -202,6 +202,16 @@ final class GroupCallService: ObservableObject {
         micOn.toggle(); let v = micOn
         Task { try? await room.localParticipant.setMicrophone(enabled: v) }
     }
+
+    /// ⛔ A REAL SPEAKER SWITCH — owner, 2026-10-04: "the speaker, I can't turn it on and off". The
+    /// button was the system route picker drawn under a speaker glyph, which never showed a state
+    /// and on a phone with no headset offered nothing to pick. Now it flips LiveKit's own output
+    /// preference (speaker vs earpiece), the way the one-to-one call's speaker button works.
+    @Published var speakerOn = true
+    func toggleSpeaker() {
+        speakerOn.toggle()
+        AudioManager.shared.isSpeakerOutputPreferred = speakerOn
+    }
     func toggleCamera() {
         cameraOn.toggle(); let v = cameraOn
         Task { try? await room.localParticipant.setCamera(enabled: v) }
@@ -242,6 +252,8 @@ final class GroupCallService: ObservableObject {
             }
         }
         activeCid = nil; micOn = true; cameraOn = false; isVideo = false; callTitle = ""
+        // The next group call starts on the speaker again, as group calls always have.
+        speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
         minimized = false
         resetRoomState()
         presentsRoomScreen = false

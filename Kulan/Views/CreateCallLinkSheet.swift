@@ -197,7 +197,7 @@ struct CreateCallLinkSheet: View {
             await CallLinkService.shared.persist(d)
             // Let the sheet finish leaving before the call screen comes up over it.
             try? await Task.sleep(nanoseconds: 350_000_000)
-            await GroupCallService.shared.joinLink(key: d.key, video: true)
+            await GroupCallService.shared.joinLink(key: d.key, video: false)
         }
     }
 

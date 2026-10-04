@@ -130,7 +130,7 @@ struct KulanApp: App {
                 GroupCallService.presentOverTop(GroupCallService.busyNotice)
                 return
             }
-            await GroupCallService.shared.joinLink(key: key, video: true)
+            await GroupCallService.shared.joinLink(key: key, video: false)
         }
     }
 

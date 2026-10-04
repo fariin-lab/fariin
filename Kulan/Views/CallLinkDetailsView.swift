@@ -26,7 +26,7 @@ struct CallLinkDetailsView: View {
             VStack(spacing: 20) {
                 CallLinkCard(key: current.key, title: current.title) {
                     let key = current.key
-                    Task { await GroupCallService.shared.joinLink(key: key, video: true) }
+                    Task { await GroupCallService.shared.joinLink(key: key, video: false) }
                 }
                 if current.admin {
                     CallLinkGroup {

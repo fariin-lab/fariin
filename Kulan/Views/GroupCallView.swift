@@ -163,23 +163,15 @@ struct GroupCallView: View {
         HStack(spacing: 20) {
             ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
             ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
-            routeCtrl
+            // Speaker on / off (owner, 2026-10-04): a real switch with its state, not the route picker.
+            ctrl(service.speakerOn ? "speaker.wave.2.fill" : "speaker.fill") { service.toggleSpeaker() }
+                .opacity(service.speakerOn ? 1 : 0.7)
             ctrl("phone.down.fill", tint: Color(.systemRed)) { service.end() }
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
     }
 
-    // Native audio-route button (the system route picker): group calls run on speaker by default;
-    // this lets you move the call to AirPods/Bluetooth/earpiece through the system sheet.
-    private var routeCtrl: some View {
-        ZStack {
-            Image(systemName: "speaker.wave.2.fill").font(.title3).foregroundStyle(.primary)
-                .frame(width: 54, height: 54)
-                .liquidGlass(Circle(), interactive: true)
-            AudioRoutePicker().frame(width: 54, height: 54).clipShape(Circle())
-        }
-    }
 
     private func ctrl(_ icon: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {

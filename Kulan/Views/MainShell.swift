@@ -665,7 +665,7 @@ struct CallsView: View {
             // Join straight from the list, on video, the way the link's own card joins.
             Button {
                 if bringLiveCallForward() { return }
-                Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
+                Task { await GroupCallService.shared.joinLink(key: link.key, video: false) }
             } label: {
                 Image(systemName: "video.fill")
                     .font(.system(size: 15, weight: .semibold))
