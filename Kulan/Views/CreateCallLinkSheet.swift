@@ -89,9 +89,34 @@ struct CreateCallLinkSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
+                // ⛔ MINIMALIST — owner, 2026-10-04: "redesign this sheet, minimalist and clear".
+                // One thing per line, in the order a person uses them: what the call is, Join, the
+                // three ways to hand the link on as round buttons, then the two settings, plain.
+                VStack(spacing: 22) {
                     header
-                    CallLinkCard(key: draft.key, title: draft.title) { join() }
+                    VStack(spacing: 8) {
+                        CallLinkAvatar(key: draft.key, size: 64)
+                        Text(draft.title)
+                            .font(.title3.weight(.semibold))
+                            .lineLimit(1)
+                        Text(shortLink)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Button { join() } label: {
+                        Text("Join Call")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                            .background(Theme.defaultBubble(scheme == .dark), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    CallLinkShareRows(draft: draft, compact: true) {
+                        await CallLinkService.shared.persist(draft)
+                    }
                     CallLinkGroup {
                         NavigationLink {
                             CallLinkNameEditor(initial: draft.name) { name in
@@ -100,15 +125,24 @@ struct CreateCallLinkSheet: View {
                                     .prefix(CallLinkDefaults.maxNameLength))
                             }
                         } label: {
-                            CallLinkRow(icon: "pencil", title: draft.name.isEmpty ? "Add Call Name" : "Edit Call Name",
-                                        chevron: true)
+                            HStack {
+                                Text("Call Name")
+                                Spacer(minLength: 8)
+                                Text(draft.name.isEmpty ? "None" : draft.name)
+                                    .foregroundStyle(.secondary).lineLimit(1)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 50)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        CallLinkDivider()
-                        CallLinkApprovalRow(isOn: Binding(get: { draft.approval }, set: { setApproval($0) }))
-                    }
-                    CallLinkShareRows(draft: draft) {
-                        await CallLinkService.shared.persist(draft)
+                        Divider().padding(.leading, 16)
+                        Toggle("Admin Approval", isOn: Binding(get: { draft.approval }, set: { setApproval($0) }))
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 50)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -133,23 +167,21 @@ struct CreateCallLinkSheet: View {
     /// navigation bar so the sheet can be exactly as tall as what it holds.
     private var header: some View {
         ZStack {
-            Text("Create Call Link")
+            Text("Call Link")
                 .font(.headline)
             HStack {
                 Spacer()
-                Button { done() } label: {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(Theme.defaultBubble(scheme == .dark), in: Circle())
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Done")
+                Button("Done") { done() }
+                    .font(.body.weight(.semibold))
             }
         }
-        .padding(.top, 4)
+        .padding(.top, 6)
+    }
+
+    /// The link without its scheme: "fariin.com/call/#key=…", cut in the middle when long.
+    private var shortLink: String {
+        let full = CallLinkKey(text: draft.key)?.url.absoluteString ?? ""
+        return full.replacingOccurrences(of: "https://", with: "")
     }
 
     private func done() {
@@ -319,8 +351,11 @@ struct CallLinkShareRows: View {
     let link: any CallLinkRef
     let beforeShare: () async -> Void
 
-    init(draft: CallLinkDraft, beforeShare: @escaping () async -> Void) {
-        self.link = draft; self.beforeShare = beforeShare
+    /// Three round buttons in a row instead of three rows (the create sheet, owner 2026-10-04).
+    var compact = false
+
+    init(draft: CallLinkDraft, compact: Bool = false, beforeShare: @escaping () async -> Void) {
+        self.link = draft; self.beforeShare = beforeShare; self.compact = compact
     }
     init(saved: SavedCallLink) {
         self.link = saved; self.beforeShare = {}
@@ -333,32 +368,61 @@ struct CallLinkShareRows: View {
 
     private var urlText: String { link.url?.absoluteString ?? "" }
 
-    var body: some View {
-        CallLinkGroup {
-            Button {
-                Task { @MainActor in await beforeShare(); sendInApp = true }
-            } label: {
-                CallLinkRow(icon: "arrowshape.turn.up.right", title: "Share Link via Kulan")
+    private func sendInKulan() { Task { @MainActor in await beforeShare(); sendInApp = true } }
+    private func copyLink() {
+        UIPasteboard.general.string = urlText
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        flash("Link copied")
+        Task { await beforeShare() }
+    }
+    private func shareLink() { Task { @MainActor in await beforeShare(); systemShare = true } }
+
+    @ViewBuilder private var actions: some View {
+        if compact {
+            HStack(spacing: 10) {
+                roundAction("paperplane", "Send", sendInKulan)
+                roundAction("doc.on.doc", "Copy", copyLink)
+                roundAction("square.and.arrow.up", "Share", shareLink)
             }
-            .buttonStyle(.plain)
-            CallLinkDivider()
-            Button {
-                UIPasteboard.general.string = urlText
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                flash("Link copied")
-                Task { await beforeShare() }
-            } label: {
-                CallLinkRow(icon: "doc.on.doc", title: "Copy Link")
+        } else {
+            CallLinkGroup {
+                Button(action: sendInKulan) {
+                    CallLinkRow(icon: "arrowshape.turn.up.right", title: "Share Link via Kulan")
+                }
+                .buttonStyle(.plain)
+                CallLinkDivider()
+                Button(action: copyLink) {
+                    CallLinkRow(icon: "doc.on.doc", title: "Copy Link")
+                }
+                .buttonStyle(.plain)
+                CallLinkDivider()
+                Button(action: shareLink) {
+                    CallLinkRow(icon: "square.and.arrow.up", title: "Share Link")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            CallLinkDivider()
-            Button {
-                Task { @MainActor in await beforeShare(); systemShare = true }
-            } label: {
-                CallLinkRow(icon: "square.and.arrow.up", title: "Share Link")
-            }
-            .buttonStyle(.plain)
         }
+    }
+
+    /// One equal-width tile: the glyph over its word, on the grouped surface.
+    private func roundAction(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 18, weight: .medium))
+                Text(title).font(.footnote.weight(.medium))
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title == "Send" ? "Send in a chat" : title)
+    }
+
+    var body: some View {
+        actions
         // The chat picker every other "share into a chat" in the app uses; it sends the link as a
         // text message into whichever chats are picked.
         .sheet(isPresented: $sendInApp) {
