@@ -1232,6 +1232,10 @@ enum ChatService {
         // refused by the database — every photo would stay a permanent blur.
         try await ensureConv?.value
 
+        // The LAST moment Cancel can win, as in sendAlbum and sendMixedAlbum (2026-10-04 audit).
+        // Without it a Cancel during the sealing above still committed a document with no media,
+        // a blurred bubble with a spinner on both phones that nothing would ever finish.
+        try Task.checkCancellation()
         let batch = db.batch()
         var imgMsg: [String: Any] = [
             "type": "image", "enc": meta.asDict, "text": captionCipher, "uploading": true,

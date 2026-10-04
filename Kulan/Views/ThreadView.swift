@@ -5509,6 +5509,12 @@ struct ThreadView: View {
         } catch {
             await MainActor.run {
                 let cancelled = MediaSend.shared.wasCancelled(clientId) || error is CancellationError
+                // A Cancel that landed while the message write was in flight: the send committed its
+                // document AFTER `cancelMediaSend` looked for it and found nothing. Take it down now,
+                // before `finish` forgets its id (2026-10-04 audit; same stuck blur as the 99% report).
+                if cancelled, let announced = MediaSend.shared.announcedId(clientId) {
+                    Task { await ChatService.cancelAnnounced(cid: cid, messageId: announced) }
+                }
                 MediaSend.shared.finish(clientId)
                 if cancelled {
                     repo.removePending(clientId: clientId)   // every-tile-X'd path; Cancel already removed it
