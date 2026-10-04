@@ -1457,7 +1457,8 @@ struct ContactInfoView: View {
             rowDivider
             // Restricted chat (owner, 2026-10-03). Beside the timer: both are rules for the chat
             // that bind both people. See `ChatRestrictions`.
-            infoRow("Restricted Chat", "ic_restricted_chat", value:   // owner's icon, 2026-10-04 chatRestricted ? "On" : "Off") {
+            // The owner's own icon (2026-10-04).
+            infoRow("Restricted Chat", "ic_restricted_chat", value: chatRestricted ? "On" : "Off") {
                 showRestricted = true
             }
             rowDivider
