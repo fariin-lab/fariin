@@ -2937,7 +2937,30 @@ enum ChatService {
         case "audio": return viewOnce ? "🎤 One-time voice message" : "🎤 Voice message"
         case "file": return "📄 File"
         case "gif": return "GIF"
+        case "call":
+            let video = d["callVideo"] as? Bool == true
+            if d["callOutcome"] as? String == "missed" { return video ? "📹 Missed video call" : "📞 Missed call" }
+            return video ? "📹 Video call" : "📞 Call"
         default: return text
+        }
+    }
+
+    /// ⛔ REPAIR A SUMMARY THAT WAS ALREADY BLANKED — owner, 2026-10-04: "where is this Say hello
+    /// coming from, it's not a message I sent or received". Chats whose summary an older build
+    /// recomputed to "" (a captionless photo, a call) still read "Say hello" although they have
+    /// messages; `summaryText` only stops new ones. The chat list calls this once per chat per
+    /// launch for a blank summary that has a sender (a truly new chat has none), and it rewrites
+    /// the summary from the newest message, guarded like every other summary rewrite.
+    private static var repairedSummaries = Set<String>()
+    @MainActor static func repairBlankSummary(_ cid: String) {
+        guard repairedSummaries.insert(cid).inserted else { return }
+        let convRef = db.collection("conversations").document(cid)
+        Task {
+            await rewriteSummaryGuarded(convRef) {
+                let d = (try? await convRef.getDocument())?.data()
+                guard (d?["lastMessage"] as? String ?? "").isEmpty else { return nil }
+                return await summaryOfNewest(convRef)
+            }
         }
     }
 

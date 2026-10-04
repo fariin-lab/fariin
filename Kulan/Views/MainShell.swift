@@ -4075,6 +4075,12 @@ struct ChatRow: View, Equatable {
                        // looks tiny, use the Apple icon". It is Apple's `mic.fill` already; at the
                        // shared 13pt its narrow shape reads as a speck beside the words.
                        iconSize: badge.0 == "mic.fill" ? 15 : 13)
+        } else if conv.lastMessageCipher.isEmpty, !conv.lastSender.isEmpty {
+            // ⛔ A BLANK SUMMARY ON A CHAT THAT HAS MESSAGES IS NOT A NEW CHAT — owner, 2026-10-04,
+            // "Say hello is not a message I sent or received". Repaired from the newest message
+            // (once per launch); the line stays empty for the moment that takes.
+            Color.clear.frame(height: 1)
+                .onAppear { ChatService.repairBlankSummary(conv.id) }
         } else if conv.lastMessageCipher.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
         } else if decodedLast.isEmpty {
