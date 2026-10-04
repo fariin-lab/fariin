@@ -137,9 +137,13 @@ struct RestrictedChatView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     ForEach(Self.effects, id: \.text) { e in
-                        HStack(alignment: .firstTextBaseline, spacing: 14) {
+                        // ⛔ CENTRED, NOT ON THE BASELINE — owner, 2026-10-04: "icons and text not on
+                        // the same line". A 17pt glyph on a subheadline baseline rode high; the
+                        // glyph now matches the text's size and sits on the middle of its lines.
+                        HStack(alignment: .center, spacing: 14) {
                             Image(systemName: e.icon)
-                                .font(.system(size: 17))
+                                .font(.subheadline)
+                                .imageScale(.large)
                                 .frame(width: 26)
                             Text(e.text)
                                 .font(.subheadline)
@@ -164,6 +168,9 @@ struct RestrictedChatView: View {
                 }
             }
         }
+        // Owner, 2026-10-04: "the header and the card have too much space". The first section
+        // starts where a system settings page's does, not under an empty header band.
+        .contentMargins(.top, 12, for: .scrollContent)
         .navigationTitle("Restricted chat")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Ask \(them) to turn it off?", isPresented: $askToRequest) {

@@ -2210,13 +2210,25 @@ enum MessageRowLayout {
 
     // ── Notices: the day separator, a system event, a pin notice ──
 
+    /// An SF Symbol at the notice's 11pt, or an "ic_" asset-catalog glyph drawn at the same 13pt
+    /// box (the Restricted chat notice uses the owner's own icon, 2026-10-04).
+    private static func noticeGlyph(_ name: String) -> UIImage? {
+        guard name.hasPrefix("ic_") else {
+            return UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
+        }
+        guard let src = UIImage(named: name) else { return nil }
+        let side: CGFloat = 13
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
+            src.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+        }.withRenderingMode(.alwaysTemplate)
+    }
+
     private static func notice(_ n: NoticeRow, width: CGFloat) -> NoticePlan {
         let attr: NSMutableAttributedString
         switch n.style {
         case .pill:
             attr = NSMutableAttributedString()
-            if let symbol = n.symbol, let img = UIImage(systemName: symbol,
-                                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 11)) {
+            if let symbol = n.symbol, let img = Self.noticeGlyph(symbol) {
                 // ⛔ THE GLYPH RIDES THE NOTICE'S FONT AND SITS ON ITS CAP HEIGHT — owner, 2026-09-28,
                 // the disappearing-timer pill: the words sat low and their descenders were cut off,
                 // while the same pill without a glyph ("You pinned…") was fine. The attachment run

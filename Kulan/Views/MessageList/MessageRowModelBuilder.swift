@@ -667,6 +667,14 @@ enum MessageRowModelBuilder {
     /// The notice tap target that means "the Restricted chat request", not a message to jump to.
     static let restrictRequestTarget = "restrict-request"
 
+    /// The four sentences `ChatService` writes about Restricted chat, minus the writer's name:
+    /// "turned on Restricted chat." etc. Nil for any other notice.
+    private static func restrictedAction(_ text: String) -> String? {
+        let actions = ["turned on Restricted chat.", "turned off Restricted chat.",
+                       "asked to turn off Restricted chat.", "kept Restricted chat on."]
+        return actions.first { text.hasSuffix(" " + $0) }
+    }
+
     private static func systemNotice(_ m: Message, ctx: MessageRowContext) -> NoticeRow {
         // The disappearing-timer notice is worded HERE, per reader, from the value the writer
         // attached: "You" when I set it, the person's name when they did. The stored sentence (with
@@ -676,6 +684,18 @@ enum MessageRowModelBuilder {
             // timer line's, which is how the pill spaces a symbol from its words.
             if let symbol = m.localNoticeSymbol {
                 return NoticeRow(text: " " + m.text, symbol: symbol, style: .pill, tapTargetId: nil,
+                                 onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
+            }
+            // ⛔ RESTRICTED CHAT NOTICES ARE WORDED PER READER — owner, 2026-10-04: "I did it, so it
+            // must say You". The stored sentence has the writer's name baked in (the chat list
+            // still shows it); here the name part is replaced by "You" for my own, by the person's
+            // name for theirs, with the owner's Restricted chat icon in front.
+            if let action = restrictedAction(m.text) {
+                let who = m.authorId == ctx.me ? "You" : ctx.nameFor(m.authorId)
+                // His wording: "Restricted Chat", as the profile row names it.
+                let words = action.replacingOccurrences(of: "Restricted chat", with: "Restricted Chat")
+                return NoticeRow(text: " \(who) \(words)", symbol: "ic_restricted_chat", style: .pill,
+                                 tapTargetId: m.isRestrictRequest ? Self.restrictRequestTarget : nil,
                                  onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
             }
             // A request to turn Restricted chat off answers from its own notice, as in the

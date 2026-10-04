@@ -208,9 +208,7 @@ struct CallView: View {
                                    photoUrl: showLocalFull ? call.myPhotoUrl : call.otherPhotoUrl,
                                    size: 180)
                             .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
-                            // Soft expanding rings while the other side hasn't picked up yet —
-                            // the frozen avatar read as "dead"; big apps pulse here.
-                            .background { if call.state == .outgoing { PulsingRings(diameter: 180) } }
+                            // No pulsing rings while Calling: the owner had them removed 2026-10-04.
                             .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
                             .frame(maxWidth: .infinity)    // guarantee horizontal centering
                             .allowsHitTesting(false)       // decoration: let the show/hide tap through
@@ -1500,30 +1498,6 @@ struct LiveCallBarBackground: View {
             Gradient(colors: [.white.opacity(0), .white.opacity(opacity)]),
             startPoint: CGPoint(x: 0, y: top),
             endPoint: CGPoint(x: 0, y: size.height)))
-    }
-}
-
-// MARK: - PulsingRings
-
-// Soft rings expanding out from the avatar while the call is still unanswered — the
-// "alive" cue every big call UI has. Two staggered rings, GPU-cheap, removed on connect.
-struct PulsingRings: View {
-    let diameter: CGFloat
-    @State private var animate = false
-    var body: some View {
-        ZStack {
-            ForEach(0..<2, id: \.self) { i in
-                Circle()
-                    .stroke(.white.opacity(0.35), lineWidth: 1.5)
-                    .frame(width: diameter, height: diameter)
-                    .scaleEffect(animate ? 1.45 : 1.0)
-                    .opacity(animate ? 0 : 0.7)
-                    .animation(.easeOut(duration: 2.0).repeatForever(autoreverses: false).delay(Double(i)),
-                               value: animate)
-            }
-        }
-        .onAppear { animate = true }
-        .allowsHitTesting(false)
     }
 }
 
