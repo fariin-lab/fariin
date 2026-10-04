@@ -1192,8 +1192,24 @@ enum MessageRowLayout {
         // A SQUARE box: the width is the bubble's and the height only bounds the hand-tuned 2/3/4
         // arrangements, exactly as the reference bounds them.
         let sizes = a.tiles.map { CGSize(width: max(0.01, $0.aspect), height: 1) }
-        let solved = MediaGroupLayout.solve(itemSizes: sizes,
-                                            maxSize: CGSize(width: albumWidth, height: albumWidth))
+        let raw = MediaGroupLayout.solve(itemSizes: sizes,
+                                         maxSize: CGSize(width: albumWidth, height: albumWidth))
+        // ⛔ A GROUP OF TALL PICTURES IS NOT A NARROW BUBBLE — owner, 2026-10-04 on 824: "3 or 4
+        // images look small". Bounded by a square, portrait tiles (phone screenshots) solve to a
+        // mosaic about half the album width. Scaled up uniformly to the album width, proportions
+        // kept, height capped at 1.5 widths so a column of tall shots cannot run off the screen.
+        let solved: MediaGroupLayout.Result = {
+            guard raw.size.width > 1, raw.size.height > 1, raw.size.width < albumWidth - 1 else { return raw }
+            let s = min(albumWidth / raw.size.width, albumWidth * 1.5 / raw.size.height)
+            guard s > 1.01 else { return raw }
+            func up(_ r: CGRect) -> CGRect {
+                CGRect(x: (r.minX * s).rounded(), y: (r.minY * s).rounded(),
+                       width: (r.width * s).rounded(), height: (r.height * s).rounded())
+            }
+            return MediaGroupLayout.Result(
+                tiles: raw.tiles.map { MediaGroupLayout.Tile(index: $0.index, rect: up($0.rect), edges: $0.edges) },
+                size: CGSize(width: (raw.size.width * s).rounded(), height: (raw.size.height * s).rounded()))
+        }()
         let bubbleW = min(maxBubble, max(1, solved.size.width))
 
         var innerY: CGFloat = 0
