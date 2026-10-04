@@ -3809,9 +3809,29 @@ struct ChatRow: View, Equatable {
             Text(r).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)   // the quoted words may wrap
         } else if isPhotoPreview {
             HStack(spacing: 5) {
-                SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
-                    .frame(width: 20, height: 20)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                // ⛔ AN ALBUM IS A STACK — owner, 2026-10-04: "send 2, show 2 overlapping; send 10,
+                // show 3, the limit is 3". Only while the stack's first picture IS the current
+                // thumbnail, so a later single photo never shows an old album's stack.
+                let stack = conv.lastImages.first?.url == conv.lastImageUrl ? conv.lastImages : []
+                if stack.count > 1 {
+                    ZStack(alignment: .leading) {
+                        // Back to front: the first picture in front on the right, the others
+                        // peeking out to its left, the same way the pinned bar stacks an album.
+                        ForEach(Array(stack.enumerated()).reversed(), id: \.offset) { i, t in
+                            SecureImageView(imageUrl: t.url, enc: t.enc, cid: conv.id)
+                                .frame(width: 20, height: 20)
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .padding(1)
+                                .background(Color.white, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                .offset(x: CGFloat(stack.count - 1 - i) * 8)
+                        }
+                    }
+                    .frame(width: 22 + CGFloat(stack.count - 1) * 8, height: 22, alignment: .leading)
+                } else {
+                    SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
+                        .frame(width: 20, height: 20)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
                 Text(lastSenderPrefix + photoPreviewLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher,

@@ -799,7 +799,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var lastMessageCipher: String
     var lastImageUrl: String?          // last message's image (when it's a photo) → list thumbnail
     var lastImageEnc: EncMeta?         // enc meta to decrypt that thumbnail
-    var lastSender: String             // uid of who sent the last message ("" if unknown)
+    /// An album's first photos (up to 3) for the list's overlapped stack (owner, 2026-10-04).
+    /// Belongs to the current summary only while its first entry is `lastImageUrl`.
+    var lastImages: [ListThumb] = []
+    struct ListThumb: Hashable { let url: String; let enc: EncMeta }
+    var lastSender: String            // uid of who sent the last message ("" if unknown)
     var unreadCount: [String: Int]
     var typing: [String: Bool]
     // Voice-note recording rides the SAME "typing" field, as a string value ("audio-<seconds>")
@@ -895,6 +899,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.lastMessageCipher = data["lastMessage"] as? String ?? ""
         self.lastImageUrl = data["lastImageUrl"] as? String
         self.lastImageEnc = (data["lastImageEnc"] as? [String: Any]).flatMap(EncMeta.init(map:))
+        self.lastImages = (data["lastImages"] as? [[String: Any]] ?? []).prefix(3).compactMap { d in
+            guard let u = d["imageUrl"] as? String,
+                  let e = (d["enc"] as? [String: Any]).flatMap(EncMeta.init(map:)) else { return nil }
+            return ListThumb(url: u, enc: e)
+        }
         self.lastSender = data["lastSender"] as? String ?? ""
         self.unreadCount = intMap(data["unreadCount"])
         // Typing = Bool true (older builds) OR the "text-<seconds>" refresh string senders now write.

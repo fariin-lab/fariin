@@ -1465,6 +1465,11 @@ enum ChatService {
             convThumb["lastImageUrl"] = u
             convThumb["lastImageEnc"] = e
         }
+        // The list's overlapped stack (owner, 2026-10-04): the album's first 3 pictures, the
+        // first being `lastImageUrl`, which is how the list knows the stack is still current.
+        if items.count > 1 {
+            convThumb["lastImages"] = items.prefix(3).map { ["imageUrl": $0["imageUrl"] as Any, "enc": $0["enc"] as Any] }
+        }
         // ⛔ ONE SURVIVOR IS A PHOTO, NOT AN ALBUM OF ONE — his report, 2026-08-28 and again
         // 2026-09-26: send two, cancel one, and you get the remaining picture plus an empty tile
         // (the mosaic is built for two and up; a lone tile leaves its partner blank).
@@ -1691,6 +1696,13 @@ enum ChatService {
            let u = firstThumb["imageUrl"], let e = firstThumb["enc"] {
             convUpdate["lastImageUrl"] = u
             convUpdate["lastImageEnc"] = e
+            // The list's overlapped stack (owner, 2026-10-04): that same first picture, then the
+            // next ones, 3 at most. Only the cover pictures: {imageUrl, enc}, nothing playable.
+            let rest = out.filter { ($0["imageUrl"] as? String) != (u as? String) }
+            convUpdate["lastImages"] = ([firstThumb] + rest).prefix(3).compactMap { t -> [String: Any]? in
+                guard let tu = t["imageUrl"], let te = t["enc"] else { return nil }
+                return ["imageUrl": tu, "enc": te]
+            }
         }
         if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
         else {

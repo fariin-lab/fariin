@@ -1567,7 +1567,7 @@ service cloud.firestore {
               || request.auth.uid != resource.data.get('startedBy', '')
               || request.auth.uid != resource.data.get('lastSender', '')
               || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-                   'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc',
+                   'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages',
                    'accepted', 'startedBy'
                  ])
             )
@@ -1620,7 +1620,7 @@ service cloud.firestore {
             && resource.data.users.hasAll(request.resource.data.users)
             && request.resource.data.users.size() == resource.data.users.size()
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                 'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'updatedAt',
+                 'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'lastImages', 'updatedAt',
                  'unreadCount', 'typing', 'lastRead', 'pinnedBy', 'mutedBy', 'archivedBy',
                  'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt', 'lastPlayedVoice',
                  'lastReactionEnc', 'lastReactionBy', 'lastReactionToAuthor', 'lastReactionAt',
