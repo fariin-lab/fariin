@@ -4859,10 +4859,7 @@ struct ThreadView: View {
                 let isPDF = safe.lowercased().hasSuffix(".pdf") || head.elementsEqual([0x25, 0x50, 0x44, 0x46])
                 // No extension: QuickLook needs a typed name to know what it is looking at.
                 let preview = isPDF ? local : DocumentPrefetch.previewURL(for: local)
-                await MainActor.run {
-                    if isPDF { pdfDoc = PDFDocWrap(url: local, title: safe) }
-                    else { filePreview = PreviewFile(url: preview) }
-                }
+                await MainActor.run { showDocument(preview, isPDF: isPDF, title: safe) }
                 return
             }
             guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
@@ -4897,10 +4894,18 @@ struct ThreadView: View {
             await MainActor.run {
                 // The sanitised name is also the one shown as the reader's title: what is on screen
                 // should be the file that was actually opened.
-                if isPDF { pdfDoc = PDFDocWrap(url: tmp, title: safe) }
-                else { filePreview = PreviewFile(url: preview) }
+                showDocument(preview, isPDF: isPDF, title: safe)
             }
         }
+    }
+
+    /// Apple's QuickLook page for every file, PDFs included (`SingleFilePreviewController`). In a
+    /// Restricted chat (No Saving) the old pages stay: QuickLook's share button cannot be removed.
+    /// For a PDF `url` is the file itself (see `openFile`).
+    private func showDocument(_ url: URL, isPDF: Bool, title: String) {
+        if savingAllowed { SingleFilePreviewController.present(url) }
+        else if isPDF { pdfDoc = PDFDocWrap(url: url, title: title) }
+        else { filePreview = PreviewFile(url: url) }
     }
 
     private func handlePickedFile(_ result: Result<[URL], Error>) {
@@ -10408,6 +10413,29 @@ struct FilePreviewSheet: View {
                 .padding(.top, 10).padding(.trailing, 12)
             }
             .presentationDragIndicator(.visible)
+    }
+}
+
+/// ⛔ APPLE'S OWN FILE PAGE — owner, 2026-10-04, a screenshot of the system QuickLook page (title
+/// with its ⌄ menu, ✕, share at the bottom): "use the Apple page, now you use a custom page, make it
+/// like the reference". QuickLook presented by itself, full screen, not wrapped in a sheet, so its
+/// own bar and buttons render. Holds its one file as its own data source (QuickLook keeps it weak).
+final class SingleFilePreviewController: QLPreviewController, QLPreviewControllerDataSource {
+    private let fileURL: URL
+    init(url: URL) {
+        fileURL = url
+        super.init(nibName: nil, bundle: nil)
+        dataSource = self
+        modalPresentationStyle = .fullScreen
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+        fileURL as NSURL
+    }
+
+    @MainActor static func present(_ url: URL) {
+        WebLink.topViewController()?.present(SingleFilePreviewController(url: url), animated: true)
     }
 }
 
