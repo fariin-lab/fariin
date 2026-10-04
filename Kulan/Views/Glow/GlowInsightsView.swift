@@ -194,23 +194,12 @@ struct GlowInsightsView: View {
         }
     }
 
-    enum StorySort: CaseIterable { case latest, views, reactions
-        var title: String {
-            switch self {
-            case .latest: return "Latest"
-            case .views: return "Views"
-            case .reactions: return "Reactions"
-            }
-        }
-    }
-
 
     @State private var loader = GlowInsightsLoader()
     @State private var history = InsightsHistoryLoader()
     @State private var countries = InsightsCountriesLoader()
     @State private var period: InsightsPeriod = .month
     @State private var tab: Tab = .overview
-    @State private var sort: StorySort = .latest
     private var glow = GlowService.shared
 
     private var live: [PostedStory] { stories.state.value ?? [] }
@@ -482,51 +471,12 @@ struct GlowInsightsView: View {
         return "\(since) These figures count from that day."
     }
 
-    // MARK: - Live now
-
-    @ViewBuilder private var liveCard: some View {
-        if stories.state.isLoading {
-            card("Live now") { ProgressView().frame(maxWidth: .infinity) }
-        } else if stories.state.isFailed {
-            card("Live now") { Text("Could not load stories").foregroundStyle(.secondary) }
-        } else if live.isEmpty {
-            card("Live now") { Text("You have no live stories.").foregroundStyle(.secondary) }
-        } else if !GlowInsightsLoader.receiptsOn {
-            card("Live now", footer: "Turn on view receipts in Settings > Stories to see who views your stories.") {
-                Text("Story views are turned off.").foregroundStyle(.secondary)
-            }
-        } else {
-            // ⛔ TAPPABLE — owner, 2026-10-03: "the names shown in Insights should be tappable and
-            // work". Live now opens the stories it counts.
-            NavigationLink { postedStories } label: {
-                card("Live now", footer: "The stories that are live at this moment. Viewers are different people across all of them.") {
-                    liveSummary
-                }
-            }
-            .buttonStyle(.plain)
-        }
-    }
+    // (The "Live now" card is gone — owner, 2026-10-04, "confusing": it repeated the summary's
+    // numbers for a different span. Live stories still show in the list, marked "Live".)
 
     /// Where a story figure leads: my own Posted stories, the page that opens each one.
     private var postedStories: some View {
         PostedStoriesView(uid: AuthService.shared.uid ?? "", isMe: true, title: title)
-    }
-
-    private var liveSummary: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 16) {
-            GridRow {
-                stat("Story views", loader.totalViews.map(GlowCount.short), nil)
-                stat("Viewers", loader.viewers.map(GlowCount.short), nil)
-            }
-            GridRow {
-                stat("Reactions", loader.totalReactions.map(GlowCount.short), nil)
-                stat("Live stories", GlowCount.short(live.count), nil)
-            }
-            GridRow {
-                stat("Views per story", loader.viewsPerStory.map(Self.average), nil)
-                stat("Reaction rate", loader.reactionRate.map { String(format: "%.0f%%", $0 * 100) }, nil)
-            }
-        }
     }
 
     // MARK: - Content
@@ -536,20 +486,26 @@ struct GlowInsightsView: View {
     /// in Fariin records how long a story was watched, and a zero would be invented.
     @ViewBuilder private func contentTab(_ report: InsightsReport) -> some View {
         periodHeader(report)
+        // ⛔ MINIMALIST — owner, 2026-10-04: "insight is confusing, make it minimalist, remove this
+        // bar". The reference app's overview: one card, a 2-by-2 grid of figures, each with its own
+        // small change under it, and ONE line saying what they are compared with. No sort bar (the
+        // stories are newest first), no second "Live now" card repeating the same numbers.
         historyGate(report) {
-            VStack(spacing: 10) {
-                figureCard("Story Views", Self.amount(report.views.current), report.views)
-                figureCard("Reactions", Self.amount(report.reactions.current), report.reactions)
-                figureCard("Stories Posted", Self.amount(report.posted.current), report.posted)
-                figureCard("Views per Story", Self.average(report.viewsPerStory.current), report.viewsPerStory)
+            card(footer: comparisonLine(report)) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 16) {
+                    GridRow {
+                        stat("Story views", Self.amount(report.views.current), report.views)
+                        stat("Reactions", Self.amount(report.reactions.current), report.reactions)
+                    }
+                    GridRow {
+                        stat("Stories posted", Self.amount(report.posted.current), report.posted)
+                        stat("Views per story", Self.average(report.viewsPerStory.current), report.viewsPerStory)
+                    }
+                }
             }
         }
-        Picker("Sort", selection: $sort) {
-            ForEach(StorySort.allCases, id: \.self) { Text($0.title).tag($0) }
-        }
-        .pickerStyle(.segmented)
         if history.phase == .loaded, report.hasHistory {
-            let rows = sorted(report.periodStories)
+            let rows = report.periodStories.sorted { $0.createdAt > $1.createdAt }
             if rows.isEmpty {
                 card {
                     ContentUnavailableView("No stories in this period",
@@ -557,7 +513,7 @@ struct GlowInsightsView: View {
                                            description: Text("Stories you post in the last \(period.rawValue) days appear here with their views and reactions."))
                 }
             } else {
-                card {
+                card("Stories") {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { i, record in
                         if i > 0 { Divider() }
                         NavigationLink { postedStories } label: { recordRow(record) }
@@ -578,16 +534,11 @@ struct GlowInsightsView: View {
                 }
             }
         }
-        // The history's loading / failed / empty state is already said once, above the figures.
-        liveCard
     }
 
-    private func sorted(_ rows: [InsightsStoryRecord]) -> [InsightsStoryRecord] {
-        switch sort {
-        case .latest: return rows.sorted { $0.createdAt > $1.createdAt }
-        case .views: return rows.sorted { $0.views != $1.views ? $0.views > $1.views : $0.createdAt > $1.createdAt }
-        case .reactions: return rows.sorted { $0.reactions != $1.reactions ? $0.reactions > $1.reactions : $0.createdAt > $1.createdAt }
-        }
+    /// The one line under a summary grid: what the changes are measured against, or why there are none yet.
+    private func comparisonLine(_ report: InsightsReport) -> String {
+        report.views.previous != nil ? "Compared with the previous \(period.rawValue) days." : overviewFooter(report)
     }
 
     // MARK: - Audience
@@ -599,25 +550,23 @@ struct GlowInsightsView: View {
     @ViewBuilder private func audienceTab(_ report: InsightsReport) -> some View {
         periodHeader(report)
         historyGate(report) {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("\(period.rawValue) Day Summary").font(.headline)
-                // Each row opens what it counts where there is a list to open. Unglows has none on
-                // purpose: who stopped glowing you is not shown anywhere in the app.
-                NavigationLink { GlowPeopleListView(side: .glowers, title: title) } label: {
-                    summaryRow("Total Glowers", GlowCount.short(glow.displayGlowers.count), totalGlowersDelta(report))
+            // The same 2-by-2 grid as the Stories tab (owner, 2026-10-04: minimalist). Tapping the
+            // card opens the Glowers list. Unglows names nobody: who stopped glowing you is not shown.
+            NavigationLink { GlowPeopleListView(side: .glowers, title: title) } label: {
+                card(footer: comparisonLine(report)) {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 16) {
+                        GridRow {
+                            stat("Total Glowers", GlowCount.short(glow.displayGlowers.count), totalGlowersDelta(report))
+                            stat("Gained", "+" + GlowCount.short(report.glowersGained), report.gainedDelta)
+                        }
+                        GridRow {
+                            stat("Unglows", GlowCount.short(report.glowersLost), report.lostDelta)
+                            stat("Net", Self.signed(Double(report.glowersGained - report.glowersLost)), report.glowersNet)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                NavigationLink { GlowPeopleListView(side: .glowers, title: title) } label: {
-                    summaryRow("Gained", "+" + GlowCount.short(report.glowersGained), report.gainedDelta)
-                }
-                .buttonStyle(.plain)
-                summaryRow("Unglows", GlowCount.short(report.glowersLost), report.lostDelta)
-                summaryRow("Net", Self.signed(Double(report.glowersGained - report.glowersLost)), report.glowersNet)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .buttonStyle(.plain)
         }
         countriesCard
         historyGate(report) { activeTimesCard(report) }
@@ -636,23 +585,6 @@ struct GlowInsightsView: View {
     private func totalGlowersDelta(_ report: InsightsReport) -> InsightsDelta {
         let start = report.coversPeriod ? report.glowersByDay.first.map { Double($0.value) } : nil
         return InsightsDelta(current: Double(glow.displayGlowers.count), previous: start)
-    }
-
-    /// One row of the summary card: name and number left, "vs Previous" and the change right.
-    private func summaryRow(_ title: String, _ value: String, _ delta: InsightsDelta) -> some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.subheadline).foregroundStyle(.secondary)
-                Text(value).font(.title3.weight(.bold)).monospacedDigit()
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("vs Previous \(period.rawValue) Days").font(.caption).foregroundStyle(.secondary)
-                let p = Self.percentText(delta)
-                Text(p.text).font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(p.color)
-            }
-        }
-        .contentShape(Rectangle())
     }
 
     @ViewBuilder private var countriesCard: some View {
