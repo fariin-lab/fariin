@@ -23,11 +23,14 @@ struct CallLinkDetailsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                CallLinkCard(key: current.key, title: current.title) {
+            // ⛔ THE SAME MINIMALIST LAYOUT AS THE CREATE SHEET — owner, 2026-10-04: what the call is
+            // and Join, the three ways to pass it on as tiles, the two settings plain, Delete last.
+            VStack(spacing: 22) {
+                CallLinkHero(key: current.key, title: current.title) {
                     let key = current.key
                     Task { await GroupCallService.shared.joinLink(key: key, video: false) }
                 }
+                CallLinkShareRows(saved: current, compact: true)
                 if current.admin {
                     CallLinkGroup {
                         NavigationLink {
@@ -35,18 +38,28 @@ struct CallLinkDetailsView: View {
                                 try await CallLinkService.shared.rename(link, to: name)
                             }
                         } label: {
-                            CallLinkRow(icon: "pencil",
-                                        title: current.name.isEmpty ? "Add Call Name" : "Edit Call Name",
-                                        chevron: true)
+                            HStack {
+                                Text("Call Name")
+                                Spacer(minLength: 8)
+                                Text(current.name.isEmpty ? "None" : current.name)
+                                    .foregroundStyle(.secondary).lineLimit(1)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 50)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        CallLinkDivider()
-                        CallLinkApprovalRow(isOn: Binding(get: { approval ?? true },
-                                                          set: { setApproval($0) }),
-                                            enabled: approval != nil)
+                        Divider().padding(.leading, 16)
+                        Toggle("Admin Approval", isOn: Binding(get: { approval ?? true },
+                                                               set: { setApproval($0) }))
+                            .disabled(approval == nil)
+                            .padding(.horizontal, 16)
+                            .frame(minHeight: 50)
                     }
                 }
-                CallLinkShareRows(saved: current)
                 if current.admin {
                     CallLinkGroup {
                         Button { confirmDelete = true } label: {

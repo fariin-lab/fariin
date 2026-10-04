@@ -94,26 +94,7 @@ struct CreateCallLinkSheet: View {
                 // three ways to hand the link on as round buttons, then the two settings, plain.
                 VStack(spacing: 22) {
                     header
-                    VStack(spacing: 8) {
-                        CallLinkAvatar(key: draft.key, size: 64)
-                        Text(draft.title)
-                            .font(.title3.weight(.semibold))
-                            .lineLimit(1)
-                        Text(shortLink)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Button { join() } label: {
-                        Text("Join Call")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity, minHeight: 50)
-                            .background(Theme.defaultBubble(scheme == .dark), in: Capsule())
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+                    CallLinkHero(key: draft.key, title: draft.title) { join() }
                     CallLinkShareRows(draft: draft, compact: true) {
                         await CallLinkService.shared.persist(draft)
                     }
@@ -178,11 +159,6 @@ struct CreateCallLinkSheet: View {
         .padding(.top, 6)
     }
 
-    /// The link without its scheme: "fariin.com/call/#key=…", cut in the middle when long.
-    private var shortLink: String {
-        let full = CallLinkKey(text: draft.key)?.url.absoluteString ?? ""
-        return full.replacingOccurrences(of: "https://", with: "")
-    }
 
     private func done() {
         let d = draft
@@ -246,6 +222,45 @@ struct CallLinkAvatar: View {
                     .foregroundStyle(.white)
             }
             .accessibilityHidden(true)
+    }
+}
+
+/// ⛔ THE MINIMALIST TOP — owner, 2026-10-04: the create sheet and the details page both open with
+/// this: the link's avatar, its name and the link without its scheme, centred, then one full-width
+/// Join Call. (The old `CallLinkCard` below is kept for nothing else to break; nothing uses it now.)
+struct CallLinkHero: View {
+    let key: String
+    let title: String
+    let onJoin: () -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    private var shortLink: String {
+        (CallLinkKey(text: key)?.url.absoluteString ?? "").replacingOccurrences(of: "https://", with: "")
+    }
+
+    var body: some View {
+        VStack(spacing: 22) {
+            VStack(spacing: 8) {
+                CallLinkAvatar(key: key, size: 64)
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                Text(shortLink)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Button(action: onJoin) {
+                Text("Join Call")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(Theme.defaultBubble(scheme == .dark), in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 
@@ -357,8 +372,8 @@ struct CallLinkShareRows: View {
     init(draft: CallLinkDraft, compact: Bool = false, beforeShare: @escaping () async -> Void) {
         self.link = draft; self.beforeShare = beforeShare; self.compact = compact
     }
-    init(saved: SavedCallLink) {
-        self.link = saved; self.beforeShare = {}
+    init(saved: SavedCallLink, compact: Bool = false) {
+        self.link = saved; self.beforeShare = {}; self.compact = compact
     }
 
     @State private var sendInApp = false
