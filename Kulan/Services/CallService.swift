@@ -3039,6 +3039,14 @@ final class CallService: NSObject {
             CallKitManager.shared.reportEnded()
         }
 
+        // I pressed End myself: close at once, no end label (owner's order 2026-10-04, the
+        // reference behaviour). A caller hanging up before an answer used to read "Couldn't reach
+        // them", which blamed the other person for my own tap. The `.ended` tail is cosmetic
+        // (see observeIncoming), so skipping it is safe. Mic-denied keeps its tail to be read.
+        if localUser, !micDenied {
+            state = .idle
+            return
+        }
         state = .ended
         // Keep the final state visible briefly (longer for the busy tone) before idle.
         // The mic-denied line needs time to be read; one second is gone before the eye lands on it.
