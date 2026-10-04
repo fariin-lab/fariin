@@ -2260,20 +2260,22 @@ struct ThreadView: View {
                     if m.album.count > 1 {
                         let second = m.album[1]
                         ZStack(alignment: .trailing) {
-                            // ⛔ 18, NOT 9 — owner, 2026-10-03, his picture beside ours: only a 2pt
-                            // sliver of the second photo showed. The front tile is 35 wide with its
-                            // edge and this one 28, so a 9 shift hid all but 2pt; 18 shows ~11pt,
-                            // about a third of it, as in his reference.
+                            // ⛔ SAME SIZE, WHITE EDGES — owner, 2026-10-04, his picture: "both the
+                            // same size, the one under looks small", and the edge "white in dark
+                            // mode, white in light mode too" (the page-coloured edge drew a black
+                            // square line in dark). Both tiles 32 + a 1.5 white edge = 35; the back
+                            // one shifted 11 shows ~11pt of it, as in his picture.
                             SecureImageView(imageUrl: second.imageUrl, enc: second.enc, cid: cid)
-                                .frame(width: 28, height: 28)
-                                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                .offset(x: -18)
+                                .frame(width: 32, height: 32)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .padding(1.5)
+                                .background(Color.white, in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
+                                .offset(x: -11)
                             SecureImageView(imageUrl: first.imageUrl, enc: first.enc, cid: cid)
                                 .frame(width: 32, height: 32)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .padding(1.5)
-                                .background(Color(.systemBackground),
-                                            in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
+                                .background(Color.white, in: RoundedRectangle(cornerRadius: 9.5, style: .continuous))
                         }
                         .frame(width: 46, height: 35, alignment: .trailing)
                     } else {
