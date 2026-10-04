@@ -5481,8 +5481,17 @@ struct ThreadView: View {
         // ALREADY finished (MediaSend.finish clears it) — at that point `m.id` is a real, DELIVERED
         // message, and falling back to it here would hard-delete it via `cancelAnnounced` instead of
         // doing nothing, for a Cancel tapped at the exact moment the send landed.
+        //
+        // ⛔ OR A SERVER ROW OF MINE STILL MARKED `uploading` — owner, 2026-10-04 on 824: "at 99% I
+        // tap X, the photo goes blurred and loads forever". Once the announced document comes back
+        // through the listener the row IS the server copy, and a server copy's `sendState` is nil,
+        // so the old fallback never matched it: the upload was cancelled, the document stayed, and
+        // with no media ever attached it showed its blurred placeholder and spinner for good.
+        // `uploading` is the server's own word that no media has been attached yet, so taking that
+        // document down can never remove a delivered photo.
         let announced = MediaSend.shared.announcedId(clientId)
             ?? (m.sendState == .sending && m.id != clientId ? m.id : nil)
+            ?? (m.uploading && m.authorId == me && m.id != clientId ? m.id : nil)
         if let announced {
             Task { await ChatService.cancelAnnounced(cid: cid, messageId: announced) }
         }
