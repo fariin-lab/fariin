@@ -58,7 +58,12 @@ final class RowImageView: UIImageView {
                    cornerRadius: CGFloat = 0, placeholder: UIImage? = nil) {
         layer.cornerRadius = cornerRadius
         layer.cornerCurve = .continuous
-        guard let url, !url.isEmpty else { token += 1; currentUrl = nil; image = placeholder; return }
+        // No url: forget the last one entirely (2026-10-04 audit). Leaving `loadedUrl` / `inFlight`
+        // set meant a later configure with that same url returned early on the placeholder for good.
+        guard let url, !url.isEmpty else {
+            token += 1; currentUrl = nil; loadedUrl = nil; inFlight = nil; unwatch(); setLoading(false)
+            image = placeholder; return
+        }
         // ⛔ "ALREADY DRAWN" MUST MEAN THE REAL BYTES, NOT ANY IMAGE. The placeholder — an inline
         // thumb or a decoded blurhash — is not nil, so a fetch that failed once left `image` holding
         // the blur, and every later configure with the same url returned here immediately. The photo

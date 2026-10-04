@@ -394,7 +394,7 @@ enum MessageRowModelBuilder {
             pixelHeight: m.height,
             durationText: duration,
             caption: caption,
-            uploading: m.sendState == .sending || m.uploading,
+            uploading: m.sendState == .sending || m.uploadingLive,
             sendFailed: m.sendState == .failed,
             clientId: m.clientId,
             cancellable: m.authorId == ctx.me && m.sendState == .sending,
@@ -480,7 +480,7 @@ enum MessageRowModelBuilder {
             // tiles with no indicator at all: the wire carries `uploading: true` for exactly this
             // and nothing read it. See [[kulan-media-send-order]] — a message exists before its
             // bytes do, on purpose, and the ring is what says so.
-            uploading: m.sendState == .sending || m.uploading,
+            uploading: m.sendState == .sending || m.uploadingLive,
             sendFailed: m.sendState == .failed,
             cancellable: m.authorId == ctx.me && m.sendState == .sending,
             blurhash: m.blurhash,

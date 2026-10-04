@@ -391,6 +391,14 @@ struct Message: Identifiable, Equatable, Codable {
     ///
     /// ⚠️ And nil once the URL arrives, so this cannot outlive the upload even if the flag somehow
     /// did. The URL is the fact; `uploading` is only the hint.
+    /// `uploading`, but not forever (2026-10-04 audit). A sender whose app was killed or lost the
+    /// network between the first write and the media write leaves `uploading: true` with nothing
+    /// to finish it, and every reader drew a spinning ring over the blur for good. Past 30 minutes
+    /// (room for a big album on a slow line) the ring stops; the blur stays, which is the truth.
+    var uploadingLive: Bool {
+        uploading && Date().timeIntervalSince(createdAt) < 30 * 60
+    }
+
     var pendingMediaKind: String? {
         guard uploading, localImageData == nil, localAudioData == nil, !localFile else { return nil }
         switch type {

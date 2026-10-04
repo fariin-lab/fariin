@@ -29,6 +29,8 @@ struct SecureImageView: View {
     @State private var failed = false
     @State private var waitingTap = false
     @State private var userRequested = false
+    /// The url `load()` last ran for, so per-photo state resets only when the photo changes.
+    @State private var loadedFor: String?
     /// ⛔ THE DOWNLOAD'S OWN STATE, NOT A TIMER — his instruction 2026-08-27, and the reference's
     /// model exactly. Their `CVAttachmentProgressView` has four:
     ///
@@ -150,6 +152,15 @@ struct SecureImageView: View {
     }
 
     private func load() async {
+        // A NEW url is a new photo (2026-10-04 audit): the old one's "waiting for a tap" and "the
+        // user asked for it" must not carry over, or the first tap on the new photo is swallowed
+        // and the next held photo skips the download policy. Only on a url change, because a tap
+        // on THIS photo sets `userRequested` and then calls load() again.
+        if loadedFor != imageUrl {
+            loadedFor = imageUrl
+            waitingTap = false
+            userRequested = false
+        }
         // ⛔ ALREADY HERE MEANS NO INDICATOR, EVER. Both cache hits return before `downloading` is
         // ever set, so a photo the phone already holds draws on its first frame with nothing over it
         // — his requirement, and the reference's `.none` state.
