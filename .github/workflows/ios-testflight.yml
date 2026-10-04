@@ -74,7 +74,23 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            RESTRICTED CHAT: MESSAGES NO LONGER COVER THE MESSAGE BOX.
+            GLOBAL SEARCH, FILES IN APPLE'S VIEWER, AUTO-SCROLL, BLOCK FIXES AND MORE.
+
+            SEARCH: names match by the start of each word. Things you searched before come first. People found by username show under Global Search (3, then Show More).
+            SENDING: sending anything now always scrolls the chat to your new message.
+            REOPENING A CHAT: a small scroll is not remembered; a real scroll still is.
+            FILES open in Apple's own viewer (PDFs too). Attach sheet: swipe right to leave a folder.
+            CHAT LIST: an album shows up to 3 overlapping photos. The verified badge stays blue on iOS 26. No more "Say hello" on a chat whose last message was a photo.
+            BLOCKS: a reply to a message sent while blocked says "Not available".
+            RESTRICTED CHAT: new icon, "You turned off Restricted Chat" for your own change, tidier page.
+            PINNED ALBUM: both photos the same size with white edges.
+            HEADER BLUR: shorter without a pinned bar, lighter, and lighter over dark wallpapers.
+            INSIGHTS: simpler summary cards, no sort bar.
+            CALLS: no pulsing rings while calling, your own End closes at once, faster recovery on network change.
+
+            PLEASE TEST: search a username by its first letters; send photos and voice while scrolled up; open a PDF; check a chat list album row.
+
+            EARLIER (build 823): RESTRICTED CHAT: MESSAGES NO LONGER COVER THE MESSAGE BOX.
 
             Turning Restricted Chat on or off no longer lifts the messages over the message box, the date and the jump button.
 
