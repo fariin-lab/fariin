@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            GLOBAL SEARCH, FILES IN APPLE'S VIEWER, AUTO-SCROLL, BLOCK FIXES AND MORE.
+            PHOTO FIXES: NO MORE STUCK BLURRED PHOTOS, BIGGER ALBUMS.
+
+            CANCEL: tapping X on a photo being sent (even at 99%) now removes it cleanly; no more blurred photo with an endless spinner.
+            STUCK SENDS: if the other person's upload was interrupted, the spinner stops instead of spinning forever.
+            ALBUMS: 3 or 4 tall photos (like screenshots) now fill the full album width.
+            ATTACH SHEET: the swipe back out of a folder follows your finger.
+            PHOTO TAPS: the first tap on a photo is no longer ignored after scrolling.
+
+            PLEASE TEST: send a photo and tap X while it uploads; send 3-4 screenshots as one album; swipe back in a photo folder.
+
+            EARLIER (build 824): GLOBAL SEARCH, FILES IN APPLE'S VIEWER, AUTO-SCROLL, BLOCK FIXES AND MORE.
 
             SEARCH: names match by the start of each word. Things you searched before come first. People found by username show under Global Search (3, then Show More).
             SENDING: sending anything now always scrolls the chat to your new message.
