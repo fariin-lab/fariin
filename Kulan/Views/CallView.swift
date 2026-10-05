@@ -713,6 +713,8 @@ struct CallContainer<Content: View>: View {
     /// no-animation transaction so the cut is instant both ways.
     private var wantsCover: Bool { isActive && !call.minimized }
     @State private var coverUp = false
+    /// Shared by the cover's zoom and the card. See `CallZoomNamespaceKey`.
+    @Namespace private var callZoom
 
     var body: some View {
         content
@@ -741,6 +743,7 @@ struct CallContainer<Content: View>: View {
                 FloatingCallWindow()
             }
         }
+        .environment(\.callZoomNamespace, callZoom)
         // An invite to a multi-person call, over whatever screen is open. Last overlay = top-most.
         .overlay { IncomingGroupCallLayer() }
         // ⛔ THE SETTER SWALLOWED THE DISMISS, AND THAT LOST THE CALL.
@@ -778,12 +781,20 @@ struct CallContainer<Content: View>: View {
             // screen. The first attempt here (scale 1.04 + fade, from another messenger) was the
             // wrong reference. The cover goes up and down inside a transaction with animations
             // disabled, which is that same hard cut.
+            //
+            // ⛔ EXCEPT BETWEEN THE SCREEN AND ITS CARD (owner, 2026-10-05: minimize "just call page
+            // make zoom out", and tapping the card "make it smooth, opening there like zoom in").
+            // Minimizing zooms the screen down into the card and tapping the card zooms it back
+            // out. Placing a call and ending one stay hard cuts; see `presentCover(animated:)`.
             CallView()
+                .navigationTransition(.zoom(sourceID: CallZoomSource.card, in: callZoom))
                 .presentationBackground(.black)
         }
-        .onAppear { if wantsCover { presentCover() } }
+        .onAppear { if wantsCover { presentCover(animated: false) } }
         .onChange(of: wantsCover) { _, want in
-            if want { presentCover() } else { dismissCover() }
+            // In: animated only when coming back from the card (it has existed this call).
+            // Out: animated only when minimizing; a call that has ended just goes.
+            if want { presentCover(animated: call.everMinimized) } else { dismissCover(animated: isActive) }
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
         // GroupCallView's own swipe-down sets `minimized` back to true, but a swipe on the COVER
@@ -808,19 +819,43 @@ struct CallContainer<Content: View>: View {
 
     /// Hard cut in: the system's slide switched off, nothing of ours in its place. The keyboard is
     /// put away first, as the reference app does by hiding the whole app window.
-    private func presentCover() {
+    /// `animated` lets the system zoom run (from the card); otherwise it is the hard cut.
+    private func presentCover(animated: Bool) {
         guard !coverUp else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        if animated { coverUp = true; return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { coverUp = true }
     }
 
-    /// Hard cut out, the same way.
-    private func dismissCover() {
+    /// Out, the same way: the zoom into the card when minimizing, a hard cut when the call is over.
+    private func dismissCover(animated: Bool) {
         guard coverUp else { return }
+        if animated { coverUp = false; return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { coverUp = false }
     }
+}
+
+// MARK: - The zoom between the call screen and the card
+
+/// The root holds the namespace (the cover is declared there) and hands it to the card through the
+/// environment, because the two are nowhere near each other in the view tree.
+private struct CallZoomNamespaceKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+
+extension EnvironmentValues {
+    var callZoomNamespace: Namespace.ID? {
+        get { self[CallZoomNamespaceKey.self] }
+        set { self[CallZoomNamespaceKey.self] = newValue }
+    }
+}
+
+enum CallZoomSource {
+    /// The floating card: the ONLY zoom source. A call is never zoomed out of the button that
+    /// placed it (owner, 2026-10-04); it zooms only between the screen and its own card.
+    static let card = "call.card"
 }
 
 // MARK: - FloatingCallWindow
@@ -856,6 +891,18 @@ struct FloatingCallWindow: View {
     /// The card's live drag, as a TRANSFORM. Zero except while a finger is down — see the drag's
     /// `onChanged` for why the settled position and the moving one are kept apart.
     @State private var dragLive: CGSize = .zero
+
+    /// The call screen's zoom partner: the screen shrinks into this card and grows back out of it.
+    /// Nil is a working configuration (the zoom falls back to a plain presentation).
+    @Environment(\.callZoomNamespace) private var zoomNamespace
+
+    @ViewBuilder private func zoomAnchored(_ content: some View) -> some View {
+        if let zoomNamespace {
+            content.matchedTransitionSource(id: CallZoomSource.card, in: zoomNamespace)
+        } else {
+            content
+        }
+    }
 
     /// Ties the card and the tab together as one shape for the morph.
     @Namespace private var morph
@@ -935,7 +982,7 @@ struct FloatingCallWindow: View {
                 // ⛔ THE TRANSFORM SITS ON `window`, INSIDE THE GESTURE, which is where the smooth
                 // build had it. Hung on the outside it moves the very view the drag is measured on,
                 // so the finger's own reference frame travels with the card.
-                morphAnchored(window.offset(dragLive))
+                morphAnchored(zoomAnchored(window.offset(dragLive)))
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
@@ -1135,7 +1182,7 @@ struct FloatingCallWindow: View {
 
     private var window: some View {
         Group {
-            if call.isVideo { videoWindow } else { voiceWindow }
+            if call.isVideoCall { videoWindow } else { voiceWindow }
         }
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1153,7 +1200,7 @@ struct FloatingCallWindow: View {
         // it; the voice card puts the same words under the face instead. Either way a minimized call
         // that has not been answered yet says so.
         .overlay(alignment: .bottom) {
-            if call.isVideo, let stage = stageLabel {
+            if call.isVideoCall, let stage = stageLabel {
                 Text(stage)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.white)

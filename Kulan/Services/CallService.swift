@@ -325,6 +325,11 @@ final class CallService: NSObject {
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
     var remoteMuted = false         // is THEIR mic muted (from the `muted` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
+    /// A VIDEO CALL, as opposed to a call with a camera on right now: placed as video, or a camera
+    /// has been on at some point. The minimized card keys on this (owner, 2026-10-05: a video call
+    /// minimized while ringing, camera not up yet, showed the voice card). The video card already
+    /// draws the photo for any camera that is off.
+    var isVideoCall: Bool { isVideo || startedAsVideo || everVideo }
 
     /// The chat this call belongs to while it is RUNNING — nil the rest of the time. The chat list
     /// reads it to float that one row to the top and label it "Active call", the way the reference
