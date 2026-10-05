@@ -493,6 +493,32 @@ struct PendingCall: Identifiable {
     var id: String { uid + (video ? "-v" : "-a") }
 }
 
+/// The Calls list's two call-link delete alerts: the confirm (same words as the link's own details
+/// page) and the failure. Its own modifier so the list's body stays small enough to type-check.
+private struct CallLinkDeleteAlerts: ViewModifier {
+    @Binding var link: SavedCallLink?
+    @Binding var failed: Bool
+    let onDelete: (SavedCallLink) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Delete this call link?",
+                   isPresented: Binding(get: { link != nil }, set: { if !$0 { link = nil } }),
+                   presenting: link) { l in
+                Button("Delete", role: .destructive) { onDelete(l) }
+                Button("Cancel", role: .cancel) {}
+            } message: { l in
+                Text(l.admin ? "People who have it will no longer be able to join."
+                             : "It will be removed from your list.")
+            }
+            .alert("Couldn't delete call link", isPresented: $failed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Check your connection and try again.")
+            }
+    }
+}
+
 // Native Phone-app-style call history (mockup IMG_4467): All / Missed segmented filter,
 // search, rows with avatar, name (red if missed), direction, time, and an info button.
 // Tap a row to call back; (i) opens the contact. Indigo brand kept.
@@ -652,6 +678,22 @@ struct CallsView: View {
     /// A link's id in the shared List selection. Prefixed so it can never collide with a call id.
     private func linkTag(_ l: SavedCallLink) -> String { "link:" + l.roomId }
 
+    /// A link row as the list holds it: pickable in Select mode, with its long-press menu. Its own
+    /// function so the list's body stays small enough for the type checker.
+    private func selectableLinkRow(_ link: SavedCallLink) -> some View {
+        linkRow(link)
+            .allowsHitTesting(!selecting)
+            .overlay {
+                if selecting {
+                    Color.clear.contentShape(Rectangle()).onTapGesture {
+                        toggleTick(linkTag(link), in: $selection)
+                    }
+                }
+            }
+            .tag(linkTag(link))
+            .contextMenu { linkMenu(link) }
+    }
+
     /// Long-press menu on a link row: the same four items, in the same order, as a call row.
     @ViewBuilder
     private func linkMenu(_ link: SavedCallLink) -> some View {
@@ -745,19 +787,7 @@ struct CallsView: View {
                         // steps aside while rows are being picked; the links stay, and can be picked
                         // and deleted with the calls (owner, 2026-10-05).
                         if !selecting { createLinkRow }
-                        ForEach(shownLinks) { link in
-                            linkRow(link)
-                                .allowsHitTesting(!selecting)
-                                .overlay {
-                                    if selecting {
-                                        Color.clear.contentShape(Rectangle()).onTapGesture {
-                                            toggleTick(linkTag(link), in: $selection)
-                                        }
-                                    }
-                                }
-                                .tag(linkTag(link))
-                                .contextMenu { linkMenu(link) }
-                        }
+                        ForEach(shownLinks) { link in selectableLinkRow(link) }
                         // The empty states live INSIDE the list now, so the create row above them is
                         // always there, even before the first call.
                         if !repo.hasLoaded || repo.calls.isEmpty {
@@ -943,21 +973,8 @@ struct CallsView: View {
                 Button("Delete", role: .destructive) { deleteSelectedCalls() }
                 Button("Cancel", role: .cancel) {}
             }
-            // Same words as the link's own details page.
-            .alert("Delete this call link?",
-                   isPresented: Binding(get: { linkToDelete != nil }, set: { if !$0 { linkToDelete = nil } }),
-                   presenting: linkToDelete) { link in
-                Button("Delete", role: .destructive) { deleteLinks([link]) }
-                Button("Cancel", role: .cancel) {}
-            } message: { link in
-                Text(link.admin ? "People who have it will no longer be able to join."
-                                : "It will be removed from your list.")
-            }
-            .alert("Couldn't delete call link", isPresented: $linkDeleteFailed) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("Check your connection and try again.")
-            }
+            .modifier(CallLinkDeleteAlerts(link: $linkToDelete, failed: $linkDeleteFailed,
+                                           onDelete: { deleteLinks([$0]) }))
             // Tapping a row pushes the contact's profile (back chevron, native). Calling
             // back happens only via the round phone button on the row.
             .navigationDestination(item: $profileTarget) { c in
