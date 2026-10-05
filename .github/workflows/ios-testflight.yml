@@ -74,7 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            PHOTO FIXES: NO MORE STUCK BLURRED PHOTOS, BIGGER ALBUMS.
+            CALLS: STEADIER CALLS, GROUP CALLS, CALL LINKS.
+
+            CALLS ENGINE: more of the connection and recovery work, so calls hold up better on a weak network.
+            CALL SCREEN opens instantly when a call starts.
+            GROUP CALLS: minimize to the small floating card like 1:1 calls. Joining by link starts with the camera off. A real speaker switch.
+            CALL LINKS: the Create Call Link sheet and the link details page are cleaner.
+            CALLS TAB: new new-call icon; the new-call list has tighter rows.
+            CHAT KEY: after entering the key the chat opens straight to typing, no "accepted" banner.
+            FILES: closing a file brings you back to the same chat.
+            PINNED ALBUM shows one picture again.
+            CHAT LIST: chats that an older build wrongly showed as "Say hello" are repaired.
+
+            PLEASE TEST: a call on mobile data; a group call minimized; join a call link; open and close a file in a chat.
+
+            EARLIER (build 825): PHOTO FIXES: NO MORE STUCK BLURRED PHOTOS, BIGGER ALBUMS.
 
             CANCEL: tapping X on a photo being sent (even at 99%) now removes it cleanly; no more blurred photo with an endless spinner.
             STUCK SENDS: if the other person's upload was interrupted, the spinner stops instead of spinning forever.
