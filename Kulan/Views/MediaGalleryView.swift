@@ -1007,6 +1007,10 @@ struct MediaGalleryView: View {
         if let url = Self.firstURL(in: m.text) { shareItems = [url]; return }
         let cid = self.cid
         Task {
+            if m.isAudio {
+                if let file = await Self.shareAudio(m, cid: cid, index: 0) { await MainActor.run { shareItems = [file] } }
+                return
+            }
             if let img = await Self.shareImage(m, cid: cid) { await MainActor.run { shareItems = [img] } }
             else if !m.text.isEmpty { await MainActor.run { shareItems = [m.text] } }
         }
@@ -1023,14 +1027,20 @@ struct MediaGalleryView: View {
             // nothing on screen said anything was happening (owner 2026-08-19: "it opens late").
             // The photos have nothing to do with each other, so they are fetched together and put
             // back in the order they were picked.
-            var out: [(Int, UIImage)] = []
-            await withTaskGroup(of: (Int, UIImage?).self) { group in
+            // Voice notes go as audio files (owner, 2026-10-05: Share did nothing with voice
+            // messages picked, because only photos and text were ever turned into share items).
+            var out: [(Int, Any)] = []
+            await withTaskGroup(of: (Int, Any?).self) { group in
                 for (i, m) in picked.enumerated() {
-                    group.addTask { (i, await Self.shareImage(m, cid: cid)) }
+                    if m.isAudio {
+                        group.addTask { (i, await Self.shareAudio(m, cid: cid, index: i)) }
+                    } else {
+                        group.addTask { (i, await Self.shareImage(m, cid: cid)) }
+                    }
                 }
-                for await (i, img) in group { if let img { out.append((i, img)) } }
+                for await (i, item) in group { if let item { out.append((i, item)) } }
             }
-            var items: [Any] = out.sorted { $0.0 < $1.0 }.map { $0.1 as Any }
+            var items: [Any] = out.sorted { $0.0 < $1.0 }.map { $0.1 }
             if items.isEmpty { for m in picked where !m.text.isEmpty { items.append(m.text) } }
             await MainActor.run {
                 preparingShare = false
@@ -1062,6 +1072,28 @@ struct MediaGalleryView: View {
               let (cipher, _) = try? await MediaSession.shared.data(from: url),
               let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
         return UIImage(data: dec)
+    }
+
+    /// A voice note as a file to share. The decrypted copy in `AudioCache` first (my own note is
+    /// cached under its clientId too, as the player knows); a note this phone never fetched is
+    /// downloaded, decrypted and kept there, the same as playing it would. The share goes out as a
+    /// COPY in tmp with a readable name, so the receiving app never sees a Firestore id, and the
+    /// cache file itself is never handed to another app.
+    private static func shareAudio(_ m: Message, cid: String, index: Int) async -> URL? {
+        var src = AudioCache.url(for: m.id) ?? m.clientId.flatMap { AudioCache.url(for: $0) }
+        if src == nil, let data = m.localAudioData { src = AudioCache.store(data, for: m.id) }
+        if src == nil, let s = m.audioUrl, let url = URL(string: s), let meta = m.enc,
+           let (cipher, _) = try? await MediaSession.shared.data(from: url),
+           let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) {
+            src = AudioCache.store(data, for: m.id)
+        }
+        guard let src else { return nil }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("share-voice", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(index == 0 ? "Voice message.m4a" : "Voice message \(index + 1).m4a")
+        try? FileManager.default.removeItem(at: dest)
+        guard (try? FileManager.default.copyItem(at: src, to: dest)) != nil else { return nil }
+        return dest
     }
 
     private func durationLabel(_ d: Double?) -> String {
