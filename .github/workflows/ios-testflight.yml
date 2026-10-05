@@ -85,8 +85,12 @@ jobs:
             FILES: closing a file brings you back to the same chat.
             PINNED ALBUM shows one picture again.
             CHAT LIST: chats that an older build wrongly showed as "Say hello" are repaired.
+            MINIMIZE: the call screen zooms down into the small card, and tapping the card zooms it back. A minimized video call shows the video card even before anyone's camera is up.
+            CALL LINK ROWS: long press for Video Call, Voice Call, Select, Delete. Select works on links.
+            ALL MEDIA: Share works for voice messages.
+            MESSAGE NOT SENT: the popup has no arrow.
 
-            PLEASE TEST: a call on mobile data; a group call minimized; join a call link; open and close a file in a chat.
+            PLEASE TEST: minimize a video call while it rings, then tap the card; long press a call link; share voice messages from All Media; a call on mobile data.
 
             EARLIER (build 825): PHOTO FIXES: NO MORE STUCK BLURRED PHOTOS, BIGGER ALBUMS.
 
