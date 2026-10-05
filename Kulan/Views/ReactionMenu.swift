@@ -28,28 +28,21 @@ enum ReactionRecents {
     }
 }
 
-// The full native Apple emoji set, enumerated from Unicode (so we render the same
-// glyphs the system keyboard does), grouped into categories and searchable by name.
+// The full Apple emoji set, the keyboard's eight groups in the keyboard's order, searchable by
+// name. The list itself is Unicode's (`EmojiCatalogData`); it used to be walked out of a handful
+// of code-point ranges, which can never find a flag, a keycap or any joined emoji, and missed
+// whole blocks besides (owner, 2026-10-05: no flags, many missing).
 enum EmojiCatalog {
     struct Item: Hashable { let char: String; let name: String }
 
-    static let sections: [(title: String, items: [Item])] = [
-        ("Smileys & People", build([0x1F600...0x1F64F, 0x1F910...0x1F92F, 0x1F970...0x1F97A, 0x1F9D0...0x1F9DF])),
-        ("Animals & Nature", build([0x1F400...0x1F43E, 0x1F980...0x1F9AE, 0x1F330...0x1F335])),
-        ("Food & Drink",     build([0x1F32D...0x1F37F, 0x1F950...0x1F96B])),
-        ("Activity & Travel", build([0x1F380...0x1F3CF, 0x1F680...0x1F6D2, 0x1F30D...0x1F320])),
-        ("Objects",          build([0x1F4A1...0x1F4FF, 0x1F526...0x1F53D])),
-        ("Symbols",          build([0x2600...0x26FF, 0x2700...0x27BF, 0x1F500...0x1F525, 0x2764...0x2764])),
-    ]
-    static let all: [Item] = sections.flatMap { $0.items }
-
-    private static func build(_ ranges: [ClosedRange<Int>]) -> [Item] {
-        ranges.flatMap { Array($0) }.compactMap { code in
-            guard let s = Unicode.Scalar(code),
-                  s.properties.isEmoji, s.properties.isEmojiPresentation else { return nil }
-            return Item(char: String(s), name: (s.properties.name ?? "").lowercased())
-        }
+    static let sections: [(title: String, items: [Item])] = EmojiCatalogData.sections.map { s in
+        (s.title, s.lines.split(separator: "\n").compactMap { line -> Item? in
+            let parts = line.split(separator: "\t", maxSplits: 1)
+            guard parts.count == 2 else { return nil }
+            return Item(char: String(parts[0]), name: String(parts[1]))
+        })
     }
+    static let all: [Item] = sections.flatMap { $0.items }
 }
 
 // Full native-emoji grid for "more": categories when idle, name-search when typing.
