@@ -921,8 +921,20 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             tc.animate(alongsideTransition: { [weak self] _ in
                 self?.tableView.deselectRow(at: ip, animated: true)
             }, completion: { [weak self] ctx in
-                guard ctx.isCancelled, let self, !self.tableView.isEditing,
-                      ip.section < self.tableView.numberOfSections,
+                guard let self, !self.tableView.isEditing else { return }
+                guard ctx.isCancelled else {
+                    // ⛔ THE BACK SWIPE FINISHED: NOTHING GREY MAY BE LEFT — owner, 2026-10-05: open a
+                    // chat, open the keyboard, swipe back, and the row is still grey. The alongside
+                    // fade is not guaranteed to run (UIKit may decline to queue it), and the press
+                    // highlight is a separate state from the selection that nothing here cleared.
+                    // Both are settled once the pop has really landed.
+                    if let sel = self.tableView.indexPathForSelectedRow {
+                        self.tableView.deselectRow(at: sel, animated: true)
+                    }
+                    self.clearStuckHighlights(in: self.tableView)
+                    return
+                }
+                guard ip.section < self.tableView.numberOfSections,
                       ip.row < self.tableView.numberOfRows(inSection: ip.section) else { return }
                 self.tableView.selectRow(at: ip, animated: false, scrollPosition: .none)
             })
@@ -1000,6 +1012,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         if !tableView.isEditing, let ip = tableView.indexPathForSelectedRow {
             tableView.deselectRow(at: ip, animated: animated)
         }
+        // And the press highlight, which is not the selection (2026-10-05, keyboard-up back swipe).
+        if !tableView.isEditing, tableView.isTracking == false { clearStuckHighlights(in: tableView) }
     }
 
     /// ⛔ THE CLEARANCE GREW BY THE INDICATOR — owner, 2026-09-11, same report as the black strip
