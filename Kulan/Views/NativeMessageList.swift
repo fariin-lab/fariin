@@ -5537,6 +5537,8 @@ extension MessageListController: MessageRowCellDelegate {
         if let pop = sheet.popoverPresentationController {
             pop.sourceView = cell.contentView
             pop.sourceRect = badge
+            // No arrow (owner, 2026-10-05: "remove that arrow"). It still opens from the badge.
+            pop.permittedArrowDirections = []
         }
         present(sheet, animated: true)
     }
