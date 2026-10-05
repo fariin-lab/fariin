@@ -512,6 +512,8 @@ struct CallsView: View {
     @State private var linkTarget: SavedCallLink?    // a saved call link row → its details page
     @State private var showCreateLink = false
     @State private var linkService = CallLinkService.shared
+    @State private var linkToDelete: SavedCallLink?   // long-press Delete on a link row → confirm
+    @State private var linkDeleteFailed = false
 
     private var shown: [CallEntry] {
         var list = filter == 1 ? repo.calls.filter { $0.missedIncoming } : repo.calls
@@ -575,12 +577,36 @@ struct CallsView: View {
         // while the toolbar still said "N Selected", so Delete removed fewer than it promised.
         // Falling back to the id itself covers a run whose grouping moved under us (audit).
         var ids = Set<String>()
+        var links: [SavedCallLink] = []
         for id in selection {
-            if let run = shownRuns.first(where: { $0.id == id }) { ids.formUnion(run.ids) }
+            if let link = linkService.links.first(where: { linkTag($0) == id }) { links.append(link) }
+            else if let run = shownRuns.first(where: { $0.id == id }) { ids.formUnion(run.ids) }
             else { ids.insert(id) }   // the run regrouped; its newest entry id is still a real record
         }
-        Task { await repo.delete(ids: ids) }
+        if !ids.isEmpty { Task { await repo.delete(ids: ids) } }
+        if !links.isEmpty { deleteLinks(links) }
         selecting = false; selection = []
+    }
+
+    /// The creator's delete ends the link for everyone; anyone else's only drops it from their list
+    /// (CallLinkService.delete). A failure leaves the row in place and says so.
+    private func deleteLinks(_ links: [SavedCallLink]) {
+        Task { @MainActor in
+            var failed = false
+            for l in links {
+                do { try await linkService.delete(l) } catch { failed = true }
+            }
+            if failed { linkDeleteFailed = true }
+        }
+    }
+
+    /// The bulk confirm names what is actually going: calls, links, or both.
+    private var deleteSelectionTitle: String {
+        let n = selection.count
+        let linkCount = selection.filter { $0.hasPrefix("link:") }.count
+        if linkCount == 0 { return "Delete \(n) call\(n == 1 ? "" : "s")?" }
+        if linkCount == n { return "Delete \(n) call link\(n == 1 ? "" : "s")?" }
+        return "Delete \(n) items?"
     }
 
     /// One history row: a multi-person call draws its own row, a 1:1 call the row it always had.
@@ -622,6 +648,30 @@ struct CallsView: View {
         return q.isEmpty ? links : links.filter { linkTitle($0).lowercased().contains(q) }
     }
     private func linkTitle(_ l: SavedCallLink) -> String { l.name.isEmpty ? "Kulan Call" : l.name }
+
+    /// A link's id in the shared List selection. Prefixed so it can never collide with a call id.
+    private func linkTag(_ l: SavedCallLink) -> String { "link:" + l.roomId }
+
+    /// Long-press menu on a link row: the same four items, in the same order, as a call row.
+    @ViewBuilder
+    private func linkMenu(_ link: SavedCallLink) -> some View {
+        let busy = !callsEnabled || GroupCallService.shared.isActive
+        Button {
+            Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
+        } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
+        .disabled(busy)
+        Button {
+            Task { await GroupCallService.shared.joinLink(key: link.key, video: false) }
+        } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
+        .disabled(busy)
+        Button {
+            withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [linkTag(link)] }
+        } label: { Label { Text("Select") } icon: { MenuIcon(system: "checkmark.circle", ink: .label) } }
+        Divider()
+        Button(role: .destructive) { linkToDelete = link } label: {
+            Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
+        }
+    }
 
     private var createLinkRow: some View {
         Button { showCreateLink = true } label: {
@@ -691,11 +741,22 @@ struct CallsView: View {
                     CallListSkeleton()
                 } else {
                     List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
-                        // Call links sit on top of the history, the create row first, and step aside
-                        // while rows are being picked (they are not calls and cannot be deleted here).
-                        if !selecting {
-                            createLinkRow
-                            ForEach(shownLinks) { link in linkRow(link) }
+                        // Call links sit on top of the history, the create row first. The create row
+                        // steps aside while rows are being picked; the links stay, and can be picked
+                        // and deleted with the calls (owner, 2026-10-05).
+                        if !selecting { createLinkRow }
+                        ForEach(shownLinks) { link in
+                            linkRow(link)
+                                .allowsHitTesting(!selecting)
+                                .overlay {
+                                    if selecting {
+                                        Color.clear.contentShape(Rectangle()).onTapGesture {
+                                            toggleTick(linkTag(link), in: $selection)
+                                        }
+                                    }
+                                }
+                                .tag(linkTag(link))
+                                .contextMenu { linkMenu(link) }
                         }
                         // The empty states live INSIDE the list now, so the create row above them is
                         // always there, even before the first call.
@@ -846,7 +907,7 @@ struct CallsView: View {
                         .disabled(selection.isEmpty).tint(.red)
                     }
                 } else {
-                    if !repo.calls.isEmpty {
+                    if !repo.calls.isEmpty || !linkService.links.isEmpty {
                         ToolbarItem(placement: .topBarLeading) {
                             Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
                         }
@@ -877,10 +938,25 @@ struct CallsView: View {
             .task { await repo.load() }
             .task { await linkService.load() }
             .refreshable { await repo.load(force: true); await linkService.load() }
-            .confirmationDialog("Delete \(selection.count) call\(selection.count == 1 ? "" : "s")?",
+            .confirmationDialog(deleteSelectionTitle,
                                 isPresented: $showDeleteCalls, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { deleteSelectedCalls() }
                 Button("Cancel", role: .cancel) {}
+            }
+            // Same words as the link's own details page.
+            .alert("Delete this call link?",
+                   isPresented: Binding(get: { linkToDelete != nil }, set: { if !$0 { linkToDelete = nil } }),
+                   presenting: linkToDelete) { link in
+                Button("Delete", role: .destructive) { deleteLinks([link]) }
+                Button("Cancel", role: .cancel) {}
+            } message: { link in
+                Text(link.admin ? "People who have it will no longer be able to join."
+                                : "It will be removed from your list.")
+            }
+            .alert("Couldn't delete call link", isPresented: $linkDeleteFailed) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Check your connection and try again.")
             }
             // Tapping a row pushes the contact's profile (back chevron, native). Calling
             // back happens only via the round phone button on the row.
