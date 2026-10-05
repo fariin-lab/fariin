@@ -89,6 +89,8 @@ jobs:
             CALL LINK ROWS: long press for Video Call, Voice Call, Select, Delete. Select works on links.
             ALL MEDIA: Share works for voice messages.
             MESSAGE NOT SENT: the popup has no arrow.
+            CHAT LIST: no grey row left behind after swiping back from a chat (keyboard open or not).
+            REACTIONS: the + sheet has every emoji, flags included, grouped like the keyboard. On a wallpaper, an incoming bubble grows cleanly when you react.
 
             PLEASE TEST: minimize a video call while it rings, then tap the card; long press a call link; share voice messages from All Media; a call on mobile data.
 
