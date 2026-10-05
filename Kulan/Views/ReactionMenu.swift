@@ -36,7 +36,8 @@ enum EmojiCatalog {
     struct Item: Hashable { let char: String; let name: String }
 
     static let sections: [(title: String, items: [Item])] = EmojiCatalogData.sections.map { s in
-        (s.title, s.lines.split(separator: "\n").compactMap { line -> Item? in
+        // Any line break, not just "\n": "\r\n" is ONE Character in Swift and would never split.
+        (s.title, s.lines.split(whereSeparator: \.isNewline).compactMap { line -> Item? in
             let parts = line.split(separator: "\t", maxSplits: 1)
             guard parts.count == 2 else { return nil }
             return Item(char: String(parts[0]), name: String(parts[1]))
