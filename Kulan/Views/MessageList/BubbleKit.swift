@@ -677,8 +677,32 @@ final class BubbleFillView: UIView {
         add(shape, "path", old.cgPath)
         add(gradientMask, "path", old.cgPath)
         if let bv = blurView, !bv.isHidden {
-            add(bv.layer, "bounds", NSValue(cgRect: oldBox))
-            add(bv.layer, "position", NSValue(cgPoint: CGPoint(x: oldBox.midX, y: oldBox.midY)))
+            // ⛔ A UIKit ANIMATION FOR THE BLUR, NOT A LAYER ONE — owner, 2026-10-05, a reaction on
+            // an incoming bubble over a wallpaper: a second, bigger dark bubble behind the bordered
+            // one. A bounds animation added straight to a UIVisualEffectView's layer does not reach
+            // the views the effect view keeps inside itself; they jumped to the new size while the
+            // rim and the shape were still growing. `UIView.animate` on its frame carries them, on
+            // the same curve. The mask's frame rides along too (it was only its path before).
+            let final = bv.frame
+            UIView.performWithoutAnimation {
+                bv.frame = CGRect(origin: .zero, size: size)
+                bv.layoutIfNeeded()
+            }
+            // The same curve as every other layer here: the timing function's own control points.
+            var p1: [Float] = [0, 0], p2: [Float] = [0, 0]
+            timing.getControlPoint(at: 1, values: &p1)
+            timing.getControlPoint(at: 2, values: &p2)
+            let curve = UICubicTimingParameters(
+                controlPoint1: CGPoint(x: CGFloat(p1[0]), y: CGFloat(p1[1])),
+                controlPoint2: CGPoint(x: CGFloat(p2[0]), y: CGFloat(p2[1])))
+            let animator = UIViewPropertyAnimator(duration: duration, timingParameters: curve)
+            animator.addAnimations {
+                bv.frame = final
+                bv.layoutIfNeeded()
+            }
+            animator.startAnimation()
+            add(blurMask, "bounds", NSValue(cgRect: oldBox))
+            add(blurMask, "position", NSValue(cgPoint: CGPoint(x: oldBox.midX, y: oldBox.midY)))
             add(blurMask, "path", old.cgPath)
         }
     }
