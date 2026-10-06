@@ -4741,7 +4741,7 @@ struct ThreadView: View {
                 albumsInstant: $attachAlbumsInstant)
                 // (The back swipe out of a folder is the SYSTEM's now: the folder is a page pushed
                 // inside the strip — owner, 2026-10-04, "use the native Apple swipe". See
-                // `AttachRecentsStrip.selectAlbum` and `NativeBackSwipe`.)
+                // `AttachRecentsStrip.selectAlbum` and `FolderNavHost`.)
                 // ⛔ NO TOP PADDING — owner, 2026-09-02, "no header". This 10 held the sheet's own
                 // header clear of the grabber. With the header gone it is a strip of empty sheet
                 // above the photos, which is the exact thing he has rejected twice before.

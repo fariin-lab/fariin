@@ -241,35 +241,23 @@ struct AttachRecentsStrip: View {
         // the leaving page was gone on the first frame and only the arriving one moved. With the
         // order pinned, the list leaves to the left WHILE the album arrives from the right, and
         // Back runs the same pair in reverse.
-        // The root page (Recents grid or the album list) inside a NavigationStack with no visible
+        // The root page (Recents grid or the album list) in a navigation controller with no visible
         // bar, so a folder can be PUSHED over the list and left with the system's back swipe
         // (owner, 2026-10-04). See `selectAlbum`.
-        NavigationStack(path: $folderPath) {
-            ZStack {
-                if showAlbums {
-                    albumsList
-                        .background(Color(uiColor: .systemBackground))
-                        .transition(.move(edge: .leading))
-                        .zIndex(0)
-                } else {
-                    grid
-                        .background(Color(uiColor: .systemBackground))
-                        .transition(.move(edge: .trailing))
-                        .zIndex(1)
-                }
-            }
-            // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.
-            // A clip cuts at this view's frame, which stops at the safe area, and the grid is meant to
-            // scroll on under the bar to the sheet's edge. The sheet's shell already clips the slide.
-            .animation(albumsInstant ? nil : .snappy(duration: 0.3), value: showAlbums)
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: String.self) { _ in
-                grid
-                    .background(Color(uiColor: .systemBackground))
-                    .toolbar(.hidden, for: .navigationBar)
-                    .background(NativeBackSwipe())
-            }
-        }
+        //
+        // ⛔ OUR OWN UIKit NAVIGATION CONTROLLER, NOT A SwiftUI NavigationStack — builds 826 and 827
+        // crashed on "+" (owner, 2026-10-06, two crash logs, SIGTRAP in SwiftUI's
+        // `NavigationColumnState.boundPathChange`). The sheet sits inside the chat, which is inside
+        // the chat list's NavigationStack, and a NavigationStack inside another one is not
+        // supported: SwiftUI joined this `[String]` path to the outer stack's `NavigationPath` and
+        // trapped when the two types met. `FolderNavHost` is a plain UINavigationController that
+        // SwiftUI's navigation never sees, with the same pushed page and the same system back swipe.
+        FolderNavHost(
+            root: AnyView(rootPage),
+            folder: AnyView(grid.background(Color(uiColor: .systemBackground))),
+            showFolder: !folderPath.isEmpty,
+            onPopped: { folderPath = [] }
+        )
         // The folder page left by the system swipe: the round button must stop being a Back arrow.
         .onChange(of: folderPath) { _, path in
             if path.isEmpty, inAlbum { inAlbum = false }
@@ -319,6 +307,28 @@ struct AttachRecentsStrip: View {
             selectedIds.removeAll { gone.contains($0) }
             for id in gone { selectedAssets.removeValue(forKey: id) }
         }
+    }
+
+    /// The root page under the folder: the Recents grid, or the album list over it (unchanged,
+    /// lifted out of the old NavigationStack for `FolderNavHost`).
+    private var rootPage: some View {
+        ZStack {
+            if showAlbums {
+                albumsList
+                    .background(Color(uiColor: .systemBackground))
+                    .transition(.move(edge: .leading))
+                    .zIndex(0)
+            } else {
+                grid
+                    .background(Color(uiColor: .systemBackground))
+                    .transition(.move(edge: .trailing))
+                    .zIndex(1)
+            }
+        }
+        // ⚠️ NO `.clipped()` — owner, 2026-09-29, build 803: a white band along the sheet's bottom.
+        // A clip cuts at this view's frame, which stops at the safe area, and the grid is meant to
+        // scroll on under the bar to the sheet's edge. The sheet's shell already clips the slide.
+        .animation(albumsInstant ? nil : .snappy(duration: 0.3), value: showAlbums)
     }
 
     // Caption + Send bar shown while items are selected (replaces the source row).
@@ -1018,42 +1028,78 @@ private struct RecentThumb: View {
     }
 }
 
-/// Keeps the SYSTEM back swipe working on a pushed page whose navigation bar is hidden. UIKit turns
-/// `interactivePopGestureRecognizer` off when the bar is hidden (its delegate refuses to begin); the
-/// standard cure is to clear that delegate on this page's own navigation controller, nothing global.
-/// The gesture itself is Apple's: it follows the finger, locks out vertical scrolling while it runs,
-/// and shows the page underneath. Used by the attach sheet's folder page (owner, 2026-10-04).
-struct NativeBackSwipe: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> Probe { Probe() }
-    func updateUIViewController(_ vc: Probe, context: Context) { vc.enable() }
+/// The attach sheet's folder page, pushed on a UIKit navigation controller of its own.
+///
+/// ⛔ NOT A SwiftUI NavigationStack (owner, 2026-10-06: builds 826 and 827 crashed on "+"). The sheet
+/// lives inside the chat, inside the chat list's NavigationStack; a second NavigationStack in there
+/// is joined to the outer one by SwiftUI, and its `[String]` path meeting the outer `NavigationPath`
+/// trapped in `NavigationColumnState.boundPathChange`. A plain UINavigationController is invisible to
+/// SwiftUI's navigation, and keeps what the 2026-10-04 change was for: the folder is a real pushed
+/// page, the system back swipe follows the finger and shows the list underneath.
+///
+/// The old helper also re-pointed the back-swipe delegate of whatever navigation controller it found,
+/// which inside the merged stack could be the CHAT's own. This one only ever touches its own.
+struct FolderNavHost: UIViewControllerRepresentable {
+    let root: AnyView
+    let folder: AnyView
+    let showFolder: Bool
+    let onPopped: () -> Void
 
-    final class Probe: UIViewController {
-        override func didMove(toParent parent: UIViewController?) {
-            super.didMove(toParent: parent)
-            enable()
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let c = context.coordinator
+        c.rootHost.rootView = root
+        let nav = UINavigationController(rootViewController: c.rootHost)
+        nav.setNavigationBarHidden(true, animated: false)
+        nav.view.backgroundColor = .clear
+        nav.delegate = c
+        nav.interactivePopGestureRecognizer?.delegate = c
+        nav.interactivePopGestureRecognizer?.isEnabled = true
+        c.nav = nav
+        c.onPopped = onPopped
+        if showFolder {
+            c.folderHost.rootView = folder
+            nav.pushViewController(c.folderHost, animated: false)
         }
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            enable()
-        }
-        func enable() {
-            guard let nav = navigationController else { return }
-            nav.interactivePopGestureRecognizer?.delegate = PopOnlyWhenDeep.shared
-            nav.interactivePopGestureRecognizer?.isEnabled = true
+        return nav
+    }
+
+    func updateUIViewController(_ nav: UINavigationController, context: Context) {
+        let c = context.coordinator
+        c.onPopped = onPopped
+        c.rootHost.rootView = root
+        c.folderHost.rootView = folder
+        let pushed = nav.viewControllers.count > 1
+        if showFolder, !pushed {
+            nav.pushViewController(c.folderHost, animated: true)
+        } else if !showFolder, pushed, nav.transitionCoordinator == nil {
+            nav.popToRootViewController(animated: true)
         }
     }
 
-    /// Lets the swipe begin only when there is a page to go back TO. A nil delegate would also let
-    /// it begin on the root page, which is the known way to freeze a navigation controller.
-    final class PopOnlyWhenDeep: NSObject, UIGestureRecognizerDelegate {
-        static let shared = PopOnlyWhenDeep()
-        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            (Self.navOf(g.view)?.viewControllers.count ?? 0) > 1
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIGestureRecognizerDelegate {
+        let rootHost = UIHostingController(rootView: AnyView(EmptyView()))
+        let folderHost = UIHostingController(rootView: AnyView(EmptyView()))
+        weak var nav: UINavigationController?
+        var onPopped: () -> Void = {}
+
+        override init() {
+            super.init()
+            rootHost.view.backgroundColor = .clear
+            folderHost.view.backgroundColor = .clear
         }
-        private static func navOf(_ v: UIView?) -> UINavigationController? {
-            var r: UIResponder? = v
-            while let cur = r { if let n = cur as? UINavigationController { return n }; r = cur.next }
-            return nil
+
+        /// The swipe begins only when there is a page to go back TO; on the root page it would
+        /// freeze the controller.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            (nav?.viewControllers.count ?? 0) > 1
+        }
+
+        /// Back on the root page by the system swipe (or any pop): tell the strip, which clears its
+        /// path and turns the round button back from a Back arrow.
+        func navigationController(_ nav: UINavigationController, didShow vc: UIViewController, animated: Bool) {
+            if vc === rootHost { onPopped() }
         }
     }
 }
