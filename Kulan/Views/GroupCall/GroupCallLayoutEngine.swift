@@ -60,6 +60,10 @@ enum GroupCallLayoutEngine {
 
     // MARK: - Internals
 
+    /// Added to a shape's score when its last row holds one tile under 3+ columns (see bestShape).
+    /// 852x230 with 4: 3x2 scores 1.24, 2x2 1.37; with the penalty 3x2 is 1.74 and 2x2 wins.
+    private static let orphanPenalty: CGFloat = 0.5
+
     /// Column / row caps. The reference app's caps are by screen size only; a phone on its side
     /// would then be held to 2 wide columns, so a landscape stage may use 3 (owner spec §9). A short
     /// stage (a phone on its side, under 300pt tall) holds 2 rows: three rows there are thin strips
@@ -94,7 +98,11 @@ enum GroupCallLayoutEngine {
 
             let fullCost = abs(log(fullWidth / rowHeight)) * CGFloat(count - lastCount)
             let lastCost = abs(log(lastWidth / rowHeight)) * CGFloat(lastCount)
-            let score = (fullCost + lastCost) / CGFloat(count)
+            // An orphan: one tile alone on the last row of a 3+ column grid is drawn as a band the
+            // full stage wide (a phone on its side, 4 people: 3 on top, 1 thin strip below). The
+            // squareness score alone rates that close to 2x2, so it pays extra.
+            let orphan: CGFloat = (columns >= 3 && rows > 1 && lastCount == 1) ? orphanPenalty : 0
+            let score = (fullCost + lastCost) / CGFloat(count) + orphan
 
             if let current = best {
                 let nearTie = abs(score - current.score) < 0.01
@@ -129,6 +137,8 @@ extension GroupCallLayoutEngine {
     ///   n=6  2 x 3           six 186x225.3 tiles
     ///   n=7  2 x 3           as n=6, 1 in overflow
     ///   n=8  2 x 3           as n=6, 2 in overflow
+    /// And a phone on its side, 852x230 (cap 3 x 2): n=4 is 2 x 2 of 417x106, not 3 on top and one
+    /// 840pt-wide orphan below (the orphan penalty); n=5 stays 3 x 2 (276x106 on top, 417x106 below).
     static func debugSelfCheck() -> [String] {
         let size = CGSize(width: 390, height: 700)
         // (count, columns, rows, overflow, size of the LAST shown tile)
@@ -162,6 +172,24 @@ extension GroupCallLayoutEngine {
             }
             if let first = layout.frames[ids[0]], first.minX != 6 || first.minY != 6 {
                 failures.append("n=\(n): first tile at \(first.origin), want (6, 6)")
+            }
+        }
+
+        // Landscape: (count, columns, rows, size of the LAST tile).
+        let wide = CGSize(width: 852, height: 230)
+        let landscape: [(Int, Int, Int, CGSize)] = [
+            (4, 2, 2, CGSize(width: 417, height: 106)),
+            (5, 3, 2, CGSize(width: 417, height: 106)),
+        ]
+        for (n, columns, rows, lastSize) in landscape {
+            let ids = (0..<n).map { "p\($0)" }
+            let layout = grid(ids: ids, in: wide)
+            if layout.columns != columns || layout.rows != rows {
+                failures.append("852x230 n=\(n): \(layout.columns)x\(layout.rows), want \(columns)x\(rows)")
+            }
+            if let last = layout.frames[ids[n - 1]],
+               abs(last.width - lastSize.width) > 0.5 || abs(last.height - lastSize.height) > 0.5 {
+                failures.append("852x230 n=\(n): last tile \(last.size), want \(lastSize)")
             }
         }
         return failures
