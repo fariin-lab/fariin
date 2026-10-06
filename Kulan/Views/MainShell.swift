@@ -733,8 +733,16 @@ struct CallsView: View {
     }
 
     private func linkRow(_ link: SavedCallLink) -> some View {
+        // ⛔ THE SAME ROW AS A CALL — owner, 2026-10-06, with a screenshot ringing the right edge:
+        // link rows carried a round video button and no time, call rows the time and an (i). Now a
+        // link row works like a call row: tap the row to call (join the link, on video, the way its
+        // card joins), the (i) opens its details page, and the time it was made sits where a call's
+        // time sits, on the same day/weekday/date rule.
         HStack(spacing: 12) {
-            Button { linkTarget = link } label: {
+            Button {
+                if bringLiveCallForward() { return }
+                Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
+            } label: {
                 HStack(spacing: 12) {
                     CallLinkAvatar(key: link.key, size: 46)
                     VStack(alignment: .leading, spacing: 2) {
@@ -749,30 +757,36 @@ struct CallsView: View {
                         .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
+                    Text(Self.linkTime(link.createdAt)).font(.system(size: 14)).foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            // Join straight from the list, on video, the way the link's own card joins.
-            Button {
-                if bringLiveCallForward() { return }
-                // Owner audit 2026-10-06 #5: this video.fill button joined as a voice call.
-                Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
-            } label: {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 15, weight: .semibold))
+            Button { linkTarget = link } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 21))
                     .foregroundStyle(Color.primary)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(Color(uiColor: .tertiarySystemFill)))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Link details")
         }
         .padding(.vertical, 2)
         .listRowSeparator(.hidden)
         .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+    }
+
+    /// The call rows' time rule (CallHistoryRow.timeLabel), for a link's creation date.
+    private static func linkTime(_ d: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(d) { return d.formatted(date: .omitted, time: .shortened) }
+        if cal.isDateInYesterday(d) { return "Yesterday" }
+        if let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: Date())).day, days < 7 {
+            return d.formatted(.dateTime.weekday(.wide))
+        }
+        return d.formatted(.dateTime.month(.abbreviated).day())
     }
 
     var body: some View {
