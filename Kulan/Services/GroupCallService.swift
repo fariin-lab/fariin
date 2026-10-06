@@ -854,7 +854,7 @@ final class GroupCallService: ObservableObject {
         // already gone, so the knock cleanup in disconnect() is skipped) still stops the join.
         let gen = joinGeneration
         Task {
-            // Still reads "Waiting to be let in…" until the room is up; `connect` clears it.
+            // Still reads "Waiting for the host to let you in" until the room is up; `connect` clears it.
             if await self.connect(payload: ["roomId": w.roomId, "link": true],
                                   room: .link(roomId: w.roomId, key: w.key), video: w.video, gen: gen),
                self.isLinkCreator {

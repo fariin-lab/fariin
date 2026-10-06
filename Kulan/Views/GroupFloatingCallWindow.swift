@@ -75,7 +75,7 @@ struct GroupFloatingCallWindow: View {
 
     /// The call screen's own words, so minimizing never renames the stage.
     private var stageLabel: String? {
-        if service.waitingForApproval { return "Waiting to be let in…" }
+        if service.waitingForApproval { return "Waiting for the host to let you in" }
         if service.connecting { return "Connecting…" }
         if room.connectionState == .reconnecting { return "Reconnecting…" }
         if remotes.isEmpty { return "Waiting for others…" }

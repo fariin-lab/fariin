@@ -143,7 +143,8 @@ struct GroupCallView: View {
     }
 
     private var subtitle: String {
-        if service.waitingForApproval { return "Waiting to be let in…" }
+        // Group call permissions, 2026-10-06: also true while the host is away; they keep waiting.
+        if service.waitingForApproval { return "Waiting for the host to let you in" }
         // 2026-09-24 audit: `connecting` was published and never read, so a join still in flight
         // showed "1 in call", identical to a live call nobody else is in. Same word the 1:1 call
         // screen uses.
