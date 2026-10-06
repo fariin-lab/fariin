@@ -1,5 +1,7 @@
 import SwiftUI
+import UIKit
 import LiveKit
+import FirebaseFunctions
 
 /// The call screen's two-people button: who is in the call right now, who was invited and has not
 /// come in, and (multi-person calls only) "Add people". The "In call" list reads the call stage, so
@@ -13,6 +15,13 @@ struct GroupCallParticipantsSheet: View {
     /// Link calls: the link's approval setting, read when the sheet opens (creator only).
     @State private var approval: Bool?
     @State private var approvalFailed = false
+    // Group call permissions, 2026-10-06: the owner's and admins' controls.
+    @State private var removeTarget: CallTile?
+    @State private var confirmEnd = false
+    @State private var confirmRevoke = false
+    @State private var makingLink = false
+    @State private var copied = false
+    @State private var actionError: String?
 
     /// The call screen passes its own stage, so the list and the tiles agree on who is speaking.
     init(stage: GroupCallStage) {
@@ -26,10 +35,12 @@ struct GroupCallParticipantsSheet: View {
 
     /// The link this call runs on, when it is a link call (owner, 2026-10-06: the people button
     /// should offer Share link and Require approval, as the reference's call sheet does).
-    private var link: ActiveCallLink? {
-        if case .link(let roomId, let key)? = service.activeRoom { return ActiveCallLink(roomId: roomId, key: key) }
-        return nil
-    }
+    /// After "Make a new link" this is the new one, so Share and Copy hand out the link that works.
+    private var link: ActiveCallLink? { service.currentLink }
+
+    /// The link's owner, as the server's join answer named me. Hiding these is a convenience; the
+    /// link functions check the creator themselves.
+    private var ownsLink: Bool { link != nil && service.myRole == .owner }
 
     private struct Row: Identifiable {
         let id: String
@@ -79,18 +90,43 @@ struct GroupCallParticipantsSheet: View {
                                     Label("Add people", systemImage: "person.badge.plus")
                                 }
                             }
-                            if let url = link?.linkKey?.url {
+                            // Everyone may copy or share the link (the access table); a revoked one
+                            // is not handed out.
+                            if !service.linkRevoked, let url = link?.linkKey?.url {
+                                Button { copy(url) } label: {
+                                    Label(copied ? "Copied" : "Copy link", systemImage: "doc.on.doc")
+                                }
+                                .accessibilityLabel(copied ? "Link copied" : "Copy link")
                                 ShareLink(item: url) {
                                     Label("Share link", systemImage: "link")
                                 }
                             }
                         }
                     }
-                    if service.isLinkCreator, let link {
+                    if ownsLink, let link {
                         Section {
-                            Toggle("Require approval to join",
-                                   isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
-                                .disabled(approval == nil)
+                            if !service.linkRevoked {
+                                Toggle("Require approval to join",
+                                       isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
+                                    .disabled(approval == nil)
+                                Button(role: .destructive) { confirmRevoke = true } label: {
+                                    Label("Revoke link", systemImage: "xmark.circle")
+                                }
+                                .accessibilityHint("No one new can join with this link. The call continues.")
+                            }
+                            Button { makeNewLink() } label: {
+                                HStack {
+                                    Label("Make a new link", systemImage: "arrow.triangle.2.circlepath")
+                                    Spacer()
+                                    if makingLink { ProgressView() }
+                                }
+                            }
+                            .disabled(makingLink)
+                            .accessibilityHint("The old link stops working")
+                        } footer: {
+                            if service.linkRevoked {
+                                Text("This link no longer works. No one new can join with it; the call continues.")
+                            }
                         }
                     }
                     Section {
@@ -113,17 +149,46 @@ struct GroupCallParticipantsSheet: View {
                             ForEach(waiting) { invitedRow($0) }
                         }
                     }
+                    // The owner only: closes the call on the media server for everyone in it.
+                    if service.myRole == .owner && service.isActive {
+                        Section {
+                            Button(role: .destructive) { confirmEnd = true } label: {
+                                Text("End call for everyone")
+                            }
+                        }
+                    }
                 }
             }
             // Alone in the call, the sheet says what is happening, as the reference's does.
             .navigationTitle(aloneInCall ? "Waiting for others" : "Participants")
             .task {
-                guard service.isLinkCreator, let link, approval == nil else { return }
+                guard ownsLink, let link, approval == nil else { return }
                 approval = await CallLinkService.shared.approval(for: link)
+                if await CallLinkService.shared.isRevoked(link) == true { service.noteLinkRevoked() }
             }
             .alert("Couldn't change setting", isPresented: $approvalFailed) {
                 Button("OK", role: .cancel) {}
             } message: { Text("Check your connection and try again.") }
+            .alert(removeTarget.map { "Remove \($0.name) from the call?" } ?? "",
+                   isPresented: Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } }),
+                   presenting: removeTarget) { t in
+                Button("Remove", role: .destructive) { run(.remove, target: t.uid) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("They won't be able to rejoin it.")
+            }
+            .alert("End the call for everyone?", isPresented: $confirmEnd) {
+                Button("End Call", role: .destructive) { run(.end) }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("Everyone in the call will be disconnected.") }
+            .alert("Revoke this link?", isPresented: $confirmRevoke) {
+                Button("Revoke", role: .destructive) { revokeLink() }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("No one new can join with this link. The call continues.") }
+            .alert(actionError ?? "",
+                   isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+                Button("OK", role: .cancel) {}
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -153,6 +218,88 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    // MARK: - Owner and admin actions (group call permissions, 2026-10-06)
+
+    /// Their role as the server signed it into their join pass, never a flag of ours.
+    private func role(of t: CallTile) -> CallRole {
+        _ = service.rolesVersion   // redraw when anyone's attributes change
+        return CallRole(attribute: stage.participant(t.id)?.attributes["role"])
+    }
+
+    /// The access table: never myself (any of my devices), and only the roles my role reaches.
+    private func canModerate(_ t: CallTile) -> Bool {
+        !t.isLocal && !t.uid.isEmpty && t.uid != service.myUid && service.myRole.canModerate(role(of: t))
+    }
+
+    private func run(_ action: CallAdminAction, target uid: String? = nil) {
+        Task { @MainActor in
+            do { try await service.admin(action, target: uid) }
+            catch { actionError = Self.errorText(error) }
+        }
+    }
+
+    private func revokeLink() {
+        Task { @MainActor in
+            do { try await service.revokeLink() }
+            catch { actionError = Self.errorText(error) }
+        }
+    }
+
+    private func makeNewLink() {
+        guard !makingLink else { return }
+        makingLink = true
+        Task { @MainActor in
+            do { try await service.makeNewLink() }
+            catch { actionError = Self.errorText(error) }
+            makingLink = false
+        }
+    }
+
+    private func copy(_ url: URL) {
+        UIPasteboard.general.url = url
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            copied = false
+        }
+    }
+
+    /// One short line for the alert. The server's refusals come back as Functions error codes.
+    private static func errorText(_ error: Error) -> String {
+        let ns = error as NSError
+        guard ns.domain == FunctionsErrorDomain, let code = FunctionsErrorCode(rawValue: ns.code) else {
+            return "Couldn't do that. Check your connection and try again."
+        }
+        switch code {
+        case .permissionDenied: return "Only the host can do that"
+        case .notFound: return "They're no longer in the call"
+        case .resourceExhausted: return "Too many tries. Wait a moment and try again."
+        case .unauthenticated: return "Sign in again, then try again."
+        default: return "Couldn't do that. Try again."
+        }
+    }
+
+    /// The trailing menu on a row the viewer may act on: Mute (while they are not muted) and Remove.
+    private func actionsMenu(_ t: CallTile) -> some View {
+        Menu {
+            if !t.isMuted {
+                Button { run(.mute, target: t.uid) } label: {
+                    Label("Mute", systemImage: "mic.slash")
+                }
+            }
+            Button(role: .destructive) { removeTarget = t } label: {
+                Label("Remove from call", systemImage: "person.fill.xmark")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 20))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Actions for \(t.name)")
+    }
+
     // MARK: - In call rows
 
     private func isSpeaking(_ t: CallTile) -> Bool {
@@ -168,19 +315,29 @@ struct GroupCallParticipantsSheet: View {
             rowContent(t)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilityText(t))
-        } else {
-            Button {
-                if stage.pinnedId != t.id { stage.togglePin(t.id) }
-                dismiss()
-            } label: {
-                rowContent(t).contentShape(Rectangle())
+        } else if canModerate(t) {
+            // Two controls in one row: borderless, so the row tap and the menu each keep their own.
+            HStack(spacing: 4) {
+                focusButton(t).buttonStyle(.borderless)
+                actionsMenu(t).buttonStyle(.borderless)
             }
-            .foregroundStyle(.primary)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityText(t))
-            .accessibilityHint("Shows them large on the call screen")
-            .accessibilityAddTraits(.isButton)
+        } else {
+            focusButton(t)
         }
+    }
+
+    private func focusButton(_ t: CallTile) -> some View {
+        Button {
+            if stage.pinnedId != t.id { stage.togglePin(t.id) }
+            dismiss()
+        } label: {
+            rowContent(t).contentShape(Rectangle())
+        }
+        .foregroundStyle(.primary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText(t))
+        .accessibilityHint("Shows them large on the call screen")
+        .accessibilityAddTraits(.isButton)
     }
 
     private func rowContent(_ t: CallTile) -> some View {
@@ -200,8 +357,9 @@ struct GroupCallParticipantsSheet: View {
                 Text(t.isLocal ? "You" : t.name)
                     .fontWeight(speaking ? .semibold : .regular)
                     .lineLimit(1)
-                if t.isHost {
-                    Text("Host").font(.caption).foregroundStyle(.secondary)
+                // Host (owner) or Admin (moderator), as the server assigned it.
+                if let badge = role(of: t).badge {
+                    Text(badge).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 8)
@@ -228,7 +386,7 @@ struct GroupCallParticipantsSheet: View {
     /// One VoiceOver element per row: "<name>, host, speaking, muted, camera off".
     private func accessibilityText(_ t: CallTile) -> String {
         var parts = [t.isLocal ? "You" : t.name]
-        if t.isHost { parts.append("host") }
+        if let badge = role(of: t).badge { parts.append(badge.lowercased()) }
         if isSpeaking(t) { parts.append("speaking") }
         if t.isMuted { parts.append("muted") }
         if !t.hasVideo { parts.append("camera off") }

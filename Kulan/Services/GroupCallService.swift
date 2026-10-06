@@ -138,6 +138,10 @@ final class GroupCallService: ObservableObject {
     /// True from my own "End call for everyone" until the room is gone, so the room-deleted event
     /// that follows is not reported back to me as "The call was ended".
     private var endingForAll = false
+    /// Link calls: the link made by "Make a new link" during this call, and whether the one being
+    /// handed out was revoked. Share and Copy use `currentLink`.
+    @Published private(set) var replacedLink: ActiveCallLink?
+    @Published private(set) var linkRevoked = false
 
     var isActive: Bool { activeCid != nil }
 
@@ -322,6 +326,32 @@ final class GroupCallService: ObservableObject {
         }
         // The server closed the room and the call's record; I leave quietly, like any hang-up.
         if action == .end { end() }
+    }
+
+    /// Link calls: the link people should be sent now (the new one after "Make a new link").
+    var currentLink: ActiveCallLink? {
+        if let replacedLink { return replacedLink }
+        if case .link(let roomId, let key)? = activeRoom { return ActiveCallLink(roomId: roomId, key: key) }
+        return nil
+    }
+
+    /// Owner: no one new can join with the link; the call goes on.
+    func revokeLink() async throws {
+        guard let link = currentLink else { return }
+        try await CallLinkService.shared.revoke(link)
+        linkRevoked = true
+    }
+
+    /// The people list read the link's doc and found it revoked (revoked on another visit).
+    func noteLinkRevoked() { linkRevoked = true }
+
+    /// Owner: the old link stops working and a new one with the same name and settings replaces it
+    /// in my Calls list. Share and Copy hand out the new one from now on.
+    func makeNewLink() async throws {
+        guard let link = currentLink else { return }
+        let fresh = try await CallLinkService.shared.regenerate(link)
+        replacedLink = fresh
+        linkRevoked = false
     }
 
     private func showToast(_ text: String) {
@@ -745,6 +775,7 @@ final class GroupCallService: ObservableObject {
         pendingRequests = []; isLinkCreator = false
         myRole = .participant
         endingForAll = false
+        replacedLink = nil; linkRevoked = false
         toastTask?.cancel(); toastTask = nil; toast = nil
     }
 

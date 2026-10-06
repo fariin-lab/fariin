@@ -57,14 +57,22 @@ struct GroupCallView: View {
             syncHosts()
         }
         .onChange(of: service.members) { _, members in stage.refreshProfiles(members) }
-        .onChange(of: service.isLinkCreator) { _, _ in syncHosts() }
+        .onChange(of: service.rolesVersion) { _, _ in syncHosts() }
+        .onChange(of: stage.tiles.count) { _, _ in syncHosts() }
+        .onChange(of: service.myRole) { _, _ in syncHosts() }   // set once the room is up
     }
 
-    /// Hosts the service can name: the link creator, when that is me. The service does not keep the
-    /// ad-hoc starter or group admins for a running call, so nobody else is marked.
+    /// The tiles' host mark: whoever the server signed in as owner (LiveKit attribute `role`, group
+    /// call permissions 2026-10-06). It used to be a flag of ours that only knew a link's creator.
     private func syncHosts() {
-        let me = service.myUid
-        stage.hostUids = service.isLinkCreator && !me.isEmpty ? [me] : []
+        let room = service.room
+        let everyone: [Participant] = [room.localParticipant as Participant]
+            + room.remoteParticipants.values.map { $0 as Participant }
+        var hosts: Set<String> = []
+        for p in everyone where CallRole(attribute: p.attributes["role"]) == .owner {
+            if let uid = p.identity?.stringValue, !uid.isEmpty { hosts.insert(uid) }
+        }
+        stage.hostUids = hosts
     }
 
     /// Between header and controls: the grid, or one person large with the strip (pinned or

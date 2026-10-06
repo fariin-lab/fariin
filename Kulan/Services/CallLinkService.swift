@@ -348,6 +348,75 @@ final class CallLinkService {
         ])
     }
 
+    /// Owner (group call permissions, 2026-10-06): no one new can join with this link. A call already
+    /// running on it goes on, and its owner can still get back in while anyone is there.
+    func revoke(_ link: some CallLinkRef) async throws {
+        _ = try await functions.httpsCallable("updateCallLink").call([
+            "roomId": link.roomId,
+            "revoked": true,
+        ])
+    }
+
+    /// Whether the link was revoked, from its own doc. nil when it cannot be read.
+    func isRevoked(_ link: some CallLinkRef) async -> Bool? {
+        guard let snap = try? await Firestore.firestore().collection("callLinks")
+            .document(link.roomId).getDocument(), let d = snap.data() else { return nil }
+        return d["revoked"] as? Bool ?? false
+    }
+
+    /// Owner: a new link in place of `old`. The server revokes the old one and copies its approval
+    /// and call type to the new one; the name is sealed with a key derived from the link's own root
+    /// key, so it is opened here with the old key and sealed again for the new one. The new link
+    /// takes the old one's place in my Calls list.
+    func regenerate(_ old: some CallLinkRef) async throws -> ActiveCallLink {
+        guard let oldKey = old.linkKey else { throw NSError(domain: "CallLink", code: 2) }
+        var name = links.first(where: { $0.roomId == old.roomId })?.name
+        if name == nil,
+           let enc = try? await Firestore.firestore().collection("callLinks").document(old.roomId)
+               .getDocument().data()?["encName"] as? String {
+            name = oldKey.decryptName(enc)
+        }
+        // Unreadable name: sent empty rather than the old sealed one, which the new key cannot open.
+        let clean = CallLinkDefaults.clamp(name ?? "")
+        var lastError: Error?
+        for _ in 0..<3 {
+            let key = CallLinkKey.generate()
+            do {
+                _ = try await functions.httpsCallable("regenerateCallLink").call([
+                    "roomId": old.roomId,
+                    "newRoomId": key.roomId,
+                    "encName": key.encryptName(clean),
+                ])
+                await replaceSaved(old.roomId, with: key, name: clean)
+                return ActiveCallLink(roomId: key.roomId, key: key.text)
+            } catch {
+                // Same rule as makeOnServer: only a roomId collision is worth another key.
+                lastError = error
+                let ns = error as NSError
+                guard ns.domain == FunctionsErrorDomain,
+                      FunctionsErrorCode(rawValue: ns.code) == .alreadyExists else { throw error }
+            }
+        }
+        throw lastError ?? NSError(domain: "CallLink", code: 1)
+    }
+
+    /// The old link's row leaves my list and the new one goes in at the top, same name, admin.
+    private func replaceSaved(_ oldId: String, with key: CallLinkKey, name: String) async {
+        guard let me else { return }
+        let fresh = SavedCallLink(roomId: key.roomId, key: key.text, name: name, createdAt: Date(), admin: true)
+        links.removeAll { $0.roomId == oldId || $0.roomId == fresh.roomId }
+        noteEdit(oldId, nil)
+        links.insert(fresh, at: 0)
+        noteEdit(fresh.roomId, fresh)
+        try? await listRef(me).document(fresh.roomId).setData([
+            "key": fresh.key,
+            "name": name,
+            "admin": true,
+            "createdAt": FieldValue.serverTimestamp(),
+        ], merge: true)
+        try? await listRef(me).document(oldId).delete()
+    }
+
     /// The link's call type from its own doc: true = Video (every link made before the setting).
     func isVideo(_ link: some CallLinkRef) async -> Bool? {
         guard let snap = try? await Firestore.firestore().collection("callLinks")
