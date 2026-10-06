@@ -1233,45 +1233,107 @@ final class Drafts {
     private static let legacyPlainKey = "chatDrafts"
     private static let keychainKey = "draftsKey"
 
-    private(set) var map: [String: String]
+    /// owner audit 2026-10-06 chat #44. EVERY KEY PRESS used to seal the whole map (all chats), read
+    /// the key from the keychain, write UserDefaults, and change this observed property, which
+    /// re-ran the chat list's body under the open chat. Small hitches while typing fast.
+    ///
+    /// Now: `live` takes each edit at once and is NOT observed, so `text(_:)` always answers with the
+    /// latest words. Observers watch `version` only, which moves when the edits are flushed: after a
+    /// short pause in typing, on leaving the chat (`flush()`), and when the app resigns active or goes
+    /// to the background, which is also the step before any kill from the app switcher. A crash
+    /// inside the pause can lose at most that pause's keystrokes of an unsent draft.
+    @ObservationIgnored private var live: [String: String]
+    private var version = 0
+    @ObservationIgnored private var dirty = false
+    @ObservationIgnored private var pendingFlush: DispatchWorkItem?
+    @ObservationIgnored private var lifecycleObservers: [NSObjectProtocol] = []
+    private static let flushDelay: TimeInterval = 0.6
+
+    /// Kept for any reader of the whole map; observing it observes the flushes.
+    var map: [String: String] { _ = version; return live }
 
     private init() {
-        map = Self.load()
+        live = Self.load()
         // Migrate anything written by the old plaintext store, then take it off the disk.
         if let old = UserDefaults.standard.dictionary(forKey: Self.legacyPlainKey) as? [String: String] {
-            for (cid, text) in old where map[cid] == nil { map[cid] = text }
+            for (cid, text) in old where live[cid] == nil { live[cid] = text }
             UserDefaults.standard.removeObject(forKey: Self.legacyPlainKey)
-            Self.save(map)
+            Self.save(live)
+        }
+        // Never leave an edit only in memory when the app is about to stop running.
+        let nc = NotificationCenter.default
+        for name in [UIApplication.willResignActiveNotification,
+                     UIApplication.didEnterBackgroundNotification,
+                     UIApplication.willTerminateNotification] {
+            lifecycleObservers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.flush()
+            })
         }
     }
 
-    func text(_ cid: String) -> String { map[cid] ?? "" }
+    func text(_ cid: String) -> String { _ = version; return live[cid] ?? "" }
     func set(_ cid: String, _ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard map[cid] ?? "" != t else { return }   // no-op → no observation churn per keystroke
-        if t.isEmpty { map.removeValue(forKey: cid) } else { map[cid] = t }
-        Self.save(map)
+        guard live[cid] ?? "" != t else { return }   // no-op → no observation churn per keystroke
+        let wasEmpty = (live[cid] ?? "").isEmpty
+        if t.isEmpty { live.removeValue(forKey: cid) } else { live[cid] = t }
+        dirty = true
+        // A draft appearing or disappearing decides whether a chat row says "Draft" at all, so that
+        // edge is flushed at once; edits inside an existing draft wait for the pause.
+        if wasEmpty != t.isEmpty { flush(); return }
+        scheduleFlush()
+    }
+
+    /// Writes any held edit now: seals it to disk and lets observers (the chat list) see it.
+    func flush() {
+        pendingFlush?.cancel(); pendingFlush = nil
+        guard dirty else { return }
+        dirty = false
+        version &+= 1
+        Self.save(live)
+    }
+
+    private func scheduleFlush() {
+        pendingFlush?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.flush() }
+        pendingFlush = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.flushDelay, execute: work)
     }
 
     /// Sign-out/delete: drafts are unsent message text — wipe them, and the key with them, so the
     /// stored blob is not merely orphaned but unreadable.
     func clear() {
-        map = [:]
+        pendingFlush?.cancel(); pendingFlush = nil
+        dirty = false
+        live = [:]
+        version &+= 1
         UserDefaults.standard.removeObject(forKey: Self.key)
         Keychain.delete(Self.keychainKey)
+        Self.keyLock.withLock { Self.cachedKey = nil }   // the next draft gets a fresh key
     }
 
     // MARK: - At-rest
 
+    /// owner audit 2026-10-06 chat #44: the key is read from the keychain once and kept in memory;
+    /// it was a keychain read on every save. Dropped by `clear()` together with the stored key.
+    private static let keyLock = NSLock()
+    private static var cachedKey: SymmetricKey?
+
     /// The device-local sealing key, created on first use.
     private static func sealingKey() -> SymmetricKey {
-        if let stored = Keychain.get(keychainKey), let raw = Data(base64Encoded: stored) {
-            return SymmetricKey(data: raw)
+        keyLock.withLock {
+            if let k = cachedKey { return k }
+            if let stored = Keychain.get(keychainKey), let raw = Data(base64Encoded: stored) {
+                let k = SymmetricKey(data: raw)
+                cachedKey = k
+                return k
+            }
+            let fresh = SymmetricKey(size: .bits256)
+            let raw = fresh.withUnsafeBytes { Data($0) }
+            Keychain.set(keychainKey, raw.base64EncodedString())
+            cachedKey = fresh
+            return fresh
         }
-        let fresh = SymmetricKey(size: .bits256)
-        let raw = fresh.withUnsafeBytes { Data($0) }
-        Keychain.set(keychainKey, raw.base64EncodedString())
-        return fresh
     }
 
     private static func save(_ map: [String: String]) {
