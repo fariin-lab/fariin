@@ -1169,8 +1169,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         BubbleMetrics.contentSizeCategory = traitCollection.preferredContentSizeCategory
         let w = collectionView.bounds.width
         guard w > 0, measuredWidth > 0 else { return }   // nothing measured yet: the first land will
+        // ⛔ THE READER'S PLACE, THE WAY A ROTATION KEEPS IT — owner audit 2026-10-06 chat #29: every
+        // row changes height here, and without an anchor the offset was simply kept, so the reader
+        // landed on whatever row now sat there. Same capture and the same put-back as
+        // `viewWillTransition`: bottom-biased anchors before the re-measure, the newest message for a
+        // reader who was at it.
+        let wasAtNewest = didFirstLand && isAtNewest
+        let anchors = (!didFirstLand || wasAtNewest) ? [] : continuityAnchors(relativeToTop: false)
         // The saved rendered heights were proven at the old text size, so they are not re-read.
         remeasureAll(width: w, reseedRenderedHeights: false)
+        guard didFirstLand else { return }
+        collectionView.layoutIfNeeded()
+        if wasAtNewest { perform(.newest(animated: false)) }
+        else { verifyAnchor(anchors) }
     }
 
     /// One live list at a time answers this. A pushed-then-popped thread leaves its controller alive
@@ -3770,12 +3781,44 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                                         bottom: newInsets.bottom, right: 0)
         }
 
+        // Owner audit 2026-10-06 chat #36: the last pass's clearance, for voiding a debt below.
+        let clearanceBeforePass = lastPassClearance
+        lastPassClearance = bottom
+
         // Theirs: `guard didChangeInsets else { return }`.
-        guard didChangeInsets else { return }
+        // ⛔ PLUS AN OWED SHIFT — owner audit 2026-10-06 chat #36. A send hold or a context menu
+        // stands down AFTER the insets are written, and the debt is kept in `lastAppliedClearance`,
+        // but with the insets already at their target no later pass ever got past this gate to pay
+        // it: a bottom reader kept a blank band under the last row, a history reader jumped by the
+        // whole debt at the next unrelated inset change. While `owedShiftAtOffset` is set the pass
+        // goes on, and the first one after the stand-down ends pays it.
+        guard didChangeInsets || owedShiftAtOffset != nil else { return }
+        // A debt only stands while the reader is exactly where the stand-down left them. If anything
+        // moved them since (the send glide, a jump, their own finger) that move settled it, and only
+        // the change since the last pass is still owed.
+        if let at = owedShiftAtOffset, abs(oldYOffset - at) > 0.5 {
+            owedShiftAtOffset = nil
+            lastAppliedClearance = clearanceBeforePass
+            guard didChangeInsets else { return }
+        }
 
         // Step 3. Theirs: the finger owns the offset while it drags the keyboard down. UIKit moves the
         // content itself there, so nothing is owed and the clearance is banked.
-        guard !collectionView.isDragging else { lastAppliedClearance = bottom; return }
+        if collectionView.isDragging {
+            // ⛔ Owner audit 2026-10-06 chat #37: this used to bank for ANY drag, so a reader resting
+            // a finger at the newest message while the composer grew (a reply banner, a mention list,
+            // the pinned bar) was left with the newest row under the composer and nothing to re-pin
+            // it. A history reader keeps "position held", as before. A reader who was at the bottom
+            // of an ordinary drag (not the keys under a finger) is owed the growth, and is pinned
+            // once the scroll comes to rest if they are still within it (`payOwedBottomPin`).
+            if fingerDrivenHeight == nil, wasScrolledToBottom {
+                let grew = bottom - (lastAppliedClearance ?? oldAdjustedBottom)
+                if grew > 0.5 { owedBottomPin = (owedBottomPin ?? 0) + grew }
+            }
+            lastAppliedClearance = bottom
+            owedShiftAtOffset = nil
+            return
+        }
         // ⛔ AND THE SYSTEM OWNS IT DURING A FULL-PAGE SCREENSHOT CAPTURE. Every other offset writer in
         // this file stands down on that clock and this one did not, so the capture's own scroll could
         // be walked by the lockstep below while it was in progress.
@@ -3805,7 +3848,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // ⚠️ IT MUST TIME OUT. A send that fails validation, or is swallowed anywhere between the
         // tap and the repo, would otherwise leave the offset frozen for the rest of the sitting.
         // `sendHoldUntil` is a deadline, not a flag.
-        guard Date() >= sendHoldUntil else { return }
+        guard Date() >= sendHoldUntil else {
+            // Chat #36: owed, and a pass is booked for the deadline, because a send whose row never
+            // lands (and so never glides) leaves nothing else to come back.
+            noteOwedShift()
+            scheduleOwedShiftPass(at: sendHoldUntil)
+            return
+        }
 
         // Step 4. Plain writes, outside the wrapper. Inside the keyboard's block they ride the keys;
         // anywhere else (composer growth, the pinned bar) they land at once, as theirs do.
@@ -3828,6 +3877,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if contextMenuVisible {
             // Nothing — and the clearance is deliberately NOT banked, so the change is still owed when
             // the menu closes and the keyboard comes back. In practice the two net out.
+            // Chat #36: and marked owed, so it is paid when the menu ends (see `customMenuDidEnd`).
+            noteOwedShift()
         } else if wasScrolledToBottom {
             // Theirs, verbatim: "If we were scrolled to the bottom, don't do any fancy math. Just
             // stay at the bottom."
@@ -3836,6 +3887,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
             }
             lastAppliedClearance = bottom
+            owedShiftAtOffset = nil   // chat #36: paid
         } else if isViewCompletelyAppeared {
             // ⛔ THEIR `isViewCompletelyAppeared` GATE, on the lockstep branch only, exactly where
             // theirs sits. During a push, a pop, or the return from a pushed screen the geometry is
@@ -3872,7 +3924,55 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 }
             }
             lastAppliedClearance = bottom
+            owedShiftAtOffset = nil   // chat #36: paid
         }
+    }
+
+    // MARK: Owed inset shifts (owner audit 2026-10-06, chat #36 and #37)
+
+    /// Set while an inset pass stood down with a shift still owed: the offset the reader was left at.
+    /// See the gate in `updateInsets`. Cleared when paid, voided when the reader is moved by anything.
+    private var owedShiftAtOffset: CGFloat?
+    /// `bottom` as the previous `updateInsets` pass computed it, for voiding a debt (chat #36).
+    private var lastPassClearance: CGFloat?
+    private var owedShiftPassBooked = false
+    /// Chat #37: composer growth a reader at the newest message was owed while a finger was down.
+    private var owedBottomPin: CGFloat?
+
+    private func noteOwedShift() {
+        if owedShiftAtOffset == nil { owedShiftAtOffset = collectionView.contentOffset.y }
+    }
+
+    /// One pass, booked for the moment a stand-down ends. Booked once; an earlier pass that pays the
+    /// debt makes this one a no-op.
+    private func scheduleOwedShiftPass(at deadline: Date) {
+        guard !owedShiftPassBooked else { return }
+        owedShiftPassBooked = true
+        let wait = max(0, deadline.timeIntervalSinceNow) + 0.01
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self else { return }
+            self.owedShiftPassBooked = false
+            guard self.owedShiftAtOffset != nil else { return }
+            UIView.performWithoutAnimation { self.updateInsets() }
+        }
+    }
+
+    /// Chat #37, at scroll rest: a reader who was at the newest message when the composer grew under
+    /// their finger, and is still within that growth of the bottom, is put back at the bottom. A
+    /// reader who scrolled further up has chosen a place and is not touched.
+    private func payOwedBottomPin() {
+        guard let grew = owedBottomPin else { return }
+        owedBottomPin = nil
+        guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
+              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil else { return }
+        let bound = maxContentOffsetY
+        let y = collectionView.contentOffset.y
+        guard y < bound - 0.5, y >= bound - Self.atNewestTolerance - grew else { return }
+        UIView.performWithoutAnimation {
+            collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+        }
+        lastStableOffset = bound
     }
 
     /// ThreadView bumps this the instant Send is tapped, BEFORE it clears the input and the reply
@@ -3962,6 +4062,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         //
         // Theirs does exactly this, in this method: `dismissMessageContextMenu(animated: false)`.
         dismissCustomMenu(animated: false)
+        // Owner audit 2026-10-06 chat #36/#37: a debt owed to this visit's geometry is not carried
+        // into the return; `restoreRecordedDistance` owns the reader on the way back in.
+        owedShiftAtOffset = nil
+        owedBottomPin = nil
         isDisappearing = true
         isViewCompletelyAppeared = false   // theirs, same method
     }
@@ -4121,6 +4225,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         isDisappearing = false
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
+        // Owner audit 2026-10-06 chat #5: a keyboard that went down WHILE the chat was leaving (a
+        // swipe-back that was cancelled, a profile or photo pushed with the keys up) posted its hide
+        // into `isDisappearing`, and both hide handlers refuse it there. Nothing else lowers the
+        // guide (the floor stands down while it reads "up", the system feeder only raises), so the
+        // composer floated a keyboard's height up until the next open and close. Reconciled here,
+        // once, on the way back in: no text field holds focus, so no keyboard is on screen. A field
+        // that does hold focus is left alone; its keyboard is up, or its show is on the way.
+        if keyboardIsUp || dockedBand > 0, !windowHasTextFocus() {
+            UIView.performWithoutAnimation { settleKeyboardAtRest() }
+        }
         updateInsets()
         // ⛔ AND CATCH UP ON WHATEVER MOVED WHILE THE GATE WAS SHUT. `updateInsets` is EDGE-TRIGGERED
         // (`guard didChangeInsets`), so a bottom change that landed during the return transition —
@@ -4139,6 +4253,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             hookedPopGesture = pop
             popGestureHooked = true
         }
+    }
+
+    /// Whether any text input in this window is first responder — the composer, or a SwiftUI field
+    /// such as the in-chat search, whose UITextField sits in the same window. Chat #5's test for "a
+    /// keyboard may honestly be up". Walked once per appearance, never per frame.
+    private func windowHasTextFocus() -> Bool {
+        guard let win = view.window else { return false }
+        func focused(_ v: UIView) -> Bool {
+            if v.isFirstResponder, v is UITextInput { return true }
+            return v.subviews.contains(where: focused)
+        }
+        return focused(win)
     }
 
     /// Release the nav controller's pop recognizer — see `hookedPopGesture`. Safe to call twice.
@@ -4264,6 +4390,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// Run by a width change and by a text-size change: both make every number measured before them
     /// untrue.
     private func remeasureAll(width w: CGFloat, reseedRenderedHeights: Bool) {
+        // Owner audit 2026-10-06 chat #55: the return anchor taken when a screen was pushed over
+        // this chat. Its row is usually cut by the top edge (a negative `offsetFromTop`), and those
+        // points belong to the row's OLD height: a rotation or text-size change while covered can
+        // shrink the row below the cut, and the restore then put it wholly off screen with another
+        // row in its place. Rescaled below so the same SHARE of the row stays above the edge.
+        let pendingAnchor = anchorOnDisappear
+        let anchorOldHeight: CGFloat? = pendingAnchor.flatMap { a in
+            dataSource.indexPath(for: a.rowId).flatMap { collectionView.layoutAttributesForItem(at: $0)?.frame.height }
+        }
         heights.removeAll(keepingCapacity: true)
         sizerRefused.removeAll()
         renderedHeights.removeAll()   // a rendered height is only true at the width it rendered at
@@ -4274,6 +4409,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         planStore.invalidateAll()
         for id in currentIds { heights[id] = measure(id, width: w) }
         estimatedIds.removeAll()   // every row was just measured for real
+        if let a = pendingAnchor, a.offsetFromTop < 0, let oldH = anchorOldHeight, oldH > 0,
+           let newH = heights[a.rowId], newH > 0 {
+            anchorOnDisappear = ChatReadingPosition(rowId: a.rowId, offsetFromTop: a.offsetFromTop * newH / oldH)
+        }
         measuredWidth = w
         layout.generation += 1
         layout.invalidateLayout()
@@ -4291,6 +4430,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // ⛔ THE WIDTH CHANGE, ASKED AGAIN NOW THAT IT IS REAL — owner audit 2026-10-06 chat #30. In
+        // `viewWillLayoutSubviews` the list's constraints have not been applied yet, so on the pass
+        // that rotates it still reports the OLD width and the re-measure waited a whole extra pass,
+        // with the new width already on screen and every row at its old height (overlaps, gaps).
+        // Here the frame is the new one, before the list lays its cells out. The check above stays:
+        // it is a no-op whenever this one has already run.
+        let laidOutWidth = collectionView.bounds.width
+        if laidOutWidth > 0 {
+            hostWidth = laidOutWidth
+            if measuredWidth > 0, laidOutWidth != measuredWidth {
+                remeasureAll(width: laidOutWidth, reseedRenderedHeights: true)
+            }
+        }
         layoutHeaderBlur()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
         // `inputToolbar.ensureTextViewHeight()` and then `updateContentInsets()` synchronously, and
@@ -4938,6 +5090,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // up over whatever comes next.
         if restoringKeyboard, menu.keyboardWasUp { onMenuRestoreKeyboard() }
         interactionHoldUntil = Date()
+        // Owner audit 2026-10-06 chat #36: pay an inset shift the menu stood down for. Not when the
+        // screen itself is leaving.
+        if restoringKeyboard, owedShiftAtOffset != nil { updateInsets() }
         settleFlush()   // land everything the menu held back
         // A reaction picked from this menu usually lands while the menu is still up, when
         // `restoreReaderPosition` stands down; this is the first moment it may act on it.
@@ -4996,7 +5151,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !ignoringScrollEvents else { return }
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
-        if !decelerate { restoreReaderPosition(); recordDistanceFromBottom(); reportReadingPosition(); settleFlush() }
+        if !decelerate { payOwedBottomPin(); restoreReaderPosition(); recordDistanceFromBottom(); reportReadingPosition(); settleFlush() }
         // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
         // is about to coast or not: perform() kills the coast on its way past.
         releaseParkedNewestJump()
@@ -5018,6 +5173,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
+        payOwedBottomPin()   // owner audit 2026-10-06 chat #37
         restoreReaderPosition(); recordDistanceFromBottom(); reportReadingPosition(); settleFlush()
     }
 
@@ -5142,6 +5298,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             canvas.removeFromSuperview()
             CaptureProtectedController<EmptyView>.pin(collectionView, in: view)
             view.insertSubview(collectionView, at: index)   // after `pin`, which puts it on top — see above
+        }
+        // Owner audit 2026-10-06 chat #56: the recording observer belongs to the "on" state. It used
+        // to stay until deinit and keep firing for a chat that no longer restricts anything.
+        if !on, let obs = captureObserver {
+            NotificationCenter.default.removeObserver(obs)
+            captureObserver = nil
         }
         view.layoutIfNeeded()
         layoutHeaderBlur()   // the header blur back above the list's new place
