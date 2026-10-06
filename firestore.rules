@@ -2178,10 +2178,20 @@ service cloud.firestore {
       function isGroupMember() {
         return request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.users;
       }
+      // owner 2026-10-06 call roles: `recordId` is the chat record the app's start write has carried
+      // since 2026-09-24 (GroupCallService.join); the old key list refused that write outright.
+      // `removedUids` is written ONLY by callAdmin (people removed from this call) and cleared only by
+      // the join-token mint once the media room is empty. A phone may carry it through a write
+      // unchanged and nothing else (groupRemovedKept), so a removed member cannot wipe it by ending
+      // and restarting the call.
       function isStartWrite() {
-        return request.resource.data.keys().hasOnly(['active', 'startedBy', 'video', 'title', 'startedAt'])
+        return request.resource.data.keys().hasOnly(['active', 'startedBy', 'video', 'title', 'startedAt',
+                                                     'recordId', 'removedUids'])
           && request.resource.data.active == true
           && request.resource.data.startedBy == request.auth.uid;
+      }
+      function groupRemovedKept() {
+        return request.resource.data.get('removedUids', null) == resource.data.get('removedUids', null);
       }
       // 2026-10-04 calls: ids starting "adhoc_" are multi-person calls grown from a 1:1. They have no
       // conversation behind them; the doc's own `members` list is who may see and change it. Every
@@ -2209,8 +2219,9 @@ service cloud.firestore {
           && request.resource.data.get(f, {}).diff(resource.data.get(f, {})).removedKeys().size() == 0;
       }
       allow read: if signedIn() && !isAdhoc() && isGroupMember();
-      allow create: if signedIn() && !isAdhoc() && isGroupMember() && isStartWrite();
-      allow update: if signedIn() && !isAdhoc() && isGroupMember() && (
+      allow create: if signedIn() && !isAdhoc() && isGroupMember() && isStartWrite()
+        && !('removedUids' in request.resource.data);
+      allow update: if signedIn() && !isAdhoc() && isGroupMember() && groupRemovedKept() && (
            (isStartWrite()
              && (resource.data.get('active', false) != true
                  || resource.data.get('startedBy', '') == request.auth.uid
@@ -2233,12 +2244,21 @@ service cloud.firestore {
         && adhocMembersOk()
         && adhocMapOk('names') && adhocMapOk('photos');
       // Members only ever grow: nobody can take a person off an invite list they did not write.
+      // owner 2026-10-06 call roles: `startedBy` (the call's owner) and `removedUids` (people the owner
+      // removed, written by callAdmin) stay outside the keys a phone may touch. Nobody may put a removed
+      // person back on the list. And an ended call stays ended: `active` may go false (the app's last
+      // one out, and a start that was abandoned), never back to true, so a member cannot re-ring
+      // everyone after the owner ended it. Ending by the last one out is still a phone write; the rules
+      // cannot see whether the media room is empty. It only clears the ringing, and the owner's End
+      // (callAdmin) is the one that closes the room.
       allow update: if signedIn() && isAdhoc()
         && request.auth.uid in resource.data.members
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['active', 'members', 'names', 'photos', 'joined', 'endedAt', 'title'])
         && adhocMembersOk()
         && request.resource.data.members.hasAll(resource.data.members)
+        && !request.resource.data.members.hasAny(resource.data.get('removedUids', []))
+        && (request.resource.data.active == false || resource.data.active == true)
         && adhocMapGrowsOnly('names') && adhocMapGrowsOnly('photos');
     }
 
