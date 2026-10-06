@@ -827,8 +827,41 @@ final class CallService: NSObject {
         observeLifecycleIfNeeded()
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard granted, let self else { return }
-            DispatchQueue.global(qos: .userInitiated).async { self.startCapture(front: self.usingFrontCamera) }
+            self.startCaptureIfWanted(front: nil)
         }
+    }
+
+    /// The ONE answer to "should the camera be capturing right now", checked by every path that can
+    /// start it (owner audit 2026-10-06 #1, #14). Each start path used to check its own subset: the
+    /// weak-link resume forgot hold, the foreground backstop and the thermal restart forgot the
+    /// weak-link pause, and none of them looked again after their async hops. So a hold, a weak link
+    /// or a quick off-toggle could each be undone by a start that was already on its way, leaving the
+    /// camera light on while the other side was told the camera was off.
+    ///
+    /// `cameraPausedByBackground` is deliberately NOT in here: that pause is recovered BY restarting
+    /// the capture (resumeCameraIfReallyBack), so blocking starts on it would make it permanent.
+    private var cameraShouldRun: Bool {
+        inLiveCall && cameraOn && !videoPausedForNetwork && !isHeld
+    }
+
+    /// Re-checks `cameraShouldRun` on main AFTER whatever async hop led here (permission callback,
+    /// stopCapture completion), then starts off-main. `front` nil means "whichever camera is current".
+    /// A start refused here still resolves a pending front/back switch, or its flipped tile never
+    /// swings back. startCapture's own completion re-checks once more for the gap after this one.
+    private func startCaptureIfWanted(front: Bool?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.cameraShouldRun else { self.resolvePendingSwitch(); return }
+            let target = front ?? self.usingFrontCamera
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.startCapture(front: target) }
+        }
+    }
+
+    /// Ends a front/back switch's flip animation. Main only.
+    private func resolvePendingSwitch() {
+        guard pendingSwitchTarget != nil else { return }
+        pendingSwitchTarget = nil
+        cameraSwitchFlip += 1
     }
 
     // How hot the phone is decides how hard we drive the camera. Nothing watched this before, so a long
@@ -849,7 +882,9 @@ final class CallService: NSObject {
         guard thermalObserver == nil else { return }
         thermalObserver = NotificationCenter.default.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                guard let self, cameraOn, !cameraPausedByBackground, videoCapturer != nil else { return }
+                // cameraShouldRun, not just cameraOn: a thermal step used to restart a camera that a
+                // weak link or a hold had stopped (owner audit 2026-10-06 #14).
+                guard let self, cameraShouldRun, !cameraPausedByBackground, videoCapturer != nil else { return }
                 // Only restart when the cap actually MOVED — a restart costs a ~200ms black frame on
                 // the other side, so reacting to every notification would be worse than the heat.
                 guard thermalCaps.fps != appliedThermalFps else { return }
@@ -859,7 +894,7 @@ final class CallService: NSObject {
                 thermalStepUpWork?.cancel(); thermalStepUpWork = nil
                 if thermalCaps.fps < appliedThermalFps { restartCaptureForThermal(); return }
                 let w = DispatchWorkItem { [weak self] in
-                    guard let self, self.cameraOn, !self.cameraPausedByBackground, self.videoCapturer != nil,
+                    guard let self, self.cameraShouldRun, !self.cameraPausedByBackground, self.videoCapturer != nil,
                           self.thermalCaps.fps > self.appliedThermalFps else { return }
                     self.restartCaptureForThermal()
                 }
@@ -871,17 +906,24 @@ final class CallService: NSObject {
 
     private func restartCaptureForThermal() {
         let front = usingFrontCamera
-        videoCapturer?.stopCapture { [weak self] in
-            DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: front) }
-        }
+        // The restart re-checks after the stop completes: a toggle-off, hold or weak-link pause that
+        // lands during the stop used to be overridden by this start (owner audit 2026-10-06 #14).
+        videoCapturer?.stopCapture { [weak self] in self?.startCaptureIfWanted(front: front) }
     }
 
     // Pick the camera + a format and start feeding frames into the local track.
     private func startCapture(front: Bool) {
-        guard let capturer = videoCapturer else { return }
+        // Every early return below must still end a pending front/back switch; they used to return
+        // straight past the completion that does it, so the flipped-away tile never came back
+        // (owner audit 2026-10-06 #14).
+        let giveUp = { DispatchQueue.main.async { [weak self] in self?.resolvePendingSwitch() } }
+        guard let capturer = videoCapturer else { giveUp(); return }
         let position: AVCaptureDevice.Position = front ? .front : .back
         let devices = RTCCameraVideoCapturer.captureDevices()
-        guard let device = devices.first(where: { $0.position == position }) ?? devices.first else { return }
+        guard let device = devices.first(where: { $0.position == position }) ?? devices.first else { giveUp(); return }
+        // The mirror follows the camera that ACTUALLY opened: the `?? devices.first` fallback can open
+        // the other one, and mirroring by the request then showed it the wrong way round.
+        let liveFront = device.position == .front ? true : (device.position == .back ? false : front)
         let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
         let caps = thermalCaps
         let format = formats.min(by: {
@@ -889,7 +931,7 @@ final class CallService: NSObject {
             let d2 = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
             return abs(Int(d1.height) - caps.height) < abs(Int(d2.height) - caps.height)
         })
-        guard let format else { return }
+        guard let format else { giveUp(); return }
         let fps = min(caps.fps, Int(format.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 30))
         appliedThermalFps = caps.fps
         allowBackgroundCamera(on: capturer.captureSession)
@@ -899,15 +941,17 @@ final class CallService: NSObject {
                 // A front↔back switch resolves HERE: the new camera is delivering (or has failed —
                 // either way the flipped-away view must come back). The mirror already changed
                 // while the view was edge-on/black (the write below this closure).
-                if self.pendingSwitchTarget != nil {
-                    self.pendingSwitchTarget = nil
-                    self.cameraSwitchFlip += 1
-                }
+                self.resolvePendingSwitch()
+                // THE LAST RE-CHECK (owner audit 2026-10-06 #14). This start was decided before one or
+                // more async hops; if a toggle-off, hold, weak-link pause or hang-up landed meanwhile,
+                // its own stopCapture ran FIRST and this start then switched the camera back on, light
+                // and all, with nothing left to turn it off. Stop it here. `capturer` is the one this
+                // start used, so it is stopped even after the idle reset has dropped `videoCapturer`.
+                guard self.cameraShouldRun else { capturer.stopCapture(); return }
                 // Only claim video once the session is REALLY running. `cams` was published purely from
                 // intent, so a start that never succeeded (most visibly a video call answered from the
                 // lock screen, where the camera cannot start and no interruption is posted either) left
                 // the other side staring at a BLACK full-screen video with a running timer, forever.
-                guard self.cameraOn, self.inLiveCall else { return }
                 if capturer.captureSession.isRunning {
                     if self.cameraPausedByBackground { self.resumeCameraIfReallyBack() }
                 } else if !self.cameraPausedByBackground {
@@ -919,7 +963,7 @@ final class CallService: NSObject {
             }
         }
         // Observed @Observable state must be written on main (this runs on a background queue).
-        DispatchQueue.main.async { self.usingFrontCamera = front; self.observeThermalIfNeeded() }
+        DispatchQueue.main.async { self.usingFrontCamera = liveFront; self.observeThermalIfNeeded() }
     }
 
     // Lets the capture session survive backgrounding, so leaving the app does not black out my video
@@ -958,9 +1002,8 @@ final class CallService: NSObject {
         pendingSwitchTarget = next
         // Stop the running capture BEFORE starting the other camera — restarting a live
         // capturer in place can freeze/black the local feed on flip.
-        capturer.stopCapture { [weak self] in
-            DispatchQueue.global(qos: .userInitiated).async { self?.startCapture(front: next) }
-        }
+        // Re-checked after the stop (owner audit 2026-10-06 #14): a toggle-off during the flip must win.
+        capturer.stopCapture { [weak self] in self?.startCaptureIfWanted(front: next) }
     }
 
     // MARK: - Camera (each side controls its OWN camera — no permission handshake)
@@ -985,7 +1028,9 @@ final class CallService: NSObject {
         // down there is nothing for the recovery path to resume, and the windows restart from scratch.
         videoPausedForNetwork = false
         linkPolicy.reset()
-        localVideoTrack?.isEnabled = on
+        // While HELD the intent is recorded but nothing is sent; unholding starts it (owner audit
+        // 2026-10-06 #1). startCameraCapture refuses on its own via cameraShouldRun.
+        localVideoTrack?.isEnabled = on && !isHeld
         if on { startCameraCapture() } else { videoCapturer?.stopCapture() }
         applyVideoAudioPolicy()
         CallKitManager.shared.updateHasVideo(on)
@@ -1034,7 +1079,7 @@ final class CallService: NSObject {
         // interruption or a weak link is producing nothing, and announcing it as on is what leaves the
         // other side staring at a frozen face instead of falling back to the avatar. The interruption
         // path already said that was the intent in its own comment; it was still sending `cameraOn`.
-        let sending = cameraOn && !cameraPausedByBackground && !videoPausedForNetwork
+        let sending = cameraOn && !cameraPausedByBackground && !videoPausedForNetwork && !isHeld
         db.collection("calls").document(id).updateData(["cams.\(me)": sending])
     }
 
@@ -1119,8 +1164,9 @@ final class CallService: NSObject {
     // we are not actually producing.
     private func resumeCameraIfReallyBack() {
         // The user may have hung up or turned the camera off while it was interrupted — re-check the
-        // intent instead of blindly restoring.
-        guard inLiveCall, cameraOn, let session = videoCapturer?.captureSession else { return }
+        // intent instead of blindly restoring. cameraShouldRun, not just cameraOn: the foreground
+        // backstop used to restart a camera stopped for a weak link or a hold (owner audit 2026-10-06 #14).
+        guard cameraShouldRun, let session = videoCapturer?.captureSession else { return }
         // Still interrupted: do NOT clear the flag and do NOT claim video. Announcing cams=true here
         // was the bug that put the other side on a frozen frame AND swallowed the real resume later.
         guard !session.isInterrupted else { return }
@@ -1352,6 +1398,10 @@ final class CallService: NSObject {
 
     private func applyLinkQuality(_ bitrate: Double?) {
         guard inLiveCall, cameraOn else { return }
+        // HOLD OWNS THE PAUSE while it lasts (owner audit 2026-10-06 #1). Hold reuses the weak-link
+        // pause flag, so a HEALTHY link read ten seconds into a phone call came back as .resume and
+        // put the camera back on mid-call. Stay out of it, and start the windows fresh on unhold.
+        guard !isHeld else { linkPolicy.reset(); return }
         switch linkPolicy.evaluate(bitrate: bitrate, paused: videoPausedForNetwork, now: Date()) {
         case .pause:  pauseVideoForWeakLink()
         case .resume: resumeVideoAfterWeakLink()
@@ -1371,6 +1421,9 @@ final class CallService: NSObject {
     }
 
     private func resumeVideoAfterWeakLink() {
+        // Never while held, whoever asks (owner audit 2026-10-06 #1). The flag stays up, so the
+        // paused state stays true until setHeld(false) lowers isHeld and calls back in here.
+        guard !isHeld else { return }
         videoPausedForNetwork = false
         // Re-check intent rather than blindly restoring: the user may have hung up, or turned the
         // camera off themselves, during the ten seconds we spent deciding the link was healthy.
@@ -1470,12 +1523,25 @@ final class CallService: NSObject {
         guard isHeld != held else { return }
         isHeld = held
         localAudioTrack?.isEnabled = !(isMuted || isHeld)
-        if held { pauseVideoForWeakLink() } else { resumeVideoAfterWeakLink() }
+        if held {
+            pauseVideoForWeakLink()
+            // pauseVideoForWeakLink stands down when a capture interruption already holds the camera,
+            // and an interrupted session resumes ITSELF when the interruption ends, which would have
+            // been mid-phone-call. Stop it outright; resumeCameraIfReallyBack restarts it on unhold.
+            if cameraOn { videoCapturer?.stopCapture() }
+        } else {
+            resumeVideoAfterWeakLink()
+            if cameraPausedByBackground { resumeCameraIfReallyBack() }
+        }
         // NOT TRACKING WHO PAUSED IT, on purpose. The only case the two owners can disagree about is
         // a weak link AND a phone call at the same moment, where unholding would restore a camera
         // the network cannot carry. `sampleLinkQuality` is still running and pauses it again within
         // its next tick. A brief flap in a rare combination beats a second paused-state machine that
         // can drift out of step with the first one.
+        //
+        // The opposite case is now closed too (owner audit 2026-10-06 #1): a GOOD link can no longer
+        // lift a hold's pause, because applyLinkQuality and resumeVideoAfterWeakLink both refuse while
+        // isHeld, and every camera start checks cameraShouldRun, which includes it.
         broadcastMuteState()
     }
 
