@@ -79,82 +79,112 @@ struct GroupCallParticipantsSheet: View {
             }
     }
 
+    // The list's sections, one property each: as one expression the body was too big for the
+    // compiler to type-check in time (830 compile, 2026-10-06).
+    @ViewBuilder private var shareSection: some View {
+        if service.isAdhoc || link != nil {
+            Section {
+                // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
+                // sends each person the link (a link call has no member list to add to).
+                if service.isAdhoc || (!service.linkRevoked && link?.linkKey?.url != nil) {
+                    Button { showAdd = true } label: {
+                        Label("Add people", systemImage: "person.badge.plus")
+                    }
+                }
+                // Everyone may copy or share the link (the access table); a revoked one
+                // is not handed out.
+                if !service.linkRevoked, let url = link?.linkKey?.url {
+                    Button { copy(url) } label: {
+                        Label(copied ? "Copied" : "Copy link", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityLabel(copied ? "Link copied" : "Copy link")
+                    ShareLink(item: url) {
+                        Label("Share link", systemImage: "link")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var hostSection: some View {
+        if ownsLink, let link {
+            Section {
+                if !service.linkRevoked {
+                    Toggle("Require approval to join",
+                           isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
+                        .disabled(approval == nil)
+                    Button(role: .destructive) { confirmRevoke = true } label: {
+                        Label("Revoke link", systemImage: "xmark.circle")
+                    }
+                    .accessibilityHint("No one new can join with this link. The call continues.")
+                }
+                // No "Make a new link" INSIDE the call (2026-10-06): a link's room is
+                // `link_<roomId>`, so a new link opens a different, empty room and its
+                // joiners would never reach this call. It lives on the link's own page
+                // outside calls; here the host can Revoke.
+            } footer: {
+                if service.linkRevoked {
+                    Text("This link no longer works. No one new can join with it; the call continues.")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var inCallSection: some View {
+        Section {
+            ForEach(inCall) { inCallRow($0) }
+        } header: {
+            // The reference app's header: bold title, count in regular weight (spec §16:
+            // how many are in the call).
+            HStack(spacing: 0) {
+                Text("In call").fontWeight(.semibold)
+                Text(" · \(stage.inCallCount)")
+            }
+            .textCase(nil)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("In call, \(stage.inCallCount)")
+            .accessibilityAddTraits(.isHeader)
+        }
+    }
+
+    @ViewBuilder private func invitedSection(at date: Date) -> some View {
+        let waiting = invited(at: date)
+        if !waiting.isEmpty {
+            Section("Invited") {
+                ForEach(waiting) { invitedRow($0) }
+            }
+        }
+    }
+
+    @ViewBuilder private var endSection: some View {
+        // The owner only: closes the call on the media server for everyone in it.
+        if service.myRole == .owner && service.isActive {
+            Section {
+                Button(role: .destructive) { confirmEnd = true } label: {
+                    Text("End call for everyone")
+                }
+            }
+        }
+    }
+
+    private var removeTitle: String { removeTarget.map { "Remove \($0.name) from the call?" } ?? "" }
+    private var removeShown: Binding<Bool> {
+        Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } })
+    }
+    private var errorShown: Binding<Bool> {
+        Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })
+    }
+
     var body: some View {
         NavigationStack {
             // Ticks so "Ringing…" turns into "Didn't join" without anyone touching the sheet.
             TimelineView(.periodic(from: .now, by: 5)) { context in
                 List {
-                    if service.isAdhoc || link != nil {
-                        Section {
-                            // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
-                            // sends each person the link (a link call has no member list to add to).
-                            if service.isAdhoc || (!service.linkRevoked && link?.linkKey?.url != nil) {
-                                Button { showAdd = true } label: {
-                                    Label("Add people", systemImage: "person.badge.plus")
-                                }
-                            }
-                            // Everyone may copy or share the link (the access table); a revoked one
-                            // is not handed out.
-                            if !service.linkRevoked, let url = link?.linkKey?.url {
-                                Button { copy(url) } label: {
-                                    Label(copied ? "Copied" : "Copy link", systemImage: "doc.on.doc")
-                                }
-                                .accessibilityLabel(copied ? "Link copied" : "Copy link")
-                                ShareLink(item: url) {
-                                    Label("Share link", systemImage: "link")
-                                }
-                            }
-                        }
-                    }
-                    if ownsLink, let link {
-                        Section {
-                            if !service.linkRevoked {
-                                Toggle("Require approval to join",
-                                       isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
-                                    .disabled(approval == nil)
-                                Button(role: .destructive) { confirmRevoke = true } label: {
-                                    Label("Revoke link", systemImage: "xmark.circle")
-                                }
-                                .accessibilityHint("No one new can join with this link. The call continues.")
-                            }
-                            // No "Make a new link" INSIDE the call (2026-10-06): a link's room is
-                            // `link_<roomId>`, so a new link opens a different, empty room and its
-                            // joiners would never reach this call. It lives on the link's own page
-                            // outside calls; here the host can Revoke.
-                        } footer: {
-                            if service.linkRevoked {
-                                Text("This link no longer works. No one new can join with it; the call continues.")
-                            }
-                        }
-                    }
-                    Section {
-                        ForEach(inCall) { inCallRow($0) }
-                    } header: {
-                        // The reference app's header: bold title, count in regular weight (spec §16:
-                        // how many are in the call).
-                        HStack(spacing: 0) {
-                            Text("In call").fontWeight(.semibold)
-                            Text(" · \(stage.inCallCount)")
-                        }
-                        .textCase(nil)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("In call, \(stage.inCallCount)")
-                        .accessibilityAddTraits(.isHeader)
-                    }
-                    let waiting = invited(at: context.date)
-                    if !waiting.isEmpty {
-                        Section("Invited") {
-                            ForEach(waiting) { invitedRow($0) }
-                        }
-                    }
-                    // The owner only: closes the call on the media server for everyone in it.
-                    if service.myRole == .owner && service.isActive {
-                        Section {
-                            Button(role: .destructive) { confirmEnd = true } label: {
-                                Text("End call for everyone")
-                            }
-                        }
-                    }
+                    shareSection
+                    hostSection
+                    inCallSection
+                    invitedSection(at: context.date)
+                    endSection
                 }
             }
             // Alone in the call, the sheet says what is happening, as the reference's does.
@@ -167,8 +197,7 @@ struct GroupCallParticipantsSheet: View {
             .alert("Couldn't change setting", isPresented: $approvalFailed) {
                 Button("OK", role: .cancel) {}
             } message: { Text("Check your connection and try again.") }
-            .alert(removeTarget.map { "Remove \($0.name) from the call?" } ?? "",
-                   isPresented: Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } }),
+            .alert(removeTitle, isPresented: removeShown,
                    presenting: removeTarget) { t in
                 Button("Remove", role: .destructive) { run(.remove, target: t.uid) }
                 Button("Cancel", role: .cancel) {}
@@ -183,8 +212,7 @@ struct GroupCallParticipantsSheet: View {
                 Button("Revoke", role: .destructive) { revokeLink() }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("No one new can join with this link. The call continues.") }
-            .alert(actionError ?? "",
-                   isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            .alert(actionError ?? "", isPresented: errorShown) {
                 Button("OK", role: .cancel) {}
             }
             .navigationBarTitleDisplayMode(.inline)
