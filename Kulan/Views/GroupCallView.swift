@@ -1,31 +1,30 @@
 import SwiftUI
 import LiveKit
 
-// Group call screen — voice = avatar grid, video = live tile grid. Frosted-capsule controls to
-// match the 1:1 call UI. Observes the LiveKit Room directly for live participant updates.
+// Group call screen: header, the stage (Views/GroupCall/, owner spec §8-16), frosted-capsule
+// controls to match the 1:1 call UI. ⛔ Owner, 2026-10-06: the header and the controls capsule stay
+// exactly as they are; only the stage between them was rebuilt. The stage object walks the LiveKit
+// room once for the tiles, the subtitle and the people sheet, so they all agree.
 struct GroupCallView: View {
     @ObservedObject private var service = GroupCallService.shared
-    @ObservedObject private var room = GroupCallService.shared.room
+    // One stage for the life of this screen; the people sheet shares it (same speaker, same pin).
+    @StateObject private var stage = GroupCallStage(room: GroupCallService.shared.room)
+    @Namespace private var ns
     @Environment(\.dismiss) private var dismiss
-
-    private var participants: [Participant] {
-        [room.localParticipant as Participant] + room.remoteParticipants.values.map { $0 as Participant }
-    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 16) {
-                header
-                if service.isLinkCreator && !service.pendingRequests.isEmpty { waitingBanner }
-                if service.isVideo {
-                    ScrollView { videoGrid }
-                } else {
-                    Spacer(); voiceGrid; Spacer()
+                header.padding(.horizontal, 14)
+                if service.isLinkCreator && !service.pendingRequests.isEmpty {
+                    waitingBanner.padding(.horizontal, 14)
                 }
-                controls
+                // Edge to edge: the stage keeps its own 6pt inset (the reference app's grid).
+                stageArea
+                controls.padding(.horizontal, 14)
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .padding(.vertical, 10)
         }
         // Always dark, for the same reason the 1:1 call is — see `CallView`. A call is drawn for a
         // dark ground whatever the phone is set to.
@@ -47,10 +46,46 @@ struct GroupCallView: View {
         } message: {
             if let m = service.notice?.message { Text(m) }
         }
-        .sheet(isPresented: $showParticipants) { GroupCallParticipantsSheet() }
+        .sheet(isPresented: $showParticipants) { GroupCallParticipantsSheet(stage: stage) }
         .sheet(isPresented: $showRequests) { CallLinkRequestsSheet() }
         // The last person waiting was answered: nothing left to show.
         .onChange(of: service.pendingRequests.isEmpty) { _, empty in if empty { showRequests = false } }
+        // Names, photos and the host mark on the tiles come from the service.
+        .onAppear {
+            stage.refreshProfiles(service.members)
+            syncHosts()
+        }
+        .onChange(of: service.members) { _, members in stage.refreshProfiles(members) }
+        .onChange(of: service.isLinkCreator) { _, _ in syncHosts() }
+    }
+
+    /// Hosts the service can name: the link creator, when that is me. The service does not keep the
+    /// ad-hoc starter or group admins for a running call, so nobody else is marked.
+    private func syncHosts() {
+        let me = service.myUid
+        stage.hostUids = service.isLinkCreator && !me.isEmpty ? [me] : []
+    }
+
+    /// Between header and controls: the grid, or one person large with the strip (pinned or
+    /// presenting). The self pip and the status capsule float over it, so neither moves a tile.
+    private var stageArea: some View {
+        ZStack {
+            if case .focus(let id) = stage.mode {
+                GroupCallFocusView(stage: stage, focusId: id, namespace: ns)
+                    .transition(.opacity)
+            } else {
+                GroupCallGridView(stage: stage)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottomTrailing) {
+            // Bottom edge in line with the strip's tiles (strip inset), as in the reference app.
+            GroupCallSelfView(stage: stage)
+                .padding(.bottom, GroupCallMetrics.stripInset)
+        }
+        .overlay(alignment: .top) { GroupCallStatusBanner(stage: stage) }
+        .animation(GroupCallMotion.layout, value: stage.mode)
     }
     @State private var settled = false
     @State private var showParticipants = false
@@ -74,27 +109,9 @@ struct GroupCallView: View {
         if service.connecting { return "Connecting…" }
         // 2026-09-24 fix-all #105: a joined call that loses its connection said "N in call" over
         // frozen tiles. The room's own state drives it now, in the 1:1 screen's word.
-        if room.connectionState == .reconnecting { return "Reconnecting…" }
-        if service.isActive && room.remoteParticipants.isEmpty { return "Waiting for others…" }
-        return "\(participants.count) in call"
-    }
-
-    /// LiveKit's participant identity is the uid (the token's `sub`), so the invite list's photo
-    /// and name can be matched to a tile.
-    private func member(_ p: Participant) -> CallMember? {
-        guard let uid = p.identity?.stringValue else { return nil }
-        return service.members.first { $0.uid == uid }
-    }
-    /// MY tile shows MY photo (owner, 2026-10-06: "my profile is not using my profile picture").
-    /// The invite list only exists for ad-hoc calls, so a link or group call found no photo for
-    /// anybody, me included; my own comes from my profile.
-    private func photo(_ p: Participant) -> String? {
-        if p is LocalParticipant { return ProfileStore.shared.me?.photoUrl ?? member(p)?.photoUrl }
-        return member(p)?.photoUrl
-    }
-    private func displayName(_ p: Participant) -> String {
-        if let n = p.name, !n.isEmpty { return n }
-        return member(p)?.name ?? "Member"
+        if stage.connectionState == .reconnecting { return "Reconnecting…" }
+        if service.isActive && !stage.tiles.contains(where: { !$0.isLocal }) { return "Waiting for others…" }
+        return "\(stage.inCallCount) in call"
     }
 
     private var waitingBanner: some View {
@@ -131,46 +148,6 @@ struct GroupCallView: View {
                 Image(systemName: "person.2.fill").font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
-            }
-        }
-    }
-
-    private var voiceGrid: some View {
-        // Fixed columns, as many as there are people up to three, so the grid is as wide as its
-        // tiles and sits in the middle (owner, 2026-10-06: alone, my tile sat at the left edge,
-        // because an adaptive grid fills the row from the left).
-        LazyVGrid(columns: Array(repeating: GridItem(.fixed(104), spacing: 22),
-                                 count: min(max(participants.count, 1), 3)), spacing: 22) {
-            ForEach(participants, id: \.sid) { p in   // stable id: index-keyed tiles reused the wrong track on join/leave
-                VStack(spacing: 6) {
-                    AvatarView(name: displayName(p), photoUrl: photo(p), size: 76)
-                        .overlay(Circle().stroke(Color.green, lineWidth: p.isSpeaking ? 3 : 0))
-                    Text(displayName(p)).font(.caption).foregroundStyle(.white).lineLimit(1)
-                }
-            }
-        }
-    }
-
-    private var videoGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-            ForEach(participants, id: \.sid) { p in   // stable id (see voiceGrid)
-                ZStack(alignment: .bottomLeading) {
-                    if let track = p.firstCameraVideoTrack {
-                        SwiftUIVideoView(track, layoutMode: .fill)
-                    } else {
-                        ZStack {
-                            Color.white.opacity(0.12)
-                            AvatarView(name: displayName(p), photoUrl: photo(p), size: 56)
-                        }
-                    }
-                    HStack(spacing: 4) {
-                        if !p.isMicrophoneEnabled() { Image(systemName: "mic.slash.fill").font(.caption2) }
-                        Text(displayName(p)).font(.caption2).lineLimit(1)
-                    }
-                    .foregroundStyle(.white).padding(6)
-                }
-                .frame(height: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
         }
     }
