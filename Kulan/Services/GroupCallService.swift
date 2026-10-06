@@ -264,6 +264,7 @@ final class GroupCallService: ObservableObject {
         // tore down the live call the first tap had just established, for everyone in it.
         guard activeCid == nil, !connecting else { return }
         notice = nil
+        closeLobbyForAnotherJoin()
         // 2026-09-24 decision D25: refused while a 1:1 call is ringing, live or closing.
         guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
@@ -636,8 +637,18 @@ final class GroupCallService: ObservableObject {
         // owner audit 2026-10-06 #4: bumped HERE, synchronously, so a join still connecting sees
         // it the moment it resumes, even if the disconnect below has not run yet.
         joinGeneration &+= 1
+        // 2026-10-06 check 1: and the door is shut here too. Leaving while waiting to be let in
+        // first withdraws the knock (a network wait); the creator's "approved" landing in that
+        // wait used to start the join anyway, with the generation already bumped, and the person
+        // ended up in the call after leaving, mic live, with no screen.
+        hangingUp = true
+        myRequestListener?.remove(); myRequestListener = nil
+        linkDocListener?.remove(); linkDocListener = nil
         Task { await disconnect() }
     }
+    /// True from `end()` until its `disconnect()` has finished. An approval that arrives in
+    /// between is for a join that no longer exists.
+    private var hangingUp = false
 
     /// owner audit 2026-10-06 #4: the call screen went away (End, or swiped down). Before the room
     /// is up there is no call to minimize to and no floating card to show, so closing the screen is
@@ -694,7 +705,7 @@ final class GroupCallService: ObservableObject {
 
     private func disconnect() async {
         leaving = true
-        defer { leaving = false }
+        defer { leaving = false; hangingUp = false }
         let cid = activeCid
         let adhoc = isAdhoc, link = isLink
         // Leaving while still waiting to be let in: withdraw the knock so the creator's list does
@@ -769,6 +780,7 @@ final class GroupCallService: ObservableObject {
     func startAdhoc(with people: [CallMember], video: Bool) async -> String? {
         guard activeCid == nil, !connecting, !waitingForApproval else { return nil }
         notice = nil
+        closeLobbyForAnotherJoin()
         presentsRoomScreen = true
         // 2026-09-24 decision D25: never alongside a 1:1. The handover ends the 1:1 before this runs.
         guard CallService.shared.state == .idle else { notice = Self.busyNotice; return nil }
@@ -826,6 +838,7 @@ final class GroupCallService: ObservableObject {
     func joinAdhoc(roomId: String, video: Bool) async {
         guard activeCid == nil, !connecting, !waitingForApproval else { return }
         notice = nil
+        closeLobbyForAnotherJoin()
         if incomingInvite?.roomId == roomId { incomingInvite = nil }
         declinedInvites.insert(roomId)   // never ring again for a room I answered
         presentsRoomScreen = true
@@ -883,7 +896,7 @@ final class GroupCallService: ObservableObject {
         lobbyJoin = fromLobby && lobby != nil
         // From the lobby the call screen waits until I am in (`connect`). Every other way in (a
         // link row's long-press menu) shows it at once, as before.
-        if !lobbyJoin { presentsRoomScreen = true }
+        if !lobbyJoin { closeLobbyForAnotherJoin(); presentsRoomScreen = true }
         guard CallService.shared.state == .idle else { refuseJoin(Self.busyNotice); return }
         guard let k = CallLinkKey(text: key) else { refuseJoin(Self.linkGone); return }
         let roomId = k.roomId
@@ -983,6 +996,16 @@ final class GroupCallService: ObservableObject {
     }
 
     private static let linkGone = Notice(title: "This call link is no longer valid", message: nil)
+
+    /// A join that starts somewhere else (an invitation answered on the lock screen, a chat's Join
+    /// bar) while the lobby of some link is open: the lobby goes first. The call screen is a second
+    /// full-screen cover from the same place, and one asked for while the lobby is still up can be
+    /// dropped, which would leave a live call with no screen (2026-10-06 check 1).
+    private func closeLobbyForAnotherJoin() {
+        guard lobby != nil else { return }
+        lobbyJoin = false
+        lobby = nil
+    }
 
     /// A join refused before it began. In the lobby it is a line on the lobby; anywhere else it is
     /// the call screen's alert.
@@ -1190,7 +1213,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func requestStatusChanged(_ status: String?) {
-        guard waitingForApproval, let w = waitingLink else { return }
+        guard !hangingUp, !leaving, waitingForApproval, let w = waitingLink else { return }
         switch status {
         case "approved":
             admit(w)
@@ -1204,7 +1227,7 @@ final class GroupCallService: ObservableObject {
     /// owner audit 2026-10-06 #44: approval was switched off while I waited. The token function
     /// mints straight away now; the old knock is withdrawn so the admin's list drops me.
     private func approvalTurnedOff() {
-        guard waitingForApproval, let w = waitingLink else { return }
+        guard !hangingUp, !leaving, waitingForApproval, let w = waitingLink else { return }
         let request = db.collection("callLinks").document(w.roomId).collection("requests").document(myUid)
         admit(w)
         Task { try? await request.delete() }
