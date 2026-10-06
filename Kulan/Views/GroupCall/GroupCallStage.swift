@@ -210,7 +210,9 @@ final class GroupCallStage: ObservableObject {
         if newShare, pinnedId != nil { pinnedId = nil }
 
         // Spec §8: the highlight follows the tracker (0.3s to take over, 1.5s hold), not the raw flag.
-        let speaking = Set(built.filter(\.isSpeaking).map(\.id))
+        // Remotes only: my own voice would hold the highlight while I talk, so nobody answering me
+        // could take it, and my tile is the self pip, which never shows the ring anyway.
+        let speaking = Set(built.filter { $0.isSpeaking && !$0.isLocal }.map(\.id))
         _ = speakerTracker.update(speaking: speaking, now: now)
         let speaker = speakerTracker.activeSpeakerId.flatMap { present.contains($0) ? $0 : nil }
         if speaker != activeSpeakerId { activeSpeakerId = speaker }
