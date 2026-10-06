@@ -419,6 +419,16 @@ final class CallService: NSObject {
             f.mirrorTile = usingFrontCamera
             f.tileName = myName; f.tilePhotoUrl = myPhotoUrl
         }
+        // ⛔ WHILE IT RINGS, THE BIG VIEW IS MY CAMERA — owner, 2026-10-06, with two screenshots: the
+        // call screen showed his camera under "Calling…", and the minimized card showed a photo on
+        // black, which reads as a voice call. Before anyone answers there is no remote video to show,
+        // so the big view is the self-preview, the same thing the call screen draws (the reference
+        // app's preview fills its small window with the local camera when it is the only video).
+        if state == .outgoing || state == .incoming, cameraOn, let local = localVideoTrack {
+            f.big = local
+            f.mirrorBig = usingFrontCamera
+            f.bigName = myName; f.bigPhotoUrl = myPhotoUrl
+        }
         // The tile belongs to the connected video call, not to a live camera: it stays put with a photo
         // in it when that camera is off. Before the call connects there is only the self-preview.
         f.showsTile = isVideo && (state == .active || state == .reconnecting)
