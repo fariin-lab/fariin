@@ -10,6 +10,7 @@ struct GroupCallView: View {
     // One stage for the life of this screen; the people sheet shares it (same speaker, same pin).
     @StateObject private var stage = GroupCallStage(room: GroupCallService.shared.room)
     @Namespace private var ns
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -71,7 +72,8 @@ struct GroupCallView: View {
     private var stageArea: some View {
         ZStack {
             if case .focus(let id) = stage.mode {
-                GroupCallFocusView(stage: stage, focusId: id, namespace: ns)
+                // Reduce Motion: no matched-geometry flight, the focus view fades in.
+                GroupCallFocusView(stage: stage, focusId: id, namespace: reduceMotion ? nil : ns)
                     .transition(.opacity)
             } else {
                 GroupCallGridView(stage: stage)
@@ -85,7 +87,7 @@ struct GroupCallView: View {
                 .padding(.bottom, GroupCallMetrics.stripInset)
         }
         .overlay(alignment: .top) { GroupCallStatusBanner(stage: stage) }
-        .animation(GroupCallMotion.layout, value: stage.mode)
+        .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
     }
     @State private var settled = false
     @State private var showParticipants = false

@@ -16,6 +16,7 @@ import LiveKit
 /// not placed are never built, so adaptiveStream stops their video (contract rule).
 struct GroupCallGridView: View {
     @ObservedObject var stage: GroupCallStage
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Strip row height: square tiles plus their inset above and below.
     private static let stripHeight: CGFloat = GroupCallMetrics.stripTile + 2 * GroupCallMetrics.stripInset
@@ -90,12 +91,15 @@ struct GroupCallGridView: View {
                         )
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        // Reduce Motion: a plain fade, no scale.
+                        .transition(reduceMotion
+                                    ? AnyTransition.opacity
+                                    : AnyTransition.opacity.combined(with: .scale(scale: 0.96)))
                     }
                 }
             }
             .frame(width: geometry.gridSize.width, height: geometry.gridSize.height, alignment: .topLeading)
-            .animation(GroupCallMotion.layout, value: layout.frames)
+            .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: layout.frames)
 
             if !layout.overflow.isEmpty {
                 // The strip keeps its own trailing gap for the self pip (one place, not two).

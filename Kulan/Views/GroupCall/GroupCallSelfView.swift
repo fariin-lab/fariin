@@ -8,6 +8,7 @@ import SwiftUI
 struct GroupCallSelfView: View {
     @ObservedObject var stage: GroupCallStage
     @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let trailingInset: CGFloat = 16
     static let corner: CGFloat = 8
@@ -40,8 +41,9 @@ struct GroupCallSelfView: View {
                 .shadow(color: .black.opacity(0.3), radius: 4)
                 .contentShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
                 .padding(.trailing, Self.trailingInset)
-                .animation(.easeInOut(duration: 0.3), value: expanded)
-                .animation(.easeInOut(duration: 0.3), value: remoteCount > 1)
+                // Reduce Motion: the pip changes size in place, no growing animation.
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: expanded)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: remoteCount > 1)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(local.isMuted ? "Your video, muted" : "Your video")
                 .accessibilityHint(expanded ? "Double-tap to shrink" : "Double-tap to enlarge")

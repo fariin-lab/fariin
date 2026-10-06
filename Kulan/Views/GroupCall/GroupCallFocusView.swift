@@ -11,6 +11,7 @@ struct GroupCallFocusView: View {
     let focusId: String
     /// Passed by the parent so the large tile can fly from its grid frame. Without it the tile fades.
     var namespace: Namespace.ID? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var focusTile: CallTile? {
         stage.tiles.first { $0.id == focusId }
@@ -30,7 +31,9 @@ struct GroupCallFocusView: View {
         VStack(spacing: GroupCallMetrics.spacing) {
             if let tile = focusTile {
                 largeTile(tile, hasStrip: !stripIds.isEmpty)
-                    .modifier(FocusTileTransition(id: tile.id, namespace: namespace))
+                    // Reduce Motion: no flying tile, the fade below.
+                    .modifier(FocusTileTransition(id: tile.id, namespace: reduceMotion ? nil : namespace,
+                                                  animation: GroupCallMotion.stage(reduceMotion: reduceMotion)))
             } else {
                 // The focused person just left: keep the space still for the one frame before the
                 // stage drops back to the grid, so nothing jumps (spec §14).
@@ -41,7 +44,7 @@ struct GroupCallFocusView: View {
                     .transition(.opacity)
             }
         }
-        .animation(GroupCallMotion.layout, value: stripIds)
+        .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stripIds)
     }
 
     private func largeTile(_ tile: CallTile, hasStrip: Bool) -> some View {
@@ -59,7 +62,7 @@ struct GroupCallFocusView: View {
                 // the stage until it ends, so a pin would only add a badge and change nothing.
                 guard !isAutoPresenter(tile) else { return }
                 // Tap again to go back to the grid (owner spec §16: how to focus someone, and undo it).
-                withAnimation(GroupCallMotion.layout) { stage.togglePin(tile.id) }
+                withAnimation(GroupCallMotion.stage(reduceMotion: reduceMotion)) { stage.togglePin(tile.id) }
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: GroupCallMetrics.tileCorner, style: .continuous))
@@ -94,17 +97,19 @@ struct GroupCallFocusView: View {
 }
 
 /// Matched geometry when the parent shares a namespace with the grid, a plain fade otherwise.
-/// One curve for both (GroupCallMotion.layout), no scale, so there is no zoom (spec §12).
+/// One curve for both (GroupCallMotion.layout, the fade under Reduce Motion), no scale, so there is
+/// no zoom (spec §12).
 private struct FocusTileTransition: ViewModifier {
     let id: String
     let namespace: Namespace.ID?
+    let animation: Animation
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if let namespace {
             content.matchedGeometryEffect(id: id, in: namespace)
         } else {
-            content.transition(.opacity.animation(GroupCallMotion.layout))
+            content.transition(AnyTransition.opacity.animation(animation))
         }
     }
 }

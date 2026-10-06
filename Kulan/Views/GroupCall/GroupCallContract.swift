@@ -22,7 +22,9 @@ import LiveKit
 //   that is on screen asks for the layer that fits its pixel size, a view that is NOT in the hierarchy
 //   receives nothing. So a tile that is not shown must not be built at all (no hidden views), and a
 //   camera-off tile draws an avatar, not a video view. No manual set(videoQuality:) calls.
-// - One animation for every layout change: `GroupCallMotion.layout`. No bounce, no zoom.
+// - One animation for every layout change: `GroupCallMotion.layout`. No bounce, no zoom. With
+//   Reduce Motion on, `GroupCallMotion.stage(reduceMotion:)` swaps it for the fade, and no view
+//   scales, flies (matchedGeometryEffect) or animates the self pip size.
 // - Tile identity is the participant's sid string, stable for the whole call.
 
 /// One person on the call, as the UI sees them. Built by `GroupCallStage` from the room.
@@ -93,6 +95,8 @@ enum GroupCallMetrics {
 enum GroupCallMotion {
     static let layout: Animation = .spring(response: 0.38, dampingFraction: 1.0)
     static let fade: Animation = .easeInOut(duration: 0.2)
+    /// The layout curve, or the cross-fade when Reduce Motion is on (no sliding, no flying tiles).
+    static func stage(reduceMotion: Bool) -> Animation { reduceMotion ? fade : layout }
 }
 
 // MARK: - Signatures the pieces implement (in their own files)

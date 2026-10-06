@@ -12,6 +12,7 @@ struct GroupCallStripView: View {
     @ObservedObject var stage: GroupCallStage
     /// Tile ids in display order.
     let ids: [String]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The self view pip floats over the strip's trailing edge, so the last tile scrolls clear of it:
     /// the pip's small width, its trailing inset and 4pt (the reference app's trim). The only place
@@ -49,7 +50,7 @@ struct GroupCallStripView: View {
         }
         .frame(height: GroupCallStripView.height)
         // Tiles slide to their new place when someone joins, leaves or changes rank.
-        .animation(GroupCallMotion.layout, value: ids)
+        .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: ids)
         // Reference app: the strip fades in and out when it becomes non-empty / empty.
         .opacity(ids.isEmpty ? 0 : 1)
         .animation(.easeInOut(duration: 0.15), value: ids.isEmpty)
