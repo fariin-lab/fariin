@@ -123,7 +123,11 @@ final class VoiceBubbleView: UIView {
         // painting synchronously would read the state we are being told is about to be replaced.
         // Hopping to the next runloop turn means `paint` reads the new one.
         player.objectWillChange
-            .receive(on: RunLoop.main)
+            // DispatchQueue.main, not RunLoop.main - owner audit 2026-10-06 chat #81. RunLoop.main
+            // delivers in the default mode only, so while a finger scrolled the list (tracking
+            // mode) nothing painted and the progress froze, then jumped. The main queue runs in
+            // every mode and still hops to the next turn, so the load-bearing delay above stays.
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.paint() }
             .store(in: &bag)
     }
