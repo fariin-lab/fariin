@@ -1,0 +1,99 @@
+import SwiftUI
+import LiveKit
+
+// The speaker page: one large tile filling the stage and, below it, the strip with everyone else.
+// The reference app has this page (its top speaker full size, the rest in the overflow strip); the
+// tap-to-unpin and the "Pinned" / "Presenting" label are the owner's additions (spec §16: the user
+// must see who they are viewing and how to get back). The local participant never appears here: they
+// are the self pip, drawn by the parent.
+struct GroupCallFocusView: View {
+    @ObservedObject var stage: GroupCallStage
+    let focusId: String
+    /// Passed by the parent so the large tile can fly from its grid frame. Without it the tile fades.
+    var namespace: Namespace.ID? = nil
+
+    private var focusTile: CallTile? {
+        stage.tiles.first { $0.id == focusId }
+    }
+
+    /// Everyone but the focused tile and the local participant, in spec §13 order, so the most
+    /// relevant people sit at the visible start of the strip.
+    private var others: [String] {
+        let rest = stage.tiles.filter { $0.id != focusId && !$0.isLocal }
+        return GroupCallPriority.ranked(rest, focusedId: nil,
+                                        speakerId: stage.activeSpeakerId, now: Date())
+            .map(\.id)
+    }
+
+    var body: some View {
+        let stripIds = others
+        VStack(spacing: GroupCallMetrics.spacing) {
+            if let tile = focusTile {
+                largeTile(tile)
+                    .modifier(FocusTileTransition(id: tile.id, namespace: namespace))
+            } else {
+                // The focused person just left: keep the space still for the one frame before the
+                // stage drops back to the grid, so nothing jumps (spec §14).
+                Color.clear
+            }
+            if !stripIds.isEmpty {
+                GroupCallStripView(stage: stage, ids: stripIds)
+                    .transition(.opacity)
+            }
+        }
+        .animation(GroupCallMotion.layout, value: stripIds)
+    }
+
+    private func largeTile(_ tile: CallTile) -> some View {
+        // A screen share is drawn with .fit by the tile view for style .focus (a cropped slide is
+        // unreadable); a camera fills the frame.
+        GroupCallTileView(
+            tile: tile,
+            track: stage.videoTrack(tile.id),
+            style: .focus,
+            isActiveSpeaker: stage.activeSpeakerId == tile.id,
+            isPinned: stage.pinnedId == tile.id,
+            onTap: {
+                // Tap again to go back to the grid (owner spec §16: how to focus someone, and undo it).
+                withAnimation(GroupCallMotion.layout) { stage.togglePin(tile.id) }
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: GroupCallMetrics.tileCorner, style: .continuous))
+        .overlay(alignment: .topLeading) { viewingLabel(tile) }
+        .padding(.horizontal, GroupCallMetrics.inset)
+        .padding(.top, GroupCallMetrics.inset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityHint(Text("Double-tap to return to the grid"))
+    }
+
+    /// Quiet capsule that names why this tile is large (spec §16: who they are viewing).
+    private func viewingLabel(_ tile: CallTile) -> some View {
+        let text = tile.isScreenShare ? "Presenting" : "Pinned"
+        return Text(text)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.black.opacity(0.5)))
+            .padding(.top, 10)
+            .padding(.leading, 10)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)   // the tile's own label already says pinned / presenting
+    }
+}
+
+/// Matched geometry when the parent shares a namespace with the grid, a plain fade otherwise.
+/// One curve for both (GroupCallMotion.layout), no scale, so there is no zoom (spec §12).
+private struct FocusTileTransition: ViewModifier {
+    let id: String
+    let namespace: Namespace.ID?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.matchedGeometryEffect(id: id, in: namespace)
+        } else {
+            content.transition(.opacity.animation(GroupCallMotion.layout))
+        }
+    }
+}
