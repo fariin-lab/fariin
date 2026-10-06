@@ -61,11 +61,15 @@ enum GroupCallLayoutEngine {
     // MARK: - Internals
 
     /// Column / row caps. The reference app's caps are by screen size only; a phone on its side
-    /// would then be held to 2 wide columns, so a landscape stage may use 3 (owner spec §9).
+    /// would then be held to 2 wide columns, so a landscape stage may use 3 (owner spec §9). A short
+    /// stage (a phone on its side, under 300pt tall) holds 2 rows: three rows there are thin strips
+    /// with no room for a face; the rest go to the strip.
     private static func limits(for size: CGSize) -> (columns: Int, rows: Int) {
         var columns = GroupCallMetrics.maxColumns(width: size.width)
         if size.width > size.height { columns = max(columns, 3) }
-        return (max(columns, 1), max(GroupCallMetrics.maxRows(height: size.height), 1))
+        var rows = GroupCallMetrics.maxRows(height: size.height)
+        if size.height < 300 { rows = min(rows, 2) }
+        return (max(columns, 1), max(rows, 1))
     }
 
     /// Picks columns x rows for `count` tiles in the content area (`width` x `height`, inset

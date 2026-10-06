@@ -125,6 +125,11 @@ struct GroupCallGridView: View {
             height: max(0, size.height - (needsStrip ? stripHeight : 0))
         )
         let capacity = max(0, GroupCallLayoutEngine.capacity(in: gridSize))
+        // The first layout pass has no size yet; its caps (rows by height) are not the real ones,
+        // and feeding them to the sticky cells would drop and re-add people (a reorder).
+        guard size.width > 0, size.height > 0 else {
+            return Plan(gridSize: gridSize, layout: GroupCallLayoutEngine.grid(ids: [], in: gridSize), placedIds: [])
+        }
 
         // Sticky cells from the stage (a speaker change swaps one cell, never reshuffles); the rest
         // follow in priority order, so the engine hands them back as `overflow` for the strip.
