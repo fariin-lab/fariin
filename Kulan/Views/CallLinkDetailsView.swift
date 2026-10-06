@@ -12,6 +12,7 @@ struct CallLinkDetailsView: View {
     /// than showing a guess.
     @State private var approval: Bool?
     @State private var approvalFailed = false
+    @State private var isVideo: Bool?   // Call Type (owner, 2026-10-06); nil until read
     @State private var confirmDelete = false
     @State private var deleting = false
     @State private var deleteFailed = false
@@ -58,6 +59,8 @@ struct CallLinkDetailsView: View {
                             .disabled(approval == nil)
                             .padding(.horizontal, 16)
                             .frame(minHeight: 50)
+                        Divider().padding(.leading, 16)
+                        CallTypeRow(isVideo: isVideo) { setVideo($0) }
                     }
                 }
                 if current.admin {
@@ -89,6 +92,7 @@ struct CallLinkDetailsView: View {
         .task {
             guard current.admin, approval == nil else { return }
             approval = await CallLinkService.shared.approval(for: link)
+            isVideo = await CallLinkService.shared.isVideo(link)
         }
         .alert("Delete this call link?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { delete() }
@@ -105,6 +109,18 @@ struct CallLinkDetailsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Check your connection and try again.")
+        }
+    }
+
+    private func setVideo(_ on: Bool) {
+        let before = isVideo
+        isVideo = on
+        Task { @MainActor in
+            do { try await CallLinkService.shared.setVideo(link, on: on) }
+            catch {
+                isVideo = before
+                approvalFailed = true
+            }
         }
     }
 

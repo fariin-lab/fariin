@@ -156,6 +156,7 @@ struct CallLinkDraft: Identifiable, Hashable, CallLinkRef {
     let key: String
     var name: String               // "" = unnamed
     var approval: Bool             // "Require Admin Approval"
+    var video: Bool = true         // Call Type: Video, or Voice (owner, 2026-10-06)
     var id: String { roomId }
 
     var title: String { name.isEmpty ? CallLinkDefaults.name : name }
@@ -242,6 +243,7 @@ final class CallLinkService {
                     "roomId": key.roomId,
                     "encName": "",
                     "restrictions": "adminApproval",
+                    "video": true,
                 ])
                 return CallLinkDraft(roomId: key.roomId, key: key.text, name: "", approval: true)
             } catch {
@@ -302,6 +304,23 @@ final class CallLinkService {
             "roomId": link.roomId,
             "restrictions": on ? "adminApproval" : "none",
         ])
+    }
+
+    /// Call Type (owner, 2026-10-06): Video, or Voice. A Voice link lets nobody turn a camera on; the
+    /// server mints its join tokens microphone-only. A Video link joins with the camera on and each
+    /// person can still turn their own camera off.
+    func setVideo(_ link: some CallLinkRef, on: Bool) async throws {
+        _ = try await functions.httpsCallable("updateCallLink").call([
+            "roomId": link.roomId,
+            "video": on,
+        ])
+    }
+
+    /// The link's call type from its own doc: true = Video (every link made before the setting).
+    func isVideo(_ link: some CallLinkRef) async -> Bool? {
+        guard let snap = try? await Firestore.firestore().collection("callLinks")
+            .document(link.roomId).getDocument(), let d = snap.data() else { return nil }
+        return (d["video"] as? Bool) ?? true
     }
 
     /// The current approval setting, read from the link's own doc. nil when it cannot be read.

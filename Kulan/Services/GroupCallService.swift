@@ -75,6 +75,9 @@ final class GroupCallService: ObservableObject {
     @Published var isVideo = false
     @Published var micOn = true
     @Published var cameraOn = false
+    /// A VOICE call link (owner, 2026-10-06): nobody's camera can come on in this room. Set from the
+    /// server's join answer; the media server enforces it too (the token can publish the mic only).
+    @Published private(set) var cameraLocked = false
     @Published var connecting = false
     @Published var minimized = false        // swiped down → CallContainer shows the return bar
     @Published var callTitle = ""
@@ -245,6 +248,7 @@ final class GroupCallService: ObservableObject {
         AudioManager.shared.isSpeakerOutputPreferred = speakerOn
     }
     func toggleCamera() {
+        guard !cameraLocked else { return }   // a voice call link: no camera for anybody
         cameraOn.toggle(); let v = cameraOn
         Task { try? await room.localParticipant.setCamera(enabled: v) }
     }
@@ -324,6 +328,7 @@ final class GroupCallService: ObservableObject {
             }
         }
         activeCid = nil; micOn = true; cameraOn = false; isVideo = false; callTitle = ""
+        cameraLocked = false
         // The next group call starts on the speaker again, as group calls always have.
         speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
         minimized = false
@@ -528,6 +533,11 @@ final class GroupCallService: ObservableObject {
                 await failJoin(Notice(title: "Call failed", message: nil))
                 return false
             }
+            // A voice link: join with the camera off whatever was asked, and keep it locked off.
+            let voiceOnly = d?["voiceOnly"] as? Bool == true
+            let video = video && !voiceOnly
+            cameraLocked = voiceOnly
+            if voiceOnly { isVideo = false }
             try await room.connect(url: url, token: token)
             try await room.localParticipant.setMicrophone(enabled: true)
             if video { try await room.localParticipant.setCamera(enabled: true) }
@@ -565,6 +575,7 @@ final class GroupCallService: ObservableObject {
     /// the notice; its OK closes the screen.
     private func failJoin(_ n: Notice) async {
         await room.disconnect()
+        cameraLocked = false
         connecting = false
         // owner audit 2026-10-06 #44: a speaker toggle made while connecting stayed set (and the
         // audio preference with it) until some later hang-up, so the next call began on the

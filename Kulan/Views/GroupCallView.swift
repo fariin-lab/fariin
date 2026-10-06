@@ -166,7 +166,10 @@ struct GroupCallView: View {
 
     private var controls: some View {
         HStack(spacing: 20) {
+            // A voice call link: the camera button is there, greyed and inert (owner, 2026-10-06).
             ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
+                .disabled(service.cameraLocked)
+                .opacity(service.cameraLocked ? 0.35 : 1)
             ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
             // Speaker on / off (owner, 2026-10-04): a real switch with its state, not the route picker.
             ctrl(service.speakerOn ? "speaker.wave.2.fill" : "speaker.fill") { service.toggleSpeaker() }

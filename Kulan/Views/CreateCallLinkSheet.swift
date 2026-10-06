@@ -123,6 +123,8 @@ struct CreateCallLinkSheet: View {
                         Toggle("Admin Approval", isOn: Binding(get: { draft.approval }, set: { setApproval($0) }))
                             .padding(.horizontal, 16)
                             .frame(minHeight: 50)
+                        Divider().padding(.leading, 16)
+                        CallTypeRow(isVideo: draft.video) { setVideo($0) }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -180,6 +182,20 @@ struct CreateCallLinkSheet: View {
     }
 
     /// Saved to the server at once. The switch moves first; a refusal puts it back and says so.
+    /// Same shape as `setApproval`: the row moves first, a refusal puts it back and says so.
+    private func setVideo(_ on: Bool) {
+        let before = draft.video
+        draft.video = on
+        let d = draft
+        Task { @MainActor in
+            do { try await CallLinkService.shared.setVideo(d, on: on) }
+            catch {
+                draft.video = before
+                approvalFailed = true
+            }
+        }
+    }
+
     private func setApproval(_ on: Bool) {
         let before = draft.approval
         draft.approval = on
@@ -548,3 +564,26 @@ struct CallLinkNameEditor: View {
 /// The corner of every card on the call link sheets: iOS 26's grouped-card radius, the one Settings
 /// uses (owner, 2026-10-06: "make it Apple style rounded corners"; it was 16).
 enum CallLinkGroupRadius { static let value: CGFloat = 26 }
+
+/// "Call Type: Video / Voice" (owner, 2026-10-06), the creator's choice for everyone on the link. A
+/// Voice link: nobody's camera can come on (the server mints mic-only tokens). A Video link: everyone
+/// joins on video and can still turn their own camera off. nil while the setting is being read.
+struct CallTypeRow: View {
+    let isVideo: Bool?
+    let onChange: (Bool) -> Void
+    var body: some View {
+        HStack {
+            Text("Call Type")
+            Spacer()
+            Picker("Call Type", selection: Binding(get: { isVideo ?? true }, set: { onChange($0) })) {
+                Text("Video").tag(true)
+                Text("Voice").tag(false)
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .disabled(isVideo == nil)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 50)
+    }
+}
