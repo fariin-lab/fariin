@@ -81,13 +81,29 @@ struct GroupCallView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The stage's size, for the enlarged pip's cap. A background reader adds no layout of its own.
+        .background(GeometryReader { geo in
+            Color.clear
+                .onAppear { stageSize = geo.size }
+                .onChange(of: geo.size) { _, size in stageSize = size }
+        })
+        // The strip's trailing gap clears the pip as it is really drawn (small or enlarged).
+        .environment(\.groupCallSelfPipWidth, selfPipWidth)
         .overlay(alignment: .bottomTrailing) {
             // Bottom edge in line with the strip's tiles (strip inset), as in the reference app.
-            GroupCallSelfView(stage: stage)
+            GroupCallSelfView(stage: stage, expanded: $selfExpanded, stageSize: stageSize)
                 .padding(.bottom, GroupCallMetrics.stripInset)
         }
         .overlay(alignment: .top) { GroupCallStatusBanner(stage: stage) }
         .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
+    }
+    /// The self pip's enlarged state, here so the strip can follow it (see selfPipWidth).
+    @State private var selfExpanded = false
+    @State private var stageSize: CGSize = .zero
+
+    private var selfPipWidth: CGFloat {
+        let remotes = stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 }
+        return GroupCallSelfView.size(remoteCount: remotes, expanded: selfExpanded, stageSize: stageSize).width
     }
     @State private var settled = false
     @State private var showParticipants = false

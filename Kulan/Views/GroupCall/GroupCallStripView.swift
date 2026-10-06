@@ -19,13 +19,14 @@ struct GroupCallStripView: View {
     /// between onAppear and onDisappear (spec §10).
     @State private var visible: Set<String> = []
 
+    /// The pip's width as drawn now (small, or enlarged), from GroupCallView.
+    @Environment(\.groupCallSelfPipWidth) private var pipWidth
+
     /// The self view pip floats over the strip's trailing edge, so the last tile scrolls clear of it:
-    /// the pip's small width, its trailing inset and 4pt (the reference app's trim). The only place
+    /// the pip's current width, its trailing inset and 4pt (the reference app's trim). The only place
     /// this gap is kept; the grid and focus views do not pad the strip again.
     private var selfPipClearance: CGFloat {
-        let remotes = stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 }
-        return GroupCallSelfView.size(remoteCount: remotes, expanded: false).width
-            + GroupCallSelfView.trailingInset + 4
+        pipWidth + GroupCallSelfView.trailingInset + 4
     }
 
     /// Height the parent reserves for the strip.

@@ -7,15 +7,27 @@ import SwiftUI
 // the grid/strip clear of it.
 struct GroupCallSelfView: View {
     @ObservedObject var stage: GroupCallStage
-    @State private var expanded = false
+    /// Owned by GroupCallView: the strip's trailing gap follows the pip's real width.
+    @Binding var expanded: Bool
+    /// The stage area's size, for the enlarged cap.
+    let stageSize: CGSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let trailingInset: CGFloat = 16
     static let corner: CGFloat = 8
 
-    /// 72pt tall (9:16) with 2+ remotes, 90x160 with exactly one, 170x300 when enlarged.
-    static func size(remoteCount: Int, expanded: Bool) -> CGSize {
-        if expanded { return CGSize(width: 170, height: 300) }
+    /// 72pt tall (9:16) with 2+ remotes, 90x160 with exactly one. Enlarged: 170x300, capped at 45%
+    /// of the stage width and the stage height less 24 (a phone on its side, a small stage), with
+    /// the same shape, so it never covers the whole stage. A zero size (first pass) is not a cap.
+    static func size(remoteCount: Int, expanded: Bool, stageSize: CGSize) -> CGSize {
+        if expanded {
+            let aspect: CGFloat = 170.0 / 300.0
+            var width: CGFloat = 170
+            if stageSize.width > 0 { width = min(width, stageSize.width * 0.45) }
+            if stageSize.height > 0 { width = min(width, (stageSize.height - 24) * aspect) }
+            width = max(width, 40.5)   // never smaller than the small pip
+            return CGSize(width: width, height: width / aspect)
+        }
         if remoteCount <= 1 { return CGSize(width: 90, height: 160) }
         return CGSize(width: 40.5, height: 72)
     }
@@ -25,7 +37,7 @@ struct GroupCallSelfView: View {
 
     var body: some View {
         if let local, remoteCount >= 1 {
-            let size = Self.size(remoteCount: remoteCount, expanded: expanded)
+            let size = Self.size(remoteCount: remoteCount, expanded: expanded, stageSize: stageSize)
             // The tile's video view already mirrors the local front camera (`.auto`); flipping it
             // again here un-mirrored the preview and drew the mute badge backwards.
             // Camera off, the tile draws the avatar look.
@@ -52,4 +64,17 @@ struct GroupCallSelfView: View {
     }
 
     private func toggle() { expanded.toggle() }
+}
+
+/// The self pip's current width (small, one-remote or enlarged), set by GroupCallView on the stage
+/// so the strip's trailing gap clears the pip as it really is drawn.
+private struct GroupCallSelfPipWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 40.5
+}
+
+extension EnvironmentValues {
+    var groupCallSelfPipWidth: CGFloat {
+        get { self[GroupCallSelfPipWidthKey.self] }
+        set { self[GroupCallSelfPipWidthKey.self] = newValue }
+    }
 }
