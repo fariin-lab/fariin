@@ -110,6 +110,18 @@ struct CallLinkKey: Hashable {
 enum CallLinkDefaults {
     static let name = "Kulan Call"
     static let maxNameLength = 32
+    /// The server rules cap a stored name at 64 code points (`name.size() <= 64`), which counts
+    /// unicode scalars, not the grapheme clusters `String.count` and `prefix` use.
+    static let maxNameScalars = 64
+
+    /// Cuts a name to the visible cap AND the rules' scalar cap, whole characters only.
+    /// owner audit 2026-10-06 #44: 32 long emoji sequences passed the old Character cap, the
+    /// rules denied the list write, and the name was lost on reload.
+    static func clamp(_ name: String) -> String {
+        var out = String(name.prefix(maxNameLength))
+        while out.unicodeScalars.count > maxNameScalars { out.removeLast() }
+        return out
+    }
 }
 
 /// Anything that names one call link: a fresh draft or a saved row.
@@ -162,6 +174,18 @@ final class CallLinkService {
     /// previous account's links afterwards (the same guard CallsRepository keeps).
     private var generation = 0
 
+    /// Local changes (a persist, rename or delete) with a running stamp; nil link = deleted here.
+    /// owner audit 2026-10-06 #23: a load() that started before a local change was acknowledged
+    /// returned the old doc and overwrote the fresh name with "" (row showed "Kulan Call").
+    /// load() re-applies every change stamped after it began instead of replacing blindly.
+    private var editStamp = 0
+    private var edits: [String: (stamp: Int, link: SavedCallLink?)] = [:]
+
+    private func noteEdit(_ roomId: String, _ link: SavedCallLink?) {
+        editStamp += 1
+        edits[roomId] = (editStamp, link)
+    }
+
     private var functions: Functions { Functions.functions(region: "me-central1") }
     private var me: String? { Auth.auth().currentUser?.uid }
 
@@ -172,6 +196,7 @@ final class CallLinkService {
     /// Sign-out/delete: drop the previous account's links.
     func reset() {
         generation &+= 1
+        edits = [:]
         links = []
         hasLoaded = false
     }
@@ -179,6 +204,7 @@ final class CallLinkService {
     func load() async {
         guard let me else { hasLoaded = true; return }
         let gen = generation
+        let startStamp = editStamp
         guard let snap = try? await listRef(me).getDocuments() else {
             if gen == generation { hasLoaded = true }
             return
@@ -186,7 +212,7 @@ final class CallLinkService {
         guard gen == generation else { return }
         // Sorted here rather than by the query: an orderBy on a subcollection this small is not
         // worth an index, and a doc whose server timestamp is still pending would drop out of it.
-        links = snap.documents.compactMap { d -> SavedCallLink? in
+        var loaded = snap.documents.compactMap { d -> SavedCallLink? in
             let data = d.data(with: .estimate)
             guard let key = data["key"] as? String, CallLinkKey(text: key) != nil else { return nil }
             return SavedCallLink(roomId: d.documentID, key: key,
@@ -194,7 +220,12 @@ final class CallLinkService {
                                  createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
                                  admin: data["admin"] as? Bool ?? false)
         }
-        .sorted { $0.createdAt > $1.createdAt }
+        // Local changes made while the read was in flight win over what it returned (#23).
+        for (id, e) in edits where e.stamp > startStamp {
+            loaded.removeAll { $0.roomId == id }
+            if let l = e.link { loaded.append(l) }
+        }
+        links = loaded.sorted { $0.createdAt > $1.createdAt }
         hasLoaded = true
     }
 
@@ -228,31 +259,40 @@ final class CallLinkService {
         guard let me else { return }
         let saved = SavedCallLink(roomId: draft.roomId, key: draft.key, name: draft.name,
                                   createdAt: Date(), admin: true)
-        if let i = links.firstIndex(where: { $0.roomId == draft.roomId }) {
-            links[i].name = draft.name
-        } else {
-            links.insert(saved, at: 0)
-        }
-        try? await listRef(me).document(draft.roomId).setData([
+        var fields: [String: Any] = [
             "key": draft.key,
             "name": draft.name,
-            "createdAt": FieldValue.serverTimestamp(),
             "admin": true,
-        ], merge: true)
+        ]
+        if let i = links.firstIndex(where: { $0.roomId == draft.roomId }) {
+            links[i].name = draft.name
+            noteEdit(draft.roomId, links[i])
+        } else {
+            links.insert(saved, at: 0)
+            noteEdit(draft.roomId, saved)
+            // owner audit 2026-10-06 #44: the order time is written on the first save only; every
+            // later Copy/Share/Done used to move it to the last tap.
+            fields["createdAt"] = FieldValue.serverTimestamp()
+        }
+        try? await listRef(me).document(draft.roomId).setData(fields, merge: true)
     }
 
     /// Renames on the server (encrypted) and, if the link is in my list, there too.
     func rename(_ link: some CallLinkRef, to name: String) async throws {
         guard let key = link.linkKey else { throw NSError(domain: "CallLink", code: 2) }
-        let clean = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(CallLinkDefaults.maxNameLength))
+        let clean = CallLinkDefaults.clamp(name.trimmingCharacters(in: .whitespacesAndNewlines))
         _ = try await functions.httpsCallable("updateCallLink").call([
             "roomId": link.roomId,
             "encName": key.encryptName(clean),
         ])
         if let i = links.firstIndex(where: { $0.roomId == link.roomId }) {
             links[i].name = clean
+            noteEdit(link.roomId, links[i])
             if let me {
-                try? await listRef(me).document(link.roomId).setData(["name": clean], merge: true)
+                // owner audit 2026-10-06 #44: not awaited. The server name is already changed, and
+                // waiting for the write's server ack hung the Save spinner when the network dropped
+                // here. Firestore applies it locally at once and syncs it when it can.
+                listRef(me).document(link.roomId).setData(["name": clean], merge: true, completion: nil)
             }
         }
     }
@@ -275,9 +315,18 @@ final class CallLinkService {
     /// The creator deletes the link for everyone; anyone else only drops it from their own list.
     func delete(_ link: SavedCallLink) async throws {
         if link.admin {
-            _ = try await functions.httpsCallable("deleteCallLink").call(["roomId": link.roomId])
+            do {
+                _ = try await functions.httpsCallable("deleteCallLink").call(["roomId": link.roomId])
+            } catch {
+                // owner audit 2026-10-06 #22: not-found means the link is already gone on the
+                // server (deleted on another device); drop the row instead of failing forever.
+                let ns = error as NSError
+                guard ns.domain == FunctionsErrorDomain,
+                      FunctionsErrorCode(rawValue: ns.code) == .notFound else { throw error }
+            }
         }
         links.removeAll { $0.roomId == link.roomId }
+        noteEdit(link.roomId, nil)
         if let me {
             try? await listRef(me).document(link.roomId).delete()
         }

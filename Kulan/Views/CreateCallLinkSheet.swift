@@ -102,8 +102,7 @@ struct CreateCallLinkSheet: View {
                         NavigationLink {
                             CallLinkNameEditor(initial: draft.name) { name in
                                 try await CallLinkService.shared.rename(draft, to: name)
-                                draft.name = String(name.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    .prefix(CallLinkDefaults.maxNameLength))
+                                draft.name = CallLinkDefaults.clamp(name.trimmingCharacters(in: .whitespacesAndNewlines))
                             }
                         } label: {
                             HStack {
@@ -497,9 +496,9 @@ struct CallLinkNameEditor: View {
                     .submitLabel(.done)
                     .onSubmit { save() }
                     .onChange(of: text) { _, v in
-                        if v.count > CallLinkDefaults.maxNameLength {
-                            text = String(v.prefix(CallLinkDefaults.maxNameLength))
-                        }
+                        // Same measure as the server rule (#44): characters and unicode scalars.
+                        let c = CallLinkDefaults.clamp(v)
+                        if c != v { text = c }
                     }
             } footer: {
                 Text("\(text.count)/\(CallLinkDefaults.maxNameLength)")
