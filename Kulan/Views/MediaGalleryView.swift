@@ -63,6 +63,7 @@ struct MediaGalleryView: View {
     @State private var shareItems: [Any]?
     @State private var confirmDelete = false
     @State private var deleteFailed = false   // 2026-09-24 fix-all #233
+    @State private var shareFailed = false    // 2026-10-06: nothing in the selection could be prepared
 
     @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
@@ -307,6 +308,11 @@ struct MediaGalleryView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("The server refused the delete. The message is still there for both of you.")
+        }
+        .alert("Couldn't share", isPresented: $shareFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("These items couldn't be loaded. Check your connection and try again.")
         }
     }
 
@@ -991,56 +997,106 @@ struct MediaGalleryView: View {
 
     private func share(_ m: Message) {
         guard !ChatRestrictions.isOn(.noSaving, cid: cid) else { return }
-        if let url = Self.firstURL(in: m.text) { shareItems = [url]; return }
-        let cid = self.cid
-        Task {
-            if m.isAudio {
-                if let file = await Self.shareAudio(m, cid: cid, index: 0) { await MainActor.run { shareItems = [file] } }
-                return
-            }
-            if m.type == "video" {
-                if let file = await Self.shareVideo(m, cid: cid) { await MainActor.run { shareItems = [file] } }
-                return
-            }
-            if let img = await Self.shareImage(m, cid: cid) { await MainActor.run { shareItems = [img] } }
-            else if !m.text.isEmpty { await MainActor.run { shareItems = [m.text] } }
-        }
+        prepareShare([m])
     }
     private func shareSelected() {
-        // Share the decrypted images among the selection (the shareable representation we can build here).
         guard !preparingShare, !ChatRestrictions.isOn(.noSaving, cid: cid) else { return }
-        let picked = all.filter { selection.contains($0.id) }
+        prepareShare(all.filter { selection.contains($0.id) })
+    }
+
+    /// ⛔ ONE PATH FOR EVERY KIND OF ITEM — owner, 2026-10-06: "the share button sometimes works,
+    /// sometimes not". It depended on WHAT was picked: photos turned into share items, but a file,
+    /// a GIF or a link gave nothing (a link only went out when nothing else was picked), so a
+    /// selection that happened to hold them shared less than it showed, or nothing at all. And one
+    /// download that hung left the spinner up and the button dead.
+    ///
+    /// Now each item becomes something shareable by its kind (`shareItem`), all of them are fetched
+    /// at once and put back in the order they were picked, nothing is dropped for being the "wrong"
+    /// type, each item gives up after 15s instead of holding the rest, and when nothing at all could
+    /// be prepared the person is told rather than left looking at a button that did nothing.
+    private func prepareShare(_ picked: [Message]) {
+        guard !picked.isEmpty else { return }
         let cid = self.cid
         preparingShare = true
         Task {
-            // ALL AT ONCE, not one after another. This was a `for` loop that awaited each photo in
-            // turn, so picking four meant four fetches END TO END before the sheet could open, and
-            // nothing on screen said anything was happening (owner 2026-08-19: "it opens late").
-            // The photos have nothing to do with each other, so they are fetched together and put
-            // back in the order they were picked.
-            // Voice notes go as audio files (owner, 2026-10-05: Share did nothing with voice
-            // messages picked, because only photos and text were ever turned into share items).
             var out: [(Int, Any)] = []
             await withTaskGroup(of: (Int, Any?).self) { group in
                 for (i, m) in picked.enumerated() {
-                    if m.isAudio {
-                        group.addTask { (i, await Self.shareAudio(m, cid: cid, index: i)) }
-                    } else if m.type == "video" {
-                        // Videos too (owner, 2026-10-06: Share did nothing with a video picked).
-                        group.addTask { (i, await Self.shareVideo(m, cid: cid)) }
-                    } else {
-                        group.addTask { (i, await Self.shareImage(m, cid: cid)) }
-                    }
+                    group.addTask { (i, await Self.withTimeout(15) { await Self.shareItem(m, cid: cid, index: i) }) }
                 }
                 for await (i, item) in group { if let item { out.append((i, item)) } }
             }
-            var items: [Any] = out.sorted { $0.0 < $1.0 }.map { $0.1 }
-            if items.isEmpty { for m in picked where !m.text.isEmpty { items.append(m.text) } }
+            let items: [Any] = out.sorted { $0.0 < $1.0 }.map { $0.1 }
             await MainActor.run {
                 preparingShare = false
-                if !items.isEmpty { shareItems = items }
+                if items.isEmpty { shareFailed = true } else { shareItems = items }
             }
         }
+    }
+
+    /// The shareable form of one message, by kind: a link as its URL, a voice note / video / file /
+    /// GIF as a file, a photo as the picture, plain text as text. nil only when it truly cannot be
+    /// had (gone from the server, no network).
+    private static func shareItem(_ m: Message, cid: String, index: Int) async -> Any? {
+        if m.isAudio { return await shareAudio(m, cid: cid, index: index) }
+        if m.type == "video" { return await shareVideo(m, cid: cid) }
+        if m.isFile { return await shareFile(m, cid: cid) }
+        if m.isGif { return await shareGif(m, index: index) }
+        if m.isImage { return await shareImage(m, cid: cid) }
+        if let url = firstURL(in: m.text) { return url }
+        return m.text.isEmpty ? nil : m.text
+    }
+
+    /// First of `op` and a timer; nil when the timer wins (the slow item is cancelled, the others go).
+    private static func withTimeout(_ seconds: Double, _ op: @escaping () async -> Any?) async -> Any? {
+        await withTaskGroup(of: Any?.self) { g in
+            g.addTask { await op() }
+            g.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return nil }
+            let first = await g.next() ?? nil
+            g.cancelAll()
+            return first
+        }
+    }
+
+    /// A document as a file with its own (sanitised) name: the copy the Documents auto-download
+    /// already holds, else downloaded and decrypted the way opening it does.
+    private static func shareFile(_ m: Message, cid: String) async -> URL? {
+        let safe = DocumentPrefetch.safeName(m.fileName)
+        if let local = DocumentPrefetch.cached(id: m.id, fileName: m.fileName) {
+            return copyForShare(local, name: safe, id: m.id)
+        }
+        guard let s = m.fileUrl, let url = URL(string: s), let meta = m.enc,
+              let (cipher, _) = try? await MediaSession.shared.data(from: url),
+              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
+        let box = FileManager.default.temporaryDirectory.appendingPathComponent("share-\(m.id)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+        let dest = box.appendingPathComponent(safe)
+        return (try? data.write(to: dest)) != nil ? dest : nil
+    }
+
+    /// A GIF as a .gif file, so it stays animated where it lands. GIFs are public URLs (not E2EE):
+    /// the bubble's byte cache first, else a plain download.
+    private static func shareGif(_ m: Message, index: Int) async -> Any? {
+        guard let s = m.imageUrl, let url = URL(string: s) else { return nil }
+        var data = GifBytesCache.data(s)
+        if data == nil, let (d, _) = try? await URLSession.shared.data(from: url) {
+            GifBytesCache.store(d, s); data = d
+        }
+        guard let data else { return url }   // at worst the link to it
+        let box = FileManager.default.temporaryDirectory.appendingPathComponent("share-gif", isDirectory: true)
+        try? FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+        let dest = box.appendingPathComponent(index == 0 ? "GIF.gif" : "GIF \(index + 1).gif")
+        try? FileManager.default.removeItem(at: dest)
+        return (try? data.write(to: dest)) != nil ? dest : url
+    }
+
+    /// A copy in tmp under the readable name, so the receiving app never sees our cache path.
+    private static func copyForShare(_ src: URL, name: String, id: String) -> URL? {
+        let box = FileManager.default.temporaryDirectory.appendingPathComponent("share-\(id)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+        let dest = box.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: dest)
+        return (try? FileManager.default.copyItem(at: src, to: dest)) != nil ? dest : src
     }
 
     /// The full-quality image behind a message, for sharing (nil for non-images / failures).
