@@ -229,11 +229,9 @@ final class MediaBubbleView: UIView {
             gif?.reset()
             picture.isHidden = false
             picture.frame = plan.media
-            if let data = m.localData, let ui = UIImage(data: data) {
+            if let data = m.localData, picture.showLocalBytes(data) {
                 // The optimistic local copy, shown before the upload lands. It is the real bytes, so
-                // it must beat anything the url would fetch.
-                picture.reset()
-                picture.image = ui
+                // it must beat anything the url would fetch. Decoded once (chat #82).
             } else {
                 // A video shows its POSTER, not its file.
                 let url = m.kind == .video ? m.posterUrl : m.url
@@ -768,9 +766,8 @@ final class AlbumTileView: UIView {
                    placeholder: UIImage?, cid: String, cancellable: Bool, sendFailed: Bool) {
         let local = CGRect(origin: .zero, size: tile.rect.size)
         picture.frame = local
-        if let data = model?.localData, let ui = UIImage(data: data) {
-            picture.reset()
-            picture.image = ui
+        if let data = model?.localData, picture.showLocalBytes(data) {
+            // The optimistic local copy, decoded once and reused across reconfigures (chat #82).
         } else {
             // An album tile is the case that needed this most: it usually has neither an inline
             // thumb nor a blurhash, so without an indicator it was a flat grey square with nothing
@@ -887,9 +884,8 @@ final class FileBubbleView: UIView {
             preview.isHidden = false
             glyph.isHidden = true
             preview.frame = plan.slot
-            if let data = f.localPreview, let ui = UIImage(data: data) {
-                preview.reset()
-                preview.image = ui
+            if let data = f.localPreview, preview.showLocalBytes(data) {
+                // The optimistic local preview, decoded once and reused (chat #82).
             } else {
                 preview.configure(url: f.previewUrl, enc: f.previewEnc, cid: cid, cornerRadius: 7)
             }

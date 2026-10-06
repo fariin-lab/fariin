@@ -58,6 +58,7 @@ final class RowImageView: UIImageView {
                    cornerRadius: CGFloat = 0, placeholder: UIImage? = nil) {
         layer.cornerRadius = cornerRadius
         layer.cornerCurve = .continuous
+        localMemo = nil   // a url row: the last optimistic copy is not needed any more (see `showLocalBytes`)
         // No url: forget the last one entirely (2026-10-04 audit). Leaving `loadedUrl` / `inFlight`
         // set meant a later configure with that same url returned early on the placeholder for good.
         guard let url, !url.isEmpty else {
@@ -92,7 +93,14 @@ final class RowImageView: UIImageView {
         inFlight = nil
 
         // Synchronous memory hit → the first frame already has the picture, no skeleton flash.
-        if let mem = DiskImageCache.shared.memoryImage(url) { image = mem; return }
+        // A memory hit is a finished load, so it is recorded as one - owner audit 2026-10-06 chat #83.
+        // It returned without setting `loadedUrl`, so A, then B (hit), then A again on one view
+        // matched the stale `loadedUrl` and kept B's picture; a spinner or watcher left by an
+        // earlier in-flight url also stayed on.
+        if let mem = DiskImageCache.shared.memoryImage(url) {
+            unwatch(); setLoading(false)
+            image = mem; loadedUrl = url; return
+        }
         // ⛔ NO SYNCHRONOUS DISK READ HERE — owner, 2026-10-03: "scroll up and down chats feels lag".
         // `smallImageSync` stood on this line. It reads the file, decodes it and scales it down to
         // 2048px, all on the main thread, and this view draws full chat photos and every album
@@ -166,6 +174,31 @@ final class RowImageView: UIImageView {
     private func unwatch() {
         if let w = watching { MediaDownloads.shared.stopObserving(w.url, w.id) }
         watching = nil
+    }
+
+    /// The last optimistic local copy, decoded. See `showLocalBytes`.
+    private var localMemo: (bytes: Data, image: UIImage)?
+
+    /// Shows a just-sent photo's own bytes, before the upload lands. Returns false when the bytes
+    /// are not an image, so the caller falls back to the url, as it did with `UIImage(data:)`.
+    ///
+    /// ⚠️ DECODED ONCE, NOT ON EVERY CONFIGURE - owner audit 2026-10-06 chat #82. The callers built a
+    /// fresh `UIImage(data:)` on each pass, and this row reconfigures on every tick, progress step
+    /// and reaction while the upload runs, so the full bitmap was decoded on main again each time
+    /// (the same 8ms-per-row cost `InlineThumbCache` notes). The same bytes now reuse one decoded image.
+    @discardableResult
+    func showLocalBytes(_ data: Data) -> Bool {
+        let ui: UIImage
+        if let memo = localMemo, memo.bytes == data {
+            ui = memo.image
+        } else {
+            guard let fresh = UIImage(data: data) else { return false }
+            ui = fresh.preparingForDisplay() ?? fresh
+            localMemo = (data, ui)
+        }
+        reset()
+        image = ui
+        return true
     }
 
     func reset() {
