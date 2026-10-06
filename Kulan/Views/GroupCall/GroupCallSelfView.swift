@@ -1,7 +1,7 @@
 import SwiftUI
 
 // The self view pip (owner spec §16 "who am I showing"; reference app: bottom-right, 16pt from the
-// trailing edge, 9:16, corner 8, shadow 4). Only drawn while at least one remote is on the call: alone,
+// trailing edge, 9:16, corner 10, shadow 4). Only drawn while at least one remote is on the call: alone,
 // the local tile is the fullscreen tile and the grid/focus draw it. Tap to enlarge, tap to shrink.
 // The parent places it bottom-trailing, bottom-aligned with the strip area, and uses `size` to keep
 // the grid/strip clear of it.
@@ -14,7 +14,11 @@ struct GroupCallSelfView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let trailingInset: CGFloat = 16
-    static let corner: CGFloat = 8
+    // owner, 2026-10-06: 10, the one corner of every group tile (it was 8).
+    static let corner: CGFloat = GroupCallMetrics.tileCorner
+    /// Enlarge and shrink: the reference app's 0.3s spring with no bounce, the pip growing out of
+    /// the corner it is parked in (it was a 0.3s ease in and out).
+    static let resize: Animation = .spring(response: 0.3, dampingFraction: 1)
 
     /// 72pt tall (9:16) with 2+ remotes, 90x160 with exactly one. Enlarged: 170x300, capped at 45%
     /// of the stage width and the stage height less 24 (a phone on its side, a small stage), with
@@ -54,8 +58,8 @@ struct GroupCallSelfView: View {
                 .contentShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
                 .padding(.trailing, Self.trailingInset)
                 // Reduce Motion: the pip changes size in place, no growing animation.
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: expanded)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: remoteCount > 1)
+                .animation(reduceMotion ? nil : Self.resize, value: expanded)
+                .animation(reduceMotion ? nil : Self.resize, value: remoteCount > 1)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(local.isMuted ? "Your video, muted" : "Your video")
                 .accessibilityHint(expanded ? "Double-tap to shrink" : "Double-tap to enlarge")

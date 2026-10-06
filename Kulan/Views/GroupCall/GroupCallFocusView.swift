@@ -6,24 +6,25 @@ import LiveKit
 // tap-to-unpin and the "Pinned" / "Presenting" label are the owner's additions (spec §16: the user
 // must see who they are viewing and how to get back). The local participant never appears here: they
 // are the self pip, drawn by the parent.
+// owner, 2026-10-06: also the pager's second page (GroupCallStagePager), where the large tile is
+// whoever is speaking, not a pin: `isSpeakerPage` drops the "Pinned" label there, and a tap pins.
 struct GroupCallFocusView: View {
     @ObservedObject var stage: GroupCallStage
     let focusId: String
     /// Passed by the parent so the large tile can fly from its grid frame. Without it the tile fades.
     var namespace: Namespace.ID? = nil
+    /// The pager's speaker page: the large tile follows the active speaker and nobody is pinned.
+    var isSpeakerPage: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var focusTile: CallTile? {
         stage.tiles.first { $0.id == focusId }
     }
 
-    /// Everyone but the focused tile and the local participant, in spec §13 order, so the most
-    /// relevant people sit at the visible start of the strip.
+    /// Everyone but the focused tile and the local participant. The strip puts them in its own
+    /// order (newest joiner first, owner 2026-10-06), so no ranking here any more.
     private var others: [String] {
-        let rest = stage.tilesWithLiveSpeech.filter { $0.id != focusId && !$0.isLocal }
-        return GroupCallPriority.ranked(rest, focusedId: nil,
-                                        speakerId: stage.activeSpeakerId, now: Date())
-            .map(\.id)
+        stage.tiles.filter { $0.id != focusId && !$0.isLocal }.map(\.id)
     }
 
     var body: some View {
@@ -63,17 +64,27 @@ struct GroupCallFocusView: View {
                 // the stage until it ends, so a pin would only add a badge and change nothing.
                 guard !isAutoPresenter(tile) else { return }
                 // Tap again to go back to the grid (owner spec §16: how to focus someone, and undo it).
+                // On the speaker page nobody is pinned yet, so the same tap pins this person.
                 withAnimation(GroupCallMotion.stage(reduceMotion: reduceMotion)) { stage.togglePin(tile.id) }
-            }
+            },
+            menu: stage.tileMenu(for: tile)
         )
         .clipShape(RoundedRectangle(cornerRadius: GroupCallMetrics.tileCorner, style: .continuous))
-        .overlay(alignment: .topLeading) { viewingLabel(tile) }
+        .overlay(alignment: .topLeading) {
+            viewingLabel(tile)
+                .animation(GroupCallMotion.fade, value: tile.isHandRaised)
+        }
         .padding(.horizontal, GroupCallMetrics.inset)
         .padding(.top, GroupCallMetrics.inset)
         // With the strip below, its own inset is the gap; without it the tile keeps the stage inset.
         .padding(.bottom, hasStrip ? 0 : GroupCallMetrics.inset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityHint(Text(isAutoPresenter(tile) ? "" : "Double-tap to return to the grid"))
+        .accessibilityHint(Text(tapHint(tile)))
+    }
+
+    private func tapHint(_ tile: CallTile) -> String {
+        if isAutoPresenter(tile) { return "" }
+        return isSpeakerPage ? "Double-tap to pin" : "Double-tap to return to the grid"
     }
 
     /// Shown large because they are presenting, not because the user pinned them.
@@ -81,10 +92,27 @@ struct GroupCallFocusView: View {
         tile.isScreenShare && stage.pinnedId != tile.id
     }
 
-    /// Quiet capsule that names why this tile is large (spec §16: who they are viewing).
+    /// The large tile's top-left corner. "Presenting" wins; a raised hand takes the place of
+    /// "Pinned" while it is up (owner, 2026-10-06); the speaker page has no "Pinned" to show.
+    @ViewBuilder
     private func viewingLabel(_ tile: CallTile) -> some View {
-        let text = tile.isScreenShare ? "Presenting" : "Pinned"
-        return Text(text)
+        if tile.isScreenShare {
+            viewingCapsule("Presenting")
+        } else if tile.isHandRaised {
+            CallRaisedHandChip(name: tile.name)
+                .padding(.top, 10)
+                .padding(.leading, 10)
+                .padding(.trailing, 44)   // clear of the network glyph, top-right on this tile
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)   // the tile's own label says "hand raised"
+        } else if !isSpeakerPage {
+            viewingCapsule("Pinned")
+        }
+    }
+
+    /// Quiet capsule that names why this tile is large (spec §16: who they are viewing).
+    private func viewingCapsule(_ text: String) -> some View {
+        Text(text)
             .font(.footnote.weight(.semibold))   // 13pt at default, follows Dynamic Type
             .foregroundStyle(.white)
             .padding(.horizontal, 10)

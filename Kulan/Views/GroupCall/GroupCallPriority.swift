@@ -43,6 +43,13 @@ enum GroupCallPriority {
         shown.sorted(by: joinOrder)
     }
 
+    /// The strip's order (owner, 2026-10-06, the reference app's): the newest joiner first, so a
+    /// person who just arrived is at the visible start. Still a stable order: it only moves when
+    /// someone joins or leaves, never when ranks change.
+    static func newestFirst(_ tiles: [CallTile]) -> [CallTile] {
+        tiles.sorted { a, b in joinOrder(b, a) }
+    }
+
     /// Join time, then identity, then id: the one stable order every list falls back to.
     static func joinOrder(_ a: CallTile, _ b: CallTile) -> Bool {
         if a.joinedAt != b.joinedAt { return a.joinedAt < b.joinedAt }

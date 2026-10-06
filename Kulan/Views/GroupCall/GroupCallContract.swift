@@ -12,7 +12,8 @@ import LiveKit
 //   GroupCallStage.swift          LiveKit room -> [CallTile], live  (ObservableObject)
 //   GroupCallTileView.swift       one participant tile, every state
 //   GroupCallGridView.swift       the grid page
-//   GroupCallFocusView.swift      one large tile + the strip
+//   GroupCallFocusView.swift      one large tile + the strip (a pin, a share, or the speaker page)
+//   GroupCallStagePager.swift     grid page above, speaker page below, one vertical swipe apart
 //   GroupCallStripView.swift      the horizontal overflow strip
 //   GroupCallSelfView.swift       my own camera, the 9:16 pip bottom-right (when others are here)
 //   GroupCallStatusBanner.swift   connection lost / poor network / join-leave toasts
@@ -29,6 +30,8 @@ import LiveKit
 //   Reduce Motion on, `GroupCallMotion.stage(reduceMotion:)` swaps it for the fade, and no view
 //   scales, flies (matchedGeometryEffect) or animates the self pip size.
 // - Tile identity is the participant's sid string, stable for the whole call.
+// - The pager builds a page only while part of it is on screen: the speaker page does not exist
+//   until the swipe starts, and the grid page is dropped while the speaker page fills the stage.
 // - The local participant is never ranked, placed on the grid, focused or fed to the speaker
 //   tracker while anyone else is here: it is the self pip. Alone, it is the one fullscreen tile.
 
@@ -49,12 +52,17 @@ struct CallTile: Identifiable, Equatable {
     var isHost: Bool            // link creator / group admin / ad-hoc starter
     var cameraTrackSid: String? // the live camera track; a republish is a new sid, so views rebind
     var screenTrackSid: String? // the live screen share track, same reason
+    // owner, 2026-10-06: the three states below, as the reference app's tile has them. Defaulted, so
+    // a tile built without them is a plain one.
+    var isConnecting: Bool = false      // media still arriving: just joined, or camera on but no picture yet
+    var videoUnavailable: Bool = false  // camera on, and still no picture after the wait
+    var isHandRaised: Bool = false      // raised hand (GroupCallSocial); never set on my own tile
 
     /// Speech is left out on purpose: the raw flag flips several times a second, and a tile that
     /// differs only in speech must not republish `tiles` and re-render the whole stage (spec §12).
     /// The live values sit in the stage's own store (`GroupCallStage.speech(for:)`), read whenever
     /// the stage re-renders for a real change or a new active speaker.
-    /// A guard chain, not one long `&&` expression: thirteen mixed-type comparisons in one
+    /// A guard chain, not one long `&&` expression: sixteen mixed-type comparisons in one
     /// expression can time out the type checker.
     static func == (a: CallTile, b: CallTile) -> Bool {
         guard a.id == b.id, a.uid == b.uid, a.name == b.name else { return false }
@@ -63,8 +71,21 @@ struct CallTile: Identifiable, Equatable {
         guard a.isMuted == b.isMuted, a.joinedAt == b.joinedAt else { return false }
         guard a.networkPoor == b.networkPoor, a.isHost == b.isHost else { return false }
         guard a.cameraTrackSid == b.cameraTrackSid else { return false }
-        return a.screenTrackSid == b.screenTrackSid
+        guard a.screenTrackSid == b.screenTrackSid else { return false }
+        guard a.isConnecting == b.isConnecting, a.videoUnavailable == b.videoUnavailable else { return false }
+        return a.isHandRaised == b.isHandRaised
     }
+}
+
+/// What a long press on a remote tile offers (owner, 2026-10-06; the reference app has the same
+/// menu). Built by `GroupCallStage.tileMenu(for:)`, so the tile view stays dumb.
+struct CallTileMenu {
+    var isPinned: Bool
+    /// The people list's access table: only then are Mute and Remove offered.
+    var canModerate: Bool
+    var onPin: () -> Void
+    var onMute: () -> Void
+    var onRemove: () -> Void
 }
 
 /// What the stage is showing.
@@ -89,10 +110,18 @@ struct CallGridLayout: Equatable {
 enum GroupCallMetrics {
     static let inset: CGFloat = 6
     static let spacing: CGFloat = 6
-    static let tileCorner: CGFloat = 12
+    // owner, 2026-10-06: 10 on every group tile (grid, focus, strip, self pip), the reference app's
+    // one corner. It was 12 on the grid and 8 on the strip and pip. The two-person tile keeps the
+    // 1:1 screen's own 18 (GroupCallDuoView).
+    static let tileCorner: CGFloat = 10
     static let stripTile: CGFloat = 72          // square strip tiles
-    static let stripSpacing: CGFloat = 6
-    static let stripInset: CGFloat = 12
+    static let stripSpacing: CGFloat = 4        // the reference app's (was 6)
+    static let stripLeading: CGFloat = 16       // the strip's first tile from the screen edge (was 6)
+    static let stripInset: CGFloat = 12         // under the strip; the self pip's bottom edge too
+    /// How long a tile waits for media before it says so: 5s for a person who just joined (the
+    /// reference app's wait), 8s for a camera that is on but sends no picture.
+    static let joinGrace: TimeInterval = 5
+    static let videoGrace: TimeInterval = 8
     static let speakingBorder: CGFloat = 3
     static let speakerHold: TimeInterval = 1.5  // spec 8: no flicker between speakers
     /// Phone caps (spec 9): columns x rows the grid may use before people go to the strip.
@@ -132,10 +161,11 @@ enum GroupCallMotion {
 //   enum GroupCallPriority {
 //       /// Spec 13 order: presenter, focused, active speaker, recently speaking (lastSpokeAt within
 //       /// 30s, newest first), other video, audio-only. The local tile is excluded whenever anyone
-//       /// else is here (returned alone when it is the only one). Used for the strip's order; the
-//       /// grid's cells come from `GroupCallStage.gridPlacement` (sticky, no 30s tier).
+//       /// else is here (returned alone when it is the only one). Decides WHO overflows to the
+//       /// strip; the grid's cells come from `GroupCallStage.gridPlacement` (sticky, no 30s tier).
 //       static func ranked(_ tiles: [CallTile], focusedId: String?, speakerId: String?, now: Date) -> [CallTile]
 //       static func stableForGrid(_ shown: [CallTile]) -> [CallTile]   // join order
+//       static func newestFirst(_ tiles: [CallTile]) -> [CallTile]     // the strip's order
 //       static func joinOrder(_ a: CallTile, _ b: CallTile) -> Bool    // joinedAt, uid, id
 //   }
 
@@ -147,6 +177,8 @@ enum GroupCallMotion {
 //       @Published var pinnedId: String?                          // user's focus (tap a tile)
 //       @Published private(set) var mode: CallStageMode          // focus if pinned or screen share
 //       @Published private(set) var connectionState: ConnectionState
+//       @Published var removeCandidate: CallTile?                 // a tile's "Remove…"; the screen confirms
+//       var speakerPageTileId: String?                            // speaker, else last speaker, else first remote
 //       var hostUids: Set<String>
 //       var inCallCount: Int { tiles.count }
 //       var tilesWithLiveSpeech: [CallTile]                       // tiles + the unpublished speech
@@ -155,6 +187,8 @@ enum GroupCallMotion {
 //       func participant(_ tileId: String) -> Participant?       // for the video track
 //       func videoTrack(_ tileId: String) -> VideoTrack?         // camera, or the screen share
 //       func togglePin(_ tileId: String)                          // tap: pin / unpin (never local)
+//       func tileMenu(for tile: CallTile) -> CallTileMenu?        // long press; nil on my own tile
+//       func canModerate(_ tile: CallTile) -> Bool                // the people list's access table
 //       func refreshProfiles(_ members: [CallMember])            // names/photos from the service
 //   }
 
@@ -167,7 +201,15 @@ enum GroupCallMotion {
 //       let isActiveSpeaker: Bool
 //       let isPinned: Bool
 //       var onTap: () -> Void
+//       var menu: CallTileMenu? = nil // long press: Pin / Unpin, and Mute / Remove… for a moderator
 //   }
+
+// GroupCallStagePager.swift
+//   struct GroupCallStagePager: View {     // what the screen places between header and controls
+//       init(stage: GroupCallStage, namespace: Namespace.ID?)
+//   }
+//   Fewer than 2 remotes, or focus mode: the grid / the focus view, exactly as the screen drew them
+//   itself before. 2+ remotes on the grid: two pages, the grid and the speaker page.
 
 // GroupCallGridView / GroupCallFocusView / GroupCallStripView / GroupCallSelfView /
 // GroupCallStatusBanner: see their files; each takes a `GroupCallStage` as @ObservedObject.

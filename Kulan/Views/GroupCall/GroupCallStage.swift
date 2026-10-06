@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import LiveKit
 
 // The live model behind the group call stage (owner spec §8-16): turns the LiveKit room into
@@ -23,6 +24,19 @@ final class GroupCallStage: ObservableObject {
     @Published private(set) var mode: CallStageMode = .grid
     /// Mirrors `room.connectionState` for the status banner (spec §14: reconnecting / lost).
     @Published private(set) var connectionState: ConnectionState
+    /// Set by a tile's "Remove…" (long press). The screen asks "Remove <name> from the call?", runs
+    /// the service's remove and clears it. Cleared here if that person leaves first.
+    @Published var removeCandidate: CallTile?
+
+    /// Who the speaker page shows large (owner, 2026-10-06, the reference app's rule): the active
+    /// speaker, the last one while nobody speaks, else the first remote. Not published by itself:
+    /// it only moves when `activeSpeakerId` or `tiles` do, and both publish.
+    var speakerPageTileId: String? {
+        if let id = activeSpeakerId, participants[id] != nil { return id }
+        if let id = lastSpeakerId, participants[id] != nil { return id }
+        return tiles.first(where: { !$0.isLocal })?.id
+    }
+    private var lastSpeakerId: String?
 
     /// Host uids (link creator / group admin / ad-hoc starter). The screen sets it; tiles follow.
     var hostUids: Set<String> = [] {
@@ -50,6 +64,19 @@ final class GroupCallStage: ObservableObject {
     private var speakerTracker = GroupCallSpeakerTracker()
     // The grid's cells in cell order, kept between renders so tiles stay put (see gridPlacement).
     private var placedIds: [String] = []
+    // The two waiting windows behind `isConnecting` / `videoUnavailable` (owner, 2026-10-06). Phone
+    // time only, never the server's join time: a phone whose clock is behind would keep a spinner
+    // up for as long as it is behind.
+    // When this stage first saw each remote: `.distantPast` for the people already here when the
+    // stage was built (they did not just join), now for anyone who arrives after.
+    private var arrivedAt: [String: Date] = [:]
+    private var firstBuildDone = false
+    // Since when a remote's camera has been on with no picture arriving. Only people inside that
+    // wait have an entry, so the map is empty on a healthy call. No timer of its own: the 0.25s
+    // tick below already re-reads the room, so a window closes within a tick of its deadline.
+    private var cameraWaitSince: [String: Date] = [:]
+    // Raised hands and role changes arrive from outside the room's own events.
+    private var subscriptions: Set<AnyCancellable> = []
     private var refreshScheduled = false
     // nonisolated(unsafe) on these two: only touched on the main thread, but deinit is nonisolated.
     nonisolated(unsafe) private var observer: StageRoomObserver?
@@ -68,6 +95,25 @@ final class GroupCallStage: ObservableObject {
         if let name = room.name, let cached = Self.joinOrderCache, cached.room == name {
             firstSeen = cached.seen
         }
+        // A hand going up or down rebuilds the tiles. The sink runs before the new value is stored
+        // (a @Published fires in willSet), so the rebuild is deferred a turn, never run inline.
+        GroupCallSocial.shared.$raisedHands
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.scheduleRefresh() }
+            }
+            .store(in: &subscriptions)
+        // My role, or anyone's, changed: the long-press menu's Mute / Remove may appear or go. The
+        // role is not part of a tile, so the views are told directly.
+        GroupCallService.shared.$myRole
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.objectWillChange.send() }
+            }
+            .store(in: &subscriptions)
+        GroupCallService.shared.$rolesVersion
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.objectWillChange.send() }
+            }
+            .store(in: &subscriptions)
         refresh()   // also starts the tick unless the room is closed
     }
 
@@ -186,6 +232,53 @@ final class GroupCallStage: ObservableObject {
         pinnedId = (pinnedId == tileId) ? nil : tileId
     }
 
+    // MARK: - Long press on a tile (owner, 2026-10-06)
+
+    /// The same access table the people list uses (GroupCallParticipantsSheet.canModerate): never
+    /// myself on any of my devices, and only the roles my server-signed role reaches.
+    func canModerate(_ tile: CallTile) -> Bool {
+        let service = GroupCallService.shared
+        guard !tile.isLocal, !tile.uid.isEmpty, tile.uid != service.myUid else { return false }
+        let attribute = participants[tile.id]?.attributes["role"]
+        // No attribute (a server without roles yet): the tile's host mark, itself server-sourced.
+        let role: CallRole = (attribute == nil && tile.isHost) ? .owner : CallRole(attribute: attribute)
+        return service.myRole.canModerate(role)
+    }
+
+    /// What a long press on this tile offers. nil for my own tile (the self pip has no menu).
+    func tileMenu(for tile: CallTile) -> CallTileMenu? {
+        guard !tile.isLocal else { return nil }
+        let id = tile.id
+        return CallTileMenu(
+            isPinned: pinnedId == id,
+            canModerate: canModerate(tile),
+            onPin: { [weak self] in
+                guard let self else { return }
+                self.togglePin(id)
+            },
+            onMute: { [weak self] in
+                guard let self else { return }
+                self.mute(tile)
+            },
+            onRemove: { [weak self] in
+                guard let self else { return }
+                // The screen confirms before anyone is removed.
+                self.removeCandidate = tile
+            }
+        )
+    }
+
+    /// Mute needs no confirmation (the people list asks for none either): straight to the service's
+    /// admin function, which the server checks against my role again.
+    private func mute(_ tile: CallTile) {
+        let uid = tile.uid
+        guard !uid.isEmpty else { return }
+        Task { @MainActor in
+            do { try await GroupCallService.shared.admin(.mute, target: uid) }
+            catch { GroupCallService.shared.showToast("Couldn't mute. Try again.") }
+        }
+    }
+
     func refreshProfiles(_ members: [CallMember]) {
         var map: [String: CallMember] = [:]
         for m in members { map[m.uid] = m }
@@ -240,6 +333,38 @@ final class GroupCallStage: ObservableObject {
             if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now; newShare = true }
             if !sharing { shareStartedAt[id] = nil }
 
+            // Media still on its way (the reference app's waiting tile, then its error tile).
+            // Remotes only: my own camera has no wait to show me.
+            if arrivedAt[id] == nil {
+                let firstSight: Date = firstBuildDone ? now : Date.distantPast
+                arrivedAt[id] = firstSight
+            }
+            var connecting = false
+            var unavailable = false
+            if !isLocal {
+                if let pub = p.firstCameraPublication, !pub.isMuted, pub.track == nil {
+                    // Their camera is on (a remote publication with no track reads the server's
+                    // mute flag) and no picture has arrived: a spinner, then "Can't show video".
+                    let since = cameraWaitSince[id] ?? now
+                    cameraWaitSince[id] = since
+                    if now.timeIntervalSince(since) < GroupCallMetrics.videoGrace {
+                        connecting = true
+                    } else {
+                        unavailable = true
+                    }
+                } else {
+                    cameraWaitSince[id] = nil
+                    // Just joined and nothing published yet: their media is still arriving.
+                    let arrived: Date = arrivedAt[id] ?? Date.distantPast
+                    if p.trackPublications.isEmpty,
+                       now.timeIntervalSince(arrived) < GroupCallMetrics.joinGrace {
+                        connecting = true
+                    }
+                }
+            }
+            // Never on my own tile: I know my hand is up, and the pip is too small to say it.
+            let handRaised = !isLocal && !uid.isEmpty && GroupCallSocial.shared.isHandRaised(uid)
+
             built.append(CallTile(
                 id: id,
                 uid: uid,
@@ -255,9 +380,13 @@ final class GroupCallStage: ObservableObject {
                 networkPoor: p.connectionQuality == .poor || p.connectionQuality == .lost,
                 isHost: !uid.isEmpty && hostUids.contains(uid),
                 cameraTrackSid: camera?.sid.stringValue,
-                screenTrackSid: screen?.sid.stringValue
+                screenTrackSid: screen?.sid.stringValue,
+                isConnecting: connecting,
+                videoUnavailable: unavailable,
+                isHandRaised: handRaised
             ))
         }
+        firstBuildDone = true
 
         // Stable order: me first, then everyone by join time (the room's dictionary has no order,
         // and a reshuffle every tick would move tiles around). Equal times (the server's are whole
@@ -276,6 +405,9 @@ final class GroupCallStage: ObservableObject {
         }
         if let name = room.name, !name.isEmpty { Self.joinOrderCache = (name, firstSeen) }
         shareStartedAt = shareStartedAt.filter { present.contains($0.key) }
+        // Someone who left takes their waiting window with them (nothing is left counting).
+        arrivedAt = arrivedAt.filter { present.contains($0.key) }
+        cameraWaitSince = cameraWaitSince.filter { present.contains($0.key) }
         participants = byId
         // Before `tiles` publishes, so a re-render reads this tick's speech.
         var speech: [String: (isSpeaking: Bool, lastSpokeAt: Date?)] = [:]
@@ -287,6 +419,8 @@ final class GroupCallStage: ObservableObject {
         if let pin = pinnedId, !present.contains(pin) { pinnedId = nil }   // didSet updates mode
         // A share that just started takes the stage over an older pin (the latest thing wins).
         if newShare, pinnedId != nil { pinnedId = nil }
+        // The person behind an open "Remove?" question left by themselves: nothing left to confirm.
+        if let candidate = removeCandidate, !present.contains(candidate.id) { removeCandidate = nil }
 
         // Spec §8: the highlight follows the tracker (0.3s to take over, 1.5s hold), not the raw flag.
         // Remotes only: my own voice would hold the highlight while I talk, so nobody answering me
@@ -294,6 +428,13 @@ final class GroupCallStage: ObservableObject {
         let speaking = Set(built.filter { $0.isSpeaking && !$0.isLocal }.map(\.id))
         _ = speakerTracker.update(speaking: speaking, now: now)
         let speaker = speakerTracker.activeSpeakerId.flatMap { present.contains($0) ? $0 : nil }
+        // Remembered for the speaker page, which keeps the last speaker large through a silence.
+        // Before `activeSpeakerId` publishes, so the re-render it causes reads this tick's value.
+        if let speaker {
+            lastSpeakerId = speaker
+        } else if let last = lastSpeakerId, !present.contains(last) {
+            lastSpeakerId = nil
+        }
         if speaker != activeSpeakerId { activeSpeakerId = speaker }
 
         updateMode()

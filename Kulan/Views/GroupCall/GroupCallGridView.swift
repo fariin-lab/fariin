@@ -88,7 +88,8 @@ struct GroupCallGridView: View {
                             style: .grid,
                             isActiveSpeaker: stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,
-                            onTap: { stage.togglePin(id) }
+                            onTap: { stage.togglePin(id) },
+                            menu: stage.tileMenu(for: tile)
                         )
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)
