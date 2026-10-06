@@ -78,8 +78,13 @@ struct GroupCallStatusBanner: View {
             if case .connected = stage.connectionState { wasConnected = true }
             takeBaseline()
         }
-        .onChange(of: stage.connectionState) { _, new in
-            if case .connected = new { wasConnected = true }
+        .onChange(of: stage.connectionState) { old, new in
+            if case .connected = new {
+                wasConnected = true
+                // The people the room hands me on (re)connect were already there: they are the new
+                // baseline, not a "5 people joined" toast on my own join.
+                if old != .connected { knownNames = remoteNames() }
+            }
         }
         .onChange(of: stage.tiles.map(\.id)) { _, _ in diffTiles() }
         .onChange(of: item?.text) { _, new in
@@ -109,6 +114,9 @@ struct GroupCallStatusBanner: View {
 
     private func diffTiles() {
         guard baselineTaken else { takeBaseline(); return }
+        // Only while connected: before the first connect the room is filling in, and during a
+        // reconnect it empties and refills, which is nobody joining or leaving.
+        guard wasConnected, stage.connectionState == .connected else { knownNames = remoteNames(); return }
         let now = remoteNames()
         let joined = now.keys.filter { knownNames[$0] == nil }
         let left = knownNames.keys.filter { now[$0] == nil }
