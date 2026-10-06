@@ -6,8 +6,9 @@ import LiveKit
 // muted badge bottom-left, no names on tiles. Where the reference app draws nothing (who is speaking,
 // pinned, poor network) the owner's spec adds a quiet mark: a thin border, two small glyphs.
 
-/// Where the tile is drawn. Decides corner, badges and the name.
-enum CallTileStyle { case grid, focus, strip, alone }
+/// Where the tile is drawn. Decides corner, badges and the name. `.pip` is my own self view: at its
+/// small 40pt width the badges shrink (16pt muted badge, no network badge) so they do not cover it.
+enum CallTileStyle { case grid, focus, strip, alone, pip }
 
 struct GroupCallTileView: View {
     let tile: CallTile
@@ -44,7 +45,7 @@ struct GroupCallTileView: View {
         .accessibilityAction { onTap() }
     }
 
-    private var corner: CGFloat { style == .strip ? 8 : GroupCallMetrics.tileCorner }
+    private var corner: CGFloat { (style == .strip || style == .pip) ? 8 : GroupCallMetrics.tileCorner }
 
     // MARK: - Video or avatar
 
@@ -98,21 +99,23 @@ struct GroupCallTileView: View {
     @ViewBuilder
     private func badges(width: CGFloat) -> some View {
         let inset: CGFloat = width >= 170 ? 8 : 4
+        // The small self pip (40pt wide): a 28pt badge would cover most of it.
+        let compact = style == .pip && width < 60
         ZStack {
             // Muted: the reference app hides it on the big speaker tile and fullscreen.
-            if tile.isMuted && (style == .grid || style == .strip) {
-                badge("mic.slash.fill", size: 28, glyph: 16)
+            if tile.isMuted && (style == .grid || style == .strip || style == .pip) {
+                badge("mic.slash.fill", size: compact ? 16 : 28, glyph: compact ? 9 : 16)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .transition(.opacity)
             }
-            if tile.networkPoor {
+            if tile.networkPoor && !compact {
                 badge("wifi.exclamationmark", size: 22, glyph: 11)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .transition(.opacity)
             }
-            if isPinned && style != .strip {
+            if isPinned && style != .strip && style != .pip {
                 badge("pin.fill", size: 22, glyph: 11)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)

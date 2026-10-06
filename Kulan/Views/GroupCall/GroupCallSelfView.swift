@@ -31,7 +31,7 @@ struct GroupCallSelfView: View {
             let track = local.hasVideo ? stage.videoTrack(local.id) : nil
             GroupCallTileView(tile: local,
                               track: track,
-                              style: .strip,
+                              style: .pip,
                               isActiveSpeaker: false,
                               isPinned: false,
                               onTap: toggle)

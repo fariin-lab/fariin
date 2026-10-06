@@ -140,7 +140,7 @@ enum GroupCallMotion {
 //   }
 
 // GroupCallTileView.swift
-//   enum CallTileStyle { case grid, focus, strip, alone }
+//   enum CallTileStyle { case grid, focus, strip, alone, pip }
 //   struct GroupCallTileView: View {
 //       let tile: CallTile
 //       let track: VideoTrack?        // nil = avatar
