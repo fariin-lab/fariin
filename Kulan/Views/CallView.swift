@@ -730,7 +730,7 @@ struct CallView: View {
 /// re-renders only the modifier; the call screen hears about the drag once, when it lands.
 /// #18: the drag starts from `rest`, the corner worked out against TODAY's bounds, never from an
 /// offset stored against older ones (that was the dead zone and jump after the chrome toggled).
-private struct PipTileDrag: ViewModifier {
+struct PipTileDrag: ViewModifier {   // also the two-person group call's tile (GroupCallDuoView)
     let rest: CGSize
     let maxLeft: CGFloat
     let maxUp: CGFloat

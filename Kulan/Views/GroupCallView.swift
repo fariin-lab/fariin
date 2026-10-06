@@ -13,20 +13,59 @@ struct GroupCallView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
 
-    var body: some View {
+    /// The screen and its two-person behaviour, apart from `body` so neither is too long for the
+    /// type checker (it gave up on a long body here once, 2026-10-06).
+    private var screen: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            // Two people: the 1:1 call's look, edge to edge under the chrome (GroupCallDuoView).
+            if let pair = duoPair {
+                GroupCallDuoView(stage: stage, local: pair.local, remote: pair.remote,
+                                 swapped: $duoSwapped, chromeVisible: chromeVisible, insets: winInsets,
+                                 onBackgroundTap: toggleChrome,
+                                 onTileTouch: { hideTask?.cancel() },
+                                 onTileRelease: armAutoHide,
+                                 onShowChrome: showChrome)
+                    .transition(.opacity)
+            }
             VStack(spacing: 16) {
                 header.padding(.horizontal, 14)
+                    .opacity(chromeVisible ? 1 : 0)
+                    .allowsHitTesting(chromeVisible)
+                    .accessibilityHidden(!chromeVisible)
                 if service.isLinkCreator && !service.pendingRequests.isEmpty {
                     waitingBanner.padding(.horizontal, 14)
                 }
                 // Edge to edge: the stage keeps its own 6pt inset (the reference app's grid).
-                stageArea
+                middle
                 controls.padding(.horizontal, 14)
+                    .opacity(chromeVisible ? 1 : 0)
+                    .allowsHitTesting(chromeVisible)
+                    .accessibilityHidden(!chromeVisible)
             }
             .padding(.vertical, 10)
         }
+        // 2 <-> 3 people: one cross-fade between the 1:1 look and the group stage.
+        .animation(.easeInOut(duration: 0.3), value: duoPair != nil)
+        .background(GeometryReader { geo in
+            Color.clear
+                .onAppear { winInsets = geo.safeAreaInsets }
+                .onChange(of: geo.safeAreaInsets) { _, v in winInsets = v }
+        })
+        .onChange(of: duoPair != nil) { _, duo in
+            if !duo { duoSwapped = false }
+            showChrome()
+        }
+        .onChange(of: duoHasVideo) { _, _ in showChrome() }
+        .onChange(of: service.isActive) { _, _ in showChrome() }
+        .onChange(of: showParticipants) { _, up in
+            if up { hideTask?.cancel() } else { showChrome() }
+        }
+        .onDisappear { hideTask?.cancel() }
+    }
+
+    var body: some View {
+        screen
         // Always dark, for the same reason the 1:1 call is — see `CallView`. A call is drawn for a
         // dark ground whatever the phone is set to.
         .environment(\.colorScheme, .dark)
@@ -106,7 +145,22 @@ struct GroupCallView: View {
             GroupCallSelfView(stage: stage, expanded: $selfExpanded, stageSize: stageSize)
                 .padding(.bottom, GroupCallMetrics.stripInset)
         }
-        .overlay(alignment: .top) { GroupCallStatusBanner(stage: stage) }
+        .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
+    }
+
+    /// Between header and controls: the group stage, or (two people) an empty, see-through area
+    /// over the 1:1 look. The join/leave notes and the toasts sit on this one view in both layouts,
+    /// so a person joining is still announced across the switch (the banner keeps who it has seen).
+    private var middle: some View {
+        ZStack {
+            if duoPair == nil {
+                stageArea.transition(.opacity)
+            } else {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .top) { GroupCallStatusBanner(stage: stage).allowsHitTesting(duoPair == nil) }
         // Group call permissions, 2026-10-06: "You were muted" and other short notes that do not
         // close the screen. VoiceOver hears it as an announcement from the service.
         .overlay(alignment: .bottom) {
@@ -122,7 +176,63 @@ struct GroupCallView: View {
             }
         }
         .animation(GroupCallMotion.fade, value: service.toast)
-        .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
+    }
+
+    // MARK: - Two people (the 1:1 look)
+
+    /// Me and exactly one other person, nobody presenting a screen (a shared screen needs the
+    /// group stage's fitted view). nil = the group stage.
+    private var duoPair: (local: CallTile, remote: CallTile)? {
+        guard service.isActive else { return nil }
+        var local: CallTile?
+        var remote: CallTile?
+        var remotes = 0
+        for t in stage.tiles {
+            if t.isLocal { local = t } else { remotes += 1; remote = t }
+        }
+        guard remotes == 1, let local, let remote, !remote.isScreenShare, !local.isScreenShare else { return nil }
+        return (local, remote)
+    }
+    private var duoHasVideo: Bool {
+        guard let p = duoPair else { return false }
+        return p.local.hasVideo || p.remote.hasVideo
+    }
+    @State private var duoSwapped = false
+    @State private var winInsets = EdgeInsets()
+
+    // The chrome (header + controls) hides on a two-person VIDEO call the way a 1:1 call's does:
+    // tap to toggle, gone after 5s. Never under VoiceOver, never on a voice call, never on the group
+    // stage (CallView `autoHideEnabled`).
+    @State private var chromeVisible = true
+    @State private var hideTask: DispatchWorkItem?
+    private var autoHideEnabled: Bool { duoHasVideo && !UIAccessibility.isVoiceOverRunning }
+
+    private func armAutoHide() {
+        hideTask?.cancel()
+        guard autoHideEnabled, !showParticipants else {
+            if !chromeVisible { withAnimation(.easeInOut(duration: 0.2)) { chromeVisible = true } }
+            return
+        }
+        let work = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.28)) { chromeVisible = false }
+        }
+        hideTask = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    private func showChrome() {
+        if !chromeVisible { withAnimation(.easeInOut(duration: 0.2)) { chromeVisible = true } }
+        armAutoHide()
+    }
+
+    private func toggleChrome() {
+        guard autoHideEnabled else { return }
+        if chromeVisible {
+            hideTask?.cancel()
+            withAnimation(.easeInOut(duration: 0.28)) { chromeVisible = false }
+        } else {
+            showChrome()
+        }
     }
     /// The self pip's enlarged state, here so the strip can follow it (see selfPipWidth).
     @State private var selfExpanded = false
@@ -138,6 +248,8 @@ struct GroupCallView: View {
 
     /// Ad-hoc: the other people's names, live as people are added. Otherwise the call's own title.
     private var title: String {
+        // Two people: the other person's name, as a 1:1 call's header.
+        if let pair = duoPair, !pair.remote.name.isEmpty { return pair.remote.name }
         if service.isAdhoc {
             let me = service.myUid
             let t = GroupCallService.title(for: service.members.filter { $0.uid != me }.map(\.name))
@@ -158,6 +270,19 @@ struct GroupCallView: View {
         if stage.connectionState == .reconnecting { return "Reconnecting…" }
         if service.isActive && !stage.tiles.contains(where: { !$0.isLocal }) { return "Waiting for others…" }
         return "\(stage.inCallCount) in call"
+    }
+
+    /// The two-person header's clock (a 1:1 call's), else the subtitle above.
+    @ViewBuilder private var subtitleView: some View {
+        if duoPair != nil, let since = service.joinedAt, !service.waitingForApproval, !service.connecting,
+           stage.connectionState != .reconnecting {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                Text(CallDuration.clock(Int(ctx.date.timeIntervalSince(since))))
+                    .monospacedDigit()
+            }
+        } else {
+            Text(subtitle)
+        }
     }
 
     private var waitingBanner: some View {
@@ -193,7 +318,7 @@ struct GroupCallView: View {
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
-                Text(subtitle).font(.caption).foregroundStyle(.white.opacity(0.7))
+                subtitleView.font(.caption).foregroundStyle(.white.opacity(0.7))
             }
             Spacer()
             Button { showParticipants = true } label: {

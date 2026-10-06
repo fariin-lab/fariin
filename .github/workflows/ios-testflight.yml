@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 831: A SCREEN BEFORE YOU JOIN A LINK CALL, CALL LINK SHEET FIXES.
+            BUILD 832: TWO PEOPLE IN A GROUP OR LINK CALL LOOK LIKE A NORMAL CALL.
+
+            2 PEOPLE: the other person fills the screen, your camera is the small corner tile you can drag and tap to swap, a voice call shows their photo on their colour, the header shows their name and the call time, and on video the buttons hide after 5 seconds (tap to bring them back), just like a 1:1 call. A 3rd person joining switches to the group grid with a smooth fade, and it goes back when it is 2 again.
+            CONNECTING: the call no longer says Connecting... while you are already in it; your mic and camera start right after you are in.
+
+            PLEASE TEST: a link call with 2 people (video, then voice), drag and tap the corner tile, then have a 3rd person join and leave.
+
+            EARLIER (build 831): A SCREEN BEFORE YOU JOIN A LINK CALL, CALL LINK SHEET FIXES.
 
             LINK CALLS: tapping a call link (calls list, Join Call, a link in a chat) first shows your camera full screen with the call's name, camera and mic buttons, and Leave / Join. The mic starts off; Join enters with the camera and mic as you left them. A Voice link keeps the camera off.
             CALL LINK SHEET: the title and Done stay put; the sheet no longer scrolls when everything fits. Call Name comes up from the bottom with Cancel and Save.

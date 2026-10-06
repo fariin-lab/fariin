@@ -121,6 +121,9 @@ final class GroupCallService: ObservableObject {
     /// The mic as the lobby left it. Read by `connect` (also after an approval wait), cleared with
     /// the room.
     private var startMuted = false
+    /// When this phone got into the room. The two-person look's header clock, like a 1:1 call's;
+    /// here and not on the screen, which is rebuilt every time the call is restored from its card.
+    @Published private(set) var joinedAt: Date?
 
     /// Opens the pre-join screen for a link. Busy (a call already up or starting) says so instead.
     func openLobby(key: String) {
@@ -244,11 +247,10 @@ final class GroupCallService: ObservableObject {
                 return
             }
             try await room.connect(url: url, token: token)
-            try await room.localParticipant.setMicrophone(enabled: true)
-            let cameraOK = video ? await Self.cameraAllowed() : false   // asked first (see toggleCamera)
-            if cameraOK { try await room.localParticipant.setCamera(enabled: true) }
             guard gen == joinGeneration else { await abandonJoin(); return }
-            activeCid = cid; activeRoom = .group(cid: cid); micOn = true; cameraOn = cameraOK; connecting = false
+            // In the room = in the call; mic and camera follow (see startLocalMedia).
+            activeCid = cid; activeRoom = .group(cid: cid); connecting = false
+            startLocalMedia(mic: true, video: video)
             myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
             // joined one, and the starter writes the call's record into the chat.
@@ -432,6 +434,39 @@ final class GroupCallService: ObservableObject {
                 guard cameraOn == v else { return }   // toggled again meanwhile
                 cameraOn = !v
                 showToast(v ? "Couldn't turn the camera on" : "Couldn't turn the camera off")
+            }
+        }
+    }
+
+    /// ⛔ IN THE ROOM IS IN THE CALL — owner, 2026-10-06, screenshots of a live call (the other
+    /// person's video on screen) still saying "Connecting…". The join used to wait for the mic and
+    /// then the camera to be published before it counted as joined, so a slow camera start (or the
+    /// first camera-access prompt) held the whole screen on "Connecting…". Now the call is up the
+    /// moment the room is, and the mic and camera start after it; the buttons show the wish at once
+    /// and go back, with a short note, if a start fails.
+    private func startLocalMedia(mic: Bool, video: Bool) {
+        joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
+        micOn = mic
+        cameraOn = video
+        let gen = joinGeneration
+        Task { @MainActor in
+            do { try await room.localParticipant.setMicrophone(enabled: mic) }
+            catch {
+                guard gen == joinGeneration, mic else { return }
+                micOn = false
+                showToast("Couldn't turn the microphone on")
+            }
+            guard video else { return }
+            guard await Self.cameraAllowed() else {
+                if gen == joinGeneration { cameraOn = false; showToast("Allow camera access in Settings") }
+                return
+            }
+            guard gen == joinGeneration, cameraOn else { return }   // turned off meanwhile
+            do { try await room.localParticipant.setCamera(enabled: true) }
+            catch {
+                guard gen == joinGeneration else { return }
+                cameraOn = false
+                showToast("Couldn't turn the camera on")
             }
         }
     }
@@ -755,10 +790,6 @@ final class GroupCallService: ObservableObject {
             cameraLocked = voiceOnly
             if voiceOnly { isVideo = false }
             try await room.connect(url: url, token: token)
-            try await room.localParticipant.setMicrophone(enabled: !startMuted)
-            // Asked first (see toggleCamera); joining goes ahead camera-off if access is refused.
-            let cameraOK = video ? await Self.cameraAllowed() : false
-            if cameraOK { try await room.localParticipant.setCamera(enabled: true) }
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
             // up anyway, mic on, with no screen and no card, and every other call was refused.
             guard gen == joinGeneration else { await abandonJoin(); return false }
@@ -767,9 +798,10 @@ final class GroupCallService: ObservableObject {
             case .adhoc(let id): activeCid = id
             case .link(let roomId, _): activeCid = roomId
             }
-            activeRoom = r; micOn = !startMuted; cameraOn = cameraOK; connecting = false
+            activeRoom = r; connecting = false
             waitingForApproval = false
             myRole = CallRole(attribute: d?["role"] as? String)
+            startLocalMedia(mic: !startMuted, video: video)
             return true
         } catch {
             // Hung up mid-connect: the room.disconnect() that hang-up ran is what threw here, and
@@ -821,6 +853,7 @@ final class GroupCallService: ObservableObject {
 
     private func resetRoomState() {
         startMuted = false
+        joinedAt = nil
         roomListener?.remove(); roomListener = nil
         requestsListener?.remove(); requestsListener = nil
         myRequestListener?.remove(); myRequestListener = nil
