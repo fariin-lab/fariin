@@ -1861,18 +1861,7 @@ struct ThreadView: View {
             // owner audit 2026-10-06 chat #75: a message out of reach (older than the paging limit,
             // or gone) said nothing at all, with the gallery already popped. Same toast as the other
             // jumps. #10: superseded by a newer jump or the down arrow.
-            jumpSeq += 1
-            let seq = jumpSeq
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                Task {
-                    await repo.ensureLoaded(p.messageId)
-                    await MainActor.run {
-                        guard seq == jumpSeq else { return }
-                        if repo.items.contains(where: { $0.id == p.messageId }) { flashAndScroll(p.messageId) }
-                        else { showJumpToast("That message isn't available") }
-                    }
-                }
-            }
+            goToMessageJump(p.messageId)
         }
         .sheet(item: $tappedMember) { m in
             GroupMemberSheet(cid: cid, member: m,
@@ -2039,47 +2028,8 @@ struct ThreadView: View {
             // owner audit 2026-10-06 chat #13: whatever is already presented when the chat appears
             // (normally nothing) is the baseline; anything above it later is a sheet over the chat.
             baseCoverDepth = Self.presentationDepth()
-            Task {
-                // owner audit 2026-10-06 chat #14: ask the server EVERY time, not only when the chat
-                // was missing from the cached list. After a push or a long background the cached row
-                // can be present but old (0, or a smaller N), and the divider was placed from it once
-                // and never corrected. Only a positive answer that differs is adopted: a failed read
-                // also says 0, and a live arrival read at the bottom has already zeroed it legitimately.
-                let n = await ChatService.myUnread(cid)
-                await MainActor.run {
-                    if cachedConv == nil {
-                        unreadOnOpen = n
-                    } else if n > 0, n != unreadOnOpen {
-                        firstUnreadId = nil
-                        didAnchorUnread = false   // the onChange(of: unreadOnOpen) re-anchors the divider
-                        unreadOnOpen = n
-                    }
-                }
-                // Wait for the REAL block state before stamping a read receipt (audit M8): iBlocked
-                // defaults to false and the conv listener has only just attached — a blocked contact
-                // received a receipt on open despite every other call site gating on iBlocked.
-                //
-                // owner audit 2026-10-06 chat #2: …and for the list to LAND. This stamped everything
-                // read the moment the chat opened, written when every open landed at the bottom. Since
-                // the open lands on the first unread, the newest messages can be below the screen, and
-                // the sender saw blue ticks (and the list lost its badge) for messages never shown.
-                // Now: landed with the newest on screen → exactly as before. Landed above it → nothing
-                // here; scrolling down to the newest flips `isAtBottom`, which sends the receipt and
-                // clears the counter. `settled` flips 0.35s after the reveal (the same moment the
-                // jump-arrow badge reads `isAtBottom`); capped at 5s so a slow or returning open
-                // still stamps on its best-known state.
-                var waited = 0
-                while !repo.convLoaded || !repo.didInitialLoad || !settled, waited < 50 {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    waited += 1
-                }
-                // The list publishes `isAtBottom` on a 0.1s debounce after its landing scroll.
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                guard isAtBottom else { return }
-                if chatCovered { armCoveredRead(); return }   // chat #13
-                await ChatService.resetUnread(cid)
-                if !repo.iBlocked { await ChatService.markRead(cid) }
-            }
+            // Body moved to `openReadPass` (type-check budget of `body`, 2026-10-06).
+            Task { await openReadPass() }
             }
         }
         .onDisappear {
@@ -2191,15 +2141,66 @@ struct ThreadView: View {
         // owner audit 2026-10-06 chat #73: midnight (and a carrier time fix or DST), a time zone change
         // and a locale or 12/24-hour change move every day label and time on the page while nothing
         // in the data does. One tick re-keys the grouping, signature and row-model caches.
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
-            dayTick &+= 1
+        .modifier(DayTickWatcher(tick: $dayTick))
+    }
+
+    /// The open-time read pass, moved out of `body` unchanged (owner audit 2026-10-06 chat #2/#14;
+    /// `body` had passed the type-checker's budget).
+    private func openReadPass() async {
+        // owner audit 2026-10-06 chat #14: ask the server EVERY time, not only when the chat
+        // was missing from the cached list. After a push or a long background the cached row
+        // can be present but old (0, or a smaller N), and the divider was placed from it once
+        // and never corrected. Only a positive answer that differs is adopted: a failed read
+        // also says 0, and a live arrival read at the bottom has already zeroed it legitimately.
+        let n = await ChatService.myUnread(cid)
+        await MainActor.run {
+            if cachedConv == nil {
+                unreadOnOpen = n
+            } else if n > 0, n != unreadOnOpen {
+                firstUnreadId = nil
+                didAnchorUnread = false   // the onChange(of: unreadOnOpen) re-anchors the divider
+                unreadOnOpen = n
+            }
         }
-        // These two are not promised on the main thread, so they are hopped there before touching state.
-        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
-            DispatchQueue.main.async { dayTick &+= 1 }
+        // Wait for the REAL block state before stamping a read receipt (audit M8): iBlocked
+        // defaults to false and the conv listener has only just attached — a blocked contact
+        // received a receipt on open despite every other call site gating on iBlocked.
+        //
+        // owner audit 2026-10-06 chat #2: …and for the list to LAND. This stamped everything
+        // read the moment the chat opened, written when every open landed at the bottom. Since
+        // the open lands on the first unread, the newest messages can be below the screen, and
+        // the sender saw blue ticks (and the list lost its badge) for messages never shown.
+        // Now: landed with the newest on screen → exactly as before. Landed above it → nothing
+        // here; scrolling down to the newest flips `isAtBottom`, which sends the receipt and
+        // clears the counter. `settled` flips 0.35s after the reveal (the same moment the
+        // jump-arrow badge reads `isAtBottom`); capped at 5s so a slow or returning open
+        // still stamps on its best-known state.
+        var waited = 0
+        while !repo.convLoaded || !repo.didInitialLoad || !settled, waited < 50 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 1
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
-            DispatchQueue.main.async { dayTick &+= 1 }
+        // The list publishes `isAtBottom` on a 0.1s debounce after its landing scroll.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard isAtBottom else { return }
+        if chatCovered { armCoveredRead(); return }   // chat #13
+        await ChatService.resetUnread(cid)
+        if !repo.iBlocked { await ChatService.markRead(cid) }
+    }
+
+    /// The `.goToMessage` jump, moved out of `body` unchanged (chat #75, #10).
+    private func goToMessageJump(_ messageId: String) {
+        jumpSeq += 1
+        let seq = jumpSeq
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            Task {
+                await repo.ensureLoaded(messageId)
+                await MainActor.run {
+                    guard seq == jumpSeq else { return }
+                    if repo.items.contains(where: { $0.id == messageId }) { flashAndScroll(messageId) }
+                    else { showJumpToast("That message isn't available") }
+                }
+            }
         }
     }
 
@@ -10887,5 +10888,24 @@ extension String {
         let count = filter { !$0.isWhitespace }.count   // grapheme clusters, so a ZWJ family is one
         guard count > 0, count <= 5 else { return 0 }   // the reference app: kMaxJumbomojiCount = 5
         return count
+    }
+}
+
+/// Bumps the day tick on midnight / time zone / locale changes (owner audit 2026-10-06 chat #73).
+/// A modifier of its own so ThreadView's `body` stays inside the type-checker's budget.
+private struct DayTickWatcher: ViewModifier {
+    @Binding var tick: Int
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+                tick &+= 1
+            }
+            // These two are not promised on the main thread, so they are hopped there first.
+            .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+                DispatchQueue.main.async { tick &+= 1 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+                DispatchQueue.main.async { tick &+= 1 }
+            }
     }
 }
