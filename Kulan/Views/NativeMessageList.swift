@@ -911,6 +911,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             else { return 44 }
             return self.heights[id] ?? 44
         }
+        // Chat #26: content changes re-read the arrow and isAtBottom (a 0.1s timer, never inline).
+        // Not before the reveal: the open positions the list itself and must not be second-guessed.
+        layout.onFramesRebuilt = { [weak self] in
+            guard let self, self.didReveal else { return }
+            self.scheduleScrollWorkTimer()
+        }
         collectionView = HardenedCollectionView(frame: view.bounds, collectionViewLayout: layout)
         collectionView.isPrefetchingEnabled = false   // off until first appearance (faster, jank-free open)
         collectionView.backgroundColor = .clear
@@ -5695,7 +5701,14 @@ final class MessageLayout: UICollectionViewLayout {
         contentHeight = y + Self.contentMarginBottom
         builtGeneration = generation
         builtCount = count
+        onFramesRebuilt?()
     }
+
+    /// Called after the frames are re-stacked (rows added, removed or resized). Owner audit
+    /// 2026-10-06 chat #26: the jump arrow and `isAtBottom` were only re-read on a scroll, so a
+    /// message arriving or being deleted under a still reader left them stale. The controller
+    /// arms its debounced scroll work from here; it must only schedule, never lay out.
+    var onFramesRebuilt: (() -> Void)?
 
     override var collectionViewContentSize: CGSize { CGSize(width: layoutWidth, height: contentHeight) }
 
