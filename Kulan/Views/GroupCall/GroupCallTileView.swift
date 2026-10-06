@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreImage
 import LiveKit
 
 // ONE PARTICIPANT TILE, EVERY STATE (owner spec §8, §14). The look follows the reference app's tile:
@@ -165,14 +166,18 @@ struct GroupCallTileView: View {
 
 /// The camera-off background: the person's photo, blurred, filling the tile. Loads through the
 /// app's one avatar pipeline (`ProfilePhotoLoader`, same as `AvatarView`); no photo = dark gradient.
+/// The blur is made ONCE per photo url, on a 64px copy, and cached (`TileBackdropBlur`): a live
+/// `.blur(radius:)` re-ran a full-size Gaussian on every frame of every reflow, for every camera-off
+/// tile of a big call (spec §10 performance).
 private struct TileBackdrop: View {
     let photoUrl: String?
     @State private var image: UIImage?
 
     init(photoUrl: String?) {
         self.photoUrl = photoUrl
-        // First frame from memory/disk, so a tile does not flash grey before the blur appears.
-        _image = State(initialValue: ProfilePhotoLoader.shared.cachedAvatar(photoUrl))
+        // First frame from the blur cache, else from the avatar in memory/disk (blurring a 64px copy
+        // is cheap), so a tile does not flash grey before the blur appears.
+        _image = State(initialValue: TileBackdropBlur.cachedOrMake(photoUrl))
     }
 
     var body: some View {
@@ -182,8 +187,8 @@ private struct TileBackdrop: View {
             if let image {
                 Image(uiImage: image)
                     .resizable()
+                    .interpolation(.medium)   // smooth upscale of the 64px copy
                     .scaledToFill()
-                    .blur(radius: 28, opaque: true)
                     .overlay(Color.black.opacity(0.35))   // keeps the white badges readable
                     .transition(.opacity)
             }
@@ -192,9 +197,62 @@ private struct TileBackdrop: View {
         .animation(GroupCallMotion.fade, value: image != nil)
         .task(id: photoUrl) {
             guard let s = photoUrl, !s.isEmpty else { image = nil; return }
+            if let hit = TileBackdropBlur.cached(s) { image = hit; return }
             let img = await ProfilePhotoLoader.shared.avatar(s)
-            guard !Task.isCancelled else { return }
-            if let img { image = img }
+            guard !Task.isCancelled, let img else { return }
+            if let blurred = TileBackdropBlur.make(img, url: s) { image = blurred }
         }
+    }
+}
+
+/// The pre-blurred backdrops, one per photo url. A photo change is a new url (`?v=`), so an entry
+/// never needs invalidating. 64px images, a few KB each.
+private enum TileBackdropBlur {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 200
+        return c
+    }()
+    // One context for every tile: building a CIContext is expensive.
+    private static let context = CIContext(options: nil)
+    private static let side: CGFloat = 64
+    // Sigma on the 64px copy. The tile then scales the copy up 2-10x, which softens it further, so
+    // this reads as the old 28pt blur at every tile size.
+    private static let sigma: Double = 3
+
+    static func cached(_ url: String) -> UIImage? {
+        cache.object(forKey: url as NSString)
+    }
+
+    /// The cached blur, else one made now from the avatar already in memory/disk. nil = load later.
+    static func cachedOrMake(_ url: String?) -> UIImage? {
+        guard let url, !url.isEmpty else { return nil }
+        if let hit = cached(url) { return hit }
+        guard let avatar = ProfilePhotoLoader.shared.cachedAvatar(url) else { return nil }
+        return make(avatar, url: url)
+    }
+
+    /// Downsample to 64px on the long side, blur once, cache under `url`.
+    static func make(_ source: UIImage, url: String) -> UIImage? {
+        if let hit = cached(url) { return hit }
+        let long = max(source.size.width, source.size.height)
+        guard long > 0 else { return nil }
+        let scale = min(1, side / long)
+        let target = CGSize(width: max(1, (source.size.width * scale).rounded()),
+                            height: max(1, (source.size.height * scale).rounded()))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let small = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            source.draw(in: CGRect(origin: .zero, size: target))
+        }
+        guard let cg = small.cgImage else { return nil }
+        let input = CIImage(cgImage: cg)
+        // Clamped first so the edges do not fade to transparent, cropped back after.
+        let blurred = input.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: input.extent)
+        guard let out = context.createCGImage(blurred, from: input.extent) else { return nil }
+        let image = UIImage(cgImage: out, scale: 1, orientation: .up)
+        cache.setObject(image, forKey: url as NSString)
+        return image
     }
 }
