@@ -151,8 +151,11 @@ struct CreateCallLinkSheet: View {
                 .font(.headline)
             HStack {
                 Spacer()
+                // Apple's own blue Liquid Glass button (owner, 2026-10-06), not plain text.
                 Button("Done") { done() }
                     .font(.body.weight(.semibold))
+                    .buttonStyle(.glassProminent)
+                    .tint(.blue)
             }
         }
         .padding(.top, 6)
@@ -296,7 +299,7 @@ struct CallLinkCard: View {
         }
         .padding(14)
         .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: CallLinkGroupRadius.value, style: .continuous))
     }
 }
 
@@ -307,7 +310,7 @@ struct CallLinkGroup<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) { content }
             .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: CallLinkGroupRadius.value, style: .continuous))
     }
 }
 
@@ -428,8 +431,8 @@ struct CallLinkShareRows: View {
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, minHeight: 64)
             .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: CallLinkGroupRadius.value, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: CallLinkGroupRadius.value, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title == "Send" ? "Send in a chat" : title)
@@ -541,3 +544,7 @@ struct CallLinkNameEditor: View {
         }
     }
 }
+
+/// The corner of every card on the call link sheets: iOS 26's grouped-card radius, the one Settings
+/// uses (owner, 2026-10-06: "make it Apple style rounded corners"; it was 16).
+enum CallLinkGroupRadius { static let value: CGFloat = 26 }
