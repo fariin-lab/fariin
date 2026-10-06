@@ -61,7 +61,9 @@ struct GroupCallTileView: View {
         if let track {
             // A video view only when there is a track: adaptiveStream pauses a track that has no
             // attached view, so camera-off and unsubscribed tiles must not build one (contract rule).
-            if tile.isScreenShare {
+            // By the track itself, not `tile.isScreenShare`: the strip hands a presenter's camera
+            // (`videoTrack(_:preferScreen: false)`), which must fill and mirror like any camera.
+            if track.source == .screenShareVideo {
                 // A shared screen is never cropped (text must stay readable) and never mirrored.
                 ZStack {
                     Color.black

@@ -39,7 +39,10 @@ struct GroupCallStripView: View {
                     if let tile = byId[id] {
                         GroupCallTileView(
                             tile: tile,
-                            track: (tile.hasVideo && visible.contains(id)) ? stage.videoTrack(id) : nil,
+                            // A presenter who is not the focus: their camera (or avatar), not a
+                            // second 72pt copy of the screen.
+                            track: (tile.hasVideo && visible.contains(id))
+                                ? stage.videoTrack(id, preferScreen: false) : nil,
                             style: .strip,
                             isActiveSpeaker: stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,

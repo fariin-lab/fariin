@@ -82,10 +82,13 @@ final class GroupCallStage: ObservableObject {
 
     /// The presenter's screen when they share (it is what they want seen), else the camera.
     /// nil = draw the avatar, so adaptiveStream stops that video (contract rule).
-    func videoTrack(_ tileId: String) -> VideoTrack? {
+    /// `preferScreen: false` = the camera only: the strip shows a presenter who is not the focus as
+    /// their face, not a second, unreadable 72pt copy of the screen.
+    func videoTrack(_ tileId: String, preferScreen: Bool = true) -> VideoTrack? {
         guard let p = participants[tileId] else { return nil }
         // My own screen is not drawn back to me (a hall of mirrors); my camera is.
-        if !(p is LocalParticipant), let screen = Self.liveVideo(p.firstScreenSharePublication) { return screen }
+        if preferScreen, !(p is LocalParticipant),
+           let screen = Self.liveVideo(p.firstScreenSharePublication) { return screen }
         return Self.liveVideo(p.firstCameraPublication)
     }
 
