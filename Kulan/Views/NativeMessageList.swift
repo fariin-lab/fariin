@@ -1948,11 +1948,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // arrow. `scrollToOffset` kills the coast on its way past, so landing mid-fling is
             // already handled — this only stops us refusing the request in the first place.
             if !userInitiated {
-                guard !isUserScrolling else { pendingNewestJump = animated; return }
+                guard !isUserScrolling else {
+                    pendingNewestJump = animated
+                    // owner audit 2026-10-06 chat #8: a resting touch that never becomes a drag gets
+                    // no drag-end callback, so the parked jump outlived it and fired at the end of
+                    // some later, unrelated drag. Watch for the lift ourselves.
+                    schedulePendingNewestJumpCheck()
+                    return
+                }
             }
             pendingNewestJump = nil
             scrollToOffset(maxContentOffsetY, animated: animated)
         case .message(let id):
+            // owner audit 2026-10-06 chat #8: the reader asked for a specific message, so an
+            // automatic jump to the newest parked before it is stale and must not fire later.
+            pendingNewestJump = nil
             guard let ip = dataSource.indexPath(for: id),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
             // Centre-if-not-entirely-on-screen: when the target row is already fully visible, don't move
@@ -2110,6 +2120,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// A jump-to-newest that arrived while a finger was down, waiting for the lift. `nil` = none.
     private var pendingNewestJump: Bool?
+    private var newestJumpCheckScheduled = false
+
+    /// owner audit 2026-10-06 chat #8: the parked jump's own lift detector. `scrollViewDidEndDragging`
+    /// only fires for a touch that became a drag; a finger that rested and lifted got no callback, so
+    /// the jump stayed parked and fired at the end of a later drag, minutes on, after the reader had
+    /// scrolled up on purpose. This checks every 0.1s while the jump is parked: once no finger is down
+    /// it runs the jump, exactly as the drag-end flush does. It stops as soon as anything has taken the
+    /// jump (drag end, a user jump, a jump to a message) because those clear `pendingNewestJump`.
+    private func schedulePendingNewestJumpCheck() {
+        guard !newestJumpCheckScheduled else { return }
+        newestJumpCheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.newestJumpCheckScheduled = false
+            guard let animated = self.pendingNewestJump else { return }
+            if self.isUserScrolling { self.schedulePendingNewestJumpCheck(); return }
+            self.pendingNewestJump = nil
+            self.perform(.newest(animated: animated))
+        }
+    }
     /// Bumped by every animated glide so a late arrival check can tell whether it is still the
     /// current one — see scrollToOffset.
     private var glideSeq: Int = 0
