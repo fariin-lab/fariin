@@ -2575,7 +2575,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let liveSet = Set(collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
         // EVERY changed row is re-measured; only the visible ones are reconfigured. See
         // `remeasureOffscreenChanged` for why those are two different questions.
-        let sigChanged = ids.filter { rowSignatures[$0] != lastRowSigs[$0] }
+        // owner audit 2026-10-06 chat #7 (and #46): only a row that HAD a signature can have changed.
+        // On the first apply `lastRowSigs` is empty, so every row counted as changed: the saved
+        // rendered heights were thrown away (and forgotten in the store), and the whole window was
+        // measured, undoing the "measure one screen" open. A row new to the list is measured by
+        // `measureMissing`; counting it here as well measured each paged-in row twice.
+        let sigChanged = ids.filter { lastRowSigs[$0] != nil && rowSignatures[$0] != lastRowSigs[$0] }
         // ⛔ A SELECTION FLIP LANDING TOGETHER WITH A ROW CHANGE STILL REACHES EVERY LIVE CELL.
         //
         // The force-refresh used to exist only on the "no rows added or removed" path above, so a
