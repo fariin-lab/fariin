@@ -2850,7 +2850,11 @@ struct ThreadView: View {
                 // repaintUikitCells pushes fresh radii onto those on every update; SwiftUI-hosted rows
                 // (every PENDING message, plus media/reply/reaction rows) have no such self-heal, which
                 // is exactly why the user saw it only on 0-mark bubbles.
-                let cluster = "\(isFirstInCluster(at: i))\(isLastInCluster(at: i))"
+                // owner audit 2026-10-06 chat #32: the DATE PILL too. When a page of history lands, the
+                // old oldest row can lose its pill while staying first in its cluster (a different
+                // sender), so the string above did not change and the row kept the pill in a frame
+                // re-measured without it. The pill and the top gap both follow from these three.
+                let cluster = "\(shouldShowDate(at: i) ? "D" : "-")\(isFirstInCluster(at: i))\(isLastInCluster(at: i))"
                 let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
                 let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
                 // View-once consumption (audit M2) — the bubble flips to "Viewed" only via reconfigure.
