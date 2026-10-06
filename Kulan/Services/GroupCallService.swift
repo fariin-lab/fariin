@@ -283,6 +283,9 @@ final class GroupCallService: ObservableObject {
                 notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
                 return
             }
+            // Listening BEFORE the room is up: people already in the call send their raised hand
+            // the moment they see me arrive, which can be before this line returns.
+            GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
             try await room.connect(url: url, token: token)
             guard gen == joinGeneration else { await abandonJoin(); return }
             // In the room = in the call; mic and camera follow (see startLocalMedia).
@@ -1024,6 +1027,9 @@ final class GroupCallService: ObservableObject {
             let video = video && !voiceOnly
             cameraLocked = voiceOnly
             if voiceOnly { isVideo = false }
+            // Listening BEFORE the room is up: people already in the call send their raised hand
+            // the moment they see me arrive, which can be before this line returns.
+            GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
             try await room.connect(url: url, token: token)
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
             // up anyway, mic on, with no screen and no card, and every other call was refused.
