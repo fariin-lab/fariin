@@ -2507,6 +2507,20 @@ final class CallService: NSObject {
                 self.remoteEnded(reason: EndReason(rawValue: d["endReason"] as? String ?? "") ?? .hangup)
                 return
             }
+            // A RING THAT IS ALREADY OVER (owner audit 2026-10-06 #28). The listener path ignores a
+            // doc older than `staleRingAge`, but a VoIP push carries no age, so a push delivered late
+            // for a caller who died mid-ring (their doc still says "ringing", nothing will ever say
+            // "ended") rang for our full 60s ring-out. iOS still makes us report it; this first
+            // snapshot is the earliest we can read its age, and we end it here, the same way the
+            // ring-out would have: written as ended, logged as missed.
+            if self.state == .incoming, self.callId == id, !self.wasAccepted,
+               let ts = (d["createdAt"] as? Timestamp)?.dateValue(),
+               Date().timeIntervalSince(ts) > Self.staleRingAge {
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                self.endReason = .missed
+                self.finishCall(updateRemote: true, clearCallKit: true, localUser: false)
+                return
+            }
             // ANSWERED ELSEWHERE. `voipTokens` (users/{uid}/push/tokens) is an array and every signed-in device of mine rings, but
             // this watcher only ever handled "ended" and a callee mismatch — "active" matched neither, so
             // the OTHER phones kept ringing forever after I picked up on one. This watcher is removed the
@@ -2550,121 +2564,191 @@ final class CallService: NSObject {
             .whereField("callee", isEqualTo: me)
             .whereField("status", isEqualTo: "ringing")
             .addSnapshotListener { [weak self] snap, _ in
-                guard let self, let doc = snap?.documents.first else { return }
-                let d = doc.data()
+                guard let self, let docs = snap?.documents, !docs.isEmpty else { return }
+                // EVERY RINGING DOC, NOT `documents.first` (owner audit 2026-10-06 #11). The query has
+                // no order, so `.first` is whichever doc id sorts first: a zombie (caller crashed
+                // mid-ring) could be that one, hit the age check below and `return`, and the live call
+                // sitting second in the same snapshot was never rung or busied at all. Now: drop the
+                // zombies, keep only each caller's NEWEST doc (an older one from the same person is a
+                // call they already gave up on), and settle them oldest first, so when two different
+                // people ring at once the first one rings and the second is busied.
+                let now = Date()
+                func created(_ doc: QueryDocumentSnapshot) -> Date {
+                    (doc.data()["createdAt"] as? Timestamp)?.dateValue() ?? now
+                }
                 // H3: ignore zombie ringing docs (caller crashed mid-ring) so they don't re-ring forever.
-                if let ts = (d["createdAt"] as? Timestamp)?.dateValue(), Date().timeIntervalSince(ts) > 60 { return }
-                // THE SAME PERSON CALLING AGAIN WHILE WE ARE CONNECTED TO THEM means their side of our
-                // call is gone (app killed, phone restarted, network lost long enough to give up),
-                // and only ours is still holding on. Answering that with "busy" left them unable to
-                // reach us until our side timed out. The reference engine's rule ("ReCall"): drop the
-                // old call quietly and take the new one. Only while connected: a ring-time crossing
-                // is glare and is settled below.
-                if self.state == .active || self.state == .reconnecting,
-                   doc.documentID != self.callId,
-                   let redialer = d["caller"] as? String, !redialer.isEmpty, redialer == self.otherUid {
-                    self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+                let fresh = docs.filter { now.timeIntervalSince(created($0)) <= Self.staleRingAge }
+                var newestPerCaller: [String: QueryDocumentSnapshot] = [:]
+                for doc in fresh {
+                    let caller = doc.data()["caller"] as? String ?? ""
+                    if let kept = newestPerCaller[caller], created(kept) >= created(doc) { continue }
+                    newestPerCaller[caller] = doc
                 }
-                // H4: already in a LIVE call → send this new caller a busy signal instead of dropping
-                // them silently. `.ended` is NOT a live call: it is a cosmetic 1-2s tail before idle
-                // (see finishCall), and treating it as busy meant an instant redial — or a third
-                // person calling in that window — was rejected with a busy nobody was busy for, plus
-                // a phantom missed row (audit).
-                let inLiveCall = [.outgoing, .incoming, .active, .reconnecting].contains(self.state)
-                if inLiveCall {
-                    if doc.documentID != self.callId {
-                        let caller = d["caller"] as? String ?? ""
-                        // GLARE: we dialled each other at the same moment, so we are each other's
-                        // "incoming call while busy" and both sides sent busy — killing BOTH calls and
-                        // leaving two Missed rows in one chat. Break the tie on the only thing both
-                        // phones already agree on: the two uids. Lower uid keeps its outgoing call and
-                        // busies the other; higher uid gives up its own so the survivor can ring here.
-                        if self.state == .outgoing, !caller.isEmpty, caller == self.otherUid {
-                            if self.me < caller {
-                                // `glare` tells the loser this busy is a tiebreak, not a busy line
-                                // (see observeCallDoc), in case it hears this before it sees our call.
-                                self.db.collection("calls").document(doc.documentID)
-                                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue, "glare": true])
-                                return
-                            }
-                            self.standDownForGlare(rearmListener: true)
-                            return
-                        }
-                        self.db.collection("calls").document(doc.documentID)
-                            .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
-                        // A busy call left NO trace on this phone: the caller got a Missed row, I got
-                        // nothing and never learned they tried. Log it here (same deterministic doc id
-                        // the caller uses, same "missed" outcome, so the two writes agree).
-                        if !caller.isEmpty {
-                            let cid = [self.me, caller].sorted().joined(separator: "_")
-                            let isVideo = (d["type"] as? String) == "video"
-                            Task {
-                                await ChatService.recordCall(cid: cid, callId: doc.documentID,
-                                                             callerUid: caller, outcome: "missed",
-                                                             video: isVideo, durationSec: 0)
-                            }
-                        }
-                    }
-                    return
-                }
-                let caller = d["caller"] as? String ?? ""
-                // THE SHARED GATE, not a second copy of it. This path had its own inline version of
-                // the blocked + Calls-privacy check, with the same discarded read error — so the
-                // comment on `callAllowed` claiming both paths shared it was simply untrue, and the
-                // false-decline bug lived here twice. Silent block and Calls privacy both still
-                // apply; the difference is that a read which FAILS no longer reads as a refusal.
-                self.callAllowed(from: caller) { allowed in
-                    guard allowed else {
-                        self.db.collection("calls").document(doc.documentID)
-                            .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
-                        return
-                    }
-                    // A callback inside the 1-2s `.ended` tail was dropped here, and this doc never
-                    // changes again, so the listener never rang it (audit 2026-09-24).
-                    self.closeEndedTail()
-                    guard self.state == .idle else { return }
-                    self.callId = doc.documentID
-                    self.otherUid = caller
-                    self.resolvePeerTrust()
-                    self.otherName = Self.displayName(for: caller,
-                                                      fallback: d["callerName"] as? String ?? "Caller")
-                    let photo = d["callerPhoto"] as? String ?? ""
-                    self.otherPhotoUrl = photo.isEmpty ? nil : photo
-                    self.isCaller = false
-                    let isVideoCall = (d["type"] as? String == "video")
-                    // Camera-on-answer model (user choice): accepting a video call opens MY camera immediately —
-                    // both sides see each other the instant the call connects.
-                    self.cameraOn = isVideoCall
-                    self.startedAsVideo = isVideoCall
-                    self.noteVideo()
-                    self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
-                    if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
-                    self.state = .incoming
-                    // TURN starts fetching AT RING TIME on this path too — the push path has done
-                    // this since the awaitIceServers fix, but the foreground listener path never
-                    // did, so answering a call that rang while the app was OPEN could pay the whole
-                    // TURN fetch (up to its 2s cap) inside "Connecting…". Fetched during the ring,
-                    // it is warm by pickup and the await is a no-op.
-                    Task { await self.refreshIceServers() }
-                    CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
-                                                        video: isVideoCall, callerUid: caller)
-                    self.markRinging()
-                    self.mark("ring")
-                    // ⛔ PRE-NEGOTIATE HERE TOO. A call arrives by two different routes — a VoIP
-                    // push when the app is closed, and this listener when it is open — and the
-                    // first version of pre-negotiation was wired only into the push path, because
-                    // that is where the offer prefetch lives. The app-open path already HAS the
-                    // offer (cached two lines above), so it needed no prefetch and silently got no
-                    // pre-negotiation either. Measured on two phones: every mark from the ring
-                    // window was missing and the wait was unchanged. The path that needed the fix
-                    // least is the one that got it.
-                    if let sdp = self.pendingOffer?["sdp"] {
-                        self.preNegotiate(callId: doc.documentID, offerSdp: sdp)
-                    }
-                    self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
-                    self.armCalleeRingTimeout(doc.documentID) // and end as MISSED if nobody ever does either
+                for doc in newestPerCaller.values.sorted(by: { created($0) < created($1) }) {
+                    self.handleRingingDoc(doc)
                 }
             }
+    }
+
+    /// A ring older than this is over: the caller's own no-answer timeout (45s) has already ended
+    /// it, or the caller died mid-ring and never will. Five seconds of slack for the two phones'
+    /// clocks, since `createdAt` is the server's time and the comparison uses this phone's.
+    /// (Was a separate 60 on the listener; shared now with the push path, owner audit 2026-10-06 #28.)
+    private static let staleRingAge: TimeInterval = 50
+
+    /// Doc ids whose block/privacy gate is still reading, so a second snapshot that carries the same
+    /// ringing doc does not start a second gate (and ring it twice, or busy it against itself).
+    private var gatingIncoming = Set<String>()
+
+    /// Is a group / ad-hoc / link call live or still joining? (Decision D25: a 1:1 call and a group
+    /// call never run at once.) Both incoming paths run on the main thread: Firestore delivers on
+    /// the main queue, PushKit is registered on `.main`, and the gate hops back with main.async.
+    private var inGroupCall: Bool {
+        MainActor.assumeIsolated {
+            GroupCallService.shared.isActive || GroupCallService.shared.connecting
+        }
+    }
+
+    /// Settle a ringing doc against whatever call this phone is already in. Returns true when the doc
+    /// has been dealt with (it IS the current call, it was busied, or glare decided it); false when
+    /// this phone is free to ring it. Shared by the listener and by its gate's completion, so a call
+    /// that arrives while the gate is reading is busied too, not dropped (owner audit 2026-10-06 #11).
+    private func settleAgainstCurrentCall(docId: String, data d: [String: Any]) -> Bool {
+        let caller = d["caller"] as? String ?? ""
+        // THE SAME PERSON CALLING AGAIN WHILE WE ARE CONNECTED TO THEM means their side of our
+        // call is gone (app killed, phone restarted, network lost long enough to give up),
+        // and only ours is still holding on. Answering that with "busy" left them unable to
+        // reach us until our side timed out. The reference engine's rule ("ReCall"): drop the
+        // old call quietly and take the new one. Only while connected: a ring-time crossing
+        // is glare and is settled below.
+        if state == .active || state == .reconnecting, docId != callId,
+           !caller.isEmpty, caller == otherUid {
+            finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+        }
+        // THE SAME PERSON CALLING AGAIN WHILE THEIR LAST CALL IS STILL RINGING HERE (owner audit
+        // 2026-10-06 #11). They cancelled and redialled, and the new doc beat the old one's "ended"
+        // to this phone; or their app died mid-ring and they called back. Either way the old ring is
+        // dead. It was answered "busy": they heard a busy tone from someone whose phone was ringing
+        // for them, and both sides got a phantom missed row. Drop the old ring as a miss (it was
+        // one; no tone, the person did nothing) and let the new one ring. Not once accepted.
+        if state == .incoming, !wasAccepted, docId != callId, !caller.isEmpty, caller == otherUid {
+            endReason = .missed
+            finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+        }
+        // H4: already in a LIVE call → send this new caller a busy signal instead of dropping
+        // them silently. `.ended` is NOT a live call: it is a cosmetic 1-2s tail before idle
+        // (see finishCall), and treating it as busy meant an instant redial — or a third
+        // person calling in that window — was rejected with a busy nobody was busy for, plus
+        // a phantom missed row (audit).
+        // A GROUP CALL IS A LIVE CALL TOO (owner audit 2026-10-06 #2). Only startCall checked it,
+        // so a 1:1 call rang during a group call and could be answered: two calls, two audio
+        // sessions, the mic published to both.
+        let inLiveCall = [.outgoing, .incoming, .active, .reconnecting].contains(state)
+        guard inLiveCall || inGroupCall else { return false }
+        guard docId != callId else { return true }
+        // GLARE: we dialled each other at the same moment, so we are each other's
+        // "incoming call while busy" and both sides sent busy — killing BOTH calls and
+        // leaving two Missed rows in one chat. Break the tie on the only thing both
+        // phones already agree on: the two uids. Lower uid keeps its outgoing call and
+        // busies the other; higher uid gives up its own so the survivor can ring here.
+        if state == .outgoing, !caller.isEmpty, caller == otherUid {
+            if me < caller {
+                // `glare` tells the loser this busy is a tiebreak, not a busy line
+                // (see observeCallDoc), in case it hears this before it sees our call.
+                db.collection("calls").document(docId)
+                    .updateData(["status": "ended", "endReason": EndReason.busy.rawValue, "glare": true])
+                return true
+            }
+            standDownForGlare(rearmListener: true)
+            return true
+        }
+        db.collection("calls").document(docId)
+            .updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+        // A busy call left NO trace on this phone: the caller got a Missed row, I got
+        // nothing and never learned they tried. Log it here (same deterministic doc id
+        // the caller uses, same "missed" outcome, so the two writes agree).
+        if !caller.isEmpty {
+            let cid = [me, caller].sorted().joined(separator: "_")
+            let isVideo = (d["type"] as? String) == "video"
+            Task {
+                await ChatService.recordCall(cid: cid, callId: docId,
+                                             callerUid: caller, outcome: "missed",
+                                             video: isVideo, durationSec: 0)
+            }
+        }
+        return true
+    }
+
+    /// One ringing doc from the incoming listener: settle it against the current call, then gate it,
+    /// then ring it.
+    private func handleRingingDoc(_ doc: QueryDocumentSnapshot) {
+        let d = doc.data()
+        if self.settleAgainstCurrentCall(docId: doc.documentID, data: d) { return }
+        guard !self.gatingIncoming.contains(doc.documentID) else { return }
+        self.gatingIncoming.insert(doc.documentID)
+        let caller = d["caller"] as? String ?? ""
+        // THE SHARED GATE, not a second copy of it. This path had its own inline version of
+        // the blocked + Calls-privacy check, with the same discarded read error — so the
+        // comment on `callAllowed` claiming both paths shared it was simply untrue, and the
+        // false-decline bug lived here twice. Silent block and Calls privacy both still
+        // apply; the difference is that a read which FAILS no longer reads as a refusal.
+        self.callAllowed(from: caller) { allowed in
+            self.gatingIncoming.remove(doc.documentID)
+            guard allowed else {
+                self.db.collection("calls").document(doc.documentID)
+                    .updateData(["status": "ended", "endReason": EndReason.declined.rawValue])
+                return
+            }
+            // THE BUSY DECISION, TAKEN AGAIN NOW (owner audit 2026-10-06 #11). It was made
+            // only before this async read; a call I started, a push that rang, or a group
+            // call I joined while it was reading left this doc to fall through the idle
+            // guard below: never busied, never ended, and the caller rang out for 45s.
+            if self.settleAgainstCurrentCall(docId: doc.documentID, data: d) { return }
+            // A callback inside the 1-2s `.ended` tail was dropped here, and this doc never
+            // changes again, so the listener never rang it (audit 2026-09-24).
+            self.closeEndedTail()
+            guard self.state == .idle else { return }
+            self.callId = doc.documentID
+            self.otherUid = caller
+            self.resolvePeerTrust()
+            self.otherName = Self.displayName(for: caller,
+                                              fallback: d["callerName"] as? String ?? "Caller")
+            let photo = d["callerPhoto"] as? String ?? ""
+            self.otherPhotoUrl = photo.isEmpty ? nil : photo
+            self.isCaller = false
+            let isVideoCall = (d["type"] as? String == "video")
+            // Camera-on-answer model (user choice): accepting a video call opens MY camera immediately —
+            // both sides see each other the instant the call connects.
+            self.cameraOn = isVideoCall
+            self.startedAsVideo = isVideoCall
+            self.noteVideo()
+            self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
+            if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
+            self.state = .incoming
+            // TURN starts fetching AT RING TIME on this path too — the push path has done
+            // this since the awaitIceServers fix, but the foreground listener path never
+            // did, so answering a call that rang while the app was OPEN could pay the whole
+            // TURN fetch (up to its 2s cap) inside "Connecting…". Fetched during the ring,
+            // it is warm by pickup and the await is a no-op.
+            Task { await self.refreshIceServers() }
+            CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
+                                                video: isVideoCall, callerUid: caller)
+            self.markRinging()
+            self.mark("ring")
+            // ⛔ PRE-NEGOTIATE HERE TOO. A call arrives by two different routes — a VoIP
+            // push when the app is closed, and this listener when it is open — and the
+            // first version of pre-negotiation was wired only into the push path, because
+            // that is where the offer prefetch lives. The app-open path already HAS the
+            // offer (cached two lines above), so it needed no prefetch and silently got no
+            // pre-negotiation either. Measured on two phones: every mark from the ring
+            // window was missing and the wait was unchanged. The path that needed the fix
+            // least is the one that got it.
+            if let sdp = self.pendingOffer?["sdp"] {
+                self.preNegotiate(callId: doc.documentID, offerSdp: sdp)
+            }
+            self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
+            self.armCalleeRingTimeout(doc.documentID) // and end as MISSED if nobody ever does either
+        }
     }
 
     /// I lose a glare tiebreak: cancel MY outgoing call so theirs can ring here.
@@ -2710,12 +2794,29 @@ final class CallService: NSObject {
             }
             standDownForGlare(rearmListener: false)   // I lose: drop my call, ring theirs below
         }
+        // The same person redialling while their last call still rings here: the old ring is dead,
+        // ring the new one instead of busying it (owner audit 2026-10-06 #11, see
+        // settleAgainstCurrentCall for the listener's copy of this rule).
+        if state == .incoming, !wasAccepted, !uid.isEmpty, uid == otherUid, callId != self.callId {
+            endReason = .missed
+            finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+        }
         // The 1-2s `.ended` tail is not a live call (see observeIncoming). A callback inside it
         // was busied here, and CallKit then rang that busied call with nothing left to end it.
         closeEndedTail()
-        guard state == .idle else {
+        // A live or joining group call is busy too (owner audit 2026-10-06 #2, decision D25).
+        let groupBusy = inGroupCall
+        guard state == .idle, !groupBusy else {
             if callId != self.callId {
                 db.collection("calls").document(callId).updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
+            }
+            // A group call holds no CallKit call, so PushManager's report right after this returns
+            // (iOS requires it) becomes a REAL ring rather than the transient busy one. End it on the
+            // next turn of the main queue, once it exists.
+            if groupBusy, state == .idle {
+                DispatchQueue.main.async {
+                    if CallKitManager.shared.activeCallId == callId { CallKitManager.shared.reportEnded() }
+                }
             }
             return
         }
@@ -2742,7 +2843,13 @@ final class CallService: NSObject {
         // iOS requires reportNewIncomingCall in the same run loop as the push, so the ring genuinely
         // cannot wait on an async lookup: PushManager reports first and we end it the moment we know.
         callAllowed(from: uid) { [weak self] ok in
-            guard let self, self.state == .incoming, self.callId == callId else { return }
+            // STILL REFUSED AFTER A FAST ANSWER (owner audit 2026-10-06 #30). This bailed unless the
+            // call was still ringing, and a lock-screen answer inside the read had already moved it
+            // to .active, so a blocked caller who rang a killed app connected. The refusal now
+            // applies to the same call whether it is ringing or already answered; only the
+            // ring-time work below still needs it to be ringing.
+            guard let self, self.callId == callId,
+                  [.incoming, .active, .reconnecting].contains(self.state) else { return }
             guard ok else {
                 // Refuse WITHOUT ever having marked it ringing: from the caller's side this is the
                 // same silent non-answer the foreground listener path produces.
@@ -2752,6 +2859,7 @@ final class CallService: NSObject {
                 self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
                 return
             }
+            guard self.state == .incoming else { return }   // answered during the read: nothing left to do here
             self.markRinging()   // allowed — only now does the caller hear it ring
             self.mark("ring")
             // ⭐ THE OFFER, FETCHED WHILE IT IS STILL RINGING.
@@ -3096,10 +3204,13 @@ final class CallService: NSObject {
     /// Claim the answer for this device. Best effort: the plain `acceptedAt` write beside it still
     /// carries the accept if this transaction cannot run (offline), exactly as before.
     private func claimAnswer(_ ref: DocumentReference) {
+        let peer = otherUid, video = startedAsVideo || everVideo   // for acceptLostToCancel, read while live
         ref.firestore.runTransaction({ txn, errPtr -> Any? in
             do {
                 let snap = try txn.getDocument(ref)
-                if (snap.data()?["status"] as? String) == "ended" { return "ended" }
+                if (snap.data()?["status"] as? String) == "ended" {
+                    return Self.cancelledBeforeAccept(snap.data()) ? "cancelled" : "ended"
+                }
                 if Self.answeredOnOtherDevice(snap.data()) { return "taken" }
             } catch {
                 errPtr?.pointee = error as NSError
@@ -3109,7 +3220,40 @@ final class CallService: NSObject {
             return nil
         }, completion: { [weak self] result, _ in
             if (result as? String) == "taken" { self?.standDownAnsweredElsewhere(ref.documentID) }
+            if (result as? String) == "cancelled" {
+                self?.acceptLostToCancel(ref.documentID, peer: peer, video: video)
+            }
         })
+    }
+
+    /// The doc was ended by the CALLER giving up (cancel, or their no-answer timeout: both write
+    /// `missed`) before my accept ever reached it (no `acceptedAt`). Only then did nobody pick up.
+    private static func cancelledBeforeAccept(_ d: [String: Any]?) -> Bool {
+        d?["acceptedAt"] == nil && (d?["endReason"] as? String) == EndReason.missed.rawValue
+    }
+
+    /// ACCEPT TAPPED JUST AS THE CALLER CANCELLED (owner audit 2026-10-06 #12). `wasAccepted` is set
+    /// on the tap, before anything knows whether the call is still live, and `finishCall` logs any
+    /// accepted call as "answered". So a cancelled call that nobody ever spoke on was logged
+    /// "answered" here and "missed" by the caller, into the same row, and whichever merge landed
+    /// last won. The claim / answer transaction is the one place that reads the doc AT the accept,
+    /// and when it says the caller had already given up, the call was a miss. Still live → clear
+    /// the latch and write the record here ("missed", what the caller writes too) so the teardown
+    /// cannot write "answered". Already torn down (the end snapshot beat this reply) → the
+    /// "answered" row is already written; overwrite it with the same "missed".
+    private func acceptLostToCancel(_ id: String, peer: String, video: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !peer.isEmpty, !self.me.isEmpty else { return }
+            if self.callId == id, self.state != .ended, self.state != .idle {
+                self.wasAccepted = false
+                self.recordWritten = true
+            }
+            let cid = [self.me, peer].sorted().joined(separator: "_")
+            Task {
+                await ChatService.recordCall(cid: cid, callId: id, callerUid: peer, outcome: "missed",
+                                             video: video, durationSec: 0)
+            }
+        }
     }
 
     /// The existing "answered elsewhere" stand-down (see watchRingingCancel), usable after this
@@ -3131,6 +3275,7 @@ final class CallService: NSObject {
     /// transaction that HANGS outright (dead socket, no completion at all) is bounded by the
     /// caller's accepted-connect timeout, which fails the call from the other side.
     private func writeAnswerWithRetry(ref: DocumentReference, data: [String: Any], attempt: Int) {
+        let peer = otherUid, video = startedAsVideo || everVideo   // for acceptLostToCancel, read while live
         ref.firestore.runTransaction({ txn, errPtr -> Any? in
             // ⚠️ A FAILED READ IS NOT "THE CALLER CANCELLED". The old `try?` collapsed the two, so
             // one transient read hiccup returned success-with-no-writes, the retry path (which
@@ -3140,7 +3285,9 @@ final class CallService: NSObject {
             // "ended" status may stand down; a read error must surface as an error and retry.
             do {
                 let snap = try txn.getDocument(ref)
-                if (snap.data()?["status"] as? String) == "ended" { return "ended" }
+                if (snap.data()?["status"] as? String) == "ended" {
+                    return Self.cancelledBeforeAccept(snap.data()) ? "cancelled" : "ended"
+                }
                 // 2026-09-24 audit: another of MY devices already claimed this answer. Writing ours
                 // would overwrite its SDP and leave this phone in a call nobody hears.
                 if Self.answeredOnOtherDevice(snap.data()) { return "taken" }
@@ -3155,6 +3302,10 @@ final class CallService: NSObject {
         }, completion: { [weak self] result, error in
             guard let self else { return }
             if (result as? String) == "ended" { return }   // caller cancelled — the end path owns this
+            if (result as? String) == "cancelled" {        // …and the accept never counted (#12)
+                self.acceptLostToCancel(ref.documentID, peer: peer, video: video)
+                return
+            }
             if (result as? String) == "taken" { self.standDownAnsweredElsewhere(ref.documentID); return }
             guard error != nil else { return }             // landed
             guard self.state == .active else { return }    // call already over — nothing to save
