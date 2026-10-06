@@ -206,7 +206,9 @@ struct MediaGalleryView: View {
             // margin instead (`.contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)`).
             // Content starts below the bar and scrolls under it — which is exactly what the
             // navigation bar does, and the reason ITS glass has always looked right on this screen.
-            .overlay(alignment: .top) { if !selecting { tabBar } }
+            // Stays up in Select mode too (owner, 2026-10-06: the tabs vanished on Select and left
+            // an empty band, since the top content margin is reserved either way).
+            .overlay(alignment: .top) { tabBar }
         // NATIVE nav bar (user spec): centred "All Media" with the live count as the system
         // subtitle, the standard circular back button, and a "..." menu on the right â€” instead of
         // a custom left-aligned header.
@@ -1011,6 +1013,10 @@ struct MediaGalleryView: View {
                 if let file = await Self.shareAudio(m, cid: cid, index: 0) { await MainActor.run { shareItems = [file] } }
                 return
             }
+            if m.type == "video" {
+                if let file = await Self.shareVideo(m, cid: cid) { await MainActor.run { shareItems = [file] } }
+                return
+            }
             if let img = await Self.shareImage(m, cid: cid) { await MainActor.run { shareItems = [img] } }
             else if !m.text.isEmpty { await MainActor.run { shareItems = [m.text] } }
         }
@@ -1034,6 +1040,9 @@ struct MediaGalleryView: View {
                 for (i, m) in picked.enumerated() {
                     if m.isAudio {
                         group.addTask { (i, await Self.shareAudio(m, cid: cid, index: i)) }
+                    } else if m.type == "video" {
+                        // Videos too (owner, 2026-10-06: Share did nothing with a video picked).
+                        group.addTask { (i, await Self.shareVideo(m, cid: cid)) }
                     } else {
                         group.addTask { (i, await Self.shareImage(m, cid: cid)) }
                     }
@@ -1094,6 +1103,26 @@ struct MediaGalleryView: View {
         try? FileManager.default.removeItem(at: dest)
         guard (try? FileManager.default.copyItem(at: src, to: dest)) != nil else { return nil }
         return dest
+    }
+
+    /// A video as a file to share. Same order as the player's `load()`: the decrypted copy in
+    /// `VideoCache`, then my own clip still at `localMediaURL`, then the ONE shared download job
+    /// (`MediaDownloads`), never a second fetch beside it. nil when the clip is gone from the server.
+    private static func shareVideo(_ m: Message, cid: String) async -> URL? {
+        if let local = VideoCache.url(for: m.id) { return local }
+        if let path = m.localMediaURL, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        guard !DeadMedia.contains(m.id), let s = m.videoUrl, !s.isEmpty, m.enc != nil else { return nil }
+        _ = await MainActor.run { () -> Task<Bool, Never> in
+            Task { @MainActor in
+                await MediaDownloads.shared.download(
+                    s, priority: .user,
+                    finish: MediaFetch.videoFinisher(url: s, enc: m.enc, cid: cid,
+                                                     messageId: m.id, authorId: m.authorId))
+            }
+        }.value
+        return VideoCache.url(for: m.id)
     }
 
     private func durationLabel(_ d: Double?) -> String {
