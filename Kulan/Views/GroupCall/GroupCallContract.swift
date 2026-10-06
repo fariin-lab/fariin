@@ -14,8 +14,11 @@ import LiveKit
 //   GroupCallGridView.swift       the grid page
 //   GroupCallFocusView.swift      one large tile + the strip
 //   GroupCallStripView.swift      the horizontal overflow strip
-//   GroupCallStatusBanner.swift   reconnecting / poor network / lost
-//   GroupCallParticipantList.swift the people list (replaces the old sheet's body)
+//   GroupCallSelfView.swift       my own camera, the 9:16 pip bottom-right (when others are here)
+//   GroupCallStatusBanner.swift   connection lost / poor network / join-leave toasts
+//                                 (reconnecting is the header subtitle's job)
+// Outside this folder: Views/GroupCallView.swift (header, controls, places the stage) and
+// Views/GroupCallParticipantsSheet.swift (the people list), both reading the same stage.
 //
 // Rules every piece follows:
 // - Quality is LiveKit's adaptiveStream (already on in GroupCallService's RoomOptions): a video view
@@ -26,6 +29,8 @@ import LiveKit
 //   Reduce Motion on, `GroupCallMotion.stage(reduceMotion:)` swaps it for the fade, and no view
 //   scales, flies (matchedGeometryEffect) or animates the self pip size.
 // - Tile identity is the participant's sid string, stable for the whole call.
+// - The local participant is never ranked, placed on the grid, focused or fed to the speaker
+//   tracker while anyone else is here: it is the self pip. Alone, it is the one fullscreen tile.
 
 /// One person on the call, as the UI sees them. Built by `GroupCallStage` from the room.
 struct CallTile: Identifiable, Equatable {
@@ -34,7 +39,7 @@ struct CallTile: Identifiable, Equatable {
     var name: String
     var photoUrl: String?
     let isLocal: Bool
-    var hasVideo: Bool          // camera published, enabled and not muted
+    var hasVideo: Bool          // camera publication exists, not muted, and holds a track
     var isScreenShare: Bool     // this participant is presenting a screen
     var isMuted: Bool           // microphone off
     var isSpeaking: Bool        // LiveKit's live flag (raw, flickers); NOT part of ==, see below
@@ -121,25 +126,31 @@ enum GroupCallMotion {
 
 // GroupCallPriority.swift
 //   enum GroupCallPriority {
-//       /// Spec 13 order for who gets a place on screen: focused, active speaker, recently speaking
-//       /// (lastSpokeAt within 30s, newest first), other video, audio-only; local last among equals.
-//       /// The grid then shows the first `capacity` of these sorted back by joinedAt so tiles do not
-//       /// jump around (`stableForGrid`).
+//       /// Spec 13 order: presenter, focused, active speaker, recently speaking (lastSpokeAt within
+//       /// 30s, newest first), other video, audio-only. The local tile is excluded whenever anyone
+//       /// else is here (returned alone when it is the only one). Used for the strip's order; the
+//       /// grid's cells come from `GroupCallStage.gridPlacement` (sticky, no 30s tier).
 //       static func ranked(_ tiles: [CallTile], focusedId: String?, speakerId: String?, now: Date) -> [CallTile]
-//       static func stableForGrid(_ shown: [CallTile]) -> [CallTile]
+//       static func stableForGrid(_ shown: [CallTile]) -> [CallTile]   // join order
+//       static func joinOrder(_ a: CallTile, _ b: CallTile) -> Bool    // joinedAt, uid, id
 //   }
 
 // GroupCallStage.swift
 //   @MainActor final class GroupCallStage: ObservableObject {
 //       init(room: Room)
 //       @Published private(set) var tiles: [CallTile]            // everyone, local included
-//       @Published private(set) var activeSpeakerId: String?
+//       @Published private(set) var activeSpeakerId: String?     // remotes only
 //       @Published var pinnedId: String?                          // user's focus (tap a tile)
 //       @Published private(set) var mode: CallStageMode          // focus if pinned or screen share
+//       @Published private(set) var connectionState: ConnectionState
+//       var hostUids: Set<String>
 //       var inCallCount: Int { tiles.count }
+//       var tilesWithLiveSpeech: [CallTile]                       // tiles + the unpublished speech
+//       func speech(for tileId: String) -> (isSpeaking: Bool, lastSpokeAt: Date?)
+//       func gridPlacement(_ remotes: [CallTile], capacity: Int) -> [String]   // sticky grid cells
 //       func participant(_ tileId: String) -> Participant?       // for the video track
 //       func videoTrack(_ tileId: String) -> VideoTrack?         // camera, or the screen share
-//       func togglePin(_ tileId: String)                          // tap: pin / unpin
+//       func togglePin(_ tileId: String)                          // tap: pin / unpin (never local)
 //       func refreshProfiles(_ members: [CallMember])            // names/photos from the service
 //   }
 
@@ -154,5 +165,5 @@ enum GroupCallMotion {
 //       var onTap: () -> Void
 //   }
 
-// GroupCallGridView / GroupCallFocusView / GroupCallStripView / GroupCallStatusBanner /
-// GroupCallParticipantList: see their files; each takes a `GroupCallStage` as @ObservedObject.
+// GroupCallGridView / GroupCallFocusView / GroupCallStripView / GroupCallSelfView /
+// GroupCallStatusBanner: see their files; each takes a `GroupCallStage` as @ObservedObject.

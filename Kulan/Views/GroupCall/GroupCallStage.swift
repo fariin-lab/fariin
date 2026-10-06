@@ -321,7 +321,11 @@ final class GroupCallStage: ObservableObject {
     private func startTimer() {
         guard timer == nil else { return }
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refresh() }
+            // A Void body: `{ self?.refresh() }` returned `Void?`, an unused-result warning.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.refresh()
+            }
         }
         // .common: keeps ticking while a list in the call screen is being scrolled.
         RunLoop.main.add(t, forMode: .common)
