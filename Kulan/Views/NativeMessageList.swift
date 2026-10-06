@@ -5048,6 +5048,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let top = layout.topItem(in: collectionView.bounds)
                 .flatMap { dataSource.itemIdentifier(for: IndexPath(item: $0, section: 0)) }
             updateDatePill(topId: top)
+        } else if !isNearNewest {
+            // Owner audit 2026-10-06 chat #67: a programmatic landing (a jump to an old reply, a
+            // restored place) inside the three-screen zone never asked for the next page until the
+            // reader dragged again. A move away from the newest end may page too. Not at the newest
+            // end, so a send or arrival in a short chat does not ask for history on every message.
+            // The repository refuses a page with none left or one already in flight.
+            userScrolledSinceTimer = true
         }
         // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
         // 0.1s one-shot timer on the COMMON runloop mode: scrollViewDidScroll itself stays cheap and never
