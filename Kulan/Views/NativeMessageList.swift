@@ -4418,6 +4418,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let loc = g.location(in: collectionView)
             guard let ip = collectionView.indexPathForItem(at: loc),
                   let id = dataSource.itemIdentifier(for: ip),
+                  id == pressDownId,   // the row the finger went DOWN on — see `pressDownId`
                   !customMenuActions(id).isEmpty else { return false }
             if let native = collectionView.cellForItem(at: ip) as? MessageRowCell {
                 let p = collectionView.convert(loc, to: native.previewBubble)
@@ -4460,6 +4461,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return g === holdPress || other === holdPress
         }
         return g === swipePan || g === holdPress
+    }
+
+    /// The row under the finger at TOUCH-DOWN, for the long-press menu. Owner audit 2026-10-06
+    /// chat #27: the press resolved its row only at recognition, 0.2s later, and loads may land in
+    /// that window by design (`canLandLoad` has no touch condition). A row that shifted under the
+    /// resting finger got the menu, its actions and its Delete. The press now opens only if the row
+    /// under the finger at recognition is the one it went down on; a page held still by the
+    /// layout's offset adjustment keeps the same row there, so that case is unchanged.
+    private var pressDownId: String?
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if g === customPress {
+            pressDownId = collectionView.indexPathForItem(at: touch.location(in: collectionView))
+                .flatMap { dataSource.itemIdentifier(for: $0) }
+        }
+        return true   // stamps only; never refuses a touch
     }
 
     @objc private func handleHoldWindow(_ g: UILongPressGestureRecognizer) {
@@ -4757,6 +4774,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard activeMenu == nil,
               let ip = collectionView.indexPathForItem(at: loc),
               let id = dataSource.itemIdentifier(for: ip),
+              id == pressDownId,   // chat #27: never a row that moved under the finger
               let src = bubbleSource(at: ip, id: id) else { return }
         let actions = customMenuActions(id)
         guard !actions.isEmpty else { return }
