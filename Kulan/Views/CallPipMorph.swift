@@ -17,7 +17,14 @@ import SwiftUI
 /// motion is theirs.
 @MainActor
 enum CallPipMorph {
-    static let duration: TimeInterval = 0.2
+    /// ⛔ 0.35s, NOT THE REFERENCE SOURCE'S 0.2s — owner, 2026-10-06, on build 827: the zoom out and
+    /// zoom in "work good but too speed". 0.2s with the picture fading the whole way was over before
+    /// the eye could follow it. The frame now moves on a critically damped spring (no bounce) and the
+    /// cross-fade runs in the middle of the move (`fadeDelay` .. + `fadeDuration`), so the screen is
+    /// seen travelling into the card and back out of it.
+    static let duration: TimeInterval = 0.35
+    static let fadeDelay: TimeInterval = 0.06
+    static let fadeDuration: TimeInterval = 0.22
     static let cardRadius: CGFloat = 20
 
     /// A restore waiting for the call screen to reach the window. See `CallPipMorphProbe`.
@@ -80,10 +87,13 @@ enum CallPipMorph {
                     box.insertSubview(card, belowSubview: screen)
                 }
                 CallService.shared.cardHiddenForMorph = true
-                UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut], animations: {
+                UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseIn], animations: {
+                    screen.alpha = 0
+                })
+                UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
+                               options: [], animations: {
                     box.frame = target
                     box.layer.cornerRadius = cardRadius
-                    screen.alpha = 0
                 }, completion: { _ in
                     minimizeInFlight = false
                     CallService.shared.cardHiddenForMorph = false
@@ -144,10 +154,13 @@ enum CallPipMorph {
             card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             v.layoutIfNeeded()
             v.alpha = 1
-            UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut], animations: {
+            UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseOut], animations: {
+                card.alpha = 0
+            })
+            UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
+                           options: [], animations: {
                 v.frame = win.bounds
                 v.layer.cornerRadius = 0
-                card.alpha = 0
                 v.layoutIfNeeded()
             }, completion: { _ in
                 card.removeFromSuperview()
