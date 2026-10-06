@@ -17,14 +17,20 @@ final class RowPlanStore {
         /// The text size the plan's fonts were built at. A plan is only true at that size.
         var textSize: UIContentSizeCategory
         var plan: RowPlan
+        /// When this plan was last asked for, for least-recently-used eviction.
+        var lastUse: Int
     }
 
     private var entries: [String: Entry] = [:]
-    /// Insertion order, so the store can drop the oldest rows instead of growing with the thread.
-    private var order: [String] = []
+    /// owner audit 2026-10-06 chat #86: this was 400 entries dropped in INSERTION order, below the
+    /// message window (500, up to 800 while paging), and the newest rows are planned first after an
+    /// open, so a page of history evicted exactly the rows next to the reader and scrolling back
+    /// re-planned them on the main thread. Now above the window's high-water mark, and a hit counts
+    /// as a use, so the rows being read are the last to go.
+    private var useClock = 0
     private let capacity: Int
 
-    init(capacity: Int = 400) { self.capacity = capacity }
+    init(capacity: Int = 1000) { self.capacity = capacity }
 
     /// ⛔ ONE STORE PER CHAT, KEPT BETWEEN OPENS — owner, 2026-09-28: "opening a chat takes too
     /// long… the reference app opens almost immediately". Each list controller made its own store,
@@ -57,6 +63,8 @@ final class RowPlanStore {
     func plan(for model: MessageRowModel, width: CGFloat) -> RowPlan {
         let textSize = BubbleMetrics.contentSizeCategory
         if let hit = entries[model.id], hit.width == width, hit.textSize == textSize, hit.model == model {
+            useClock += 1
+            entries[model.id]?.lastUse = useClock
             return hit.plan
         }
         let plan = MessageRowLayout.plan(model, width: width)
@@ -68,22 +76,26 @@ final class RowPlanStore {
     /// window out on a background queue and hands the results in here, so the main thread's own
     /// `plan(for:)` finds them instead of laying the rows out again.
     func seed(_ model: MessageRowModel, width: CGFloat, plan: RowPlan) {
-        if entries[model.id] == nil {
-            order.append(model.id)
-            if order.count > capacity {
-                let drop = order.removeFirst()
-                entries.removeValue(forKey: drop)
-            }
-        }
+        useClock += 1
         // Stamped with the text size it was planned at (audit C8: text follows the system size).
         entries[model.id] = Entry(model: model, width: width,
-                                  textSize: BubbleMetrics.contentSizeCategory, plan: plan)
+                                  textSize: BubbleMetrics.contentSizeCategory, plan: plan,
+                                  lastUse: useClock)
+        if entries.count > capacity { evictLeastRecentlyUsed() }
+    }
+
+    /// Drops the least recently used tenth in one pass, so a window that keeps growing past the
+    /// capacity (deep history is never trimmed) pays for a sort once per hundred new rows, not per row.
+    private func evictLeastRecentlyUsed() {
+        let excess = entries.count - capacity + capacity / 10
+        guard excess > 0 else { return }
+        let victims = entries.sorted { $0.value.lastUse < $1.value.lastUse }.prefix(excess).map(\.key)
+        for id in victims { entries.removeValue(forKey: id) }
     }
 
     /// A width change invalidates every row at once — a rotation, or an iPad split view resizing
     /// the list. Nothing measured at the old width can be trusted. A text-size change does too.
     func invalidateAll() {
         entries.removeAll()
-        order.removeAll()
     }
 }
