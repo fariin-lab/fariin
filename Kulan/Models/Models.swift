@@ -651,6 +651,7 @@ struct Message: Identifiable, Equatable, Codable {
         case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration
         case edited, deleted, deletedBy, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
+        case expiresAt   // owner audit 2026-10-06 chat #21: a cold open must know what has already expired
         // ⚠️ THE PATH TO A PENDING SEND'S OWN BYTES, and it has to persist or a failed voice note
         // comes back after a restart as a bubble with nothing in it and a retry button that quietly
         // does nothing. The BYTES are not encoded (localAudioData/localImageData stay out on

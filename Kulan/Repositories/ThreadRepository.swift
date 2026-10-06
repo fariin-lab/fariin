@@ -284,10 +284,16 @@ final class ThreadRepository {
     }
 
     private func seed(_ cached: [Message]) {
-        messages = cached
         for m in cached { byId[m.id] = m }   // reuse them so start()'s snapshot only decrypts new/changed docs
+        // Owner audit 2026-10-06 chat #21: the cache can hold disappearing messages that ran out
+        // while the chat was closed. This path skipped `rebuild`'s expiry filter, so they drew on the
+        // first frame and vanished when the first snapshot landed. Same filter, and the burn timer
+        // armed for whatever is still counting down.
+        let now = Date()
+        messages = cached.filter { m in m.expiresAt.map { now < $0 } ?? true }
         didInitialLoad = true
         refreshItems()
+        scheduleNextBurn()
     }
 
     // MARK: - One timeline for everybody
