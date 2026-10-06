@@ -2265,24 +2265,69 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let firstInBatch = routeRepairIds.isEmpty
         routeRepairIds.insert(id)
         guard firstInBatch else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let ids = self.routeRepairIds
-            self.routeRepairIds.removeAll()
-            var snap = self.dataSource.snapshot()
-            let present = ids.filter { snap.itemIdentifiers.contains($0) }
-            guard !present.isEmpty else { return }
-            // The other renderer can measure differently — refresh the cache so the reload lands in
-            // a frame of the right size.
-            let width = self.collectionView.bounds.width
-            if width > 0 {
-                for id in present {
-                    let h = self.measure(id, width: width)
-                    if abs((self.heights[id] ?? 0) - h) > 2 { self.heights[id] = h; self.layout.generation += 1 }
-                }
+        DispatchQueue.main.async { [weak self] in self?.runRouteRepair() }
+    }
+
+    /// owner audit 2026-10-06 chat #35: the repair used to reload rows the moment it ran, outside the
+    /// land gate (a reload under a dismissing context menu is what strands its blur, and one under a
+    /// glide lands mid-flight) and outside the position owner (a repaired row above the reader that
+    /// changed height moved them). It now waits for `canLandLoad` like every other land, and holds the
+    /// reader with the same bottom-biased continuity anchor a row re-measuring in place uses. Ids that
+    /// arrive while it waits join the same batch (`routeRepairIds` is not empty, so no second loop).
+    private func runRouteRepair() {
+        guard !routeRepairIds.isEmpty else { return }
+        guard canLandLoad else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in self?.runRouteRepair() }
+            return
+        }
+        let ids = routeRepairIds
+        routeRepairIds.removeAll()
+        var snap = dataSource.snapshot()
+        let inSnapshot = Set(snap.itemIdentifiers)
+        let present = ids.filter { inSnapshot.contains($0) }
+        guard !present.isEmpty else { return }
+        let listIsMoving = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
+        let anchors = continuityAnchors(relativeToTop: false)
+        let beforeY = frameMinY(for: currentIds)
+        // The other renderer can measure differently — refresh the cache so the reload lands in
+        // a frame of the right size.
+        var heightChanged = false
+        let width = collectionView.bounds.width
+        if width > 0 {
+            for id in present {
+                let h = measure(id, width: width)
+                if abs((heights[id] ?? 0) - h) > 2 { heights[id] = h; heightChanged = true }
             }
-            self.queueReload(Array(present), into: &snap)
-            self.dataSource.apply(snap, animatingDifferences: false)
+        }
+        var delta: CGFloat = 0
+        var landedAnchor: Anchor?
+        if heightChanged {
+            layout.generation += 1
+            if let landed = continuityDelta(anchors, before: beforeY, after: frameMinY(for: currentIds)) {
+                delta = landed.delta
+                landedAnchor = landed.anchor
+            }
+            if delta != 0 { layout.pendingContentOffsetAdjustment = delta }
+        }
+        let expectedY = collectionView.contentOffset.y + delta
+        queueReload(Array(present), into: &snap)
+        dataSource.apply(snap, animatingDifferences: false) { [weak self] in
+            guard let self else { return }
+            self.layout.pendingContentOffsetAdjustment = 0
+            if delta != 0 { self.verifyAnchor(landedAnchor) }
+        }
+        // As in refreshVisible: at rest, take the shift in this turn if UIKit did not, so it is not
+        // drawn one frame late. A moving list is left to the adjustment (verifyAnchor stands down too).
+        if delta != 0 && !listIsMoving {
+            collectionView.layoutIfNeeded()
+            let target = clampOffset(expectedY)
+            layout.pendingContentOffsetAdjustment = 0
+            if abs(collectionView.contentOffset.y - target) > 0.5 {
+                UIView.performWithoutAnimation {
+                    collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                }
+                lastStableOffset = target
+            }
         }
     }
 
