@@ -252,12 +252,23 @@ struct AttachRecentsStrip: View {
         // supported: SwiftUI joined this `[String]` path to the outer stack's `NavigationPath` and
         // trapped when the two types met. `FolderNavHost` is a plain UINavigationController that
         // SwiftUI's navigation never sees, with the same pushed page and the same system back swipe.
-        FolderNavHost(
-            root: AnyView(rootPage),
-            folder: AnyView(grid.background(Color(uiColor: .systemBackground))),
-            showFolder: !folderPath.isEmpty,
-            onPopped: { folderPath = [] }
-        )
+        // ⛔ TO THE SHEET'S BOTTOM EDGE — owner, 2026-10-06, two screenshots (Recents and a folder):
+        // a black / white band under the bar. A UIKit controller hosted in SwiftUI is sized to the
+        // SAFE AREA, so both pages stopped above the home indicator and the sheet's own background
+        // showed below. The host now runs to the edge (`ignoresSafeArea(.bottom)`) and is told the
+        // bottom inset the SwiftUI side had (bar + caption bar + home indicator) as a safe-area
+        // inset, so the grid's scroll view still clears the bar while its pictures scroll under it
+        // to the very edge, as they did before the folder page became a UIKit push.
+        GeometryReader { geo in
+            FolderNavHost(
+                root: AnyView(rootPage),
+                folder: AnyView(grid.background(Color(uiColor: .systemBackground))),
+                showFolder: !folderPath.isEmpty,
+                bottomInset: geo.safeAreaInsets.bottom,
+                onPopped: { folderPath = [] }
+            )
+            .ignoresSafeArea(.container, edges: .bottom)
+        }
         // The folder page left by the system swipe: the round button must stop being a Back arrow.
         .onChange(of: folderPath) { _, path in
             if path.isEmpty, inAlbum { inAlbum = false }
@@ -1043,19 +1054,41 @@ struct FolderNavHost: UIViewControllerRepresentable {
     let root: AnyView
     let folder: AnyView
     let showFolder: Bool
+    /// The bottom inset the SwiftUI side reserves (bar, caption bar, home indicator). The host runs
+    /// to the edge and gives its pages this much safe area itself (see the call site).
+    var bottomInset: CGFloat = 0
     let onPopped: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIViewController(context: Context) -> UINavigationController {
+    /// The navigation controller that keeps its pages' bottom safe area equal to `wantedBottom`,
+    /// re-checked on every layout (the home indicator is only known once it is in a window), and
+    /// never adding what UIKit already supplies.
+    final class EdgeNavigationController: UINavigationController {
+        var wantedBottom: CGFloat = 0 { didSet { if wantedBottom != oldValue { view.setNeedsLayout() } } }
+        override func viewWillLayoutSubviews() {
+            super.viewWillLayoutSubviews()
+            let system = max(0, view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom)
+            let extra = max(0, wantedBottom - system)
+            if abs(additionalSafeAreaInsets.bottom - extra) > 0.5 { additionalSafeAreaInsets.bottom = extra }
+        }
+    }
+
+    func makeUIViewController(context: Context) -> EdgeNavigationController {
         let c = context.coordinator
         c.rootHost.rootView = root
-        let nav = UINavigationController(rootViewController: c.rootHost)
+        let nav = EdgeNavigationController(rootViewController: c.rootHost)
+        nav.wantedBottom = bottomInset
         nav.setNavigationBarHidden(true, animated: false)
         nav.view.backgroundColor = .clear
         nav.delegate = c
         nav.interactivePopGestureRecognizer?.delegate = c
         nav.interactivePopGestureRecognizer?.isEnabled = true
+        // ⛔ iOS 26's swipe back from ANYWHERE on the page, not only the left edge — owner,
+        // 2026-10-06: "swipe sometimes works and sometimes does not". The edge swipe alone loses to
+        // the photo grid's scroll when the finger lands a little in from the edge.
+        nav.interactiveContentPopGestureRecognizer?.delegate = c
+        nav.interactiveContentPopGestureRecognizer?.isEnabled = true
         c.nav = nav
         c.onPopped = onPopped
         if showFolder {
@@ -1065,9 +1098,10 @@ struct FolderNavHost: UIViewControllerRepresentable {
         return nav
     }
 
-    func updateUIViewController(_ nav: UINavigationController, context: Context) {
+    func updateUIViewController(_ nav: EdgeNavigationController, context: Context) {
         let c = context.coordinator
         c.onPopped = onPopped
+        nav.wantedBottom = bottomInset
         c.rootHost.rootView = root
         c.folderHost.rootView = folder
         let pushed = nav.viewControllers.count > 1
@@ -1094,6 +1128,15 @@ struct FolderNavHost: UIViewControllerRepresentable {
         /// freeze the controller.
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
             (nav?.viewControllers.count ?? 0) > 1
+        }
+
+        /// The back swipe wins over the grid's scroll: a scroll view's pan waits for it to fail,
+        /// which it does at once for a vertical drag, so scrolling is not slowed. Only while there is
+        /// a page to go back to; on the root page nothing waits.
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard (nav?.viewControllers.count ?? 0) > 1 else { return false }
+            return other is UIPanGestureRecognizer && other.view is UIScrollView
         }
 
         /// Back on the root page by the system swipe (or any pop): tell the strip, which clears its
