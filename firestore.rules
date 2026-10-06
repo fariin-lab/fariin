@@ -2194,6 +2194,20 @@ service cloud.firestore {
           && request.resource.data.members.size() <= 32
           && request.auth.uid in request.resource.data.members;
       }
+      // owner audit 2026-10-06 #25: `names` and `photos` became the names other members see and
+      // the push text, and any member could rewrite anybody's entry. Now an entry is only ever
+      // ADDED, and only for somebody on the list; one already there cannot be changed or removed
+      // from a phone. onAdhocCallWritten (functions-groups) puts every entry back to the person's
+      // own profile, so a new entry cannot carry a made-up name for long either.
+      function adhocMapOk(f) {
+        return request.resource.data.get(f, {}) is map
+          && request.resource.data.get(f, {}).keys().hasOnly(request.resource.data.members);
+      }
+      function adhocMapGrowsOnly(f) {
+        return adhocMapOk(f)
+          && request.resource.data.get(f, {}).diff(resource.data.get(f, {})).changedKeys().size() == 0
+          && request.resource.data.get(f, {}).diff(resource.data.get(f, {})).removedKeys().size() == 0;
+      }
       allow read: if signedIn() && !isAdhoc() && isGroupMember();
       allow create: if signedIn() && !isAdhoc() && isGroupMember() && isStartWrite();
       allow update: if signedIn() && !isAdhoc() && isGroupMember() && (
@@ -2216,14 +2230,16 @@ service cloud.firestore {
                                                  'names', 'photos', 'joined', 'startedAt', 'endedAt'])
         && request.resource.data.kind == 'adhoc'
         && request.resource.data.startedBy == request.auth.uid
-        && adhocMembersOk();
+        && adhocMembersOk()
+        && adhocMapOk('names') && adhocMapOk('photos');
       // Members only ever grow: nobody can take a person off an invite list they did not write.
       allow update: if signedIn() && isAdhoc()
         && request.auth.uid in resource.data.members
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['active', 'members', 'names', 'photos', 'joined', 'endedAt', 'title'])
         && adhocMembersOk()
-        && request.resource.data.members.hasAll(resource.data.members);
+        && request.resource.data.members.hasAll(resource.data.members)
+        && adhocMapGrowsOnly('names') && adhocMapGrowsOnly('photos');
     }
 
     // 2026-10-04 calls: call links. Written by the Cloud Functions only (createCallLink and friends);
@@ -2283,12 +2299,26 @@ service cloud.firestore {
         // not only the callee's phone (which a patched caller never reaches past the push). The
         // app's own gates (`CallPrivacyIndex` before dialling, `decideAllowed` on the callee) stay.
         && !isBlockedByUser(request.resource.data.callee)
-        && callsAllowedBy(request.resource.data.callee);
+        && callsAllowedBy(request.resource.data.callee)
+        // owner audit 2026-10-06 #26: the server's clock, never the caller's. A call created with
+        // `createdAt` missing or in the future was never timed out by sweepCalls and slipped past
+        // the phone's 60s stale-ring guard, so it rang on every app launch. The app writes
+        // serverTimestamp(), which is exactly this.
+        && request.resource.data.createdAt == request.time;
       // Either party may update the call, but neither can change who's on it.
       allow update: if signedIn()
         && (request.auth.uid == resource.data.caller || request.auth.uid == resource.data.callee)
         && request.resource.data.caller == resource.data.caller
-        && request.resource.data.callee == resource.data.callee;
+        && request.resource.data.callee == resource.data.callee
+        // owner audit 2026-10-06 (call audit 15, low): an ended call stays ended. Without this either
+        // party could flip an old call back to ringing; nothing in the app writes any status after
+        // 'ended' except 'ended' again.
+        && (resource.data.get('status', '') != 'ended' || request.resource.data.get('status', '') == 'ended')
+        // owner audit 2026-10-06 #25 / #26: the start time, and the caller's name and photo that
+        // onCallCreated put back to the profile's, are written once. The app never updates them.
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.get('callerName', null) == resource.data.get('callerName', null)
+        && request.resource.data.get('callerPhoto', null) == resource.data.get('callerPhoto', null);
       // NO delete. THIRD stray paste of the message-request decline rule, after the two removed from
       // /users and story views on 2026-08-04. A call document has `caller` and `callee`, not `users`
       // or `startedBy`, so it could only ever error. Nothing in the app deletes a call, so nothing
