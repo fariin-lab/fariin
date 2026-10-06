@@ -25,7 +25,9 @@ struct GroupCallSelfView: View {
     var body: some View {
         if let local, remoteCount >= 1 {
             let size = Self.size(remoteCount: remoteCount, expanded: expanded)
-            // Camera preview is mirrored like a mirror; camera off, the tile draws the avatar look.
+            // The tile's video view already mirrors the local front camera (`.auto`); flipping it
+            // again here un-mirrored the preview and drew the mute badge backwards.
+            // Camera off, the tile draws the avatar look.
             let track = local.hasVideo ? stage.videoTrack(local.id) : nil
             GroupCallTileView(tile: local,
                               track: track,
@@ -33,7 +35,6 @@ struct GroupCallSelfView: View {
                               isActiveSpeaker: false,
                               isPinned: false,
                               onTap: toggle)
-                .scaleEffect(x: track != nil ? -1 : 1, y: 1)
                 .frame(width: size.width, height: size.height)
                 .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
                 .shadow(color: .black.opacity(0.3), radius: 4)
