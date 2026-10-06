@@ -5041,8 +5041,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastStableOffset = scrollView.contentOffset.y
             recordDistanceFromBottom()   // the reader is choosing a position; remember it
             userScrolledSinceTimer = true
-            // Topmost visible row, for the floating date pill.
-            let top = viewportIndexPaths().first.flatMap { dataSource.itemIdentifier(for: $0) }
+            // Topmost visible row, for the floating date pill. Owner audit 2026-10-06 chat #66: this
+            // ran `viewportIndexPaths()` every frame (an attributes object per live cell, a filter and
+            // a sort, for `.first`). The layout's frames are stacked in order, so the same row is a
+            // binary search with no allocation.
+            let top = layout.topItem(in: collectionView.bounds)
+                .flatMap { dataSource.itemIdentifier(for: IndexPath(item: $0, section: 0)) }
             updateDatePill(topId: top)
         }
         // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
@@ -5708,6 +5712,19 @@ final class MessageLayout: UICollectionViewLayout {
     override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
         guard indexPath.item < frames.count else { return nil }
         return attributes(for: indexPath.item)
+    }
+
+    /// The first row whose frame reaches into `rect` (the viewport's topmost row), or nil. The same
+    /// test `viewportIndexPaths` applies, by binary search: frames are stacked top to bottom with no
+    /// gaps, so `maxY` only grows with the index. Chat #66, the per-frame date pill lookup.
+    func topItem(in rect: CGRect) -> Int? {
+        var lo = 0, hi = frames.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if frames[mid].maxY > rect.minY { hi = mid } else { lo = mid + 1 }
+        }
+        guard lo < frames.count, frames[lo].minY < rect.maxY else { return nil }
+        return lo
     }
 
     private func attributes(for item: Int) -> UICollectionViewLayoutAttributes {
