@@ -267,9 +267,13 @@ final class GroupCallStage: ObservableObject {
             return GroupCallPriority.joinOrder(a, b)
         }
 
-        // Forget people who left, so the maps do not grow over a long call.
+        // Forget people who left, so the maps do not grow over a long call. Only while connected: a
+        // full reconnect empties the room and refills it, and pruning then would hand everyone a new
+        // first-seen time and reshuffle the grid when they come back (spec §12).
         let present = Set(byId.keys)
-        firstSeen = firstSeen.filter { present.contains($0.key) }
+        if connectionState == .connected {
+            firstSeen = firstSeen.filter { present.contains($0.key) }
+        }
         if let name = room.name, !name.isEmpty { Self.joinOrderCache = (name, firstSeen) }
         shareStartedAt = shareStartedAt.filter { present.contains($0.key) }
         participants = byId
