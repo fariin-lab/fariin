@@ -95,6 +95,21 @@ struct GroupCallView: View {
                 .padding(.bottom, GroupCallMetrics.stripInset)
         }
         .overlay(alignment: .top) { GroupCallStatusBanner(stage: stage) }
+        // Group call permissions, 2026-10-06: "You were muted" and other short notes that do not
+        // close the screen. VoiceOver hears it as an announcement from the service.
+        .overlay(alignment: .bottom) {
+            if let toast = service.toast {
+                Text(toast)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.black.opacity(0.7), in: Capsule())
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
+            }
+        }
+        .animation(GroupCallMotion.fade, value: service.toast)
         .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
     }
     /// The self pip's enlarged state, here so the strip can follow it (see selfPipWidth).

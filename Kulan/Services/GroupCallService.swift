@@ -21,6 +21,42 @@ enum GroupRoom: Equatable {
     case link(roomId: String, key: String)
 }
 
+/// Who someone is in a call, as the SERVER decided it (group call permissions, 2026-10-06): the
+/// join token's LiveKit attribute `role`, or the `role` in the `groupCallToken` answer for me. The
+/// phone only uses it to choose which buttons to show; `callAdmin` checks every action itself.
+enum CallRole: String {
+    case owner, moderator, participant
+
+    /// Anything missing or unknown reads as a plain participant: the least power, never more.
+    init(attribute: String?) {
+        self = attribute.flatMap(CallRole.init(rawValue:)) ?? .participant
+    }
+
+    /// The people list's badge.
+    var badge: String? {
+        switch self {
+        case .owner: return "Host"
+        case .moderator: return "Admin"
+        case .participant: return nil
+        }
+    }
+
+    /// The access table: the owner may mute or remove anyone else, a moderator only participants,
+    /// a participant nobody. Never oneself; the caller checks that by uid.
+    func canModerate(_ target: CallRole) -> Bool {
+        switch self {
+        case .owner: return target != .owner
+        case .moderator: return target == .participant
+        case .participant: return false
+        }
+    }
+}
+
+/// What `callAdmin` can be asked to do.
+enum CallAdminAction: String {
+    case mute, remove, end
+}
+
 /// A multi-person call I was invited to and have not answered yet. `IncomingGroupCallLayer` shows it.
 struct AdhocInvite: Identifiable, Equatable {
     let roomId: String
@@ -87,6 +123,21 @@ final class GroupCallService: ObservableObject {
     /// nobody in it and nothing saying why.
     struct Notice: Equatable { let title: String; let message: String? }
     @Published var notice: Notice?
+
+    /// My role in the running call, from the server's join answer (and my own LiveKit attributes if
+    /// the server changes it mid-call). Drives which admin controls the people list offers.
+    @Published private(set) var myRole: CallRole = .participant
+    /// Bumped when anyone's LiveKit attributes change, so views that read roles straight from the
+    /// participants (`participant.attributes["role"]`) draw again.
+    @Published private(set) var rolesVersion = 0
+    /// A short line over the stage that does not close the screen ("You were muted"). Clears itself.
+    @Published private(set) var toast: String?
+    private var toastTask: Task<Void, Never>?
+    /// Mic toggles of mine still in flight: a mute event while one runs is mine, not the server's.
+    private var micChangesInFlight = 0
+    /// True from my own "End call for everyone" until the room is gone, so the room-deleted event
+    /// that follows is not reported back to me as "The call was ended".
+    private var endingForAll = false
 
     var isActive: Bool { activeCid != nil }
 
@@ -172,6 +223,7 @@ final class GroupCallService: ObservableObject {
             if video { try await room.localParticipant.setCamera(enabled: true) }
             guard gen == joinGeneration else { await abandonJoin(); return }
             activeCid = cid; activeRoom = .group(cid: cid); micOn = true; cameraOn = video; connecting = false
+            myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
             // joined one, and the starter writes the call's record into the chat.
             let startedHere = room.remoteParticipants.isEmpty
@@ -204,7 +256,8 @@ final class GroupCallService: ObservableObject {
             // unconditionally is what let a losing second task kill the winner's live room.
             if activeCid == nil {
                 await disconnect()
-                notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
+                // 2026-09-24 decision D25; a member removed from this call is told why.
+                notice = Self.joinNotice(error, link: false)
             }
         }
     }
@@ -236,7 +289,68 @@ final class GroupCallService: ObservableObject {
 
     func toggleMic() {
         micOn.toggle(); let v = micOn
-        Task { try? await room.localParticipant.setMicrophone(enabled: v) }
+        micChangesInFlight += 1
+        Task {
+            try? await room.localParticipant.setMicrophone(enabled: v)
+            micChangesInFlight -= 1
+        }
+    }
+
+    // MARK: - Owner and moderator controls (group call permissions, 2026-10-06)
+
+    /// Mute or remove `uid`, or end the call for everyone, through the server's `callAdmin`. The
+    /// server checks my role against its own records; hiding the buttons is only a convenience.
+    /// Throws the Functions error as is, so the caller can say what went wrong.
+    func admin(_ action: CallAdminAction, target uid: String? = nil) async throws {
+        guard let r = activeRoom else {
+            throw NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.notFound.rawValue)
+        }
+        let room: [String: String]
+        switch r {
+        case .group(let cid): room = ["kind": "group", "id": cid]
+        case .adhoc(let id): room = ["kind": "adhoc", "id": id]
+        case .link(let roomId, _): room = ["kind": "link", "id": roomId]
+        }
+        var payload: [String: Any] = ["room": room, "action": action.rawValue]
+        if let uid { payload["targetUid"] = uid }
+        if action == .end { endingForAll = true }
+        do {
+            _ = try await functions.httpsCallable("callAdmin").call(payload)
+        } catch {
+            if action == .end { endingForAll = false }
+            throw error
+        }
+        // The server closed the room and the call's record; I leave quietly, like any hang-up.
+        if action == .end { end() }
+    }
+
+    private func showToast(_ text: String) {
+        toast = text
+        UIAccessibility.post(notification: .announcement, argument: text)
+        toastTask?.cancel()
+        toastTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+        }
+    }
+
+    /// My microphone publication changed mute state. Muted while I wanted it on, with no toggle of
+    /// mine in flight, means the server muted me (an owner or admin). The reference app lets you
+    /// unmute again, so this only keeps the button honest and says so.
+    fileprivate func localMicMuteChanged() {
+        guard isActive, micOn, micChangesInFlight == 0,
+              !room.localParticipant.isMicrophoneEnabled() else { return }
+        micOn = false
+        // TODO: the server does not say who muted me, so it cannot read "<Owner> muted you" yet.
+        showToast("You were muted")
+    }
+
+    /// Someone's LiveKit attributes changed; mine may carry a new role.
+    fileprivate func attributesChanged() {
+        rolesVersion &+= 1
+        guard isActive, let r = room.localParticipant.attributes["role"] else { return }
+        myRole = CallRole(attribute: r)
     }
 
     /// ⛔ A REAL SPEAKER SWITCH — owner, 2026-10-04: "the speaker, I can't turn it on and off". The
@@ -285,9 +399,26 @@ final class GroupCallService: ObservableObject {
     /// others…" with the doc still active and every new call refused until End was tapped. Clean
     /// up exactly as hanging up does. Our own hang-up also fires this event; `leaving` and the
     /// state check skip it.
-    fileprivate func roomDropped() {
+    /// Group call permissions, 2026-10-06: `removed` = an owner or admin took me out of the call
+    /// (LiveKit's participantRemoved); `deleted` = the owner ended it for everyone (roomDeleted).
+    /// Each is said once the screen has closed. Neither rejoins: nothing here ever reconnects, and the
+    /// server refuses a removed person a new join pass.
+    fileprivate func roomDropped(removed: Bool, deleted: Bool) {
         guard isActive, !leaving, room.connectionState == .disconnected else { return }
-        Task { await disconnect() }
+        let n: Notice?
+        if removed {
+            n = Notice(title: "You were removed from the call", message: nil)
+        } else if deleted && !endingForAll {
+            n = Notice(title: "The call was ended", message: nil)
+        } else {
+            n = nil
+        }
+        Task {
+            await disconnect()
+            // A UIKit alert on whatever is on top: the call screen closes as the call goes (and a
+            // minimized call has no screen), so its own alert could never show this.
+            if let n { Self.presentOverTop(n) }
+        }
     }
 
     private func disconnect() async {
@@ -552,6 +683,7 @@ final class GroupCallService: ObservableObject {
             }
             activeRoom = r; micOn = true; cameraOn = video; connecting = false
             waitingForApproval = false
+            myRole = CallRole(attribute: d?["role"] as? String)
             return true
         } catch {
             // Hung up mid-connect: the room.disconnect() that hang-up ran is what threw here, and
@@ -565,9 +697,14 @@ final class GroupCallService: ObservableObject {
 
     private static func joinNotice(_ error: Error, link: Bool) -> Notice {
         let ns = error as NSError
-        if link, ns.domain == FunctionsErrorDomain, let code = FunctionsErrorCode(rawValue: ns.code) {
-            if code == .notFound { return linkGone }
-            if code == .permissionDenied { return Notice(title: "Request denied", message: nil) }
+        if ns.domain == FunctionsErrorDomain, let code = FunctionsErrorCode(rawValue: ns.code) {
+            // Group call permissions, 2026-10-06: the server refuses a removed person with the
+            // message "removed" (any kind of call); a turned-away link request says "denied".
+            if code == .permissionDenied, ns.localizedDescription == "removed" {
+                return Notice(title: "You can't rejoin this call", message: nil)
+            }
+            if link, code == .notFound { return linkGone }
+            if link, code == .permissionDenied { return Notice(title: "Request denied", message: nil) }
         }
         return Notice(title: "Call failed", message: nil)
     }
@@ -606,6 +743,9 @@ final class GroupCallService: ObservableObject {
         activeRoom = nil
         members = []; joinedUids = []; roomStartedAt = nil
         pendingRequests = []; isLinkCreator = false
+        myRole = .participant
+        endingForAll = false
+        toastTask?.cancel(); toastTask = nil; toast = nil
     }
 
     private func apply(roomData d: [String: Any]) {
@@ -828,6 +968,25 @@ private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendabl
     func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState,
               from oldConnectionState: ConnectionState) {
         guard connectionState == .disconnected else { return }
-        Task { @MainActor in GroupCallService.shared.roomDropped() }
+        // Read here, on the delegate's own beat: the SDK sets the reason in the same state change
+        // that reports `.disconnected`, and a later connect would replace it.
+        let reason = room.disconnectError?.type
+        let removed = reason == .participantRemoved
+        let deleted = reason == .roomDeleted
+        Task { @MainActor in GroupCallService.shared.roomDropped(removed: removed, deleted: deleted) }
+    }
+
+    /// Group call permissions, 2026-10-06: the server muting my microphone shows up as my own
+    /// microphone publication going muted.
+    func room(_ room: Room, participant: Participant, trackPublication: TrackPublication,
+              didUpdateIsMuted isMuted: Bool) {
+        guard participant is LocalParticipant, trackPublication.source == .microphone, isMuted else { return }
+        Task { @MainActor in GroupCallService.shared.localMicMuteChanged() }
+    }
+
+    /// Roles live in the server-signed LiveKit attributes. The delegate gets only the changed keys,
+    /// so readers look at `participant.attributes` themselves.
+    func room(_ room: Room, participant: Participant, didUpdateAttributes attributes: [String: String]) {
+        Task { @MainActor in GroupCallService.shared.attributesChanged() }
     }
 }
