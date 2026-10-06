@@ -18,8 +18,9 @@ struct GroupCallGridView: View {
     @ObservedObject var stage: GroupCallStage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Strip row height: square tiles plus their inset above and below.
-    private static let stripHeight: CGFloat = GroupCallMetrics.stripTile + 2 * GroupCallMetrics.stripInset
+    /// What the strip takes from the grid's height: its own height less the grid's bottom inset, which
+    /// the strip's 6pt top inset overlaps, so grid and strip are 6pt apart like any two tiles.
+    private static var stripReserve: CGFloat { GroupCallStripView.height - GroupCallMetrics.inset }
 
     var body: some View {
         GeometryReader { geo in
@@ -104,7 +105,9 @@ struct GroupCallGridView: View {
             if !layout.overflow.isEmpty {
                 // The strip keeps its own trailing gap for the self pip (one place, not two).
                 GroupCallStripView(stage: stage, ids: layout.overflow)
-                    .frame(width: size.width, height: Self.stripHeight)
+                    .frame(width: size.width, height: GroupCallStripView.height)
+                    // Over the grid's empty bottom inset (no tile is there): one 6pt gap, not two.
+                    .padding(.top, -GroupCallMetrics.inset)
                     .transition(.opacity)
             }
         }
@@ -132,7 +135,7 @@ struct GroupCallGridView: View {
         let needsStrip = ranked.count > fullCapacity
         let gridSize = CGSize(
             width: size.width,
-            height: max(0, size.height - (needsStrip ? stripHeight : 0))
+            height: max(0, size.height - (needsStrip ? stripReserve : 0))
         )
         let capacity = max(0, GroupCallLayoutEngine.capacity(in: gridSize))
         // The first layout pass has no size yet; its caps (rows by height) are not the real ones,

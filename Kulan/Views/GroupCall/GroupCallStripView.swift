@@ -23,14 +23,22 @@ struct GroupCallStripView: View {
     @Environment(\.groupCallSelfPipWidth) private var pipWidth
 
     /// The self view pip floats over the strip's trailing edge, so the last tile scrolls clear of it:
-    /// the pip's current width, its trailing inset and 4pt (the reference app's trim). The only place
-    /// this gap is kept; the grid and focus views do not pad the strip again.
+    /// the pip's current width, its trailing inset and the stage's 6pt spacing. The only place this
+    /// gap is kept; the grid and focus views do not pad the strip again.
     private var selfPipClearance: CGFloat {
-        pipWidth + GroupCallSelfView.trailingInset + 4
+        pipWidth + GroupCallSelfView.trailingInset + GroupCallMetrics.spacing
     }
 
-    /// Height the parent reserves for the strip.
-    static var height: CGFloat { GroupCallMetrics.stripTile + 2 * GroupCallMetrics.stripInset }
+    /// The strip's own insets. Leading = the grid's inset, so the first strip tile lines up with the
+    /// grid's left edge. Top = the stage spacing: the same 6pt gap the grid keeps between its tiles
+    /// (the grid overlaps its own bottom inset with it, see GroupCallGridView). Bottom = the strip
+    /// inset, which the self pip's bottom edge lines up with (GroupCallView).
+    static let leadingInset: CGFloat = GroupCallMetrics.inset
+    static let topInset: CGFloat = GroupCallMetrics.spacing
+    static let bottomInset: CGFloat = GroupCallMetrics.stripInset
+
+    /// Height the parent reserves for the strip: 6 + 72 + 12.
+    static var height: CGFloat { topInset + GroupCallMetrics.stripTile + bottomInset }
 
     var body: some View {
         let byId = Dictionary(stage.tiles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -55,9 +63,10 @@ struct GroupCallStripView: View {
                     }
                 }
             }
-            .padding(.leading, GroupCallMetrics.stripInset)
+            .padding(.leading, Self.leadingInset)
             .padding(.trailing, selfPipClearance)
-            .padding(.vertical, GroupCallMetrics.stripInset)
+            .padding(.top, Self.topInset)
+            .padding(.bottom, Self.bottomInset)
         }
         .frame(height: GroupCallStripView.height)
         // Tiles slide to their new place when someone joins, leaves or changes rank.

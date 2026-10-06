@@ -28,7 +28,8 @@ struct GroupCallFocusView: View {
 
     var body: some View {
         let stripIds = others
-        VStack(spacing: GroupCallMetrics.spacing) {
+        // No spacing of its own: the strip's 6pt top inset is the gap below the large tile.
+        VStack(spacing: 0) {
             if let tile = focusTile {
                 largeTile(tile, hasStrip: !stripIds.isEmpty)
                     // Reduce Motion: no flying tile, the fade below.
