@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 829: THE NEW GROUP CALL SCREEN.
+            BUILD 830: CALL HOST CONTROLS, ADD PEOPLE TO A LINK CALL, ATTACH SHEET FIXES.
+
+            HOST CONTROLS: the person who made the call (and group admins) can mute someone or remove them from the people list. A removed person can't rejoin. The host can End the call for everyone and Revoke the link mid-call. "Waiting for the host to let you in" shows while you wait for approval. All checked on the server, not just in the app.
+            LINK CALLS: Add people in the people list opens your chats and sends the link to the people you pick. Make a New Link is on the link's own page (the old link stops working).
+            CALL LINK SHEET: tall enough to show every card, Call Type included.
+            ATTACH SHEET: swiping back from a folder (Videos, etc.) works every time. No black or white band at the bottom.
+
+            PLEASE TEST: in a link call, tap the people button, Add people, send the link to a friend; mute and remove someone from another phone; swipe back from a folder in the + sheet.
+
+            EARLIER (build 829): THE NEW GROUP CALL SCREEN.
 
             GROUP CALLS: a real layout that fits everyone (most-square grid, up to 6 on screen, the rest in a strip below). A thin green border shows who is speaking, steady, no flicker. Tap anyone to make them big, tap again to go back. Your own video sits small in the corner when others are in, full screen when alone. Camera off shows the person's photo. A small badge shows who is muted and who has a poor connection. Joins and leaves are announced. Smoother movement, Reduce Motion respected. The header and bottom buttons are unchanged.
             PEOPLE LIST: In call with the count, who speaks, who is muted, who has video, the host. Tap a person to make them big.
