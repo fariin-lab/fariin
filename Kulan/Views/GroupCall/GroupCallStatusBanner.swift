@@ -4,14 +4,13 @@ import LiveKit
 /// One quiet capsule that sits under the header (owner spec §14: reconnecting, connection lost, poor
 /// network, joining and leaving must each be visible without breaking the layout). It is an overlay:
 /// the parent places it with `.overlay(alignment: .top)`, so showing or hiding it never moves a tile.
-/// Only the most important message shows at a time: lost > reconnecting > my poor network > a
-/// join/leave toast.
+/// Only the most important message shows at a time: lost > my poor network > a join/leave toast.
+/// Reconnecting is the header subtitle's job (owner's header), so the banner stays out of it.
 struct GroupCallStatusBanner: View {
     @ObservedObject var stage: GroupCallStage
 
     private struct Item: Equatable {
         let text: String
-        let spinner: Bool
     }
 
     // Join/leave toasts.
@@ -36,32 +35,30 @@ struct GroupCallStatusBanner: View {
     private var item: Item? {
         switch stage.connectionState {
         case .reconnecting:
-            return Item(text: "Reconnecting…", spinner: true)
+            // The header's subtitle already says "Reconnecting…" (owner's header); a second line
+            // saying the same, or a poor-network note on top of it, is noise.
+            return nil
         case .disconnected:
-            return wasConnected ? Item(text: "Connection lost", spinner: false) : nil
+            // Lost only while the call is still on. My own hang-up, or the screen closing, also
+            // ends in .disconnected: the service is then leaving, or already has no call.
+            let service = GroupCallService.shared
+            guard wasConnected, service.isActive, !service.leaving else { return nil }
+            return Item(text: "Connection lost")
         default:
             break
         }
-        if localPoor { return Item(text: "Poor connection", spinner: false) }
-        if let toast { return Item(text: toast, spinner: false) }
+        if localPoor { return Item(text: "Poor connection") }
+        if let toast { return Item(text: toast) }
         return nil
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             if let item {
-                HStack(spacing: 6) {
-                    if item.spinner {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                            .controlSize(.mini)
-                    }
-                    Text(item.text)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                }
+                Text(item.text)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Capsule().fill(Color.black.opacity(0.55)))

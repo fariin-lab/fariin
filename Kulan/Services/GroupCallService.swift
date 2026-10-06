@@ -46,8 +46,9 @@ final class GroupCallService: ObservableObject {
     /// turning into a live call with no screen and no card.
     private var joinGeneration = 0
     /// owner audit 2026-10-06 #16: true while `disconnect()` runs, so the room's own "disconnected"
-    /// event from OUR hang-up is not mistaken for a dropped room.
-    private var leaving = false
+    /// event from OUR hang-up is not mistaken for a dropped room. Read by the call screen's status
+    /// banner for the same reason (no "Connection lost" after I hung up).
+    private(set) var leaving = false
     /// Held here: the room keeps its delegates weakly.
     private let roomObserver = RoomDropObserver()
     /// owner audit 2026-10-06 #44: a parked link joiner also watches the link itself, so the admin
