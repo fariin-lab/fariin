@@ -309,13 +309,13 @@ final class GroupCallService: ObservableObject {
         guard let r = activeRoom else {
             throw NSError(domain: FunctionsErrorDomain, code: FunctionsErrorCode.notFound.rawValue)
         }
-        let room: [String: String]
+        let target: [String: String]
         switch r {
-        case .group(let cid): room = ["kind": "group", "id": cid]
-        case .adhoc(let id): room = ["kind": "adhoc", "id": id]
-        case .link(let roomId, _): room = ["kind": "link", "id": roomId]
+        case .group(let cid): target = ["kind": "group", "id": cid]
+        case .adhoc(let id): target = ["kind": "adhoc", "id": id]
+        case .link(let roomId, _): target = ["kind": "link", "id": roomId]
         }
-        var payload: [String: Any] = ["room": room, "action": action.rawValue]
+        var payload: [String: Any] = ["room": target, "action": action.rawValue]
         if let uid { payload["targetUid"] = uid }
         if action == .end { endingForAll = true }
         do {
