@@ -6,13 +6,18 @@ import LiveKit
 /// indicators.
 ///
 /// Lazy on purpose (spec §10): LazyHStack only builds the tiles that are scrolled into view, and a
-/// tile that is not built has no video view, so LiveKit's adaptiveStream stops its video. A strip of
+/// tile that is not built (or has scrolled out, see `visible`) has no video view, so LiveKit's
+/// adaptiveStream stops its video. A strip of
 /// 40 people therefore costs about five live video layers, not 40.
 struct GroupCallStripView: View {
     @ObservedObject var stage: GroupCallStage
     /// Tile ids in display order.
     let ids: [String]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Tiles on screen now. LazyHStack keeps a tile it built once alive after it scrolls out, video
+    /// view included, so adaptiveStream would keep that video coming: a tile gets its track only
+    /// between onAppear and onDisappear (spec §10).
+    @State private var visible: Set<String> = []
 
     /// The self view pip floats over the strip's trailing edge, so the last tile scrolls clear of it:
     /// the pip's small width, its trailing inset and 4pt (the reference app's trim). The only place
@@ -34,13 +39,15 @@ struct GroupCallStripView: View {
                     if let tile = byId[id] {
                         GroupCallTileView(
                             tile: tile,
-                            track: tile.hasVideo ? stage.videoTrack(id) : nil,
+                            track: (tile.hasVideo && visible.contains(id)) ? stage.videoTrack(id) : nil,
                             style: .strip,
                             isActiveSpeaker: stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,
                             onTap: { stage.togglePin(id) }
                         )
                         .frame(width: GroupCallMetrics.stripTile, height: GroupCallMetrics.stripTile)
+                        .onAppear { visible.insert(id) }
+                        .onDisappear { visible.remove(id) }
                     }
                 }
             }
