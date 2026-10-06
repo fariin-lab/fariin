@@ -1877,7 +1877,7 @@ struct ThreadView: View {
         .safeAreaInset(edge: .top) {
             if groupCallActive && !GroupCallService.shared.isActive {
                 Button {
-                    showGroupCall = true
+                    InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
                     Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo) }
                 } label: {
                     HStack(spacing: 8) {
@@ -4618,7 +4618,7 @@ struct ThreadView: View {
     }
 
     private func startGroupCall(video: Bool) {
-        showGroupCall = true
+        InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
         Task { await GroupCallService.shared.start(cid: cid, title: title, video: video) }
     }
 

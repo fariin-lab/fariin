@@ -340,7 +340,7 @@ struct GroupInfoView: View {
 
     private func startCall(video: Bool) {
         Task { await GroupCallService.shared.start(cid: cid, title: conv?.title ?? "Group", video: video) }
-        showCall = true
+        InstantCover.run { showCall = true }   // a cut, not a slide (owner, 2026-10-06)
     }
 
     // Colored icon chip for list rows (premium look vs plain SF Symbols).

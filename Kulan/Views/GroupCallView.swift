@@ -183,8 +183,7 @@ struct GroupCallView: View {
                 // (`CallPipMorph`), so the cover itself leaves with no animation of its own.
                 CallPipMorph.minimize {
                     service.minimized = true
-                    var t = Transaction(); t.disablesAnimations = true
-                    withTransaction(t) { dismiss() }
+                    InstantCover.run { dismiss() }
                 }
             } label: {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)

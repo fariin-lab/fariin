@@ -900,8 +900,7 @@ struct CallContainer<Content: View>: View {
         .onChange(of: group.minimized) { _, minimized in
             // Same hard cut as the 1:1 cover (the reference app uses one call window for both).
             if !minimized, group.isActive, !showGroupRestore {
-                var t = Transaction(); t.disablesAnimations = true
-                withTransaction(t) { showGroupRestore = true }
+                InstantCover.run { showGroupRestore = true }
             }
         }
         // A multi-person (ad-hoc or link) call's FIRST screen is put up by `IncomingGroupCallLayer`
@@ -915,16 +914,46 @@ struct CallContainer<Content: View>: View {
         guard !coverUp else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         if animated { coverUp = true; return }
-        var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { coverUp = true }
+        InstantCover.run { coverUp = true }
     }
 
     /// Out, the same way: the zoom into the card when minimizing, a hard cut when the call is over.
     private func dismissCover(animated: Bool) {
         guard coverUp else { return }
         if animated { coverUp = false; return }
+        InstantCover.run { coverUp = false }
+    }
+}
+
+/// ⛔ THE CALL SCREEN APPEARS, IT DOES NOT SLIDE UP — owner, 2026-10-06, screenshots of the screen
+/// half way up over the profile and over the chat: "the call page appears by sliding up from the
+/// bottom ... make it work exactly like" the reference app, which shows its call screen in one cut.
+///
+/// A no-animation transaction alone did not stop the system cover's slide on device. UIKit's own
+/// switch is turned off as well, for the beat in which SwiftUI hands the cover to UIKit, so the
+/// presentation's animation block runs at once. Turned back on right after, so nothing else in the
+/// app is held still.
+@MainActor
+enum InstantCover {
+    private static var depth = 0
+
+    static func run(_ change: () -> Void) {
+        depth += 1
+        UIView.setAnimationsEnabled(false)
         var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { coverUp = false }
+        withTransaction(t) { change() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            depth = max(0, depth - 1)
+            if depth == 0 { UIView.setAnimationsEnabled(true) }
+        }
+    }
+
+    /// The card flight (`CallPipMorph`) starts inside that beat and must move, so it ends the hold
+    /// first. The cover has been handed to UIKit by then.
+    static func release() {
+        guard depth > 0 else { return }
+        depth = 0
+        UIView.setAnimationsEnabled(true)
     }
 }
 

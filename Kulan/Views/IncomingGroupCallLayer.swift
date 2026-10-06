@@ -27,8 +27,7 @@ struct IncomingGroupCallLayer: View {
                 try? await Task.sleep(nanoseconds: 600_000_000)
                 // Hard cut, no slide-up: the reference app swaps to its call window instantly.
                 if service.presentsRoomScreen {
-                    var t = Transaction(); t.disablesAnimations = true
-                    withTransaction(t) { showRoom = true }
+                    InstantCover.run { showRoom = true }   // a cut, not a slide (see InstantCover)
                 }
             }
         }

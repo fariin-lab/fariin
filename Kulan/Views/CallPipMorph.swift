@@ -68,6 +68,7 @@ enum CallPipMorph {
                 let target = CallService.shared.cardFrame
                 guard target.width > 1, win.bounds.contains(target.insetBy(dx: 4, dy: 4)) else {
                     // No card to fly to (a stashed tab, or not laid out): their fade alone.
+                    InstantCover.release()
                     UIView.animate(withDuration: duration, animations: { box.alpha = 0 },
                                    completion: { _ in
                                        minimizeInFlight = false
@@ -87,6 +88,7 @@ enum CallPipMorph {
                     box.insertSubview(card, belowSubview: screen)
                 }
                 CallService.shared.cardHiddenForMorph = true
+                InstantCover.release()   // the cover's cut is done; this flight must move
                 UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseIn], animations: {
                     screen.alpha = 0
                 })
@@ -154,6 +156,7 @@ enum CallPipMorph {
             card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             v.layoutIfNeeded()
             v.alpha = 1
+            InstantCover.release()   // the cover's cut is done; this flight must move
             UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseOut], animations: {
                 card.alpha = 0
             })
