@@ -661,7 +661,10 @@ service cloud.firestore {
         }
         allow read, delete: if signedIn() && request.auth.uid == uid;
         allow create, update: if signedIn() && request.auth.uid == uid
-          && tokenListOk('fcmTokens') && tokenListOk('voipTokens') && tokenListOk('pushTokens');
+          && tokenListOk('fcmTokens') && tokenListOk('voipTokens') && tokenListOk('pushTokens')
+          // 2026-10-06 group rings: the VoIP token again, listed by builds that understand a
+          // multi-person ring (the server rings only these). Same cap as the others.
+          && tokenListOk('groupRingTokens');
       }
 
       // Which sticker packs you have added, and the order you keep them in. A subcollection

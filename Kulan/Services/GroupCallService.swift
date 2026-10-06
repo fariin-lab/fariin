@@ -55,8 +55,15 @@ enum CallRole: String {
 
 /// What `callAdmin` can be asked to do.
 enum CallAdminAction: String {
-    case mute, remove, end
+    /// `block` is for call links only (the server refuses it elsewhere): out of the call and refused
+    /// by that link for good. A plain `remove` on a link only takes the person out; they may ask again.
+    case mute, remove, block, end
 }
+
+/// Where I am on the way into a call (owner 2026-10-06, reference study). ONE state for the screens
+/// to read, instead of three flags each screen combined its own way: not in anything, the join is
+/// running, waiting for the link's creator to say yes, in the call.
+enum GroupJoinState: Equatable { case notJoined, joining, pending, joined }
 
 /// A multi-person call I was invited to and have not answered yet. `IncomingGroupCallLayer` shows it.
 struct AdhocInvite: Identifiable, Equatable {
@@ -109,7 +116,17 @@ final class GroupCallService: ObservableObject {
         adaptiveStream: true,
         dynacast: true
     ))
-    @Published var activeCid: String?       // nil = no group call in progress
+    @Published var activeCid: String? {     // nil = no group call in progress
+        didSet { syncJoinState() }
+    }
+    /// See `GroupJoinState`. Derived from `activeCid`, `waitingForApproval` and `connecting`, which
+    /// keep their old meanings for the code that reads them.
+    @Published private(set) var joinState: GroupJoinState = .notJoined
+    private func syncJoinState() {
+        let now: GroupJoinState = activeCid != nil ? .joined
+            : (waitingForApproval ? .pending : (connecting ? .joining : .notJoined))
+        if now != joinState { joinState = now }
+    }
     @Published var isVideo = false
     @Published var micOn = true
 
@@ -117,7 +134,20 @@ final class GroupCallService: ObservableObject {
     /// app's: tapping a call link first shows your own camera, the call's name, camera and mic
     /// buttons, and Leave / Join. Set here, shown by `IncomingGroupCallLayer` (`CallLobbyView`).
     struct Lobby: Identifiable, Equatable { let key: String; var id: String { key } }
-    @Published var lobby: Lobby?
+    @Published var lobby: Lobby? {
+        didSet {
+            // The lobby went away (Leave, or swiped down) with a join or a knock still running
+            // from it: that is leaving, exactly as closing the call screen while connecting is.
+            if lobby == nil, oldValue != nil, lobbyJoin, !isActive, connecting || waitingForApproval { end() }
+        }
+    }
+    /// ⛔ THE LOBBY STAYS UP UNTIL I AM IN (owner 2026-10-06, reference study). Join used to close
+    /// the lobby at once and put up the call screen on "Connecting…"; with approval on, the wait
+    /// happened on that second screen. Now a join started from the lobby (`joinLink(fromLobby: true)`)
+    /// keeps the lobby on screen while it runs ("Ask to Join" → "Waiting to be let in"), and the call
+    /// screen comes up only once the room is joined. A refusal lands here as a line of text.
+    @Published var lobbyError: String?
+    private var lobbyJoin = false
     /// The mic as the lobby left it. Read by `connect` (also after an approval wait), cleared with
     /// the room.
     private var startMuted = false
@@ -133,13 +163,16 @@ final class GroupCallService: ObservableObject {
             return
         }
         guard CallLinkKey(text: key) != nil else { Self.presentOverTop(Self.linkGone); return }
+        lobbyError = nil
         lobby = Lobby(key: key)
     }
     @Published var cameraOn = false
     /// A VOICE call link (owner, 2026-10-06): nobody's camera can come on in this room. Set from the
     /// server's join answer; the media server enforces it too (the token can publish the mic only).
     @Published private(set) var cameraLocked = false
-    @Published var connecting = false
+    @Published var connecting = false {
+        didSet { syncJoinState() }
+    }
     @Published var minimized = false        // swiped down → CallContainer shows the return bar
     @Published var callTitle = ""
     /// 2026-09-24 decision D25: why a start did not become a call. GroupCallView shows it as an alert
@@ -174,7 +207,9 @@ final class GroupCallService: ObservableObject {
     @Published var members: [CallMember] = []        // ad-hoc: everyone invited, live from the doc
     @Published var joinedUids: Set<String> = []      // ad-hoc: everyone who ever connected
     @Published var roomStartedAt: Date?              // ad-hoc: drives "Ringing…" vs "Didn't join"
-    @Published var waitingForApproval = false        // link joiner, parked until the creator answers
+    @Published var waitingForApproval = false {      // link joiner, parked until the creator answers
+        didSet { syncJoinState() }
+    }
     @Published var pendingRequests: [CallMember] = [] // link creator: people waiting to be let in
     @Published private(set) var isLinkCreator = false
     @Published var incomingInvite: AdhocInvite?
@@ -232,6 +267,7 @@ final class GroupCallService: ObservableObject {
         // 2026-09-24 decision D25: refused while a 1:1 call is ringing, live or closing.
         guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
+        joiningRoomId = cid
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         do {
             let res = try await Functions.functions(region: "me-central1")
@@ -239,6 +275,7 @@ final class GroupCallService: ObservableObject {
             guard gen == joinGeneration else { await abandonJoin(); return }
             guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
                 connecting = false
+                joiningRoomId = nil
                 // owner audit 2026-10-06 #44: a speaker toggle made while connecting does not
                 // carry into the next call.
                 speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
@@ -251,6 +288,7 @@ final class GroupCallService: ObservableObject {
             // In the room = in the call; mic and camera follow (see startLocalMedia).
             activeCid = cid; activeRoom = .group(cid: cid); connecting = false
             startLocalMedia(mic: true, video: video)
+            didJoinRoom()
             myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
             // joined one, and the starter writes the call's record into the chat.
@@ -378,12 +416,14 @@ final class GroupCallService: ObservableObject {
         linkRevoked = false
     }
 
-    private func showToast(_ text: String) {
+    /// Not private: `GroupCallSocial` says "<Name> muted you" through it. Four seconds, the
+    /// reference app's dwell for these notes.
+    func showToast(_ text: String) {
         toast = text
         UIAccessibility.post(notification: .announcement, argument: text)
         toastTask?.cancel()
         toastTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
             guard !Task.isCancelled else { return }
             self?.toast = nil
         }
@@ -396,9 +436,19 @@ final class GroupCallService: ObservableObject {
         guard isActive, micOn, micChangesInFlight == 0,
               !room.localParticipant.isMicrophoneEnabled() else { return }
         micOn = false
-        // TODO: the server does not say who muted me, so it cannot read "<Owner> muted you" yet.
-        showToast("You were muted")
+        // The server now also says WHO ("<Name> muted you", a data message `GroupCallSocial` shows),
+        // and that note lands a beat after the mute itself. Wait for it; say the plain line only if
+        // none came (an older server, or the note was lost).
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let self, self.isActive else { return }
+            if let at = GroupCallSocial.shared.lastMutedByAt, Date().timeIntervalSince(at) < 3 { return }
+            self.showToast("You were muted")
+        }
     }
+
+    /// Someone came or went. The caller's ringing tone stops with the first arrival.
+    fileprivate func remotePeopleChanged() { updateRingback() }
 
     /// Someone's LiveKit attributes changed; mine may carry a new role.
     fileprivate func attributesChanged() {
@@ -444,7 +494,7 @@ final class GroupCallService: ObservableObject {
     /// first camera-access prompt) held the whole screen on "Connecting…". Now the call is up the
     /// moment the room is, and the mic and camera start after it; the buttons show the wish at once
     /// and go back, with a short note, if a start fails.
-    private func startLocalMedia(mic: Bool, video: Bool) {
+    private func startLocalMedia(mic: Bool, video: Bool, cameraDelay: UInt64 = 0) {
         joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
         micOn = mic
         cameraOn = video
@@ -461,6 +511,7 @@ final class GroupCallService: ObservableObject {
                 if gen == joinGeneration { cameraOn = false; showToast("Allow camera access in Settings") }
                 return
             }
+            if cameraDelay > 0 { try? await Task.sleep(nanoseconds: cameraDelay) }
             guard gen == joinGeneration, cameraOn else { return }   // turned off meanwhile
             do { try await room.localParticipant.setCamera(enabled: true) }
             catch {
@@ -469,6 +520,104 @@ final class GroupCallService: ObservableObject {
                 showToast("Couldn't turn the camera on")
             }
         }
+    }
+
+    /// The room is up: the pieces that live beside this service start with it. Hands and reactions
+    /// ride the room's data channel; a call answered from the lock screen is told it connected.
+    private func didJoinRoom() {
+        joiningRoomId = nil
+        // Any call that is now up closes a lobby still open for some other link (an invitation
+        // answered while looking at one): there is one call at a time.
+        if lobby != nil { lobbyJoin = false; lobby = nil }
+        usingFrontCamera = true
+        GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
+        GroupCallRinging.shared.callJoined()
+        updateRingback()
+    }
+
+    // MARK: - Camera position
+
+    /// Front or back camera (owner 2026-10-06, reference study: a group call had no way to switch).
+    @Published private(set) var usingFrontCamera = true
+    private var flippingCamera = false
+    func flipCamera() {
+        guard cameraOn, !flippingCamera,
+              let track = room.localParticipant.firstCameraVideoTrack as? LocalVideoTrack,
+              let capturer = track.capturer as? CameraCapturer else { return }
+        flippingCamera = true
+        Task { @MainActor in
+            do {
+                _ = try await capturer.switchCameraPosition()
+                usingFrontCamera = capturer.position != .back
+            } catch {
+                showToast("Couldn't switch the camera")
+            }
+            flippingCamera = false
+        }
+    }
+
+    // MARK: - Ringing, as the caller hears and sees it
+
+    /// How long an invitation to a multi-person call rings (the people list's "Ringing…" minute).
+    static let ringWindow: TimeInterval = 60
+    /// Invited people who said no, or whose phone answered "busy" (`groupRingAnswer` writes both on
+    /// the call's doc). They stop counting as ringing at once.
+    @Published private(set) var declinedUids: Set<String> = []
+    @Published private(set) var busyUids: Set<String> = []
+    private var roomAnswersSeeded = false
+
+    /// Caller side (owner 2026-10-06): who a multi-person call is still ringing, for "Ringing Alice…".
+    /// Invited, never joined, has not said no, and inside the ring minute. Empty for any other call.
+    func ringingNames(at now: Date) -> [String] {
+        guard isAdhoc, isActive, let start = roomStartedAt,
+              now.timeIntervalSince(start) < Self.ringWindow else { return [] }
+        let me = myUid
+        return members
+            .filter { $0.uid != me && !joinedUids.contains($0.uid)
+                && !declinedUids.contains($0.uid) && !busyUids.contains($0.uid) }
+            .map(\.name)
+    }
+
+    /// The room a join is running for, from the tap until it is joined or dropped. With `activeCid`
+    /// it answers "is this ring for the call I am already going into?".
+    private var joiningRoomId: String?
+
+    /// ⛔ A RING THAT IS ALREADY MINE IS NOT "BUSY" — read by `GroupCallRinging` before it answers a
+    /// ring with "busy". True when the ring is for the call I am in, joining or already answered; and
+    /// when it comes from the person I am in a 1:1 with, because that is "Add people" carrying both
+    /// of us into the new room (`CallService.moveToGroup`, the other side's `followMove`). Such a
+    /// ring is ended quietly: no busy answer, no second call screen.
+    func ringIsMine(roomId: String, callerUid: String) -> Bool {
+        if activeCid == roomId || joiningRoomId == roomId || declinedInvites.contains(roomId) { return true }
+        let oneToOne = CallService.shared
+        return oneToOne.state != .idle && !callerUid.isEmpty && oneToOne.otherUid == callerUid
+    }
+
+    /// The tone the caller hears while the call rings and nobody has come yet: the 1:1 call's own
+    /// tone (`RingbackTone`). The reference app stops it the moment the first person joins.
+    private var ringback: AVAudioPlayer?
+    private var ringbackTimeout: Task<Void, Never>?
+    fileprivate func updateRingback() {
+        let ringing = isActive && room.connectionState == .connected && room.remoteParticipants.isEmpty
+            && !ringingNames(at: Date()).isEmpty
+        guard ringing else { stopRingback(); return }
+        guard ringback == nil else { return }
+        let player = try? AVAudioPlayer(data: RingbackTone.wavData())
+        player?.numberOfLoops = -1
+        player?.play()
+        ringback = player
+        // The ring minute ends by the clock, with no event to hang the stop on.
+        ringbackTimeout?.cancel()
+        let left = Self.ringWindow - Date().timeIntervalSince(roomStartedAt ?? Date())
+        ringbackTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(1, left + 0.5) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.updateRingback()
+        }
+    }
+    private func stopRingback() {
+        ringbackTimeout?.cancel(); ringbackTimeout = nil
+        ringback?.stop(); ringback = nil
     }
 
     /// Camera access, asking the first time.
@@ -515,15 +664,22 @@ final class GroupCallService: ObservableObject {
     /// (LiveKit's participantRemoved); `deleted` = the owner ended it for everyone (roomDeleted).
     /// Each is said once the screen has closed. Neither rejoins: nothing here ever reconnects, and the
     /// server refuses a removed person a new join pass.
-    fileprivate func roomDropped(removed: Bool, deleted: Bool) {
+    fileprivate func roomDropped(_ reason: RoomDropReason) {
         guard isActive, !leaving, room.connectionState == .disconnected else { return }
+        // owner 2026-10-06, reference study: every way a call ends says why. Only being removed and
+        // "ended for everyone" did; a lost connection, a failed reconnect or a server fault closed
+        // the screen without a word.
         let n: Notice?
-        if removed {
+        switch reason {
+        case .removed:
             n = Notice(title: "You were removed from the call", message: nil)
-        } else if deleted && !endingForAll {
-            n = Notice(title: "The call was ended", message: nil)
-        } else {
-            n = nil
+        case .deleted:
+            n = endingForAll ? nil : Notice(title: "The call was ended", message: nil)
+        case .duplicate:
+            n = Notice(title: "You joined this call on another device", message: nil)
+        case .other:
+            n = endingForAll ? nil : Notice(title: "Call unexpectedly ended",
+                                            message: "Check your connection and try joining again.")
         }
         Task {
             await disconnect()
@@ -573,6 +729,7 @@ final class GroupCallService: ObservableObject {
         }
         activeCid = nil; micOn = true; cameraOn = false; isVideo = false; callTitle = ""
         cameraLocked = false
+        usingFrontCamera = true; lobbyError = nil
         // The next group call starts on the speaker again, as group calls always have.
         speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
         minimized = false
@@ -715,13 +872,17 @@ final class GroupCallService: ObservableObject {
 
     /// Joins a call link. With admin approval on, a non-creator is parked in `waitingForApproval`
     /// until the creator answers.
-    func joinLink(key: String, video: Bool, mic: Bool = true) async {
+    func joinLink(key: String, video: Bool, mic: Bool = true, fromLobby: Bool = false) async {
         guard activeCid == nil, !connecting, !waitingForApproval else { return }
         startMuted = !mic
         notice = nil
-        presentsRoomScreen = true
-        guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
-        guard let k = CallLinkKey(text: key) else { notice = Self.linkGone; return }
+        lobbyError = nil
+        lobbyJoin = fromLobby && lobby != nil
+        // From the lobby the call screen waits until I am in (`connect`). Every other way in (a
+        // link row's long-press menu) shows it at once, as before.
+        if !lobbyJoin { presentsRoomScreen = true }
+        guard CallService.shared.state == .idle else { refuseJoin(Self.busyNotice); return }
+        guard let k = CallLinkKey(text: key) else { refuseJoin(Self.linkGone); return }
         let roomId = k.roomId
         connecting = true; isVideo = video
         callTitle = "Kulan Call"
@@ -760,7 +921,76 @@ final class GroupCallService: ObservableObject {
         }
     }
 
+    /// Creator of a link call: let everyone waiting in, or turn them all away (the reference app's
+    /// "Approve all" / "Deny all"). One server call; a failure puts them back in the list.
+    func answerAllRequests(approve: Bool) async {
+        guard case .link(let roomId, _)? = activeRoom, isLinkCreator, !pendingRequests.isEmpty else { return }
+        let before = pendingRequests
+        pendingRequests = []
+        do {
+            _ = try await functions.httpsCallable("answerAllCallLinkRequests")
+                .call(["roomId": roomId, "approve": approve])
+        } catch {
+            if pendingRequests.isEmpty { pendingRequests = before }
+            showToast("Couldn't answer everyone. Try again.")
+        }
+    }
+
+    /// Creator of a link call: out of the call and refused by this link for good. False when the
+    /// server said no (the caller says so).
+    @discardableResult
+    func block(_ uid: String) async -> Bool {
+        do { try await admin(.block, target: uid); return true } catch { return false }
+    }
+
+    /// What the screen before joining shows about a link: who is in the call now, whether joining
+    /// needs the creator's yes, voice only, full, or no longer valid.
+    struct LinkPeek: Equatable {
+        let title: String
+        let count: Int
+        let names: [String]     // up to three people in the call now; empty when the server keeps them back
+        let approval: Bool
+        let video: Bool
+        let gone: Bool
+        let full: Bool
+        let iAmCreator: Bool
+    }
+
+    /// nil = the server could not be asked (offline, or an older server): the lobby then shows the
+    /// link without the extras and Join works as it always has.
+    func peekLink(key: String) async -> LinkPeek? {
+        guard let k = CallLinkKey(text: key) else {
+            return LinkPeek(title: "Kulan Call", count: 0, names: [], approval: false, video: true,
+                            gone: true, full: false, iAmCreator: false)
+        }
+        guard let res = try? await functions.httpsCallable("peekCallLink").call(["roomId": k.roomId]),
+              let d = res.data as? [String: Any] else { return nil }
+        var title = "Kulan Call"
+        if let enc = d["encName"] as? String, !enc.isEmpty, let name = k.decryptName(enc), !name.isEmpty {
+            title = name
+        }
+        return LinkPeek(title: title,
+                        count: (d["count"] as? NSNumber)?.intValue ?? 0,
+                        names: d["names"] as? [String] ?? [],
+                        approval: d["approval"] as? Bool ?? false,
+                        video: d["video"] as? Bool ?? true,
+                        gone: d["gone"] as? Bool ?? false,
+                        full: d["full"] as? Bool ?? false,
+                        iAmCreator: d["creator"] as? Bool ?? false)
+    }
+
     private static let linkGone = Notice(title: "This call link is no longer valid", message: nil)
+
+    /// A join refused before it began. In the lobby it is a line on the lobby; anywhere else it is
+    /// the call screen's alert.
+    private func refuseJoin(_ n: Notice) {
+        if lobbyJoin, lobby != nil {
+            lobbyJoin = false
+            lobbyError = n.message ?? n.title
+        } else {
+            notice = n
+        }
+    }
 
     /// Fetches a token for `payload` and joins the room. Returns false when it did not join; a
     /// `{pending: true}` answer for a link parks us in the waiting state instead of failing.
@@ -769,6 +999,11 @@ final class GroupCallService: ObservableObject {
     private func connect(payload: [String: Any], room r: GroupRoom, video: Bool, gen: Int) async -> Bool {
         guard gen == joinGeneration else { await abandonJoin(); return false }
         connecting = true
+        switch r {
+        case .group(let cid): joiningRoomId = cid
+        case .adhoc(let id): joiningRoomId = id
+        case .link(let roomId, _): joiningRoomId = roomId
+        }
         var isLinkRoom = false
         if case .link(_, _) = r { isLinkRoom = true }
         do {
@@ -776,8 +1011,8 @@ final class GroupCallService: ObservableObject {
             guard gen == joinGeneration else { await abandonJoin(); return false }
             let d = res.data as? [String: Any]
             if d?["pending"] as? Bool == true, case .link(let roomId, let key) = r {
+                beginWaiting(roomId: roomId, key: key, video: video)   // first: pending, never a beat of "not joined"
                 connecting = false
-                beginWaiting(roomId: roomId, key: key, video: video)
                 return false
             }
             guard let token = d?["token"] as? String else {
@@ -801,7 +1036,16 @@ final class GroupCallService: ObservableObject {
             activeRoom = r; connecting = false
             waitingForApproval = false
             myRole = CallRole(attribute: d?["role"] as? String)
-            startLocalMedia(mic: !startMuted, video: video)
+            // Joined from the lobby: now the lobby goes and the call screen comes. The lobby's own
+            // camera preview is still letting go of the camera, so the call's camera waits a beat.
+            let fromLobby = lobbyJoin
+            if fromLobby {
+                lobbyJoin = false
+                lobby = nil
+                presentsRoomScreen = true
+            }
+            startLocalMedia(mic: !startMuted, video: video, cameraDelay: fromLobby ? 400_000_000 : 0)
+            didJoinRoom()
             return true
         } catch {
             // Hung up mid-connect: the room.disconnect() that hang-up ran is what threw here, and
@@ -821,6 +1065,11 @@ final class GroupCallService: ObservableObject {
             if code == .permissionDenied, ns.localizedDescription == "removed" {
                 return Notice(title: "You can't rejoin this call", message: nil)
             }
+            // owner 2026-10-06, reference study: the server's ceiling. (The rate limit uses the same
+            // code with a different message, and stays "Call failed".)
+            if code == .resourceExhausted, ns.localizedDescription == "full" {
+                return Notice(title: "Call is full", message: "This call has reached its limit. Try again later.")
+            }
             if link, code == .notFound { return linkGone }
             if link, code == .permissionDenied { return Notice(title: "Request denied", message: nil) }
         }
@@ -839,8 +1088,9 @@ final class GroupCallService: ObservableObject {
         speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
         // A join minimized with the chevron that then failed must not start the next call minimized.
         minimized = false
+        let inLobby = lobbyJoin && lobby != nil   // read before the reset clears it
         resetRoomState()
-        notice = n
+        if inLobby { lobbyError = n.message ?? n.title } else { notice = n }
     }
 
     private func markJoined(_ roomId: String) async {
@@ -853,7 +1103,14 @@ final class GroupCallService: ObservableObject {
 
     private func resetRoomState() {
         startMuted = false
+        lobbyJoin = false
+        joiningRoomId = nil
         joinedAt = nil
+        stopRingback()
+        declinedUids = []; busyUids = []; roomAnswersSeeded = false
+        // Idempotent on both sides: this also runs for a join that never became a call.
+        GroupCallSocial.shared.reset()
+        GroupCallRinging.shared.callEnded()
         roomListener?.remove(); roomListener = nil
         requestsListener?.remove(); requestsListener = nil
         myRequestListener?.remove(); myRequestListener = nil
@@ -876,6 +1133,19 @@ final class GroupCallService: ObservableObject {
         members = uids.map { CallMember(uid: $0, name: names[$0] ?? "Member", photoUrl: photos[$0]) }
         joinedUids = Set(d["joined"] as? [String] ?? [])
         if roomStartedAt == nil, let t = (d["startedAt"] as? Timestamp)?.dateValue() { roomStartedAt = t }
+        // Invited people who said no or were busy (written by the server's `groupRingAnswer`). The
+        // people in the call are told once, by name; what was already there when I joined is not news.
+        let declined = Set(d["declined"] as? [String] ?? [])
+        let busy = Set(d["busy"] as? [String] ?? [])
+        if roomAnswersSeeded, isActive {
+            if let uid = busy.subtracting(busyUids).first, let name = names[uid] {
+                showToast("\(name) is busy")
+            } else if let uid = declined.subtracting(declinedUids).first, let name = names[uid] {
+                showToast("\(name) declined")
+            }
+        }
+        declinedUids = declined; busyUids = busy; roomAnswersSeeded = true
+        updateRingback()
         let me = myUid
         let t = Self.title(for: members.filter { $0.uid != me }.map(\.name))
         if !t.isEmpty { callTitle = t }
@@ -1018,12 +1288,30 @@ final class GroupCallService: ObservableObject {
     /// declined, and still inside the 90s ring window. Nothing rings while I am already in a call.
     func reevaluateInvites() {
         let me = myUid
+        let now = Date()
         guard !me.isEmpty, activeCid == nil, !connecting, !waitingForApproval,
               CallService.shared.state == .idle else {
+            // In another call: the invitation is not shown, and the people ringing me are told
+            // "busy" instead of ringing into nothing (owner 2026-10-06; the reference app does the
+            // same). Only a fresh ring for a call I am not in and have not answered.
+            if !me.isEmpty {
+                for doc in inviteDocs {
+                    let d = doc.data
+                    guard d["active"] as? Bool == true,
+                          let by = d["startedBy"] as? String, by != me,
+                          !ringIsMine(roomId: doc.id, callerUid: by),
+                          !(d["joined"] as? [String] ?? []).contains(me),
+                          !(d["declined"] as? [String] ?? []).contains(me),
+                          !(d["busy"] as? [String] ?? []).contains(me),
+                          !declinedInvites.contains(doc.id),
+                          let at = (d["startedAt"] as? Timestamp)?.dateValue(),
+                          now.timeIntervalSince(at) < Self.ringWindow else { continue }
+                    GroupCallRinging.shared.reportBusy(roomKind: "adhoc", roomId: doc.id)
+                }
+            }
             incomingInvite = nil
             return
         }
-        let now = Date()
         for doc in inviteDocs {
             let d = doc.data
             guard let by = d["startedBy"] as? String, by != me,
@@ -1078,23 +1366,41 @@ final class GroupCallService: ObservableObject {
     func acceptInvite() {
         guard let i = incomingInvite else { return }
         incomingInvite = nil
-        Task { await joinAdhoc(roomId: i.roomId, video: i.video) }
+        // No camera prompt in the middle of answering (the reference app's rule): a video invitation
+        // is answered with the camera on only when access was already given.
+        let video = i.video && AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        Task { await joinAdhoc(roomId: i.roomId, video: video) }
     }
 }
 
 /// owner audit 2026-10-06 #16: tells the service when the LiveKit room goes to `.disconnected` by
 /// itself. A separate NSObject because RoomDelegate is an @objc protocol called off the main
 /// thread; the service decides on the main actor whether it was a drop or our own hang-up.
+/// Why the room closed without my asking, as the media server put it.
+enum RoomDropReason { case removed, deleted, duplicate, other }
+
 private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendable {
     func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState,
               from oldConnectionState: ConnectionState) {
         guard connectionState == .disconnected else { return }
         // Read here, on the delegate's own beat: the SDK sets the reason in the same state change
         // that reports `.disconnected`, and a later connect would replace it.
-        let reason = room.disconnectError?.type
-        let removed = reason == .participantRemoved
-        let deleted = reason == .roomDeleted
-        Task { @MainActor in GroupCallService.shared.roomDropped(removed: removed, deleted: deleted) }
+        let why: RoomDropReason
+        switch room.disconnectError?.type {
+        case .participantRemoved?: why = .removed
+        case .roomDeleted?: why = .deleted
+        case .duplicateIdentity?: why = .duplicate
+        default: why = .other
+        }
+        Task { @MainActor in GroupCallService.shared.roomDropped(why) }
+    }
+
+    func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+        Task { @MainActor in GroupCallService.shared.remotePeopleChanged() }
+    }
+
+    func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        Task { @MainActor in GroupCallService.shared.remotePeopleChanged() }
     }
 
     /// Group call permissions, 2026-10-06: the server muting my microphone shows up as my own
