@@ -111,6 +111,7 @@ final class GroupCallStage: ObservableObject {
 
         var built: [CallTile] = []
         var byId: [String: Participant] = [:]
+        var newShare = false
         for p in all {
             let isLocal = p is LocalParticipant
             // Before connect the local participant has no sid yet; "local" keeps my own tile on
@@ -129,7 +130,7 @@ final class GroupCallStage: ObservableObject {
             }()
             let photo = isLocal ? (ProfileStore.shared.me?.photoUrl ?? member?.photoUrl) : member?.photoUrl
             let sharing = p.firstScreenShareVideoTrack != nil
-            if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now }
+            if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now; newShare = true }
             if !sharing { shareStartedAt[id] = nil }
 
             built.append(CallTile(
@@ -165,6 +166,8 @@ final class GroupCallStage: ObservableObject {
 
         if built != tiles { tiles = built }
         if let pin = pinnedId, !present.contains(pin) { pinnedId = nil }   // didSet updates mode
+        // A share that just started takes the stage over an older pin (the latest thing wins).
+        if newShare, pinnedId != nil { pinnedId = nil }
 
         // Spec §8: the highlight follows the tracker (0.3s to take over, 1.5s hold), not the raw flag.
         let speaking = Set(built.filter(\.isSpeaking).map(\.id))
@@ -175,14 +178,16 @@ final class GroupCallStage: ObservableObject {
         updateMode()
     }
 
-    /// Presenter wins (a shared screen is what the room is looking at), then the user's pin, else grid.
+    /// The user's pin, then the presenter (a shared screen is what the room is looking at), else grid.
+    /// The pin goes first so a tap on the strip or the people list during a share does show that
+    /// person; a share that starts later clears the pin in `refresh()`, so it still takes over.
     private func updateMode() {
         let presenter = shareStartedAt.max { $0.value < $1.value }?.key
         let next: CallStageMode
-        if let presenter, participants[presenter] != nil {
-            next = .focus(tileId: presenter)
-        } else if let pin = pinnedId, participants[pin] != nil {
+        if let pin = pinnedId, participants[pin] != nil {
             next = .focus(tileId: pin)
+        } else if let presenter, participants[presenter] != nil {
+            next = .focus(tileId: presenter)
         } else {
             next = .grid
         }
