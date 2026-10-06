@@ -138,7 +138,9 @@ struct CreateCallLinkSheet: View {
             .background(Color(.systemGroupedBackground))
             .toolbar(.hidden, for: .navigationBar)
         }
-        .presentationDetents([.height(contentHeight + 12)])
+        // + the home-indicator band (owner, 2026-10-06: the Call Type row was cut off at the bottom):
+        // a fixed-height detent does not add it by itself (same rule as WallpaperPickerSheet).
+        .presentationDetents([.height(contentHeight + 12 + WallpaperPickerSheet.bottomInset)])
         .presentationDragIndicator(.visible)
         .alert("Couldn't change setting", isPresented: $approvalFailed) {
             Button("OK", role: .cancel) {}
