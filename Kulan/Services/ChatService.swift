@@ -800,7 +800,18 @@ enum ChatService {
     /// they had not been sent. The reaction path already refuses to do this and says why ("a reaction
     /// shouldn't reorder chats or re-arm unread"); the intent existed and these three callers simply
     /// were not covered by it.
-    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true) async throws {
+    ///
+    /// owner audit 2026-10-06 chat #24: `tapTs` is when Send was tapped (ms epoch) and `turn` is the
+    /// place in this chat's send line taken at that tap. Both are optional: a caller without them is
+    /// stamped and queued on entry here, which is still before every await below.
+    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true,
+                         tapTs: Double? = nil, turn: SendTurn? = nil) async throws {
+        // owner audit 2026-10-06 chat #24: stamped and queued BEFORE the first await. `clientTs` used
+        // to be read after encryption and the server reads, so of two quick sends whichever cleared
+        // those awaits first took the earlier stamp, and nothing kept their writes in tap order.
+        let clientTs = tapTs ?? Date().timeIntervalSince1970 * 1000
+        let turn = turn ?? SendTurn.take(cid)
+        defer { turn.finish() }   // every exit, thrown or returned, lets the next send go
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         // Group path: per-member encryption + unread fan-out. 1:1 path below is untouched.
@@ -813,7 +824,8 @@ enum ChatService {
             members = snap?.data()?["users"] as? [String]
         }
         if let members {
-            try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded)
+            try await sendGroupText(cid: cid, members: members, text: t, replyTo: replyTo, clientId: clientId, mentions: mentions, preview: preview, forwarded: forwarded,
+                                    clientTs: clientTs, turn: turn)
             return
         }
 
@@ -883,13 +895,13 @@ enum ChatService {
         // ...and that first message is a knock, which the check above could not see (no document yet).
         if isNewConv && knocking == nil { await MessageRequests.countKnock(clientId: clientId) }
 
-        let msgRef = convRef.collection("messages").document()
+        let msgRef = textMessageRef(convRef, clientId: clientId)   // owner audit 2026-10-06 chat #77
         let batch = db.batch()
         var msg: [String: Any] = [
             "text": cipher,
             "authorId": uid,
             "createdAt": FieldValue.serverTimestamp(),
-            "clientTs": Date().timeIntervalSince1970 * 1000,   // tap time — display order is send order
+            "clientTs": clientTs,   // tap time — display order is send order (chat #24: stamped at the tap)
         ]
         if let clientId { msg["clientId"] = clientId }   // lets the client reconcile its optimistic copy
         if let replyEnc { msg["replyTo"] = replyEnc }
@@ -911,7 +923,7 @@ enum ChatService {
         ]
         if countsAsUnread { convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1)) }
         batch.updateData(convUpdate, forDocument: convRef)
-        try await batch.commit()
+        try await commitTextInTurn(batch, turn: turn, clientId: clientId)
     }
 
     /// 2026-09-24 fix-all #111: the member list a group message is sealed to, read from the SERVER
@@ -943,7 +955,8 @@ enum ChatService {
     /// but me. The conversation already exists (created by createGroup), so no users write.
     private static func sendGroupText(cid: String, members: [String], text t: String,
                                       replyTo: ReplyRef?, clientId: String?, mentions: [String] = [],
-                                      preview: OutgoingLinkPreview? = nil, forwarded: Bool = false) async throws {
+                                      preview: OutgoingLinkPreview? = nil, forwarded: Bool = false,
+                                      clientTs: Double, turn: SendTurn) async throws {
         let cipher = try await Crypto.shared.encryptForGroup(t, members: members)
         var replyEnc: [String: Any]?
         if let r = replyTo {
@@ -954,13 +967,13 @@ enum ChatService {
             replyEnc = e
         }
         let convRef = db.collection("conversations").document(cid)
-        let msgRef = convRef.collection("messages").document()
+        let msgRef = textMessageRef(convRef, clientId: clientId)   // owner audit 2026-10-06 chat #77
         let batch = db.batch()
         var msg: [String: Any] = [
             "text": cipher,
             "authorId": uid,
             "createdAt": FieldValue.serverTimestamp(),
-            "clientTs": Date().timeIntervalSince1970 * 1000,   // tap time — display order is send order
+            "clientTs": clientTs,   // tap time — display order is send order (chat #24: stamped at the tap)
         ]
         if let clientId { msg["clientId"] = clientId }
         if let replyEnc { msg["replyTo"] = replyEnc }
@@ -996,7 +1009,113 @@ enum ChatService {
             convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1))
         }
         batch.updateData(convUpdate, forDocument: convRef)
-        try await batch.commit()
+        try await commitTextInTurn(batch, turn: turn, clientId: clientId)
+    }
+
+    // MARK: - Text send order, cancel and retry safety (owner audit 2026-10-06, chat #23 #24 #77)
+
+    /// owner audit 2026-10-06 chat #77: a text with a clientId is written at `messages/{clientId}`.
+    /// The id used to be random, so a send re-driven after a kill (the SDK replaying its own queued
+    /// write while `SendQueue.alreadySent` asked the server too early) wrote a SECOND document.
+    /// With one fixed address the replay and the retry name the same document: the second write is
+    /// an update the rules refuse, the batch with its unread increment is rolled back, and the
+    /// person gets one message. The pending bubble already uses the clientId as its id.
+    private static func textMessageRef(_ convRef: DocumentReference, clientId: String?) -> DocumentReference {
+        let messages = convRef.collection("messages")
+        guard let clientId, !clientId.isEmpty, !clientId.contains("/") else { return messages.document() }
+        return messages.document(clientId)
+    }
+
+    /// owner audit 2026-10-06 chat #24: one line of text sends per chat, in tap order. The server
+    /// stamps `createdAt` when the write arrives and the SDK sends writes in the order they were
+    /// committed, so holding each commit until the send tapped before it has committed keeps the
+    /// server order equal to the tap order. Only the hand-off to the SDK waits, never the server's
+    /// answer, and never longer than `maxWait`: a send stuck behind a dead one goes anyway.
+    final class SendTurn: @unchecked Sendable {
+        private static let lock = NSLock()
+        private static var tails: [String: SendTurn] = [:]
+        private static let maxWait: TimeInterval = 10
+
+        private let cid: String
+        private var previous: SendTurn?
+        private var done = false
+
+        private init(cid: String, previous: SendTurn?) {
+            self.cid = cid
+            self.previous = previous
+        }
+
+        /// The next place in `cid`'s line. Call it at the tap, on the main thread, so the line is the
+        /// order the taps happened in.
+        static func take(_ cid: String) -> SendTurn {
+            lock.withLock {
+                let turn = SendTurn(cid: cid, previous: tails[cid])
+                tails[cid] = turn
+                return turn
+            }
+        }
+
+        var isDone: Bool { Self.lock.withLock { done } }
+
+        /// Lets the next send in the line go. Safe to call more than once.
+        func finish() {
+            Self.lock.withLock {
+                guard !done else { return }
+                done = true
+                previous = nil   // a finished turn holds nothing, so the line never grows
+                if Self.tails[cid] === self { Self.tails[cid] = nil }
+            }
+        }
+
+        /// Waits until the send before this one has committed (or given up), at most `maxWait`.
+        func waitForPrevious() async {
+            let deadline = Date().addingTimeInterval(Self.maxWait)
+            while let prev = Self.lock.withLock({ previous }), !prev.isDone, Date() < deadline {
+                if Task.isCancelled { return }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+    }
+
+    /// owner audit 2026-10-06 chat #23: text sends the user deleted before they went out, and the
+    /// clientIds whose write has already been handed to the SDK.
+    private static let textSendLock = NSLock()
+    private static var cancelledTextSends = Set<String>()
+    private static var committedTextSends = Set<String>()
+
+    /// owner audit 2026-10-06 chat #23. Deleting an unsent text dropped its bubble and its queue
+    /// entry, but a send suspended in this process (offline, waiting inside `sendText`) still wrote
+    /// the message when the signal came back. Called by the delete: a send that has not committed
+    /// yet now stops at its commit; one whose write the SDK already holds is taken back by deleting
+    /// its document (the author may delete their own message; it lives at `messages/{clientId}`).
+    static func cancelTextSend(cid: String, clientId: String) {
+        let alreadyCommitted = textSendLock.withLock { () -> Bool in
+            cancelledTextSends.insert(clientId)
+            return committedTextSends.contains(clientId)
+        }
+        if alreadyCommitted {
+            Task { await cancelAnnounced(cid: cid, messageId: clientId) }
+        }
+    }
+
+    /// Waits for this send's turn, then hands the batch to the SDK unless the send was deleted
+    /// meanwhile. The turn is released the moment the SDK holds the write, before the server answers.
+    private static func commitTextInTurn(_ batch: WriteBatch, turn: SendTurn, clientId: String?) async throws {
+        await turn.waitForPrevious()
+        if let clientId {
+            let cancelled = textSendLock.withLock { () -> Bool in
+                if cancelledTextSends.contains(clientId) { return true }
+                committedTextSends.insert(clientId)
+                return false
+            }
+            if cancelled { turn.finish(); return }   // deleted before it went: nothing is written
+        }
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            batch.commit { error in
+                if let error { c.resume(throwing: error) } else { c.resume() }
+            }
+            turn.finish()   // the SDK holds the write now, in order
+        }
     }
 
     /// Encrypt + send a photo. The JPEG bytes are sealed with Crypto.encryptBytes
