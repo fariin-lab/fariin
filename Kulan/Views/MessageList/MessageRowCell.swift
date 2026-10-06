@@ -323,6 +323,9 @@ final class MessageRowCell: UICollectionViewCell {
         super.prepareForReuse()
         rowId = nil
         model = nil
+        // Owner audit 2026-10-06 chat #78: the slide the list adds to a reacted row's neighbours
+        // rides the cell's own layer; a recycled cell must not carry it into the next row.
+        layer.removeAnimation(forKey: "reaction.neighbour")
         rowView.prepareForReuse()
     }
 

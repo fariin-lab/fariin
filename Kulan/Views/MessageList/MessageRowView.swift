@@ -603,6 +603,10 @@ final class MessageRowView: UIView {
         // recycled cell (a different id): that would be motion out of nowhere mid-scroll.
         let oldKeys = Self.reactionKeys(model), newKeys = Self.reactionKeys(m)
         var before: ReactionBefore?
+        // Owner audit 2026-10-06 chat #38: a growth belongs to the pass that made it. When the list
+        // skipped its read (a moving list, or the main apply path), the old number waited here and
+        // a later, unrelated height change on this cell handed it out, sliding the whole screen.
+        pendingGrowth = 0
         if model?.id == m.id, let oldKeys, let newKeys, oldKeys != newKeys,
            !UIAccessibility.isReduceMotionEnabled, case .bubble(let ob)? = plan?.body {
             before = captureBefore(ob, oldKeys: oldKeys, newKeys: newKeys)
@@ -613,6 +617,9 @@ final class MessageRowView: UIView {
         let dark = traitCollection.userInterfaceStyle == .dark
         defer {
             if let before, case .bubble(let nb) = p.body { animateReactionChange(from: before, to: nb) }
+            // Owner audit 2026-10-06 chat #39: the direction is for this pass only. Left set, it was
+            // read by a later pass the list had not decided it for. Back to the fixed-top default.
+            growsFromBottom = false
         }
 
         applyHeader(p, dark: dark)
@@ -1263,7 +1270,8 @@ final class MessageRowView: UIView {
     /// Handed in by the list through the cell before each configure: true when a row that grows
     /// keeps its bottom edge still (a reader at the newest message), false when it grows down from a
     /// fixed top. Per row, not static: two chat screens alive during a push or pop each own theirs.
-    var growsFromBottom = true
+    /// Used by ONE apply and then put back to false (chat #39), so it must be handed in every time.
+    var growsFromBottom = false
 
     /// The emoji shown by each entry of `reactionViews`, "" when unknown.
     private var chipKeys: [String] = []
@@ -1271,6 +1279,16 @@ final class MessageRowView: UIView {
     /// move the rest of the conversation with it (see `takeReactionGrowth`).
     private var pendingGrowth: CGFloat = 0
     func takeReactionGrowth() -> CGFloat { defer { pendingGrowth = 0 }; return pendingGrowth }
+    /// Snapshots of leaving pills still fading out, so a recycle can take them away (chat #78).
+    private var leavingSnaps: [UIView] = []
+
+    /// Every reaction animation on this row's layers, at any depth: the bubble's own ("reaction.*"),
+    /// the fill's shape and masks ("reactionGrow.*"), the chips, the body, and the date pill, divider
+    /// and sender name above the box. Only those keys, so nothing else running here is touched.
+    private static func dropReactionAnimations(_ l: CALayer) {
+        for k in l.animationKeys() ?? [] where k.hasPrefix("reaction") { l.removeAnimation(forKey: k) }
+        l.sublayers?.forEach(dropReactionAnimations)
+    }
 
     private struct ReactionBefore {
         var bubble: CGRect
@@ -1376,10 +1394,14 @@ final class MessageRowView: UIView {
         for (snap, f) in old.leaving {
             snap.frame = f
             bubbleBox.addSubview(snap)
+            leavingSnaps.append(snap)
             UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
                 snap.transform = CGAffineTransform(scaleX: 0.01, y: 0.01)
                 snap.alpha = 0
-            } completion: { _ in snap.removeFromSuperview() }
+            } completion: { [weak self] _ in
+                snap.removeFromSuperview()
+                self?.leavingSnaps.removeAll { $0 === snap }
+            }
         }
         pendingGrowth = grow
     }
@@ -1683,6 +1705,19 @@ final class MessageRowView: UIView {
         bubbleBox.transform = .identity
         bubbleBox.layer.removeAllAnimations()
         highlight.shape.removeAllAnimations()
+        // Owner audit 2026-10-06 chat #79: a notice or call row is the box a swipe translates
+        // (`liftTarget`), so its transform is put back here as well, not only the bubble box's.
+        noticeView?.transform = .identity
+        callView?.transform = .identity
+        // Owner audit 2026-10-06 chat #78: the reset above covers the box, not its children. A
+        // reaction's animations on the fill, chips, body and the chrome above the box kept running
+        // for up to 0.4s on the next row drawn here, morphing it from the old row's geometry.
+        Self.dropReactionAnimations(layer)
+        // Emptied before the removals: a removal can run the fade's completion, which edits the list.
+        let snaps = leavingSnaps
+        leavingSnaps.removeAll()
+        snaps.forEach { $0.removeFromSuperview() }
+        pendingGrowth = 0   // chat #38: never handed to the next row this cell draws
         // The countdown belongs to one message's timer; a recycled cell must not inherit it.
         expiryRing?.isHidden = true
         // The circle is a view that only exists while the selection lane does, so recycling takes it
