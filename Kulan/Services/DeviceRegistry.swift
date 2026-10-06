@@ -322,7 +322,13 @@ final class DeviceRegistry: ObservableObject {
             // pre-move build) and users/{uid}/push/tokens (a post-move build). setData(merge:)
             // on the push doc so a missing doc can't NOT_FOUND the whole batch.
             batch.updateData(tokenRemovals, forDocument: user)
-            batch.setData(tokenRemovals, forDocument: user.collection("push").document("tokens"), merge: true)
+            // 2026-10-06 group rings: the same VoIP token is also listed under `groupRingTokens`,
+            // on the push doc only (it never lived on the user doc).
+            var pushRemovals = tokenRemovals
+            if let voip = data["voipToken"] as? String {
+                pushRemovals["groupRingTokens"] = FieldValue.arrayRemove([voip])
+            }
+            batch.setData(pushRemovals, forDocument: user.collection("push").document("tokens"), merge: true)
         }
         batch.deleteDocument(ref)
         try await batch.commit()

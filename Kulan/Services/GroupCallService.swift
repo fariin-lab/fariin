@@ -1322,6 +1322,9 @@ final class GroupCallService: ObservableObject {
             let d = doc.data
             guard let by = d["startedBy"] as? String, by != me,
                   !(d["joined"] as? [String] ?? []).contains(me),
+                  // Said no on my other phone, or on this one's lock screen before the app's own
+                  // list loaded (the server keeps the answer on the call's doc).
+                  !(d["declined"] as? [String] ?? []).contains(me),
                   !declinedInvites.contains(doc.id),
                   let invite = makeInvite(id: doc.id, data: d),
                   ageExemptInvites.contains(doc.id) || now.timeIntervalSince(invite.startedAt) < 90

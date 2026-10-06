@@ -34,8 +34,8 @@ struct GroupCallView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             frontLayer
+            hiddenChromeCatcher   // UNDER the chrome stack: see its note
             chromeStack
-            hiddenChromeCatcher
             moreLayer
         }
     }
@@ -87,10 +87,12 @@ struct GroupCallView: View {
         }
     }
 
-    /// Group stage with the chrome away: the first tap anywhere only brings it back (it must not
-    /// also pin whoever was under the finger). It exists ONLY while the chrome is hidden, so it can
-    /// never sit over a tile the user is trying to pin. Alone / two people, GroupCallDuoView has
-    /// the 1:1 screen's own tap surface and this is not drawn.
+    /// Group stage with the chrome away: a tap where the header or the controls were brings them
+    /// back. It sits UNDER the chrome stack, so it only gets the taps that stack lets through (the
+    /// hidden header and controls take none). The stage itself answers its own first tap
+    /// (`stageArea`'s high-priority tap), which leaves its swipe between the grid and the speaker
+    /// page working while the chrome is away; a catcher over the whole screen swallowed that swipe.
+    /// Alone / two people, GroupCallDuoView has the 1:1 screen's own tap surface and this is not drawn.
     @ViewBuilder
     private var hiddenChromeCatcher: some View {
         if !chromeVisible && front == nil {
@@ -311,6 +313,11 @@ struct GroupCallView: View {
             .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
             .contentShape(Rectangle())
             .onTapGesture { toggleChrome() }
+            // Chrome away: the first tap anywhere on the stage only brings it back. It must not
+            // also pin whoever was under the finger, so it outranks the tiles' own taps; scrolling
+            // is untouched. Chrome up: this gesture is off and the tiles get their taps.
+            .highPriorityGesture(TapGesture().onEnded { showChrome() },
+                                 including: chromeVisible ? .subviews : .all)
     }
 
     private var stageSizeReader: some View {
