@@ -55,6 +55,7 @@ struct CallLinkDetailsView: View {
                         Toggle("Admin Approval", isOn: Binding(get: { approval ?? true },
                                                                set: { setApproval($0) }))
                             .disabled(approval == nil)
+                            .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
                             .padding(.horizontal, 16)
                             .frame(minHeight: 50)
                         Divider().padding(.leading, 16)

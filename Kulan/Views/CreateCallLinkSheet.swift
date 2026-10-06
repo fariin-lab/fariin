@@ -131,6 +131,7 @@ struct CreateCallLinkSheet: View {
                         .buttonStyle(.plain)
                         Divider().padding(.leading, 16)
                         Toggle("Admin Approval", isOn: Binding(get: { draft.approval }, set: { setApproval($0) }))
+                            .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
                             .padding(.horizontal, 16)
                             .frame(minHeight: 50)
                         Divider().padding(.leading, 16)
@@ -390,6 +391,7 @@ struct CallLinkApprovalRow: View {
                 .font(.system(size: 17))
                 .frame(width: 24)
             Toggle("Require Admin Approval", isOn: $isOn)
+                .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
                 .disabled(!enabled)
         }
         .padding(.horizontal, 14)

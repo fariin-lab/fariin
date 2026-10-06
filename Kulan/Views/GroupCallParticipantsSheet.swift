@@ -113,6 +113,7 @@ struct GroupCallParticipantsSheet: View {
                     Toggle("Require approval to join",
                            isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
                         .disabled(approval == nil)
+                        .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
                     Button(role: .destructive) { confirmRevoke = true } label: {
                         Label("Revoke link", systemImage: "xmark.circle")
                     }
