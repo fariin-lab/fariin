@@ -7,9 +7,12 @@ import SwiftUI
 struct AddPeopleSheet: View {
     let alreadyIn: Set<String>
     let onAdd: ([CallMember]) -> Void
+    /// The bottom button. A link call sends the link instead of adding to a member list.
+    let actionTitle: String
 
-    init(alreadyIn: Set<String>, onAdd: @escaping ([CallMember]) -> Void) {
+    init(alreadyIn: Set<String>, actionTitle: String = "Add to call", onAdd: @escaping ([CallMember]) -> Void) {
         self.alreadyIn = alreadyIn.filter { !$0.isEmpty }
+        self.actionTitle = actionTitle
         self.onAdd = onAdd
     }
 
@@ -235,7 +238,7 @@ struct AddPeopleSheet: View {
             dismiss()
             onAdd(picked)
         } label: {
-            Label("Add to call", systemImage: "plus")
+            Label(actionTitle, systemImage: "plus")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)

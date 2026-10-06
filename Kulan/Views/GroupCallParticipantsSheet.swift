@@ -86,7 +86,9 @@ struct GroupCallParticipantsSheet: View {
                 List {
                     if service.isAdhoc || link != nil {
                         Section {
-                            if service.isAdhoc {
+                            // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
+                            // sends each person the link (a link call has no member list to add to).
+                            if service.isAdhoc || (!service.linkRevoked && link?.linkKey?.url != nil) {
                                 Button { showAdd = true } label: {
                                     Label("Add people", systemImage: "person.badge.plus")
                                 }
@@ -198,9 +200,29 @@ struct GroupCallParticipantsSheet: View {
         .onAppear { stage.refreshProfiles(service.members) }
         .onChange(of: service.members) { _, members in stage.refreshProfiles(members) }
         .sheet(isPresented: $showAdd) {
-            AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid))) { people in
-                Task { await service.invite(people) }
+            if service.isAdhoc {
+                AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid))) { people in
+                    Task { await service.invite(people) }
+                }
+            } else if let url = link?.linkKey?.url {
+                AddPeopleSheet(alreadyIn: Set(stage.tiles.map(\.uid)), actionTitle: "Send link") { people in
+                    sendLink(url, to: people)
+                }
             }
+        }
+    }
+
+    /// Each person gets the link in our 1:1 chat (the id is derived; the chat need not exist yet).
+    private func sendLink(_ url: URL, to people: [CallMember]) {
+        let me = AuthService.shared.uid ?? ""
+        Task {
+            var failed = false
+            for p in people where !p.uid.isEmpty && p.uid != me {
+                let cid = [me, p.uid].sorted().joined(separator: "_")
+                do { try await ChatService.sendText(cid: cid, text: url.absoluteString) }
+                catch { failed = true }
+            }
+            if failed { actionError = "Couldn't send the link to everyone. Check your connection and try again." }
         }
     }
 
