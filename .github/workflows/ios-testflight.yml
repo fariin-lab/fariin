@@ -76,11 +76,11 @@ jobs:
           TF_CHANGELOG: |
             BUILD 831: A SCREEN BEFORE YOU JOIN A LINK CALL, CALL LINK SHEET FIXES.
 
-            LINK CALLS: tapping a call link (calls list, Join Call, a link in a chat) first shows your camera full screen with the call's name, camera and mic buttons, and Leave / Join. Join enters with the camera and mic as you left them. A Voice link keeps the camera off.
+            LINK CALLS: tapping a call link (calls list, Join Call, a link in a chat) first shows your camera full screen with the call's name, camera and mic buttons, and Leave / Join. The mic starts off; Join enters with the camera and mic as you left them. A Voice link keeps the camera off.
             CALL LINK SHEET: the title and Done stay put; the sheet no longer scrolls when everything fits. Call Name comes up from the bottom with Cancel and Save.
             LINK PAGE: Make a New Link is removed.
 
-            PLEASE TEST: tap a call link row, turn the mic off, Join, and check others hear nothing until you unmute; try Leave; open Call Name on a new link.
+            PLEASE TEST: tap a call link row, Join with the mic off and check others hear nothing until you unmute, then try it with the mic on; try Leave; open Call Name on a new link.
 
             EARLIER (build 830): CALL HOST CONTROLS, ADD PEOPLE TO A LINK CALL, ATTACH SHEET FIXES.
 

@@ -16,7 +16,9 @@ struct CallLobbyView: View {
     @State private var title = "Kulan Call"
     @State private var voiceOnly = false
     @State private var cameraOn = true
-    @State private var micOn = true
+    /// Off to begin with, as in the owner's screenshot of the reference screen: you choose to be
+    /// heard before you walk in.
+    @State private var micOn = false
     @State private var cameraDenied = false
     @StateObject private var preview = LobbyCameraPreview()
 
