@@ -197,6 +197,7 @@ final class CallLinkService {
     /// Sign-out/delete: drop the previous account's links.
     func reset() {
         generation &+= 1
+        prepared = nil; preparing?.cancel(); preparing = nil   // a link made for the previous account
         edits = [:]
         links = []
         hasLoaded = false
@@ -230,9 +231,40 @@ final class CallLinkService {
         hasLoaded = true
     }
 
+    /// ⛔ ONE LINK MADE AHEAD — owner, 2026-10-06: "Create a Call Link" sat on a spinner. Each tap
+    /// waited for a server round trip, and a cold function start on top of it. The Calls tab now asks
+    /// for one link in the background (`prepare`) and the tap takes it at once; the next one is made
+    /// behind it. An unused one is just an unsaved link (nothing is in anybody's list until Done,
+    /// Join, Copy or Share), it expires on its own, and at most one exists per session.
+    private var prepared: CallLinkDraft?
+    private var preparing: Task<CallLinkDraft?, Never>?
+
+    func prepare() {
+        guard prepared == nil, preparing == nil, me != nil else { return }
+        preparing = Task { @MainActor [weak self] in
+            let d = try? await self?.makeOnServer()
+            self?.preparing = nil
+            if self?.prepared == nil { self?.prepared = d }
+            return d
+        }
+    }
+
+    /// Hands back a ready link: the one made ahead if there is one (or is about to be), else a new one.
+    func create() async throws -> CallLinkDraft {
+        if let d = prepared { prepared = nil; prepare(); return d }
+        if let t = preparing, let d = await t.value {
+            if prepared?.roomId == d.roomId { prepared = nil }
+            prepare()
+            return d
+        }
+        let d = try await makeOnServer()
+        prepare()
+        return d
+    }
+
     /// Makes a new link on the server (me as its admin, approval ON) and hands back the draft.
     /// Nothing is saved to my list yet.
-    func create() async throws -> CallLinkDraft {
+    private func makeOnServer() async throws -> CallLinkDraft {
         // A collision on a fresh 128-bit key is not going to happen; the retry is there so an
         // 'already-exists' from the server can never surface as a failed create.
         var lastError: Error?

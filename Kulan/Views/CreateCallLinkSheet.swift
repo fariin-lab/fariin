@@ -35,10 +35,12 @@ struct CreateCallLinkFlow: ViewModifier {
                         // Swallows taps while the server works, so a second tap cannot start a
                         // second link.
                         Color.black.opacity(0.001).ignoresSafeArea()
+                        // iOS 26 Liquid Glass, not the old material square (owner, 2026-10-06:
+                        // "make that loading updated"). Rarely seen now: the link is made ahead.
                         ProgressView()
                             .controlSize(.large)
-                            .frame(width: 80, height: 80)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .frame(width: 76, height: 76)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                     }
                     .transition(.opacity)
                 }

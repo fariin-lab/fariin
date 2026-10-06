@@ -981,7 +981,8 @@ struct CallsView: View {
             }
             .connectionTitle(suppressed: selecting)   // 2026-09-24 fix-all #173
             .task { await repo.load() }
-            .task { await linkService.load() }
+            // Load the list, then make the next "Create a Call Link" ahead of the tap (owner, 2026-10-06).
+            .task { await linkService.load(); linkService.prepare() }
             .refreshable { await repo.load(force: true); await linkService.load() }
             .confirmationDialog(deleteSelectionTitle,
                                 isPresented: $showDeleteCalls, titleVisibility: .visible) {
