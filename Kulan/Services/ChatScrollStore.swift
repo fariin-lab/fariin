@@ -122,26 +122,54 @@ final class RenderedHeightStore {
         let textSize = BubbleMetrics.contentSizeCategory.rawValue
     }
 
-    private var byKey: [Key: [String: CGFloat]] = [:]
+    /// A height and the row's content signature when it rendered at it.
+    /// owner audit 2026-10-06 chat #59: a height saved before the chat was closed was seeded back
+    /// without asking whether the message changed meanwhile (an edit, a reaction, a tombstone landed
+    /// while you were elsewhere). It is handed back only for the same signature.
+    private struct Entry {
+        let height: CGFloat
+        let signature: String
+    }
+
+    private var byKey: [Key: [String: Entry]] = [:]
     /// Least-recently-used chat ids, so a long session moving through many conversations cannot grow
     /// this without bound. Heights are cheap, but "cheap" times two hundred chats is not.
     private var order: [Key] = []
     private let maxChats = 12
 
-    func heights(cid: String, width: CGFloat) -> [String: CGFloat] {
-        guard !cid.isEmpty, width > 0 else { return [:] }
-        return byKey[Key(cid: cid, width: Int(width.rounded()))] ?? [:]
+    /// owner audit 2026-10-06 chat #88: this was insertion order, so the chat used most (created
+    /// first) was the first one dropped. A read or a write now moves the key to the back.
+    private func touch(_ key: Key) {
+        guard order.last != key else { return }
+        order.removeAll { $0 == key }
+        order.append(key)
     }
 
-    func record(cid: String, width: CGFloat, id: String, height: CGFloat) {
+    /// Heights for the rows whose current content signature still matches the one they rendered
+    /// with. A row with no signature now, or a different one, is left for the sizer.
+    func heights(cid: String, width: CGFloat, signatures: [String: String]) -> [String: CGFloat] {
+        guard !cid.isEmpty, width > 0 else { return [:] }
+        let key = Key(cid: cid, width: Int(width.rounded()))
+        guard let entries = byKey[key] else { return [:] }
+        touch(key)
+        var out: [String: CGFloat] = [:]
+        for (id, e) in entries where signatures[id] == e.signature { out[id] = e.height }
+        return out
+    }
+
+    func record(cid: String, width: CGFloat, id: String, height: CGFloat, signature: String?) {
         guard !cid.isEmpty, width > 0, height > 0 else { return }
         let key = Key(cid: cid, width: Int(width.rounded()))
+        // No signature, nothing to check a later open against: do not keep a height that could be stale.
+        guard let signature else { byKey[key]?.removeValue(forKey: id); return }
         if byKey[key] == nil {
             byKey[key] = [:]
             order.append(key)
             if order.count > maxChats { byKey.removeValue(forKey: order.removeFirst()) }
+        } else {
+            touch(key)
         }
-        byKey[key]?[id] = height
+        byKey[key]?[id] = Entry(height: height, signature: signature)
     }
 
     /// A message whose content changed is no longer described by what it rendered at last time.

@@ -1471,7 +1471,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func seedRenderedHeights(width: CGFloat) {
         guard !seededRenderedHeights, !cid.isEmpty, width > 0 else { return }
         seededRenderedHeights = true
-        let known = RenderedHeightStore.shared.heights(cid: cid, width: width)
+        // Only heights whose row still has the content it rendered with (chat #59, see the store).
+        let known = RenderedHeightStore.shared.heights(cid: cid, width: width, signatures: rowSignatures)
         guard !known.isEmpty else { return }
         // Only for rows this list still holds — a store entry for a message that has since been
         // deleted is dead weight, and `measure()` would never ask for it anyway.
@@ -1483,7 +1484,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// Remember a proven height so the next open of this chat does not have to discover it again.
     private func rememberRenderedHeight(_ h: CGFloat, for id: String) {
-        RenderedHeightStore.shared.record(cid: cid, width: collectionView.bounds.width, id: id, height: h)
+        RenderedHeightStore.shared.record(cid: cid, width: collectionView.bounds.width, id: id, height: h,
+                                          signature: rowSignatures[id])
     }
 
     /// ⛔ A RENDERED HEIGHT DESCRIBES CONTENT, AND DIES WITH IT.
