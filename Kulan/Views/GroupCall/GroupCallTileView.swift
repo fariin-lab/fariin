@@ -22,7 +22,7 @@ struct GroupCallTileView: View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack {
-                content(width: width)
+                content(width: width, height: geo.size.height)
                 badges(width: width)
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -45,12 +45,18 @@ struct GroupCallTileView: View {
         .accessibilityAction { onTap() }
     }
 
-    private var corner: CGFloat { (style == .strip || style == .pip) ? 8 : GroupCallMetrics.tileCorner }
+    private var corner: CGFloat {
+        switch style {
+        case .strip, .pip: return 8
+        case .alone: return 0          // edge to edge, nothing to round against
+        case .grid, .focus: return GroupCallMetrics.tileCorner
+        }
+    }
 
     // MARK: - Video or avatar
 
     @ViewBuilder
-    private func content(width: CGFloat) -> some View {
+    private func content(width: CGFloat, height: CGFloat) -> some View {
         if let track {
             // A video view only when there is a track: adaptiveStream pauses a track that has no
             // attached view, so camera-off and unsubscribed tiles must not build one (contract rule).
@@ -65,16 +71,17 @@ struct GroupCallTileView: View {
                 SwiftUIVideoView(track, layoutMode: .fill)
             }
         } else {
-            cameraOff(width: width)
+            cameraOff(width: width, height: height)
         }
     }
 
     /// The reference app's camera-off tile: blurred photo filling the tile, round avatar centred.
-    private func cameraOff(width: CGFloat) -> some View {
+    private func cameraOff(width: CGFloat, height: CGFloat) -> some View {
         ZStack {
             TileBackdrop(photoUrl: tile.photoUrl)
             VStack(spacing: 10) {
-                AvatarView(name: tile.name, photoUrl: tile.photoUrl, size: Self.avatarSize(width: width))
+                AvatarView(name: tile.name, photoUrl: tile.photoUrl,
+                           size: Self.avatarSize(width: width, height: height))
                 if style == .alone {
                     Text(tile.name)
                         .font(.headline)
@@ -86,12 +93,15 @@ struct GroupCallTileView: View {
         }
     }
 
-    /// The reference app's avatar size rule, by tile width.
-    static func avatarSize(width: CGFloat) -> CGFloat {
-        if width > 180 { return 112 }
-        if width > 102 { return 96 }
-        if width > 48 { return width - 36 }
-        return 16
+    /// The reference app's avatar size rule, by tile width, capped by the height (a wide, short
+    /// landscape tile would otherwise clip the circle top and bottom).
+    static func avatarSize(width: CGFloat, height: CGFloat) -> CGFloat {
+        let byWidth: CGFloat
+        if width > 180 { byWidth = 112 }
+        else if width > 102 { byWidth = 96 }
+        else if width > 48 { byWidth = width - 36 }
+        else { byWidth = 16 }
+        return min(byWidth, max(16, height - 16))
     }
 
     // MARK: - Badges
@@ -110,12 +120,15 @@ struct GroupCallTileView: View {
                     .transition(.opacity)
             }
             if tile.networkPoor && !compact {
+                // The focus tile's top-leading corner holds the "Pinned" / "Presenting" label.
                 badge("wifi.exclamationmark", size: 22, glyph: 11)
                     .padding(inset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: style == .focus ? .topTrailing : .topLeading)
                     .transition(.opacity)
             }
-            if isPinned && style != .strip && style != .pip {
+            // Not on the focus tile: its "Pinned" label already says it.
+            if isPinned && style != .strip && style != .pip && style != .focus {
                 badge("pin.fill", size: 22, glyph: 11)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
