@@ -19,6 +19,9 @@ final class RowGifView: UIImageView {
     /// The url currently being fetched. The third state: a reconfigure while this is set must not
     /// start a second download or clear the picture. See `configure`.
     private var inFlight: String?
+    /// Bumped whenever this view moves on (a new url, a reset), so a job that lands for an answer
+    /// the view no longer wants paints nothing. The job itself still finishes and caches.
+    private var token = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -29,7 +32,7 @@ final class RowGifView: UIImageView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(url: String?) {
-        guard let url, !url.isEmpty else { displayedURL = nil; inFlight = nil; image = nil; return }
+        guard let url, !url.isEmpty else { token += 1; displayedURL = nil; inFlight = nil; image = nil; return }
         // ⛔ THREE STATES, NOT TWO: shown, in flight, and neither. Collapsing them is what broke this.
         //
         // The original guard was `url != loadedURL`, with `loadedURL` set BEFORE the fetch — which
@@ -46,37 +49,66 @@ final class RowGifView: UIImageView {
         guard url != displayedURL else { return }
         guard inFlight != url else { return }
 
+        // Bumped only when this view really moves on to a new answer (a hit or a new load), never
+        // by a reconfigure that returned above, so a running load's completion still lands.
+        token += 1
+        let mine = token
+        inFlight = nil
         if let hit = Self.cache.object(forKey: url as NSString) { image = hit; displayedURL = url; return }
-        if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
-            Self.cache.setObject(img, forKey: url as NSString)
-            image = img
-            displayedURL = url
-            return
-        }
-        guard let u = URL(string: url) else { return }
+        // ⛔ NO DISK READ OR DECODE ON MAIN - owner audit 2026-10-06 chat #42. `GifBytesCache.data`
+        // and `animatedGif` (every frame through ImageIO) ran right here, inside the cell's
+        // configure, so a cold gif scrolling in cost the frame it arrived in. The same fault the
+        // photo view lost on 2026-10-03. Both now run in the shared job below, behind the grey fill.
         image = nil
         inFlight = url
-        // The app's own session rather than `URLSession.shared`, which is the shared cookie jar every
-        // other request in the app deliberately avoids.
+        let job = Self.job(for: url)
         Task { [weak self] in
-            let fetched: Data? = try? await MediaSession.shared.data(from: u).0
-            await MainActor.run {
-                guard let self, self.inFlight == url else { return }
-                self.inFlight = nil
-                // ⚠️ A FAILURE LEAVES NOTHING BEHIND, so the next configure retries. `animatedGif`
-                // already falls back to a still frame for anything with one usable image in it, so
-                // reaching here with nil means the bytes were not an image at all — an error page, or
-                // an empty body — and re-asking is the only thing that can help.
-                guard let data = fetched, let img = UIImage.animatedGif(data: data) else { return }
-                GifBytesCache.store(data, url)
-                Self.cache.setObject(img, forKey: url as NSString)
-                self.displayedURL = url
-                self.image = img
-            }
+            let img = await job.value
+            if Self.jobs[url] == job { Self.jobs[url] = nil }
+            guard let self, self.token == mine else { return }
+            self.inFlight = nil
+            // ⚠️ A FAILURE LEAVES NOTHING BEHIND, so the next configure retries. `animatedGif`
+            // already falls back to a still frame for anything with one usable image in it, so
+            // reaching here with nil means the bytes were not an image at all — an error page, or
+            // an empty body — and re-asking is the only thing that can help.
+            guard let img else { return }
+            self.displayedURL = url
+            self.image = img
         }
     }
 
-    func reset() { displayedURL = nil; inFlight = nil; image = nil }
+    /// ⛔ ONE JOB PER URL, AND IT FINISHES WHETHER ANYONE IS STILL LOOKING - owner audit 2026-10-06
+    /// chat #43. The download used to sit behind the view's own "still mine?" guard, and `reset()`
+    /// clears that on reuse, so a gif scrolled past mid-download was thrown away before it reached
+    /// `GifBytesCache` and started again from zero on the way back. The photo path was fixed the
+    /// same way on 2026-09-26 (see `RowImageView`'s shared job). Now the job stores the bytes and the
+    /// decoded gif itself, and a view coming back to the same url joins the running job instead of
+    /// starting a second download.
+    private static var jobs: [String: Task<UIImage?, Never>] = [:]
+
+    private static func job(for url: String) -> Task<UIImage?, Never> {
+        if let running = jobs[url] { return running }
+        let cache = Self.cache
+        // Detached: the disk read, the download and the frame decode all stay off the main thread.
+        let t = Task.detached(priority: .userInitiated) { () -> UIImage? in
+            if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
+                cache.setObject(img, forKey: url as NSString)
+                return img
+            }
+            // The app's own session rather than `URLSession.shared`, which is the shared cookie jar
+            // every other request in the app deliberately avoids.
+            guard let u = URL(string: url),
+                  let data = try? await MediaSession.shared.data(from: u).0,
+                  let img = UIImage.animatedGif(data: data) else { return nil }
+            GifBytesCache.store(data, url)
+            cache.setObject(img, forKey: url as NSString)
+            return img
+        }
+        jobs[url] = t
+        return t
+    }
+
+    func reset() { token += 1; displayedURL = nil; inFlight = nil; image = nil }
 }
 
 final class MediaBubbleView: UIView {
