@@ -74,6 +74,9 @@ struct AdminRecord: Identifiable, Equatable {
     let id: String            // uid
     var role: String          // "owner" | "admin"
     var perms: [String]
+    /// Filled from the person's live profile (`users/{uid}`), never from the admin document: a copy
+    /// stored there went stale the moment they renamed (2026-10-06, an owner listed under a username
+    /// they had given up). Empty until `withProfile` has run.
     var name: String
     var handle: String
     var addedBy: String
@@ -89,10 +92,17 @@ struct AdminRecord: Identifiable, Equatable {
         self.id = id
         self.role = data["role"] as? String ?? "admin"
         self.perms = data["perms"] as? [String] ?? []
-        self.name = data["name"] as? String ?? ""
-        self.handle = data["handle"] as? String ?? ""
+        self.name = ""
+        self.handle = ""
         self.addedBy = data["addedBy"] as? String ?? ""
         self.addedAt = (data["addedAt"] as? Timestamp)?.dateValue()
+    }
+
+    /// The same record with the person's current name and @handle.
+    func withProfile() async -> AdminRecord {
+        var r = self
+        if let p = await ProfileStore.shared.fetch(id) { r.name = p.name; r.handle = p.handle }
+        return r
     }
 }
 
@@ -477,8 +487,14 @@ enum AnnouncementAdmin {
     /// nobody on it, not even the owner.
     static func admins() async throws -> [AdminRecord] {
         let snap = try await db.collection("admins").getDocuments()
-        return snap.documents
-            .map { AdminRecord(id: $0.documentID, data: $0.data()) }
+        let bare = snap.documents.map { AdminRecord(id: $0.documentID, data: $0.data()) }
+        let named = await withTaskGroup(of: AdminRecord.self) { group in
+            for r in bare { group.addTask { await r.withProfile() } }
+            var out: [AdminRecord] = []
+            for await r in group { out.append(r) }
+            return out
+        }
+        return named
             .sorted { a, b in
                 if a.isOwner != b.isOwner { return a.isOwner }
                 return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
@@ -511,8 +527,6 @@ enum AnnouncementAdmin {
         try await db.collection("admins").document(person.id).setData([
             "role": "admin",
             "perms": perms.map(\.rawValue),
-            "name": person.name,
-            "handle": person.handle,
             "addedBy": uid,
             "addedAt": FieldValue.serverTimestamp(),
         ])

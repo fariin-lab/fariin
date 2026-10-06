@@ -174,7 +174,7 @@ enum VerificationAdmin {
 
         let peerDoc = db.collection(peer.kind.collection).document(peer.id)
         let now = Date().timeIntervalSince1970 * 1000
-        let adminHandle = AdminStore.shared.me?.handle ?? ""
+        let adminHandle = ProfileStore.shared.me?.handle ?? ""
         // Fixed outside the transaction so a retried attempt writes the SAME audit entry, not a second.
         let caseRef = db.collection("verifications").document(peer.key)
         let auditRef = db.collection("verificationAudit").document(UUID().uuidString.lowercased())
@@ -332,7 +332,7 @@ enum VerificationAdmin {
             "fromStatus": "", "toStatus": "", "type": "",
             "reason": note,
             "adminUid": adminUid,
-            "adminHandle": AdminStore.shared.me?.handle ?? "",
+            "adminHandle": ProfileStore.shared.me?.handle ?? "",
             "peerName": peerName,
             "peerHandle": peerHandle,
             "at": now,
