@@ -35,8 +35,13 @@ final class GroupCallStage: ObservableObject {
     private var profiles: [String: CallMember] = [:]
     // Tile id -> participant, rebuilt with the tiles, for the video track lookups.
     private var participants: [String: Participant] = [:]
-    // First time this phone saw each tile id: the stable grid order (spec §12, tiles do not jump).
+    // Join time per tile id: the stable grid order (spec §12, tiles do not jump). The server's join
+    // time when LiveKit gives one, so a stage built mid-call (the screen reopened after a minimize)
+    // orders the people already there as they really joined; else the first time this phone saw them.
     private var firstSeen: [String: Date] = [:]
+    // The service and its room outlive this screen (minimize, reopen), the stage does not: the join
+    // order is kept here per room name, so the reopened stage starts from the same order.
+    private static var joinOrderCache: (room: String, seen: [String: Date])?
     // When each remote started presenting: with two presenters the newest one takes the stage.
     private var shareStartedAt: [String: Date] = [:]
     // Raw speech per tile id, refreshed on every tick and never published (spec §12: the raw flag
@@ -60,6 +65,9 @@ final class GroupCallStage: ObservableObject {
         )
         self.observer = observer
         room.delegates.add(delegate: observer)
+        if let name = room.name, let cached = Self.joinOrderCache, cached.room == name {
+            firstSeen = cached.seen
+        }
         refresh()   // also starts the tick unless the room is closed
     }
 
@@ -210,7 +218,7 @@ final class GroupCallStage: ObservableObject {
             // screen while joining (spec §14) instead of an empty stage. A remote always has one.
             guard let id = p.sid?.stringValue ?? (isLocal ? "local" : nil) else { continue }
             byId[id] = p
-            if firstSeen[id] == nil { firstSeen[id] = now }
+            if firstSeen[id] == nil { firstSeen[id] = p.joinedAt ?? now }
 
             let uid = p.identity?.stringValue ?? ""
             let member = profiles[uid]
@@ -246,17 +254,18 @@ final class GroupCallStage: ObservableObject {
             ))
         }
 
-        // Stable order: me first, then everyone in the order this phone first saw them (the room's
-        // dictionary has no order, and a reshuffle every tick would move tiles around).
+        // Stable order: me first, then everyone by join time (the room's dictionary has no order,
+        // and a reshuffle every tick would move tiles around). Equal times (the server's are whole
+        // seconds) fall back to identity, the same on every phone and across a reopen.
         built.sort { a, b in
             if a.isLocal != b.isLocal { return a.isLocal }
-            if a.joinedAt != b.joinedAt { return a.joinedAt < b.joinedAt }
-            return a.id < b.id
+            return GroupCallPriority.joinOrder(a, b)
         }
 
         // Forget people who left, so the maps do not grow over a long call.
         let present = Set(byId.keys)
         firstSeen = firstSeen.filter { present.contains($0.key) }
+        if let name = room.name, !name.isEmpty { Self.joinOrderCache = (name, firstSeen) }
         shareStartedAt = shareStartedAt.filter { present.contains($0.key) }
         participants = byId
         // Before `tiles` publishes, so a re-render reads this tick's speech.

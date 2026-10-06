@@ -43,9 +43,10 @@ enum GroupCallPriority {
         shown.sorted(by: joinOrder)
     }
 
-    /// Join time, then id: the one stable order every list falls back to.
+    /// Join time, then identity, then id: the one stable order every list falls back to.
     static func joinOrder(_ a: CallTile, _ b: CallTile) -> Bool {
         if a.joinedAt != b.joinedAt { return a.joinedAt < b.joinedAt }
+        if a.uid != b.uid { return a.uid < b.uid }
         return a.id < b.id
     }
 }

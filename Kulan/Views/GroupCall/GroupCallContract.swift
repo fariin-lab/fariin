@@ -37,7 +37,7 @@ struct CallTile: Identifiable, Equatable {
     var isMuted: Bool           // microphone off
     var isSpeaking: Bool        // LiveKit's live flag (raw, flickers); NOT part of ==, see below
     var lastSpokeAt: Date?      // LiveKit's last speech time; NOT part of ==, see below
-    var joinedAt: Date          // first seen by this phone
+    var joinedAt: Date          // server join time, else first seen by this phone (kept across a reopen)
     var networkPoor: Bool       // connectionQuality .poor or .lost
     var isHost: Bool            // link creator / group admin / ad-hoc starter
     var cameraTrackSid: String? // the live camera track; a republish is a new sid, so views rebind
