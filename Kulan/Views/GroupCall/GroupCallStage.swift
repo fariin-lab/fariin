@@ -177,7 +177,9 @@ final class GroupCallStage: ObservableObject {
     }
 
     func togglePin(_ tileId: String) {
-        guard participants[tileId] != nil else { return }
+        // My own tile is the self pip; focusing it (my own camera, or my own shared screen, a hall
+        // of mirrors) would push everyone else off the stage.
+        guard let p = participants[tileId], !(p is LocalParticipant) else { return }
         pinnedId = (pinnedId == tileId) ? nil : tileId
     }
 
@@ -296,7 +298,8 @@ final class GroupCallStage: ObservableObject {
     private func updateMode() {
         let presenter = shareStartedAt.max { $0.value < $1.value }?.key
         let next: CallStageMode
-        if let pin = pinnedId, participants[pin] != nil {
+        // Never the local tile, however pinnedId was set (togglePin refuses it; this is the backstop).
+        if let pin = pinnedId, let p = participants[pin], !(p is LocalParticipant) {
             next = .focus(tileId: pin)
         } else if let presenter, participants[presenter] != nil {
             next = .focus(tileId: presenter)
