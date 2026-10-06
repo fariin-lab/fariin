@@ -27,7 +27,7 @@ import LiveKit
 
 /// One person on the call, as the UI sees them. Built by `GroupCallStage` from the room.
 struct CallTile: Identifiable, Equatable {
-    let id: String              // participant sid (stable), "local" never used: the local sid is real
+    let id: String              // participant sid (stable); "local" for me only before connect (no sid yet)
     let uid: String             // identity = Firebase uid ("" if unknown)
     var name: String
     var photoUrl: String?
