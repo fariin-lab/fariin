@@ -1203,6 +1203,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard collectionView.window != nil else { return }
         // Only the down-arrow posts this (see the observer above), so it is user-initiated by
         // definition and does not wait for a finger to lift.
+        // owner audit 2026-10-06 chat #10: the arrow is the newest word. A jump to a message still
+        // parked here (waiting for a land) would otherwise run after it and pull the reader back up.
+        pendingScrollTarget = nil
         perform(.newest(animated: true, userInitiated: true))
     }
 

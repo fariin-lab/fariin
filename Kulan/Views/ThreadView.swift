@@ -3946,6 +3946,12 @@ struct ThreadView: View {
                 // hidden / blocked / expired filters drop and the pin notices and system rows the
                 // divider skips, so the open landed rows away from the divider, or (on a dropped
                 // row) silently at the bottom with the divider still drawn above.
+                // owner audit 2026-10-06 chat #51: the divider's own frozen id first. `unreadBoundary`
+                // counts back from the end of the list, so every arrival moved its answer one row; once
+                // the divider is placed (`anchorUnread`, once per open) the landing names that same row.
+                if let id = firstUnreadId, let row = repo.items.first(where: { $0.id == id })?.rowId {
+                    return row
+                }
                 if let row = unreadBoundary()?.rowId {
                     return row
                 }
@@ -5552,6 +5558,7 @@ struct ThreadView: View {
         }
         var handedOff = false
         defer { if mediaRetry && !handedOff { SendQueue.endSending(clientId) } }
+        repo.forgetOrder(rowId: clientId)   // chat #76: a resend sorts by its new send, not the old one
         repo.removePending(clientId: clientId)
 
         if m.isVideo {

@@ -517,6 +517,12 @@ final class ThreadRepository {
     }
     func removePending(clientId: String) { pending.removeAll { $0.clientId == clientId }; refreshItems() }
 
+    /// A RESEND gets a new server time, so its sticky order key (the old send's place) is dropped and
+    /// the row sorts by the new send. Kept, the bubble stayed at the old place for this visit and then
+    /// jumped to the new one on reopen (owner audit 2026-10-06 chat #76). Resend only: an ordinary
+    /// ack keeps its key, which is the whole point of the key.
+    func forgetOrder(rowId: String) { stickyOrderKey[rowId] = nil }
+
     func start() {
         // Demo: serve the local conversation directly — no Firestore, no decryption. Keyed on the
         // conversation, not on a global flag, because a demo chat now opens from a list that also
