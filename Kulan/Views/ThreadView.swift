@@ -360,6 +360,18 @@ struct ThreadView: View {
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
     @State private var didAnchorUnread = false
+    // owner audit 2026-10-06 chat #10: quote / pin / "go to message" jumps page history in a Task;
+    // the down arrow bumps this so a jump still loading when the reader asked for the bottom never
+    // lands afterwards. Same "newer request wins" rule `searchJumpSeq` already gave search.
+    @State private var jumpSeq = 0
+    // owner audit 2026-10-06 chat #49: one token per flash, so an older flash's timer cannot clear a
+    // newer flash of the same message early.
+    @State private var flashSeq = 0
+    // owner audit 2026-10-06 chat #13: how many controllers were already presented when this chat
+    // appeared (normally 0). More than that = a sheet or cover is over the chat.
+    @State private var baseCoverDepth = 0
+    // owner audit 2026-10-06 chat #13: arrivals at the bottom while covered still owe a receipt.
+    @State private var coveredReadPending = false
     @State private var morePickerTarget: Message? // any-emoji picker
     @State private var reactorsTarget: Message?   // "who reacted" sheet
     @State private var pendingDelete: Message?
@@ -744,10 +756,16 @@ struct ThreadView: View {
                 // marked read with nobody looking. `didBecomeActive` below sends the receipt instead.
                 if !incoming.isEmpty && isAtBottom && !repo.iBlocked && !preview
                     && UIApplication.shared.applicationState == .active {
-                    ChatService.markReadThrottled(cid)
-                    // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
-                    // badge goes stale if the app is killed while this chat is still open.
-                    Task { await ChatService.resetUnread(cid) }
+                    // owner audit 2026-10-06 chat #13: a sheet or cover over the chat hides the
+                    // newest rows, and sheets fire no onDisappear. Hold the receipt until it closes.
+                    if chatCovered {
+                        armCoveredRead()
+                    } else {
+                        ChatService.markReadThrottled(cid)
+                        // Keep the stored unread counter at 0 for live-read arrivals too — otherwise the
+                        // badge goes stale if the app is killed while this chat is still open.
+                        Task { await ChatService.resetUnread(cid) }
+                    }
                 }
             }
             // (chain continues in messagesLayer below — split at this erased boundary for the type-checker)
@@ -958,9 +976,15 @@ struct ThreadView: View {
                 // down-arrow is scrolled UP, which reads as the button being broken rather than as a
                 // feature. The lander's own guard ("don't move if the target is entirely on screen")
                 // does not catch it, because an upward move to an off-screen row is a legal jump.
+                // owner audit 2026-10-06 chat #10: any quote / pin / search jump still paging is
+                // superseded by this tap, so it cannot pull the reader away once its pages land.
+                jumpSeq += 1
+                searchJumpSeq += 1
+                // owner audit 2026-10-06 chat #11: the index comes from the same doc-id search as the
+                // row. `indexById` is keyed by rowId (clientId ?? id), so looking the doc id up there
+                // was nil for every modern message and this branch never ran.
                 if let unread = firstUnreadId,
-                   let row = repo.items.first(where: { $0.id == unread }),
-                   let unreadIdx = repo.indexById[unread],
+                   let unreadIdx = repo.items.firstIndex(where: { $0.id == unread }),
                    !visibleRows.ids.isEmpty,
                    !repo.items.enumerated().contains(where: { i, m in
                        i > unreadIdx && visibleRows.ids.contains(m.id)
@@ -968,7 +992,7 @@ struct ThreadView: View {
                     // rowId, not doc id — the native list keys rows by clientId ?? id, and every
                     // modern message has a clientId, so the untranslated id failed the lookup
                     // silently and the first tap did nothing (audit finding).
-                    nativeScrollTarget = row.rowId
+                    nativeScrollTarget = repo.items[unreadIdx].rowId
                     firstUnreadId = nil   // consumed → next press goes to the bottom
                 } else {
                     // STRAIGHT TO THE LIST, NOT THROUGH FIVE LAYERS (owner, third report, still dead
@@ -1655,8 +1679,19 @@ struct ThreadView: View {
                 onUnpin: { id in Task { await ChatService.removePinnedMessage(cid, id) } },
                 onTap: { id in
                     showPinnedSheet = false
+                    // owner audit 2026-10-06 chat #10 / #75: superseded by a newer jump or the down
+                    // arrow, and says so when the message cannot be reached instead of doing nothing.
+                    jumpSeq += 1
+                    let seq = jumpSeq
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        Task { await repo.ensureLoaded(id); await MainActor.run { flashAndScroll(id) } }
+                        Task {
+                            await repo.ensureLoaded(id)
+                            await MainActor.run {
+                                guard seq == jumpSeq else { return }
+                                if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
+                                else { showJumpToast("That message isn't available") }
+                            }
+                        }
                     }
                 })
         }
@@ -1821,8 +1856,20 @@ struct ThreadView: View {
             // profile is never rendered. (ContactInfoView clears showAllMedia the same way.)
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t) { showContactInfo = false }
+            // owner audit 2026-10-06 chat #75: a message out of reach (older than the paging limit,
+            // or gone) said nothing at all, with the gallery already popped. Same toast as the other
+            // jumps. #10: superseded by a newer jump or the down arrow.
+            jumpSeq += 1
+            let seq = jumpSeq
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                Task { await repo.ensureLoaded(p.messageId); await MainActor.run { flashAndScroll(p.messageId) } }
+                Task {
+                    await repo.ensureLoaded(p.messageId)
+                    await MainActor.run {
+                        guard seq == jumpSeq else { return }
+                        if repo.items.contains(where: { $0.id == p.messageId }) { flashAndScroll(p.messageId) }
+                        else { showJumpToast("That message isn't available") }
+                    }
+                }
             }
         }
         .sheet(item: $tappedMember) { m in
@@ -1962,8 +2009,8 @@ struct ThreadView: View {
             // SILENTLY (audit M6): the programmatic set used to fire the typing broadcast — opening a
             // chat with a parked draft showed "typing…" to the other person with zero keystrokes.
             if input.isEmpty { setInputSilently(Drafts.shared.text(cid)) }
-            // Unread count from the cached conversation — only used to place the unread-divider
-            // MARKER now (we always open at the bottom, so it no longer drives the scroll position).
+            // Unread count from the cached conversation. It places the unread-divider marker AND, since
+            // the 2026-07-13 landing change, the first open lands on that row (`initialScrollId`).
             unreadOnOpen = cachedConv?.unread(me) ?? 0
             // Gate animated auto-scroll until the push transition + first chunked load settle,
             // so the conversation opens cleanly at the bottom with no jump (defaultScrollAnchor).
@@ -1987,21 +2034,48 @@ struct ThreadView: View {
             // 2026-09-27: the first call after launch connects to the Photos service on the main
             // thread (`PHPhotoLibrary.shared()`), inside the push of the first chat opened.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { RecentsCache.prewarm() }
+            // owner audit 2026-10-06 chat #13: whatever is already presented when the chat appears
+            // (normally nothing) is the baseline; anything above it later is a sheet over the chat.
+            baseCoverDepth = Self.presentationDepth()
             Task {
-                // Only needed when this chat wasn't in the cached list (no sync count above).
-                if cachedConv == nil {
-                    let n = await ChatService.myUnread(cid)
-                    await MainActor.run { unreadOnOpen = n }
+                // owner audit 2026-10-06 chat #14: ask the server EVERY time, not only when the chat
+                // was missing from the cached list. After a push or a long background the cached row
+                // can be present but old (0, or a smaller N), and the divider was placed from it once
+                // and never corrected. Only a positive answer that differs is adopted: a failed read
+                // also says 0, and a live arrival read at the bottom has already zeroed it legitimately.
+                let n = await ChatService.myUnread(cid)
+                await MainActor.run {
+                    if cachedConv == nil {
+                        unreadOnOpen = n
+                    } else if n > 0, n != unreadOnOpen {
+                        firstUnreadId = nil
+                        didAnchorUnread = false   // the onChange(of: unreadOnOpen) re-anchors the divider
+                        unreadOnOpen = n
+                    }
                 }
-                await ChatService.resetUnread(cid)
                 // Wait for the REAL block state before stamping a read receipt (audit M8): iBlocked
                 // defaults to false and the conv listener has only just attached — a blocked contact
                 // received a receipt on open despite every other call site gating on iBlocked.
+                //
+                // owner audit 2026-10-06 chat #2: …and for the list to LAND. This stamped everything
+                // read the moment the chat opened, written when every open landed at the bottom. Since
+                // the open lands on the first unread, the newest messages can be below the screen, and
+                // the sender saw blue ticks (and the list lost its badge) for messages never shown.
+                // Now: landed with the newest on screen → exactly as before. Landed above it → nothing
+                // here; scrolling down to the newest flips `isAtBottom`, which sends the receipt and
+                // clears the counter. `settled` flips 0.35s after the reveal (the same moment the
+                // jump-arrow badge reads `isAtBottom`); capped at 5s so a slow or returning open
+                // still stamps on its best-known state.
                 var waited = 0
-                while !repo.convLoaded, waited < 20 {   // ≤2s; then proceed on best-known state
+                while !repo.convLoaded || !repo.didInitialLoad || !settled, waited < 50 {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     waited += 1
                 }
+                // The list publishes `isAtBottom` on a 0.1s debounce after its landing scroll.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard isAtBottom else { return }
+                if chatCovered { armCoveredRead(); return }   // chat #13
+                await ChatService.resetUnread(cid)
                 if !repo.iBlocked { await ChatService.markRead(cid) }
             }
             }
@@ -2037,7 +2111,11 @@ struct ThreadView: View {
             typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
             // Messages that arrived while the chat was OPEN were read live but only onAppear reset
             // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
-            Task { await ChatService.resetUnread(cid) }
+            // owner audit 2026-10-06 chat #12: only when the reader IS at the newest. Scrolled up in
+            // history (or still above the first unread the open landed on), the arrivals were never
+            // seen and no receipt was sent, so zeroing here made the list say "read" while the
+            // sender still saw one grey tick. Same for arrivals held under a sheet (chat #13).
+            if isAtBottom, !coveredReadPending { Task { await ChatService.resetUnread(cid) } }
             // Leaving with a recording: a HELD (unlocked) one dies with the finger — the gesture
             // is gone. A LOCKED session (recording or reviewing) PARKS instead — his order, the
             // reference's model: the note stops, its stretches move to a per-chat draft on disk,
@@ -2071,6 +2149,7 @@ struct ThreadView: View {
         // arrivals were denied above (2026-09-24 audit).
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             guard !preview, isAtBottom, !repo.iBlocked, AppRouter.shared.activeChatId == cid else { return }
+            if chatCovered { armCoveredRead(); return }   // owner audit 2026-10-06 chat #13
             ChatService.markReadThrottled(cid)
             Task { await ChatService.resetUnread(cid) }
         }
@@ -2345,15 +2424,25 @@ struct ThreadView: View {
                 // So: jump to it when we can reach it. Say deleted only when the repository has PROVEN
                 // it is gone. Otherwise the message is real and out of reach, and the pinned list can
                 // show it to him — which is the one thing that beats a sentence explaining why not.
+                // owner audit 2026-10-06 chat #10: a newer jump or the down arrow supersedes this one.
+                jumpSeq += 1
+                let seq = jumpSeq
                 Task {
                     await repo.ensureLoaded(pid)
                     await MainActor.run {
-                        if repo.items.contains(where: { $0.id == pid }) { flashAndScroll(pid) }
+                        guard seq == jumpSeq else { return }
+                        if repo.items.contains(where: { $0.id == pid }) {
+                            flashAndScroll(pid)
+                            // owner audit 2026-10-06 chat #75: advance only once the jump really
+                            // landed. Moving on after a failed jump (toast or the pinned sheet) left
+                            // the bar naming a pin the reader never reached. The index test skips the
+                            // advance if the pin list changed (and reset the index) while this paged.
+                            if ids.count > 1, min(pinIndex, ids.count - 1) == idx { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
+                        }
                         else if repo.pinnedGone.contains(pid) { showJumpToast("Pinned message was deleted") }
                         else { showPinnedSheet = true }
                     }
                 }
-                if ids.count > 1 { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
             }
             // 20pt = the nav bar's own button inset on iOS 26 (the glass back-button circle's leading
             // edge). scenePadding resolved to 16pt here, leaving the bar poking 4pt past the back button;
@@ -2701,12 +2790,19 @@ struct ThreadView: View {
             // away-counter and send the (throttled) read receipt.
             .onChange(of: isAtBottom) { _, atBottom in
                 if atBottom {
+                    let hadNew = newWhileAway > 0
                     newWhileAway = 0
                     if !repo.iBlocked, !preview {
                         ChatService.markReadThrottled(cid)
                         // Mirror the arrival path: zero the stored counter the moment these are seen,
                         // so the badge is right even if the app dies before onDisappear.
-                        Task { await ChatService.resetUnread(cid) }
+                        // owner audit 2026-10-06 chat #74: but not as a billed write on every flip
+                        // when there is nothing to clear. Skipped only when nothing arrived while away
+                        // AND the list's own copy of the counter is already 0 with no unread mark;
+                        // a chat missing from the list still writes, as before.
+                        if hadNew || cachedConv?.hasUnreadMark(me) != false {
+                            Task { await ChatService.resetUnread(cid) }
+                        }
                     }
                 }
             }
@@ -3643,9 +3739,13 @@ struct ThreadView: View {
                     }
                     return
                 }
+                // owner audit 2026-10-06 chat #10: a newer jump or the down arrow supersedes this one.
+                jumpSeq += 1
+                let seq = jumpSeq
                 Task {
                     await repo.ensureLoaded(id)
                     await MainActor.run {
+                        guard seq == jumpSeq else { return }
                         if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
                         else { showJumpToast("That message isn't available") }
                     }
@@ -3688,17 +3788,13 @@ struct ThreadView: View {
                    let row = repo.items.first(where: { $0.id == target })?.rowId {
                     return row
                 }
-                if unreadOnOpen > 0 {
-                    let msgs = repo.messages
-                    // Same rule as anchorUnread: with more unread than we hold, do not pretend the
-                    // oldest loaded row is the boundary (audit).
-                    if unreadOnOpen <= msgs.count {
-                        let idx = msgs.count - unreadOnOpen
-                        if idx < msgs.count,
-                           let row = repo.items.first(where: { $0.id == msgs[idx].id })?.rowId {
-                            return row
-                        }
-                    }
+                // owner audit 2026-10-06 chat #3: the SAME computation anchorUnread uses to place the
+                // divider. This copy counted in `repo.messages`, which still holds the rows the
+                // hidden / blocked / expired filters drop and the pin notices and system rows the
+                // divider skips, so the open landed rows away from the divider, or (on a dropped
+                // row) silently at the bottom with the divider still drawn above.
+                if let row = unreadBoundary()?.rowId {
+                    return row
                 }
                 // ⛔ THIRD, WHERE THIS READER LEFT OFF — theirs, and the tier we did not have.
                 // Their open priority is focus message, then the unread indicator, then the last
@@ -3849,8 +3945,23 @@ struct ThreadView: View {
         // the reference app's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
         // (the bubble's own 0.4s ease drives the fade). The old 2.2s hold felt sluggish across every
         // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ the reference app's timing.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            if highlightId == id { withAnimation { highlightId = nil } }
+        //
+        // owner audit 2026-10-06 chat #49: the 0.6s hold starts when the row is ON SCREEN, not at the
+        // tap. A long glide, or a jump the list parks behind its land gate, arrived after the timer
+        // had already cleared the mark, so the row landed with no flash. Waits at most 3s for the
+        // row; `flashSeq` stops an older flash's timer from ending a newer one early.
+        flashSeq += 1
+        let seq = flashSeq
+        Task { @MainActor in
+            var waited = 0
+            while !visibleRows.ids.contains(id), waited < 60 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard seq == flashSeq else { return }
+                waited += 1
+            }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard seq == flashSeq, highlightId == id else { return }
+            withAnimation { highlightId = nil }
         }
     }
 
@@ -3952,9 +4063,14 @@ struct ThreadView: View {
         // ⛔ Sent while I had its author blocked — owner, 2026-10-04: say "Not available", never
         // fetch or show it. It stays hidden after the unblock, as it always has.
         if repo.isHiddenByBlock(id: id) { showJumpToast("Not available"); return }
+        // owner audit 2026-10-06 chat #10: the down arrow (or a newer jump) bumps `jumpSeq` while
+        // this pages; the stale jump then neither scrolls nor toasts.
+        jumpSeq += 1
+        let seq = jumpSeq
         Task {
             await repo.ensureLoaded(id)
             await MainActor.run {
+                guard seq == jumpSeq else { return }
                 if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
                 else if repo.isHiddenByBlock(id: id) { showJumpToast("Not available") }
                 else { showJumpToast("Original message isn't loaded") }
@@ -4232,7 +4348,12 @@ struct ThreadView: View {
     /// not re-run a search that cannot have changed — but that assumes the only thing a result
     /// depends on is the query, and the corpus and the live window are inputs too. Both of the
     /// callers that pass `force` are cases where the query is the same and the ANSWER is not.
-    private func updateSearchMatches(force: Bool = false) {
+    ///
+    /// owner audit 2026-10-06 chat #4: `navigate: false` refreshes the results WITHOUT moving the
+    /// list. The live-update caller used to end in `goToCurrentMatch()` like a keystroke, so every
+    /// new message, reaction, tick or page pulled a reader who had scrolled away back to the match
+    /// and flashed it again. Silent refreshes keep the focus on the same message where it survives.
+    private func updateSearchMatches(force: Bool = false, navigate: Bool = true) {
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else {
             searchMatches = []; lastSearchText = nil
@@ -4245,6 +4366,7 @@ struct ThreadView: View {
 
         // How far from the NEWEST match the user currently is (preserved across refinement).
         let distanceFromNewest = searchMatches.isEmpty ? 0 : max(0, (searchMatches.count - 1) - searchIndex)
+        let focusedId = searchMatches.indices.contains(searchIndex) ? searchMatches[searchIndex].id : nil
 
         var seen = Set<String>()
         var pool: [InChatMessage] = []
@@ -4260,6 +4382,10 @@ struct ThreadView: View {
 
         guard !searchMatches.isEmpty else { return }
         searchIndex = max(0, (searchMatches.count - 1) - min(distanceFromNewest, searchMatches.count - 1))
+        guard navigate else {
+            if let focusedId, let i = searchMatches.firstIndex(where: { $0.id == focusedId }) { searchIndex = i }
+            return
+        }
         goToCurrentMatch()
     }
 
@@ -6051,6 +6177,18 @@ struct ThreadView: View {
     // Runs once; the last `unreadOnOpen` messages are treated as the unread block.
     private func anchorUnread(_ proxy: ScrollViewProxy) {
         guard !didAnchorUnread, unreadOnOpen > 0 else { return }
+        guard let boundary = unreadBoundary() else { return }
+        // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
+        // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
+        // (Scrolling to the first unread dropped the user into old history / old missed calls.)
+        firstUnreadId = boundary.id
+        didAnchorUnread = true
+    }
+
+    /// The first unread row: the divider sits above it and the first open lands on it.
+    /// owner audit 2026-10-06 chat #3: ONE computation for both, so they can never disagree again.
+    private func unreadBoundary() -> Message? {
+        guard unreadOnOpen > 0 else { return nil }
         // ⛔ THE ROWS THE LIST ACTUALLY RENDERS, not `repo.messages`.
         //
         // `messages` is the sorted server window; the delete-for-me filter, the block filter and the
@@ -6065,22 +6203,66 @@ struct ThreadView: View {
         // things already read. Counting in the same list the divider is placed in removes both
         // faults at once, because the two numbers finally describe the same thing.
         //
-        // (The other copy of this computation, in `nativeList`, already looked up through `items`.
-        // The two sites disagreed about the same question.)
+        // (The landing in `nativeList` (`initialScrollId`) asks this same function now; it used to
+        // count in `repo.messages`, and the two sites disagreed about the same question.)
         let msgs = repo.items.filter { !$0.isSystem && $0.pinNotice == nil }
-        guard !msgs.isEmpty else { return }
+        guard !msgs.isEmpty else { return nil }
         // More unread than the loaded window (40 a page) → the real boundary is further up than
         // anything we hold, and `max(0, …)` used to clamp to the OLDEST LOADED row and label it the
         // start of unread, which is a claim about a message that isn't the boundary at all (audit).
         // Say nothing rather than mark the wrong message; the divider appears once enough is paged in.
-        guard unreadOnOpen <= msgs.count else { return }
+        guard unreadOnOpen <= msgs.count else { return nil }
         let idx = msgs.count - unreadOnOpen
-        guard idx < msgs.count else { return }
-        // Just mark WHERE the unread divider goes — do NOT scroll to it. The chat always opens at
-        // the BOTTOM (newest), like a standard messenger; the divider is a marker you scroll up to.
-        // (Scrolling to the first unread dropped the user into old history / old missed calls.)
-        firstUnreadId = msgs[idx].id
-        didAnchorUnread = true
+        guard idx < msgs.count else { return nil }
+        return msgs[idx]
+    }
+
+    /// owner audit 2026-10-06 chat #13: how many controllers are presented on top of each window's
+    /// root, deepest window wins (a sheet, a cover, an alert). One being dismissed no longer counts.
+    private static func presentationDepth() -> Int {
+        var deepest = 0
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                var depth = 0
+                var top = window.rootViewController
+                while let next = top?.presentedViewController, !next.isBeingDismissed {
+                    depth += 1
+                    top = next
+                }
+                deepest = max(deepest, depth)
+            }
+        }
+        return deepest
+    }
+
+    /// owner audit 2026-10-06 chat #13: something was presented over the chat after it appeared, so
+    /// the newest rows are not what the reader is looking at. Sheets fire no onDisappear, which is
+    /// why the receipt paths could not tell before.
+    private var chatCovered: Bool { Self.presentationDepth() > baseCoverDepth }
+
+    /// owner audit 2026-10-06 chat #13: an arrival at the bottom while covered still owes its receipt
+    /// once the cover closes. Checked twice a second, only while one is owed and this chat is still
+    /// the active one; leaving the chat drops it (the next open stamps on its own landing).
+    private func armCoveredRead() {
+        guard !coveredReadPending else { return }
+        coveredReadPending = true
+        Task { @MainActor in
+            while true {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard coveredReadPending, AppRouter.shared.activeChatId == cid else {
+                    coveredReadPending = false
+                    return
+                }
+                if chatCovered { continue }
+                coveredReadPending = false
+                guard isAtBottom, !repo.iBlocked,
+                      UIApplication.shared.applicationState == .active else { return }
+                ChatService.markReadThrottled(cid)
+                Task { await ChatService.resetUnread(cid) }
+                return
+            }
+        }
     }
 
     private func react(_ m: Message, _ emoji: String) {
@@ -6438,7 +6620,7 @@ struct ThreadView: View {
         // arrow being broken. Theirs re-runs the search against the database on every update pass.
         .onChange(of: repo.itemsVersion) { _, _ in
             guard searchActive else { return }
-            updateSearchMatches(force: true)
+            updateSearchMatches(force: true, navigate: false)   // owner audit 2026-10-06 chat #4
         }
                 if !searchQuery.isEmpty {
                     Button { searchQuery = "" } label: {
