@@ -86,27 +86,35 @@ struct CreateCallLinkSheet: View {
     @State private var approvalFailed = false
     /// Measured from the content; the first value is a close estimate so the sheet does not open
     /// at one height and move to another.
-    @State private var contentHeight: CGFloat = 470
+    @State private var contentHeight: CGFloat = 420
+    @State private var headerHeight: CGFloat = 50
+    @State private var editingName = false   // Call Name comes up as a sheet
 
+    // ⛔ THE HEADER STAYS PUT AND THE SHEET DOES NOT SCROLL FOR NOTHING — owner, 2026-10-06: "when I
+    // scroll up the Done button also moves up ... behave like a real Apple sheet". The title and
+    // Done were the first row INSIDE the scroll view, so they travelled with it, and the detent was
+    // a few points short of the content, so there was always a little to scroll. Now the header sits
+    // above the scroll view, pinned like a navigation bar, and the detent is the header plus the
+    // content plus the home-indicator band, so content that fits does not move at all
+    // (`scrollBounceBehavior(.basedOnSize)`); only a larger text size makes it scroll.
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             ScrollView {
                 // ⛔ MINIMALIST — owner, 2026-10-04: "redesign this sheet, minimalist and clear".
                 // One thing per line, in the order a person uses them: what the call is, Join, the
                 // three ways to hand the link on as round buttons, then the two settings, plain.
                 VStack(spacing: 22) {
-                    header
                     CallLinkHero(key: draft.key, title: draft.title) { join() }
                     CallLinkShareRows(draft: draft, compact: true) {
                         await CallLinkService.shared.persist(draft)
                     }
                     CallLinkGroup {
-                        NavigationLink {
-                            CallLinkNameEditor(initial: draft.name) { name in
-                                try await CallLinkService.shared.rename(draft, to: name)
-                                draft.name = CallLinkDefaults.clamp(name.trimmingCharacters(in: .whitespacesAndNewlines))
-                            }
-                        } label: {
+                        Button { editingName = true } label: {
                             HStack {
                                 Text("Call Name")
                                 Spacer(minLength: 8)
@@ -130,17 +138,24 @@ struct CreateCallLinkSheet: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 14)
+                .padding(.top, 8)
                 .padding(.bottom, 12)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            .background(Color(.systemGroupedBackground))
-            .toolbar(.hidden, for: .navigationBar)
         }
+        .background(Color(.systemGroupedBackground))
         // + the home-indicator band (owner, 2026-10-06: the Call Type row was cut off at the bottom):
-        // a fixed-height detent does not add it by itself (same rule as WallpaperPickerSheet).
-        .presentationDetents([.height(contentHeight + 12 + WallpaperPickerSheet.bottomInset)])
+        // a fixed-height detent does not add it by itself (same rule as WallpaperPickerSheet). The
+        // +2 keeps a rounding half-point from turning into a scroll.
+        .presentationDetents([.height(headerHeight + contentHeight + 2 + WallpaperPickerSheet.bottomInset)])
+        // Owner, 2026-10-06: Call Name came in from the side; it comes up from the bottom now.
+        .sheet(isPresented: $editingName) {
+            CallLinkNameSheet(initial: draft.name) { name in
+                try await CallLinkService.shared.rename(draft, to: name)
+                draft.name = CallLinkDefaults.clamp(name.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
         .presentationDragIndicator(.visible)
         .alert("Couldn't change setting", isPresented: $approvalFailed) {
             Button("OK", role: .cancel) {}
@@ -164,7 +179,6 @@ struct CreateCallLinkSheet: View {
                     .tint(.blue)
             }
         }
-        .padding(.top, 6)
     }
 
 
@@ -495,6 +509,21 @@ struct CallLinkShareRows: View {
     }
 }
 
+/// Call Name as its own sheet, coming up from the bottom (owner, 2026-10-06: it slid in from the
+/// side). Its own navigation bar carries Cancel and Save.
+struct CallLinkNameSheet: View {
+    let initial: String
+    let onSave: (String) async throws -> Void
+
+    var body: some View {
+        NavigationStack {
+            CallLinkNameEditor(initial: initial, onSave: onSave)
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+}
+
 /// "Add Call Name": one field, 32 characters, Save.
 struct CallLinkNameEditor: View {
     let initial: String
@@ -533,6 +562,9 @@ struct CallLinkNameEditor: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
             ToolbarItem(placement: .confirmationAction) {
                 if saving {
                     ProgressView()
