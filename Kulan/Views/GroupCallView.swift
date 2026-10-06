@@ -125,7 +125,7 @@ struct GroupCallView: View {
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).opacity(0.7)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 14).frame(height: 40)
+            .padding(.horizontal, 14).frame(minHeight: 40)   // grows with Dynamic Type, 40 at default
             .background(.white.opacity(0.15), in: Capsule())
         }
         .buttonStyle(.plain)
@@ -140,6 +140,7 @@ struct GroupCallView: View {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
             }
+            .accessibilityLabel("Minimize")
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
@@ -151,19 +152,24 @@ struct GroupCallView: View {
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
             }
+            .accessibilityLabel("Participants")
         }
     }
 
     private var controls: some View {
         HStack(spacing: 20) {
             // A voice call link: the camera button is there, greyed and inert (owner, 2026-10-06).
+            // VoiceOver labels name what a tap does (no visual change).
             ctrl(service.cameraOn ? "video.fill" : "video.slash.fill") { service.toggleCamera() }
                 .disabled(service.cameraLocked)
                 .opacity(service.cameraLocked ? 0.35 : 1)
+                .accessibilityLabel(cameraLabel)
             ctrl(service.micOn ? "mic.fill" : "mic.slash.fill") { service.toggleMic() }
+                .accessibilityLabel(service.micOn ? "Mute" : "Unmute")
             // Speaker on / off (owner, 2026-10-04): a real switch with its state, not the route picker.
             ctrl(service.speakerOn ? "speaker.wave.2.fill" : "speaker.fill") { service.toggleSpeaker() }
                 .opacity(service.speakerOn ? 1 : 0.7)
+                .accessibilityLabel(service.speakerOn ? "Turn speaker off" : "Turn speaker on")
             // owner audit 2026-10-06 #4: before the room is up `activeCid` never changes, so the
             // onChange that closes this screen never fired and End looked dead. Close it here.
             ctrl("phone.down.fill", tint: Color(.systemRed)) {
@@ -171,11 +177,17 @@ struct GroupCallView: View {
                 service.end()
                 if !wasUp { dismiss() }
             }
+            .accessibilityLabel("End call")
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
     }
 
+
+    private var cameraLabel: String {
+        if service.cameraLocked { return "Camera unavailable on a voice call" }
+        return service.cameraOn ? "Turn camera off" : "Turn camera on"
+    }
 
     private func ctrl(_ icon: String, tint: Color? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -202,9 +214,11 @@ struct CallLinkRequestsSheet: View {
                     answer("xmark", tint: Color(.systemRed)) {
                         Task { await service.answerRequest(uid: person.uid, approve: false) }
                     }
+                    .accessibilityLabel("Decline \(person.name)")
                     answer("checkmark", tint: Color(.systemGreen)) {
                         Task { await service.answerRequest(uid: person.uid, approve: true) }
                     }
+                    .accessibilityLabel("Let in \(person.name)")
                 }
             }
             .navigationTitle("\(service.pendingRequests.count) waiting")
