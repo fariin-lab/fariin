@@ -178,8 +178,14 @@ struct GroupCallView: View {
     private var header: some View {
         HStack {
             Button {
-                service.minimized = true   // NOT ending the call: the floating card takes over
-                dismiss()
+                // NOT ending the call: the floating card takes over. Owner, 2026-10-06: the screen
+                // slid down to the bottom; it now shrinks into the card like a 1:1 call
+                // (`CallPipMorph`), so the cover itself leaves with no animation of its own.
+                CallPipMorph.minimize {
+                    service.minimized = true
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { dismiss() }
+                }
             } label: {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass

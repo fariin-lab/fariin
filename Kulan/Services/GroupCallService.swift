@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import LiveKit
+import AVFoundation
 import FirebaseFunctions
 import FirebaseFirestore
 import FirebaseAuth
@@ -224,9 +225,10 @@ final class GroupCallService: ObservableObject {
             }
             try await room.connect(url: url, token: token)
             try await room.localParticipant.setMicrophone(enabled: true)
-            if video { try await room.localParticipant.setCamera(enabled: true) }
+            let cameraOK = video ? await Self.cameraAllowed() : false   // asked first (see toggleCamera)
+            if cameraOK { try await room.localParticipant.setCamera(enabled: true) }
             guard gen == joinGeneration else { await abandonJoin(); return }
-            activeCid = cid; activeRoom = .group(cid: cid); micOn = true; cameraOn = video; connecting = false
+            activeCid = cid; activeRoom = .group(cid: cid); micOn = true; cameraOn = cameraOK; connecting = false
             myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
             // joined one, and the starter writes the call's record into the chat.
@@ -395,7 +397,32 @@ final class GroupCallService: ObservableObject {
     func toggleCamera() {
         guard !cameraLocked else { return }   // a voice call link: no camera for anybody
         cameraOn.toggle(); let v = cameraOn
-        Task { try? await room.localParticipant.setCamera(enabled: v) }
+        Task { @MainActor in
+            // Owner, 2026-10-06: "when I open camera, group call is not working". The camera was
+            // started without asking for access, and any failure was swallowed, so the button said
+            // on while no picture went out. Ask first (as the 1:1 call does), and on a failure put
+            // the button back and say why.
+            if v, !(await Self.cameraAllowed()) {
+                cameraOn = false
+                showToast("Allow camera access in Settings")
+                return
+            }
+            do { try await room.localParticipant.setCamera(enabled: v) }
+            catch {
+                guard cameraOn == v else { return }   // toggled again meanwhile
+                cameraOn = !v
+                showToast(v ? "Couldn't turn the camera on" : "Couldn't turn the camera off")
+            }
+        }
+    }
+
+    /// Camera access, asking the first time.
+    static func cameraAllowed() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
+        default: return false
+        }
     }
 
     func end() {
@@ -702,7 +729,9 @@ final class GroupCallService: ObservableObject {
             if voiceOnly { isVideo = false }
             try await room.connect(url: url, token: token)
             try await room.localParticipant.setMicrophone(enabled: true)
-            if video { try await room.localParticipant.setCamera(enabled: true) }
+            // Asked first (see toggleCamera); joining goes ahead camera-off if access is refused.
+            let cameraOK = video ? await Self.cameraAllowed() : false
+            if cameraOK { try await room.localParticipant.setCamera(enabled: true) }
             // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
             // up anyway, mic on, with no screen and no card, and every other call was refused.
             guard gen == joinGeneration else { await abandonJoin(); return false }
@@ -711,7 +740,7 @@ final class GroupCallService: ObservableObject {
             case .adhoc(let id): activeCid = id
             case .link(let roomId, _): activeCid = roomId
             }
-            activeRoom = r; micOn = true; cameraOn = video; connecting = false
+            activeRoom = r; micOn = true; cameraOn = cameraOK; connecting = false
             waitingForApproval = false
             myRole = CallRole(attribute: d?["role"] as? String)
             return true

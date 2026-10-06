@@ -26,6 +26,12 @@ struct GroupFloatingCallWindow: View {
     var body: some View {
         GeometryReader { geo in
             card
+                // Where the minimize flight lands (`CallPipMorph`), reported on the 1:1 card's own
+                // slot: only one of the two cards exists at a time. Owner, 2026-10-06: the group
+                // call slid down instead of zooming out into the card like a normal call.
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { CallService.shared.cardFrame = $0 }
+                .onDisappear { CallService.shared.cardFrame = .zero }
+                .opacity(CallService.shared.cardHiddenForMorph ? 0 : 1)
                 .offset(dragLive)
                 .gesture(
                     DragGesture(minimumDistance: 8)
