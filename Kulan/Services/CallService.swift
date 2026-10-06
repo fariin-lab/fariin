@@ -126,7 +126,7 @@ final class CallService: NSObject {
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
                 isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
-                cardOffset = .zero; cardBase = .zero; cardStashed = false
+                cardOffset = .zero; cardBase = .zero; cardStashed = false; cardFrame = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
                 updateInCallScreenBehavior() // proximity off + allow sleep again
@@ -418,6 +418,11 @@ final class CallService: NSObject {
     /// call starts in the corner rather than wherever the last one happened to finish.
     var cardOffset = CGSize.zero
     var cardBase = CGSize.zero
+    /// The card's frame in window points, for the minimize/restore flight (`CallPipMorph`). Never
+    /// read from a `body`, so writing it does not redraw anything.
+    @ObservationIgnored var cardFrame = CGRect.zero
+    /// The real card stays invisible while the minimize flight is landing on it.
+    var cardHiddenForMorph = false
     /// The card has been shoved off the side and is sitting there as a tab (owner, 2026-08-23 —
     /// the reference app does this, and he asked whether we could without Apple's help; we can,
     /// because this only ever happens INSIDE our own window. Hiding a floating window past the edge

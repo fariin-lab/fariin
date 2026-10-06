@@ -354,7 +354,8 @@ struct CallView: View {
     private func topBar(safeTop: CGFloat) -> some View {
         HStack {
             // The ONLY way to minimize the call (swipe-to-minimize removed — screen is locked).
-            Button { call.minimized = true } label: {   // no withAnimation: the zoom owns this motion
+            // The reference app's 0.2s shrink into the card (`CallPipMorph`).
+            Button { CallPipMorph.minimize { call.minimized = true } } label: {
                 // The minimise glyph rather than a bare chevron: this button shrinks the call
                             // into the pill, it does not dismiss or scroll anything.
                             topCircle("arrow.down.right.and.arrow.up.left")
@@ -786,15 +787,19 @@ struct CallContainer<Content: View>: View {
             // make zoom out", and tapping the card "make it smooth, opening there like zoom in").
             // Minimizing zooms the screen down into the card and tapping the card zooms it back
             // out. Placing a call and ending one stay hard cuts; see `presentCover(animated:)`.
+            // ⛔ 2026-10-06: the system zoom to and from the card is gone. The cover is a hard cut
+            // both ways now, and the reference app's 0.2s frame shrink/grow is drawn around it by
+            // `CallPipMorph`; the probe hands a pending restore the presented view.
             CallView()
-                .navigationTransition(.zoom(sourceID: CallZoomSource.card, in: callZoom))
+                .background(CallPipMorphProbe())
                 .presentationBackground(.black)
         }
         .onAppear { if wantsCover { presentCover(animated: false) } }
         .onChange(of: wantsCover) { _, want in
             // In: animated only when coming back from the card (it has existed this call).
             // Out: animated only when minimizing; a call that has ended just goes.
-            if want { presentCover(animated: call.everMinimized) } else { dismissCover(animated: isActive) }
+            // Both ways a hard cut; the card flight is `CallPipMorph`'s (2026-10-06).
+            if want { presentCover(animated: false) } else { dismissCover(animated: false) }
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
         // GroupCallView's own swipe-down sets `minimized` back to true, but a swipe on the COVER
@@ -982,7 +987,13 @@ struct FloatingCallWindow: View {
                 // ⛔ THE TRANSFORM SITS ON `window`, INSIDE THE GESTURE, which is where the smooth
                 // build had it. Hung on the outside it moves the very view the drag is measured on,
                 // so the finger's own reference frame travels with the card.
-                morphAnchored(zoomAnchored(window.offset(dragLive)))
+                morphAnchored(zoomAnchored(window
+                    // Where the minimize/restore flight lands and starts (`CallPipMorph`). At rest
+                    // `dragLive` is zero, which is the only time a flight reads it.
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { call.cardFrame = $0 }
+                    .onDisappear { call.cardFrame = .zero }
+                    .opacity(call.cardHiddenForMorph ? 0 : 1)
+                    .offset(dragLive)))
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
@@ -1067,7 +1078,8 @@ struct FloatingCallWindow: View {
                             }
                     )
                     .onTapGesture {
-                        call.minimized = false   // no withAnimation: the zoom owns this motion
+                        // The reference app's 0.2s grow out of the card (`CallPipMorph`).
+                        CallPipMorph.restore { call.minimized = false }
                     }
                     // ⛔ PADDING, NOT `.offset`, AND THAT IS THE WHOLE POINT (owner, 2026-08-23: he
                     // dragged the card to the bottom-left, reopened the call, and the zoom still flew
