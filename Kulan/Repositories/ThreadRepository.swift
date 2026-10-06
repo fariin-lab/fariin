@@ -500,6 +500,28 @@ final class ThreadRepository {
         return true
     }
 
+    /// ⛔ MY OWN REACTION SHOWS AT ONCE, ON ANY MESSAGE — owner, 2026-10-06, with a screenshot: "old
+    /// messages I can't react, and I can't remove a reaction". The write reached the server; the
+    /// screen never heard. Only the newest window is live (the listener); a message paged in from
+    /// further back was read once, so nothing ever told the row it changed and a tap looked dead
+    /// (chat audit #16 is the general version). The row now takes my reaction the moment I make it,
+    /// and `revertMyReaction` puts the old one back if the server refuses. Inside the live window the
+    /// listener's echo writes the same value over it.
+    @discardableResult
+    func setMyReactionLocally(_ messageId: String, uid: String, emoji: String?) -> String? {
+        guard var m = byId[messageId] else { return nil }
+        let previous = m.reactions[uid]
+        if let emoji { m.reactions[uid] = emoji } else { m.reactions.removeValue(forKey: uid) }
+        byId[messageId] = m
+        rebuild()
+        return previous
+    }
+
+    /// The server refused my reaction: the row goes back to what it showed before the tap.
+    func revertMyReaction(_ messageId: String, uid: String, to previous: String?) {
+        setMyReactionLocally(messageId, uid: uid, emoji: previous)
+    }
+
     /// The server refused the delete: drop the overlay and the real message is back, untouched.
     func restoreAfterFailedDelete(_ id: String) {
         guard locallyDeleted.remove(id) != nil else { return }

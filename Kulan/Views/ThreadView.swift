@@ -6482,11 +6482,19 @@ struct ThreadView: View {
             if m.isVideo, let url = m.thumbUrl, !url.isEmpty { return [(url: url, enc: m.thumbEnc)] }
             return []
         }()
+        // On screen now, on any message (old ones are outside the live listener), and undone below if
+        // the server refuses (owner, 2026-10-06: reactions on old messages looked dead).
+        let previous = repo.setMyReactionLocally(messageId, uid: me, emoji: emoji)
         Task {
             let ok = await ChatService.setReaction(cid: cid, messageId: messageId, emoji: emoji,
                                                    toAuthor: toAuthor, group: members,
                                                    targetText: target, targetImages: thumbs)
-            if !ok { await MainActor.run { showJumpToast("Couldn't update the reaction") } }
+            if !ok {
+                await MainActor.run {
+                    repo.revertMyReaction(messageId, uid: me, to: previous)
+                    showJumpToast("Couldn't update the reaction")
+                }
+            }
         }
     }
 
