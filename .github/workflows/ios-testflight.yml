@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 828: THE + CRASH IS FIXED, PLUS CALL LINK AND CALL FIXES.
+            BUILD 829: THE NEW GROUP CALL SCREEN.
+
+            GROUP CALLS: a real layout that fits everyone (most-square grid, up to 6 on screen, the rest in a strip below). A thin green border shows who is speaking, steady, no flicker. Tap anyone to make them big, tap again to go back. Your own video sits small in the corner when others are in, full screen when alone. Camera off shows the person's photo. A small badge shows who is muted and who has a poor connection. Joins and leaves are announced. Smoother movement, Reduce Motion respected. The header and bottom buttons are unchanged.
+            PEOPLE LIST: In call with the count, who speaks, who is muted, who has video, the host. Tap a person to make them big.
+
+            PLEASE TEST: a group or link call with 2, 3 and 4+ people; turn a camera off and on; tap a tile; open the people list; talk and watch the green border.
+
+            EARLIER (build 828): THE + CRASH IS FIXED, PLUS CALL LINK AND CALL FIXES.
 
             + BUTTON: opening the attach sheet no longer crashes the app.
             ALL MEDIA: Share works for photos, videos, voice, files, GIFs and links every time. The Share / Selected / Delete bar is Apple's own bottom toolbar.
