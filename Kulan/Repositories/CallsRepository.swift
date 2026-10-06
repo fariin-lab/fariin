@@ -119,6 +119,7 @@ final class CallsRepository {
         hasLoaded = false
         loading = false
         lastLoadedAt = nil
+        HiddenCalls.clear()   // the Calls tab's own hidden set is account-scoped too
     }
 
     // force: true bypasses the 30s TTL (pull-to-refresh). Normal tab-switch passes false so we
@@ -192,7 +193,7 @@ final class CallsRepository {
             }
         }
         all.append(contentsOf: adhocEntries)
-        all.removeAll { HiddenMessages.isHidden($0.id) }   // locally deleted entries stay gone
+        all.removeAll { HiddenCalls.isHidden($0.id) }   // locally deleted entries stay gone
         all.sort { $0.date > $1.date }
         await MainActor.run {
             // The account changed while this was in flight → drop the results on the floor.
@@ -210,15 +211,43 @@ final class CallsRepository {
     // A multi-person row's id is its room id, so the same hide covers those too.
     func delete(_ entry: CallEntry) async {
         await MainActor.run {
-            HiddenMessages.hide(entry.id)
+            // Owner audit 2026-10-06 #37: HiddenCalls, not HiddenMessages, so the chat bubble stays.
+            HiddenCalls.hide(entry.id)
             calls.removeAll { $0.id == entry.id }
         }
     }
 
     func delete(ids: Set<String>) async {
         await MainActor.run {
-            for id in ids { HiddenMessages.hide(id) }
+            for id in ids { HiddenCalls.hide(id) }
             calls.removeAll { ids.contains($0.id) }
         }
+    }
+}
+
+/// The Calls tab's own "deleted for me" set. Owner audit 2026-10-06 #37: history rows and chat call
+/// bubbles used to share HiddenMessages, so deleting in one place hid the call in the other.
+/// Upgrade: the first time it is read, the set is seeded from the existing HiddenMessages ids, so
+/// every call row already deleted stays gone (and those bubbles stay hidden in chat, as before).
+enum HiddenCalls {
+    private static let key = "hiddenCalls"
+    private static var cache: Set<String> = {
+        let d = UserDefaults.standard
+        if let stored = d.string(forKey: key) {
+            return Set(stored.split(separator: " ").map(String.init))
+        }
+        let seed = d.string(forKey: "hiddenMessages") ?? ""
+        d.set(seed, forKey: key)
+        return Set(seed.split(separator: " ").map(String.init))
+    }()
+    static func isHidden(_ id: String) -> Bool { cache.contains(id) }
+    static func hide(_ id: String) {
+        guard !id.isEmpty, !cache.contains(id) else { return }
+        cache.insert(id)
+        UserDefaults.standard.set(cache.joined(separator: " "), forKey: key)
+    }
+    static func clear() {
+        cache.removeAll()
+        UserDefaults.standard.removeObject(forKey: key)
     }
 }
