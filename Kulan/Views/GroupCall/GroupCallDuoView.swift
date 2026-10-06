@@ -16,10 +16,17 @@ import LiveKit
 ///
 /// The numbers are the 1:1 screen's (`CallView.pipLayer`), so the two cannot drift apart unnoticed:
 /// change one, change both.
+///
+/// Owner, 2026-10-06 (group call build plan, the screen package):
+/// - ALONE in a joined call (`remote` nil) this is the screen too: my camera edge to edge under the
+///   chrome, or my photo on my colour when it is off. No corner tile, nothing to swap. It used to be
+///   the grid's letterboxed "alone" tile.
+/// - while the small tile is my live camera it carries the 1:1 tile's flip glyph, top-right.
 struct GroupCallDuoView: View {
     @ObservedObject var stage: GroupCallStage
     let local: CallTile
-    let remote: CallTile
+    /// The one other person, or nil while I am alone in the call.
+    let remote: CallTile?
     /// My feed is the big one. Owned by `GroupCallView` so it survives a re-render.
     @Binding var swapped: Bool
     let chromeVisible: Bool
@@ -30,45 +37,43 @@ struct GroupCallDuoView: View {
     let onTileRelease: () -> Void
     /// The chrome comes back (a tap on the small tile while it is away).
     let onShowChrome: () -> Void
+    /// The flip glyph on my own live tile.
+    let onFlipCamera: () -> Void
 
     @State private var cornerLeft = false
     @State private var cornerTop = false
 
-    private var big: CallTile { swapped ? local : remote }
-    private var small: CallTile { swapped ? remote : local }
+    /// Alone, the big feed is mine whatever `swapped` says (there is nobody to swap with).
+    private var big: CallTile {
+        guard let remote else { return local }
+        return swapped ? local : remote
+    }
+    private var small: CallTile? {
+        guard let remote else { return nil }
+        return swapped ? remote : local
+    }
     /// The live feeds, nil while a camera is off OR its track has not arrived yet (a camera marked
     /// on with no picture must show the photo, not a black screen).
     private var bigTrack: VideoTrack? { big.hasVideo ? stage.videoTrack(big.id, preferScreen: false) : nil }
-    private var smallTrack: VideoTrack? { small.hasVideo ? stage.videoTrack(small.id, preferScreen: false) : nil }
+    private var smallTrack: VideoTrack? {
+        guard let small, small.hasVideo else { return nil }
+        return stage.videoTrack(small.id, preferScreen: false)
+    }
     /// A video call, in the 1:1 sense: someone's camera is on.
-    private var anyVideo: Bool { local.hasVideo || remote.hasVideo }
+    private var anyVideo: Bool { local.hasVideo || (remote?.hasVideo ?? false) }
+    /// The corner tile belongs to a two-person video call; alone there is no second feed to hold.
+    private var showsTile: Bool { remote != nil && anyVideo }
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 ground
                 bigFeed(geo)
-                // The 1:1 screen's dark top scrim: white name and buttons stay readable over a
-                // bright picture (CallView, "L1").
-                if bigTrack != nil {
-                    LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: insets.top + 140)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .allowsHitTesting(false)
-                }
-                // Tap anywhere that is not the tile: show or hide the chrome (the 1:1 screen's rule).
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { onBackgroundTap() }
-                if bigTrack == nil {
-                    AvatarView(name: big.name, photoUrl: big.photoUrl, size: 180)
-                        .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-                if anyVideo {
-                    tile(geo).zIndex(2)
+                topScrim
+                tapSurface
+                bigPhoto
+                if showsTile, let small {
+                    tile(small, geo).zIndex(2)
                         .transition(.opacity)
                 }
             }
@@ -77,7 +82,9 @@ struct GroupCallDuoView: View {
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 0.25), value: swapped)
         .animation(.easeInOut(duration: 0.2), value: bigTrack != nil)
-        .animation(.easeInOut(duration: 0.3), value: anyVideo)
+        .animation(.easeInOut(duration: 0.3), value: showsTile)
+        // Someone joins me, or the other person leaves: the big picture changes hands in one fade.
+        .animation(.easeInOut(duration: 0.3), value: big.id)
     }
 
     // MARK: - Big
@@ -107,9 +114,41 @@ struct GroupCallDuoView: View {
         }
     }
 
+    /// The 1:1 screen's dark top scrim: white name and buttons stay readable over a bright picture
+    /// (CallView, "L1").
+    @ViewBuilder
+    private var topScrim: some View {
+        if bigTrack != nil {
+            LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: insets.top + 140)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Tap anywhere that is not the tile: show or hide the chrome (the 1:1 screen's rule).
+    private var tapSurface: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { onBackgroundTap() }
+    }
+
+    /// Camera off (or its picture not here yet): that person's photo in the middle.
+    @ViewBuilder
+    private var bigPhoto: some View {
+        if bigTrack == nil {
+            AvatarView(name: big.name, photoUrl: big.photoUrl, size: 180)
+                .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
+                .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
+                .allowsHitTesting(false)
+                .id(big.id)
+                .transition(.opacity)
+        }
+    }
+
     // MARK: - Corner tile
 
-    private func tile(_ geo: GeometryProxy) -> some View {
+    private func tile(_ small: CallTile, _ geo: GeometryProxy) -> some View {
         let tileW: CGFloat = chromeVisible ? 135 : 79
         let tileH: CGFloat = chromeVisible ? 240 : 140
         // Clear of the controls capsule (54pt buttons + 12pt padding, 10pt from the safe bottom)
@@ -118,11 +157,7 @@ struct GroupCallDuoView: View {
         let maxLeft = -(geo.size.width - tileW - 24)
         let maxUp = -max(0, geo.size.height - tileH - (insets.top + 64) - bottomPad)
         let rest = CGSize(width: cornerLeft ? maxLeft : 0, height: cornerTop ? maxUp : 0)
-        return tileContent
-            .frame(width: tileW, height: tileH)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.white.opacity(0.25), lineWidth: 1))
+        return tileStack(small, width: tileW, height: tileH)
             .shadow(color: .black.opacity(0.45), radius: 14, y: 5)
             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .modifier(PipTileDrag(
@@ -133,24 +168,52 @@ struct GroupCallDuoView: View {
             ))
             // Two stages, as the 1:1 tile: with the chrome away a tap only brings it back (and grows
             // the tile); with it up, a tap swaps big and small.
-            .onTapGesture {
-                guard chromeVisible else { onShowChrome(); return }
-                onShowChrome()
-                withAnimation(.easeInOut(duration: 0.25)) { swapped.toggle() }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(small.isLocal ? "Your video" : "\(small.name)'s video")
-            .accessibilityHint("Double-tap to swap")
-            .accessibilityAddTraits(.isButton)
+            .onTapGesture { tileTapped() }
             .padding(.bottom, bottomPad)
             .padding(.trailing, 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .animation(.spring(duration: 0.4), value: chromeVisible)
     }
 
+    private func tileTapped() {
+        guard chromeVisible else { onShowChrome(); return }
+        onShowChrome()
+        withAnimation(.easeInOut(duration: 0.25)) { swapped.toggle() }
+    }
+
+    /// The tile's picture with the flip glyph over its top-right corner, the 1:1 tile's layering
+    /// (`CallView.pipLayer`). VoiceOver reads the picture as one button and the glyph as another, so
+    /// the picture's label sits on the picture alone, not on the pair.
+    private func tileStack(_ small: CallTile, width: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .topTrailing) {
+            tileContent(small)
+                .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.25), lineWidth: 1))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(small.isLocal ? "Your video" : "\(small.name)'s video")
+                .accessibilityHint("Double-tap to swap")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { tileTapped() }
+            // The flip glyph belongs to a LIVE local camera only (the 1:1 rule).
+            if small.isLocal, smallTrack != nil { flipGlyph }
+        }
+    }
+
+    private var flipGlyph: some View {
+        Button { onFlipCamera() } label: {
+            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
+                .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                .padding(6).background(.black.opacity(0.45), in: Circle())
+        }
+        .accessibilityLabel("Flip camera")
+        .padding(6)
+    }
+
     /// That person's video, or their photo on a dark card with the camera-off glyph (the 1:1 tile).
     @ViewBuilder
-    private var tileContent: some View {
+    private func tileContent(_ small: CallTile) -> some View {
         if let track = smallTrack {
             SwiftUIVideoView(track, layoutMode: .fill)
                 .id(small.cameraTrackSid)
