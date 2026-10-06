@@ -23,8 +23,9 @@ struct CallView: View {
     // Layout state lives in CallService so minimize/restore keeps the SAME big/small choice and tile
     // position (the fullScreenCover destroys this view on minimize; @State here reset every time).
     private var isLocalExpanded: Bool { get { call.isLocalExpanded } nonmutating set { call.isLocalExpanded = newValue } }
-    private var pipOffset: CGSize { get { call.pipOffset } nonmutating set { call.pipOffset = newValue } }
-    private var pipBase: CGSize { get { call.pipBase } nonmutating set { call.pipBase = newValue } }
+    // Owner audit 2026-10-06 #18: the tile's CORNER, not an offset — see CallService.pipCornerLeft.
+    private var pipCornerLeft: Bool { get { call.pipCornerLeft } nonmutating set { call.pipCornerLeft = newValue } }
+    private var pipCornerTop: Bool { get { call.pipCornerTop } nonmutating set { call.pipCornerTop = newValue } }
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     // Front↔back switch, rebuilt on the reference implementation's mechanics (owner's order: no
     // blur, and never both feeds visible mid-switch). The OLD camera rotates the tile edge-on (or
@@ -34,6 +35,10 @@ struct CallView: View {
     @State private var flippingCamera = false   // a switch is in flight (double-tap guard + fallback reset)
     @State private var flipAngle: Double = 0    // tile: rotates OUT to ±90°, returns from the far side
     @State private var flipDim = false          // fullscreen local video: the crossfade reads as a dip to black
+    // Owner audit 2026-10-06 (area 11): the 1.2s fallback of one switch used to land in the middle of
+    // the NEXT one (flip, camera back at 0.5s, flip again at 0.9s: the first timer fired 0.3s into the
+    // second switch and swung the tile back early). Each switch gets a number; a stale timer stands down.
+    @State private var flipGeneration = 0
     // The ACCEPT hand-off (user report: "you feel your face left on big screen, [then] a moment when
     // it drops [to the] small one" — a hard cut). While true, the corner tile renders FULL SCREEN over
     // everything, holding the same local feed the big view just gave up; releasing it with a spring
@@ -53,7 +58,10 @@ struct CallView: View {
     @State private var showAddPeople = false   // "…" › Add people
     private static let autoHideAfter: TimeInterval = 5
 
-    private var autoHideEnabled: Bool { call.everVideo && connectedCall }
+    // Owner audit 2026-10-06 #19: never under VoiceOver. Hidden controls are taken out of the
+    // accessibility tree (below), and a VoiceOver user has no way to find the tap-anywhere surface to
+    // bring them back, so for them the buttons simply stay.
+    private var autoHideEnabled: Bool { call.everVideo && connectedCall && !UIAccessibility.isVoiceOverRunning }
 
     private func armAutoHide() {
         hideTask?.cancel()
@@ -62,6 +70,10 @@ struct CallView: View {
             if !controlsVisible { withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = true } }
             return
         }
+        // Owner audit 2026-10-06 #40: no clock while the Add people sheet is up. It used to run on
+        // under the sheet, so dismissing it landed on a screen whose buttons had already gone. The
+        // sheet's dismissal restarts it (`.onChange(of: showAddPeople)`).
+        guard !showAddPeople else { return }
         let work = DispatchWorkItem {
             withAnimation(.easeInOut(duration: 0.28)) { controlsVisible = false }
         }
@@ -100,10 +112,13 @@ struct CallView: View {
             withAnimation(.easeIn(duration: 0.1)) { flipAngle = call.usingFrontCamera ? 90 : -90 }
         }
         call.switchCamera()
+        flipGeneration &+= 1
+        let generation = flipGeneration
         // Fallback: a camera that never comes back (hardware refusal) must not leave the tile
-        // edge-on forever. The real return path lands first on every normal switch.
+        // edge-on forever. The real return path lands first on every normal switch. Only THIS
+        // switch's fallback may act (see flipGeneration).
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            guard flippingCamera else { return }
+            guard flippingCamera, flipGeneration == generation else { return }
             withAnimation(.easeOut(duration: 0.15)) { flipAngle = 0; flipDim = false }
             flippingCamera = false
         }
@@ -202,6 +217,9 @@ struct CallView: View {
                         .frame(maxWidth: .infinity)        // full-width header (centered name/status)
                         .opacity(controlsVisible ? 1 : 0)
                         .allowsHitTesting(controlsVisible) // hidden buttons must not eat the tap
+                        // Owner audit 2026-10-06 #19: opacity 0 left them in the accessibility
+                        // tree, so VoiceOver focused invisible buttons that did nothing.
+                        .accessibilityHidden(!controlsVisible)
                     Spacer()
                     if showAvatar {
                         // WHOSE photo follows who is on the big screen, not always theirs.
@@ -220,6 +238,7 @@ struct CallView: View {
                         .padding(.bottom, winInsets.bottom + 22)
                         .opacity(controlsVisible ? 1 : 0)
                         .allowsHitTesting(controlsVisible)
+                        .accessibilityHidden(!controlsVisible)   // #19, as the top bar
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the screen (never collapse/offset)
             }
@@ -238,6 +257,14 @@ struct CallView: View {
             // controls for the moment something changes, then get out of the way again.
             .onChange(of: call.state) { _, _ in showControls() }
             .onChange(of: call.isVideo) { _, _ in showControls() }
+            // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
+            // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
+            .onChange(of: showAddPeople) { _, up in
+                if up { hideTask?.cancel() } else { showControls() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)) { _ in
+                showControls()
+            }
             // The switch's RETURN half: the new camera is live, mirror already changed while the
             // view was edge-on/black. Come back from the FAR side — the jump across is invisible.
             .onChange(of: call.cameraSwitchFlip) { _, _ in
@@ -361,6 +388,7 @@ struct CallView: View {
                             topCircle("arrow.down.right.and.arrow.up.left")
             }
             .buttonStyle(CallControlStyle())
+            .accessibilityLabel("Minimize call")   // owner audit 2026-10-06 #19
 
             Spacer()
             // Big bold name over a smaller status (18pt read as a toolbar label).
@@ -377,7 +405,13 @@ struct CallView: View {
                 if call.remoteMuted, call.state == .active {
                     HStack(spacing: 5) {
                         Image(systemName: "mic.slash.fill").font(.system(size: 12, weight: .semibold))
-                        Text("Muted").font(.system(size: 15, weight: .medium))
+                            .accessibilityLabel("Muted")
+                        // Owner audit 2026-10-06 #42: "Muted" used to replace the weak-signal notice
+                        // outright, and that notice is the one thing that explains a frozen camera.
+                        // Both apply → the slashed mic still says muted, the words say why the video
+                        // stopped.
+                        Text(call.videoPausedForNetwork ? "Video paused, weak signal" : "Muted")
+                            .font(.system(size: 15, weight: .medium))
                     }
                     .foregroundStyle(.white.opacity(0.75))
                     .transition(.opacity)
@@ -397,6 +431,7 @@ struct CallView: View {
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
+            .accessibilityLabel("More options")   // #19
         }
         .padding(.horizontal, 16)
         .padding(.top, safeTop + 14)   // clear the iOS status-bar call indicator (green pill)
@@ -462,13 +497,12 @@ struct CallView: View {
         let bottomPad = safeBottom + (controlsVisible ? 132 : 12)
         let maxLeft = -(geo.size.width - tileW - 24)
         let maxUp = -max(0, geo.size.height - tileH - (winInsets.top + 60) - bottomPad)
-        // A dragged offset was stored against ONE set of bounds, and the bounds move when the
-        // chrome toggles — the tile grows and its home rises. Clamp at DISPLAY time (his 544
-        // report: park the card at the top by hand, tap the screen, and the grown card slid off
-        // the top edge). The STORED offset survives untouched, so hiding the chrome returns the
-        // card to exactly where he parked it.
-        let shownOffset = CGSize(width: max(maxLeft, min(0, pipOffset.width)),
-                                 height: max(maxUp, min(0, pipOffset.height)))
+        // The bounds move when the chrome toggles — the tile grows and its home rises (his 544
+        // report: park the card at the top by hand, tap the screen, and the grown card slid off the
+        // top edge). Owner audit 2026-10-06 #18: so the stored thing is the CORNER, and the offset is
+        // worked out from it against the bounds of this very render. A stored offset fixed only one
+        // direction (hidden → shown); shown → hidden left the tile 68pt off the side or mid-screen.
+        let restOffset = CGSize(width: pipCornerLeft ? maxLeft : 0, height: pipCornerTop ? maxUp : 0)
         // THE TILE BELONGS TO THE CALL, NOT TO A LIVE CAMERA. It used to vanish the moment that camera
         // went off, which left an empty corner and — because the tile is also the tap target for the
         // swap — took the only way back with it. Now it stays, holding that person's photo instead of
@@ -499,33 +533,21 @@ struct CallView: View {
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                                 .padding(6).background(.black.opacity(0.45), in: Circle())
                         }
+                        .accessibilityLabel("Flip camera")   // owner audit 2026-10-06 #19
                         .padding(6)
                     }
                 }
                 .shadow(color: .black.opacity(tileEntering ? 0 : 0.45), radius: 14, y: 5)
-                .offset(tileEntering ? .zero : shownOffset)
-                // Drag (min 10pt) repositions the window; a tap (no move) swaps the feeds.
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 10)
-                        .onChanged { v in
-                            // Home is the BOTTOM-trailing corner now, so travel is left (negative w)
-                            // and UP (negative h) — bounds computed above from the live tile size.
-                            let w = pipBase.width + v.translation.width
-                            let h = pipBase.height + v.translation.height
-                            pipOffset = CGSize(width: min(0, max(maxLeft, w)), height: max(maxUp, min(0, h)))
-                        }
-                        .onEnded { _ in
-                            // SNAP TO THE NEAREST CORNER (standard PiP): the tile must never rest
-                            // mid-screen. Choose left/right by which half the tile is in, top/bottom the
-                            // same, then spring there.
-                            let targetX: CGFloat = pipOffset.width < maxLeft / 2 ? maxLeft : 0
-                            let targetY: CGFloat = pipOffset.height < maxUp / 2 ? maxUp : 0
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                                pipOffset = CGSize(width: targetX, height: targetY)
-                            }
-                            pipBase = CGSize(width: targetX, height: targetY)
-                        }
-                )
+                // Drag (min 10pt) repositions the window; a tap (no move) swaps the feeds. The offset
+                // and the drag live in `PipTileDrag`, whose own state carries the finger — see there.
+                .modifier(PipTileDrag(
+                    rest: restOffset, maxLeft: maxLeft, maxUp: maxUp, entering: tileEntering,
+                    // Owner audit 2026-10-06 #41: the hide clock fired mid-drag and the tile
+                    // shrank under the finger. Stopped while a finger is down, restarted on release.
+                    onBegin: { hideTask?.cancel() },
+                    onSnap: { left, top in pipCornerLeft = left; pipCornerTop = top },
+                    onFinish: { armAutoHide() }
+                ))
                 // SWAP ONLY BETWEEN TWO LIVE FEEDS. A photo tile is not tappable: blowing a still photo
                 // up to full screen while a live feed shrinks into the corner is worse in both
                 // directions, and it is how tapping once stranded the user full screen on their own
@@ -593,15 +615,19 @@ struct CallView: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
-            callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted) { call.toggleMute() }
+            // Labels: owner audit 2026-10-06 #19 — icon-only buttons read as "button" or the raw
+            // symbol name under VoiceOver. Each says what a tap does now.
+            callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
+                       label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
             // MY camera — turn it on/off freely (the other side just sees it, no
             // permission). Only once CONNECTED; dimmed while still Calling/Ringing.
-            callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn) { call.toggleCamera() }
+            callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
+                       label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
                 .disabled(call.state != .active)
                 .opacity(call.state == .active ? 1 : 0.4)
             // Flip front/back only while my camera is on.
             if call.cameraOn {
-                callCircle("arrow.triangle.2.circlepath", active: false) { flipCamera() }
+                callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
             }
             speakerCircle
             endCircle
@@ -630,17 +656,20 @@ struct CallView: View {
                     .frame(width: 52, height: 52)
                     .background(call.audioRoute == .earpiece ? AnyShapeStyle(.clear) : AnyShapeStyle(.white), in: Circle())
                     .liquidGlass(Circle(), interactive: true, enabled: call.audioRoute == .earpiece)
+                    .accessibilityHidden(true)   // #19: the picker on top is the one control
                 // Invisible native picker on top — owns the tap, opens the system route sheet.
                 AudioRoutePicker().frame(width: 52, height: 52).clipShape(Circle())
+                    .accessibilityLabel("Audio output")
             }
         } else {
             // One steady speaker glyph; ON = filled white circle (the slash icon looked like
             // something was muted even when it wasn't).
-            callCircle("speaker.wave.2.fill", active: call.isSpeaker) { call.toggleSpeaker() }
+            callCircle("speaker.wave.2.fill", active: call.isSpeaker, label: "Speaker") { call.toggleSpeaker() }
+                .accessibilityAddTraits(call.isSpeaker ? .isSelected : [])
         }
     }
 
-    private func callCircle(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+    private func callCircle(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             showControls()          // using a button restarts the clock, never cuts it short
@@ -657,6 +686,7 @@ struct CallView: View {
                 .liquidGlass(Circle(), interactive: true, enabled: !active)
         }
         .buttonStyle(CallControlStyle())
+        .accessibilityLabel(label)
     }
 
     private var endCircle: some View {
@@ -671,6 +701,62 @@ struct CallView: View {
                 .liquidGlass(Circle(), interactive: true, tint: Color(.systemRed))
         }
         .buttonStyle(CallControlStyle())
+        .accessibilityLabel("End call")   // #19
+    }
+}
+
+/// The corner tile's position and drag. Home is the BOTTOM-trailing corner, so travel is left
+/// (negative width) and UP (negative height), within bounds the call screen computes from the live
+/// tile size.
+///
+/// Owner audit 2026-10-06 (area 11): the live drag used to be written into CallService, which the
+/// whole call screen observes, so every drag frame re-ran the entire CallView body (the video
+/// layers, the scene scan for insets, the PiP feeds). It is this modifier's own @State now, which
+/// re-renders only the modifier; the call screen hears about the drag once, when it lands.
+/// #18: the drag starts from `rest`, the corner worked out against TODAY's bounds, never from an
+/// offset stored against older ones (that was the dead zone and jump after the chrome toggled).
+private struct PipTileDrag: ViewModifier {
+    let rest: CGSize
+    let maxLeft: CGFloat
+    let maxUp: CGFloat
+    let entering: Bool
+    let onBegin: () -> Void
+    let onSnap: (_ left: Bool, _ top: Bool) -> Void
+    let onFinish: () -> Void
+
+    /// Where the finger has the tile, or nil at rest.
+    @State private var live: CGSize?
+
+    private func clamped(_ s: CGSize) -> CGSize {
+        CGSize(width: min(0, max(maxLeft, s.width)), height: max(maxUp, min(0, s.height)))
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .offset(entering ? .zero : (live.map { clamped($0) } ?? rest))
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 10)
+                    .onChanged { v in
+                        if live == nil { onBegin() }
+                        live = clamped(CGSize(width: rest.width + v.translation.width,
+                                              height: rest.height + v.translation.height))
+                    }
+                    .onEnded { v in
+                        // SNAP TO THE NEAREST CORNER (standard PiP): the tile must never rest
+                        // mid-screen. #41: decided on where the THROW was going, not where the finger
+                        // stopped, so a short fast flick toward another corner lands there.
+                        // `predictedEndTranslation` equals the plain translation on a slow release.
+                        let thrown = clamped(CGSize(width: rest.width + v.predictedEndTranslation.width,
+                                                    height: rest.height + v.predictedEndTranslation.height))
+                        let left = thrown.width < maxLeft / 2
+                        let top = thrown.height < maxUp / 2
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                            onSnap(left, top)
+                            live = nil
+                        }
+                        onFinish()
+                    }
+            )
     }
 }
 
@@ -930,9 +1016,18 @@ struct FloatingCallWindow: View {
     /// to find the notch, and `body` re-runs on every frame of a drag — sixty scene-graph walks a
     /// second, for a number that cannot change while a call is on screen. Resolved once when the
     /// card appears and read from memory after that.
-    @State private var insetsCache: UIEdgeInsets = .zero
+    @State private var insetsCache: UIEdgeInsets
 
     private var insets: UIEdgeInsets { insetsCache }
+
+    /// Owner audit 2026-10-06 #43: resolved HERE, before the first layout, not in `onAppear`. Starting
+    /// from `.zero` laid the card out once under the notch (y = 8) and only then moved it down, and the
+    /// minimize flight, which reads the card's frame 30ms after the cover goes, could land on that
+    /// first position and see the real card appear 59pt lower. This view is rebuilt on every
+    /// minimize, so that was every minimize, not just the first.
+    init() {
+        _insetsCache = State(initialValue: Self.resolveInsets())
+    }
 
     private static func resolveInsets() -> UIEdgeInsets {
         UIApplication.shared.connectedScenes

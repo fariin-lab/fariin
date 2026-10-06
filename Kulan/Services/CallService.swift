@@ -144,7 +144,7 @@ final class CallService: NSObject {
                 stopRingback(); stopTone(); cancelTimers()
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
-                isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
+                isLocalExpanded = false; pipCornerLeft = false; pipCornerTop = false
                 cardOffset = .zero; cardBase = .zero; cardStashed = false; cardFrame = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
@@ -428,8 +428,13 @@ final class CallService: NSObject {
     // Video layout state — owned HERE so minimize/restore keeps the user's big/small choice and PiP
     // tile position (CallView is destroyed by the cover on minimize; its @State reset every time).
     var isLocalExpanded = false
-    var pipOffset = CGSize.zero
-    var pipBase = CGSize.zero
+    // Owner audit 2026-10-06 #18: the tile's resting place is a CORNER, not a stored offset. An
+    // absolute offset was only right for the bounds it was measured against; when the chrome hid, the
+    // tile shrank and its home dropped, and the same offset left it mid-screen. The offset is derived
+    // from the corner and the live bounds every time. The live drag is the view's own state
+    // (audit 11: writing it here re-rendered the whole call screen on every drag frame).
+    var pipCornerLeft = false
+    var pipCornerTop = false
     /// WHERE THE MINIMIZED CARD WAS LEFT. Owned here for the same reason as the tile above: the card
     /// is destroyed and rebuilt every time you go back into the call and minimize again, so view
     /// @State sent it home to the bottom-right corner every single time (owner, 2026-08-23 — it
