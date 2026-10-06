@@ -2043,7 +2043,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // not. Marked first, that same callback sees an animation in flight and defers.
             scrollingAnimationDidStart()   // lands defer until the glide completes
             stopScrolling()
+            // owner audit 2026-10-06 chat #41: remember where THIS glide is going and when it set
+            // off, so an end callback that belongs to the glide it just replaced can be told apart.
+            glideTarget = target
+            glideStartedAt = CACurrentMediaTime()
+            startingGlide = true
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
+            startingGlide = false
             // AND THEN CHECK THAT IT ACTUALLY HAPPENED. Everything above is a chain of things that
             // each have to hold; this asks the only question that matters — am I there? — and puts
             // the reader there if not. Skipped the moment the reader takes over or a newer move
@@ -2051,21 +2057,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             glideSeq &+= 1
             let seq = glideSeq
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                // ⛔ THE SAME STAND-DOWNS EVERY OTHER OFFSET WRITER HONOURS. This checked only for a
-                // finger, so: tap jump-to-latest, flick the list within half a second, and at t=0.5
-                // the reader is coasting with no finger down and no NEW scroll issued — so `glideSeq`
-                // still matches and this hard-writes the old target, killing the fling. Deceleration
-                // is a reader in motion. A context menu is up means nothing may move (the menu's
-                // snapshot is anchored to a frame from before). A screenshot capture owns the offset.
-                // And a controller on its way out should write nothing at all.
-                guard let self, seq == self.glideSeq,
-                      !self.collectionView.isDragging, !self.collectionView.isTracking,
-                      !self.collectionView.isDecelerating,
-                      !self.contextMenuVisible, !self.isDisappearing,
-                      abs(self.collectionView.contentOffset.y - target) > 2 else { return }
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
-                self.lastStableOffset = target
-                self.scrollingAnimationDidComplete()
+                self?.checkGlideArrival(seq: seq, target: target, lastY: nil)
             }
         } else {
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
@@ -2148,19 +2140,99 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// Bumped by every animated glide so a late arrival check can tell whether it is still the
     /// current one — see scrollToOffset.
     private var glideSeq: Int = 0
+    /// The offset the glide in flight is flying to, and when it set off. `nil` = no glide.
+    private var glideTarget: CGFloat?
+    private var glideStartedAt: CFTimeInterval = 0
+    /// True only inside the animated `setContentOffset` that starts a glide: an end callback UIKit
+    /// delivers from in there belongs to the animation being replaced, never to the new one.
+    private var startingGlide = false
+
+    /// THE GLIDE'S ARRIVAL CHECK, half a second after it set off.
+    ///
+    /// ⛔ THE SAME STAND-DOWNS EVERY OTHER OFFSET WRITER HONOURS. This checked only for a finger, so:
+    /// tap jump-to-latest, flick the list within half a second, and at t=0.5 the reader is coasting
+    /// with no finger down and no NEW scroll issued — so `glideSeq` still matches and this hard-wrote
+    /// the old target, killing the fling. Deceleration is a reader in motion. A context menu is up
+    /// means nothing may move (the menu's snapshot is anchored to a frame from before). And a
+    /// controller on its way out should write nothing at all.
+    ///
+    /// owner audit 2026-10-06 chat #6: standing down used to leave `programmaticScrollAnimating` set,
+    /// and UIKit does not report the end of a glide the reader interrupted, so every land waited for
+    /// the 5s watchdog. A reader in motion now ENDS the glide (without writing); a menu or a
+    /// disappearing screen clears the flag quietly.
+    ///
+    /// owner audit 2026-10-06 chat #61: (a) a glide UIKit already reported finished is not completed
+    /// a second time (the flag is the proof), (b) the target is re-clamped, because the bound can have
+    /// moved since the glide set off (the composer shrinking), and (c) a glide that is still moving at
+    /// this point is let finish instead of being cut short: the offset is sampled a frame apart and
+    /// only written once it has stopped changing.
+    private func checkGlideArrival(seq: Int, target: CGFloat, lastY: CGFloat?) {
+        guard seq == glideSeq, programmaticScrollAnimating else { return }
+        if collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating {
+            glideInterruptedByReader()
+            return
+        }
+        if contextMenuVisible || isDisappearing {
+            endGlideQuietly()
+            return
+        }
+        let y = collectionView.contentOffset.y
+        let want = clampOffset(target)
+        // There, and UIKit's end callback was lost: complete it as that callback would have.
+        if abs(y - target) <= 2 || abs(y - want) <= 2 {
+            sendAnimating = false
+            scrollingAnimationDidComplete()
+            return
+        }
+        if let lastY, abs(y - lastY) <= 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+            lastStableOffset = want
+            sendAnimating = false
+            scrollingAnimationDidComplete()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.checkGlideArrival(seq: seq, target: target, lastY: y)
+        }
+    }
+
+    /// owner audit 2026-10-06 chat #6: clear the glide's gates without touching the reader's place.
+    private func endGlideQuietly() {
+        scrollAnimationWatchdog?.invalidate()
+        scrollAnimationWatchdog = nil
+        programmaticScrollAnimating = false
+        sendAnimating = false
+        glideTarget = nil
+    }
+
+    /// owner audit 2026-10-06 chat #6: the reader's hand ended a programmatic glide. UIKit sends no
+    /// end callback for that, so the glide is closed here and whatever it held back may land (loads
+    /// land under a finger by design, see Land-when-safe). Where the reader actually is gets recorded,
+    /// not where the glide was going.
+    private func glideInterruptedByReader() {
+        guard programmaticScrollAnimating || sendAnimating else { return }
+        endGlideQuietly()
+        recordDistanceFromBottom()
+        settleFlush()
+    }
 
     private func scrollingAnimationDidStart() {
         programmaticScrollAnimating = true
         scrollAnimationWatchdog?.invalidate()
-        scrollAnimationWatchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+        // owner audit 2026-10-06 chat #6: in the common run-loop modes, so the net also fires while a
+        // finger is scrolling (a default-mode timer waits for the scroll to end).
+        let watchdog = Timer(timeInterval: 5, repeats: false) { [weak self] _ in
             self?.scrollingAnimationDidComplete()
         }
+        RunLoop.main.add(watchdog, forMode: .common)
+        scrollAnimationWatchdog = watchdog
     }
 
     private func scrollingAnimationDidComplete() {
         scrollAnimationWatchdog?.invalidate()
         scrollAnimationWatchdog = nil
         programmaticScrollAnimating = false
+        glideTarget = nil
         // ⛔ THE GLIDE WAS AIMED BEFORE THE COMPOSER SHRANK — the other half of the long-message gap.
         // `perform(.newest(animated:))` captures `maxContentOffsetY` when it starts, and on a long
         // send the composer collapses WHILE it is flying, which moves that bound. Landing on the old
@@ -5402,8 +5474,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // MARK: - Scroll observation
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        // owner audit 2026-10-06 chat #41: its two siblings stand down for our own stop and this one
+        // did not, so the end of a glide that a NEWER glide had just replaced could clear the new
+        // glide's flags mid-flight and open the land gate under it. An end is ignored when:
+        // it comes from inside our own stop or glide start; no glide is in flight (it was already
+        // completed by the arrival check or ended by the reader); or it arrives within a few frames
+        // of a new glide setting off while the list is nowhere near that glide's target.
+        guard !ignoringScrollEvents, !startingGlide else { return }
+        guard programmaticScrollAnimating || sendAnimating else { return }
+        if let t = glideTarget, abs(scrollView.contentOffset.y - t) > 2,
+           CACurrentMediaTime() - glideStartedAt < 0.1 { return }
         sendAnimating = false
         scrollingAnimationDidComplete()
+    }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        // owner audit 2026-10-06 chat #6: a pan ends a programmatic glide, and UIKit sends no end
+        // callback for that, so the glide is closed here rather than by the 5s watchdog.
+        guard !ignoringScrollEvents else { return }
+        glideInterruptedByReader()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         guard !ignoringScrollEvents else { return }
