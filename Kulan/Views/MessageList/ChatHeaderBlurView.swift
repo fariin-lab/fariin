@@ -81,7 +81,10 @@ final class ChatHeaderBlurView: UIView {
         let key = "\(cid)|\(dark)|\(Int(screenSize.width))x\(Int(screenSize.height))|\(store.version)"
         guard key != appliedKey else { return }
         appliedKey = key
-        let kind = store.wallpaper(for: cid)
+        // ⛔ NO CHAT, NO WALLPAPER — owner, 2026-10-06: the Fariin header wore the wallpaper he set
+        // for his other chats. The official page never hands the list a cid, and an empty cid is not
+        // the official one, so the store fell through to the all-chats default.
+        let kind: ChatWallpaper = cid.isEmpty ? .none : store.wallpaper(for: cid)
         if kind != .none, let image = WallpaperBlur.headerPicture(for: cid, dark: dark, size: screenSize) {
             // The wallpaper itself, at the same place it has on screen: this view starts at the
             // top of the full-screen chat, so the picture's own origin is ours.
