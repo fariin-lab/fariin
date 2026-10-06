@@ -1736,6 +1736,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Asked BEFORE the height lands, for the same reason the anchors are: afterwards the bound
         // has already moved and a reader who was at it no longer looks like one.
         if isAtNewest {
+            // owner audit 2026-10-06 chat #60: under a live finger or a fling a setContentOffset
+            // resets the pan and kills the fling. The bottom is followed through the layout's own
+            // contentOffsetAdjustment instead, which UIScrollView honours under a pan (the anchored
+            // branch below relies on the same). The shift is how far the bound itself moves: the
+            // whole height change for a chat taller than the screen, nothing for a short one.
+            if collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating {
+                let raw = safeContentHeight + collectionView.adjustedContentInset.bottom - collectionView.bounds.height
+                let shift = max(minContentOffsetY, raw + (h - cached)) - max(minContentOffsetY, raw)
+                heights[id] = h
+                layout.generation += 1
+                let ctx = UICollectionViewLayoutInvalidationContext()
+                if shift != 0 { ctx.contentOffsetAdjustment = CGPoint(x: 0, y: shift) }
+                layout.invalidateLayout(with: ctx)
+                collectionView.layoutIfNeeded()
+                return
+            }
             heights[id] = h
             layout.generation += 1
             layout.invalidateLayout()
@@ -1743,6 +1759,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let bound = maxContentOffsetY
             if abs(collectionView.contentOffset.y - bound) > 0.5 {
                 collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+                lastStableOffset = bound   // chat #60: like every other offset write here
             }
             recordDistanceFromBottom()
             return
