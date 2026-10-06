@@ -261,7 +261,7 @@ struct MediaGalleryView: View {
         // and its note is above. Same answer here: the toolbar floats, the content passes under it,
         // and each scroll view carries a matching bottom content margin so the last row can still be
         // reached. Three glass controls over the photographs, and no line anywhere.
-        .overlay(alignment: .bottom) { if selecting { selectionToolbar } }
+        // The selection bar is the system's bottom toolbar now (see `toolbar`), not an overlay.
         // The derived lists follow their inputs, and nothing else (see `Derived`).
         .onChange(of: all) { _, _ in rebuildDerived() }
         .onChange(of: mediaFilter) { _, _ in rebuildDerived() }
@@ -458,6 +458,33 @@ struct MediaGalleryView: View {
                     .disabled(currentItems.isEmpty
                               || selection.count >= min(Self.selectionCap, currentItems.count))
             }
+            // ⛔ THE SYSTEM'S BOTTOM BAR — owner, 2026-10-06, with a screenshot: the bottom buttons
+            // "not using safe area". They were an overlay drawn over the grid by hand, so the grid
+            // never knew they were there and the buttons sat on the photos. Now they are system-
+            // positioned UI: iOS places the bar above the home indicator, gives each item its own
+            // glass, takes the bar out of the content's safe area and fades the photos under it with
+            // its own scroll-edge effect. Same three things as before: Share, the count, Delete.
+            ToolbarItem(placement: .bottomBar) {
+                Button { shareSelected() } label: {
+                    if preparingShare { ProgressView() }
+                    else { Image(systemName: "square.and.arrow.up") }
+                }
+                .disabled(selection.isEmpty || preparingShare)
+                .accessibilityLabel("Share")
+            }
+            ToolbarSpacer(.flexible, placement: .bottomBar)
+            ToolbarItem(placement: .bottomBar) {
+                Text("\(selection.count) Selected")
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+            }
+            ToolbarSpacer(.flexible, placement: .bottomBar)
+            ToolbarItem(placement: .bottomBar) {
+                Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
+                    .tint(.red)
+                    .disabled(selection.isEmpty)
+                    .accessibilityLabel("Delete")
+            }
         } else if showsMoreMenu {
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
@@ -519,44 +546,6 @@ struct MediaGalleryView: View {
         Button(action: action) { if on { Label(title, systemImage: "checkmark") } else { Text(title) } }
     }
 
-    /// The vertical room the floating toolbar needs: a 48pt control plus its own 8pt of air top and
-    /// bottom. Stated so the scroll views can reserve a matching bottom margin — a floating bar and
-    /// the content that must clear it cannot each guess. Same contract as `MediaTabBar.slotHeight`.
-    static let selectionBarSlot: CGFloat = 48 + 16
-
-    private var selectionToolbar: some View {
-        HStack {
-            // Share â€” 48px real Liquid Glass circle.
-            Button { shareSelected() } label: {
-                // A SPINNER WHILE IT PREPARES. Even with the cache below there is a case that has to
-                // fetch (a photo evicted from this phone), and a button that stays exactly as it was
-                // for a second reads as a button that did not work.
-                Group {
-                    if preparingShare { ProgressView().tint(.primary) }
-                    else { Image(systemName: "square.and.arrow.up").font(.system(size: 20)).foregroundStyle(.primary) }
-                }
-                .frame(width: 48, height: 48)
-                .liquidGlass(Circle(), interactive: true)
-            }
-            .disabled(selection.isEmpty || preparingShare)
-            Spacer()
-            // Count â€” a glass pill (Apple's floating-toolbar style), not a plain label on a bar.
-            Text("\(selection.count) Selected")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                .padding(.horizontal, 18).frame(height: 48)
-                .liquidGlass(Capsule(), interactive: true)
-            Spacer()
-            // Delete â€” 48px real Liquid Glass circle, red glyph.
-            Button { confirmDelete = true } label: {
-                Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(.red)
-                    .frame(width: 48, height: 48)
-                    .liquidGlass(Circle(), interactive: true)
-            }
-            .disabled(selection.isEmpty)
-        }
-        .padding(.horizontal, 20).padding(.vertical, 8)
-    }
-
     // MARK: - Media / GIF grid (time-grouped)
 
     private func grid(_ items: [Message], sections groups: [(title: String, items: [Message])],
@@ -584,8 +573,7 @@ struct MediaGalleryView: View {
         // bar being an overlay. A content margin does what padding cannot: it moves where the content
         // STARTS without moving where it is allowed to go.
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
-        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
-        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
+        // (No bottom margin for the selection bar: the system bottom toolbar is in the safe area.)
     }
 
     // Group items into date sections ("Today", "Yesterday", "This Month", "June", "June 2024"),
@@ -729,8 +717,7 @@ struct MediaGalleryView: View {
             }
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
-        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
-        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
+        // (No bottom margin for the selection bar: the system bottom toolbar is in the safe area.)
     }
 
     private func voiceRow(_ m: Message) -> some View {
@@ -768,8 +755,7 @@ struct MediaGalleryView: View {
             }
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
-        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
-        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
+        // (No bottom margin for the selection bar: the system bottom toolbar is in the safe area.)
     }
 
     private func linkRow(_ m: Message) -> some View {
@@ -818,8 +804,7 @@ struct MediaGalleryView: View {
             }
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
-        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
-        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
+        // (No bottom margin for the selection bar: the system bottom toolbar is in the safe area.)
     }
 
     private func fileRow(_ m: Message) -> some View {
