@@ -23,6 +23,11 @@ enum CallPipMorph {
     /// A restore waiting for the call screen to reach the window. See `CallPipMorphProbe`.
     private static var pendingRestore: (from: CGRect, snapshot: UIView)?
 
+    /// Owner audit 2026-10-06 #43: a minimize flight is on screen. A tap on the card during it used to
+    /// start a restore anyway (the card is invisible but still hit-testable), snapshotting the
+    /// half-flown overlay as the card. Taps are ignored until the flight lands.
+    private static var minimizeInFlight = false
+
     private static var keyWindow: UIWindow? {
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
     }
@@ -47,6 +52,7 @@ enum CallPipMorph {
         screen.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         box.addSubview(screen)
         win.addSubview(box)
+        minimizeInFlight = true
         commit()
         // A beat for SwiftUI to take the cover down, lay the card out and report its frame. The
         // overlay covers the whole screen meanwhile, so nothing is seen to wait.
@@ -56,7 +62,10 @@ enum CallPipMorph {
                 guard target.width > 1, win.bounds.contains(target.insetBy(dx: 4, dy: 4)) else {
                     // No card to fly to (a stashed tab, or not laid out): their fade alone.
                     UIView.animate(withDuration: duration, animations: { box.alpha = 0 },
-                                   completion: { _ in box.removeFromSuperview() })
+                                   completion: { _ in
+                                       minimizeInFlight = false
+                                       box.removeFromSuperview()
+                                   })
                     return
                 }
                 // The preview's own picture under the fading screen, as their pip window carries its
@@ -76,6 +85,7 @@ enum CallPipMorph {
                     box.layer.cornerRadius = cardRadius
                     screen.alpha = 0
                 }, completion: { _ in
+                    minimizeInFlight = false
                     CallService.shared.cardHiddenForMorph = false
                     box.removeFromSuperview()
                 })
@@ -86,13 +96,26 @@ enum CallPipMorph {
     /// Restore from the card. Snapshots the card where it sits, then `commit` clears `minimized`; the
     /// call screen picks the flight up when it reaches the window (`CallPipMorphProbe`).
     static func restore(_ commit: () -> Void) {
+        // #43: a tap while the minimize flight is still landing is ignored (see `minimizeInFlight`).
+        guard !minimizeInFlight else { return }
         let from = CallService.shared.cardFrame
         if let win = keyWindow, from.width > 1,
            let card = win.resizableSnapshotView(from: from, afterScreenUpdates: false, withCapInsets: .zero) {
             pendingRestore = (from, card)
-            // A restore the call screen never picked up must not fire on some later call.
+            // Owner audit 2026-10-06 #43: the snapshot stands in the card's place, in the window, from
+            // this moment. `commit` removes the real card at once, and the call screen is invisible
+            // until the probe hands it the snapshot a runloop turn later, so without this there was a
+            // frame with neither, just the screen underneath. The probe moves it into the call view.
+            card.frame = from
+            card.isUserInteractionEnabled = false
+            win.addSubview(card)
+            // A restore the call screen never picked up must not fire on some later call, nor leave
+            // its picture sitting on the window.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                if pendingRestore?.snapshot === card { pendingRestore = nil }
+                if pendingRestore?.snapshot === card {
+                    pendingRestore = nil
+                    card.removeFromSuperview()
+                }
             }
         }
         commit()
@@ -103,7 +126,10 @@ enum CallPipMorph {
         guard let pending = pendingRestore else { return }
         pendingRestore = nil
         let from = pending.from, card = pending.snapshot
-        guard let win = probe.window, let vc = presentedRoot(of: probe) else { return }
+        guard let win = probe.window, let vc = presentedRoot(of: probe) else {
+            card.removeFromSuperview()   // #43: it was standing in for the card on the window
+            return
+        }
         let v = vc.view!
         // Hidden for the turn UIKit may still spend finishing the presentation (it sets the final
         // frame on completion); alpha is the one thing it leaves alone.
@@ -113,9 +139,9 @@ enum CallPipMorph {
             v.layer.cornerRadius = cardRadius
             v.layer.cornerCurve = .continuous
             v.clipsToBounds = true
+            v.addSubview(card)   // off the window (#43) and into the call view, in one move
             card.frame = v.bounds
             card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            v.addSubview(card)
             v.layoutIfNeeded()
             v.alpha = 1
             UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut], animations: {
