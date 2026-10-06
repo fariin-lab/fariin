@@ -56,7 +56,7 @@ struct GroupCallStatusBanner: View {
         ZStack(alignment: .top) {
             if let item {
                 Text(item.text)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.footnote.weight(.semibold))   // 13pt at default, follows Dynamic Type
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 .padding(.horizontal, 12)

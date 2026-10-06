@@ -84,7 +84,7 @@ struct GroupCallFocusView: View {
     private func viewingLabel(_ tile: CallTile) -> some View {
         let text = tile.isScreenShare ? "Presenting" : "Pinned"
         return Text(text)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.footnote.weight(.semibold))   // 13pt at default, follows Dynamic Type
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
