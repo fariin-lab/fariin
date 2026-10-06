@@ -16,6 +16,11 @@ struct CallLinkDetailsView: View {
     @State private var confirmDelete = false
     @State private var deleting = false
     @State private var deleteFailed = false
+    // "Make a New Link" (owner, 2026-10-06): here, outside calls only. Inside a call a new link would
+    // open a different, empty room (see GroupCallParticipantsSheet).
+    @State private var confirmRegenerate = false
+    @State private var regenerating = false
+    @State private var regenerateFailed = false
 
     /// The live copy from the service, so a rename shows here at once.
     private var current: SavedCallLink {
@@ -65,6 +70,20 @@ struct CallLinkDetailsView: View {
                 }
                 if current.admin {
                     CallLinkGroup {
+                        Button { confirmRegenerate = true } label: {
+                            HStack {
+                                Spacer()
+                                if regenerating { ProgressView() } else { Text("Make a New Link") }
+                                Spacer()
+                            }
+                            .frame(minHeight: 50)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(regenerating)
+                        .accessibilityHint("The old link stops working")
+                    }
+                    CallLinkGroup {
                         Button { confirmDelete = true } label: {
                             HStack {
                                 Spacer()
@@ -105,6 +124,17 @@ struct CallLinkDetailsView: View {
         } message: {
             Text("Check your connection and try again.")
         }
+        .alert("Make a new link?", isPresented: $confirmRegenerate) {
+            Button("Make New Link") { regenerate() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The old link stops working. Share the new one with the people you want to join.")
+        }
+        .alert("Couldn't make a new link", isPresented: $regenerateFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check your connection and try again.")
+        }
         .alert("Couldn't delete call link", isPresented: $deleteFailed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -133,6 +163,24 @@ struct CallLinkDetailsView: View {
             catch {
                 approval = before
                 approvalFailed = true
+            }
+        }
+    }
+
+    /// The server makes the new link (same name, type and approval) and revokes the old one; the
+    /// saved list swaps the row. This page showed the old link, so it closes.
+    private func regenerate() {
+        guard !regenerating else { return }
+        regenerating = true
+        let target = current
+        Task { @MainActor in
+            do {
+                _ = try await CallLinkService.shared.regenerate(target)
+                regenerating = false
+                dismiss()
+            } catch {
+                regenerating = false
+                regenerateFailed = true
             }
         }
     }

@@ -115,15 +115,10 @@ struct GroupCallParticipantsSheet: View {
                                 }
                                 .accessibilityHint("No one new can join with this link. The call continues.")
                             }
-                            Button { makeNewLink() } label: {
-                                HStack {
-                                    Label("Make a new link", systemImage: "arrow.triangle.2.circlepath")
-                                    Spacer()
-                                    if makingLink { ProgressView() }
-                                }
-                            }
-                            .disabled(makingLink)
-                            .accessibilityHint("The old link stops working")
+                            // No "Make a new link" INSIDE the call (2026-10-06): a link's room is
+                            // `link_<roomId>`, so a new link opens a different, empty room and its
+                            // joiners would never reach this call. It lives on the link's own page
+                            // outside calls; here the host can Revoke.
                         } footer: {
                             if service.linkRevoked {
                                 Text("This link no longer works. No one new can join with it; the call continues.")
