@@ -90,7 +90,7 @@ final class RowGifView: UIImageView {
         if let running = jobs[url] { return running }
         let cache = Self.cache
         // Detached: the disk read, the download and the frame decode all stay off the main thread.
-        let t = Task.detached(priority: .userInitiated) { () -> UIImage? in
+        let t = Task.detached(priority: .userInitiated) { () async -> UIImage? in
             if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
                 cache.setObject(img, forKey: url as NSString)
                 return img
