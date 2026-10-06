@@ -2131,10 +2131,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self else { return }
             self.newestJumpCheckScheduled = false
-            guard let animated = self.pendingNewestJump else { return }
+            guard self.pendingNewestJump != nil else { return }
             if self.isUserScrolling { self.schedulePendingNewestJumpCheck(); return }
-            self.pendingNewestJump = nil
-            self.perform(.newest(animated: animated))
+            // A long-press menu or a reply swipe owns the touch: the jump stays parked and the menu's
+            // or swipe's own end releases it (chat #64). Polling on would only fire it under the menu.
+            if self.pressOrSwipeOwnsTouch { return }
+            self.releaseParkedNewestJump()
         }
     }
     /// Bumped by every animated glide so a late arrival check can tell whether it is still the
