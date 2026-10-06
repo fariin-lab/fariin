@@ -2484,8 +2484,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// the reference app's retry loop: `asyncAfter` takes longer than `async` under load, which is what you want here
     /// â€” it backs off exactly when the CPU is busy. The load lands the instant the block clears.
+    ///
+    /// owner audit 2026-10-06 chat #62: one frame, not 1ms. At 1ms a gate held shut for seconds (an
+    /// 8s long-press hold) re-ran apply about a thousand times a second on the main thread, against
+    /// the very gesture and menu it was waiting for. One frame is the settle retry's interval too,
+    /// and a land can never be drawn sooner than the next frame anyway.
     private func scheduleLandRetry() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
             guard let self, let pending = self.pendingIdsApply else { return }
             self.pendingIdsApply = nil
             self.apply(rowIds: pending, scrollTarget: nil)   // re-parks itself if it still cannot land
