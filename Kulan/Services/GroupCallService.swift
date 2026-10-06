@@ -38,7 +38,21 @@ struct AdhocInvite: Identifiable, Equatable {
 @MainActor
 final class GroupCallService: ObservableObject {
     static let shared = GroupCallService()
-    private init() {}
+    private init() { room.add(delegate: roomObserver) }
+
+    /// owner audit 2026-10-06 #4: bumped by `end()`. A join in flight (token fetch, room.connect)
+    /// carries the value it started with and checks it after every wait; a mismatch means the user
+    /// already hung up or closed the screen, so whatever it got up is taken down quietly instead of
+    /// turning into a live call with no screen and no card.
+    private var joinGeneration = 0
+    /// owner audit 2026-10-06 #16: true while `disconnect()` runs, so the room's own "disconnected"
+    /// event from OUR hang-up is not mistaken for a dropped room.
+    private var leaving = false
+    /// Held here: the room keeps its delegates weakly.
+    private let roomObserver = RoomDropObserver()
+    /// owner audit 2026-10-06 #44: a parked link joiner also watches the link itself, so the admin
+    /// turning approval off lets them in without answering the old request.
+    private var linkDocListener: ListenerRegistration?
 
     // Public LiveKit server address (not a secret — it's just where the app connects).
     private let url = "wss://kulan-irgnsxba.livekit.cloud"
@@ -135,34 +149,52 @@ final class GroupCallService: ObservableObject {
         // 2026-09-24 decision D25: refused while a 1:1 call is ringing, live or closing.
         guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
+        let gen = joinGeneration   // owner audit 2026-10-06 #4
         do {
             let res = try await Functions.functions(region: "me-central1")
                 .httpsCallable("groupCallToken").call(["cid": cid])
+            guard gen == joinGeneration else { await abandonJoin(); return }
             guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
                 connecting = false
+                // owner audit 2026-10-06 #44: a speaker toggle made while connecting does not
+                // carry into the next call.
+                speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
+                minimized = false
                 notice = Notice(title: "Call failed", message: nil)   // 2026-09-24 decision D25
                 return
             }
             try await room.connect(url: url, token: token)
             try await room.localParticipant.setMicrophone(enabled: true)
             if video { try await room.localParticipant.setCamera(enabled: true) }
+            guard gen == joinGeneration else { await abandonJoin(); return }
             activeCid = cid; activeRoom = .group(cid: cid); micOn = true; cameraOn = video; connecting = false
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
             // joined one, and the starter writes the call's record into the chat.
             let startedHere = room.remoteParticipants.isEmpty
-            let recordId = startedHere ? "gcall_\(UUID().uuidString)" : nil
-            // Mark the call active so other members see a "Join call" bar + get rung.
-            var callDoc: [String: Any] = [
-                "active": true,
-                "startedBy": Auth.auth().currentUser?.uid ?? "",
-                "video": video,
-                "title": title,
-                "startedAt": FieldValue.serverTimestamp(),
-            ]
-            if let recordId { callDoc["recordId"] = recordId }
-            try? await Firestore.firestore().collection("groupCalls").document(cid).setData(callDoc)
-            if let recordId { await Self.writeRecord(cid: cid, id: recordId, video: video) }
+            let ref = Firestore.firestore().collection("groupCalls").document(cid)
+            if startedHere {
+                let recordId = "gcall_\(UUID().uuidString)"
+                // Mark the call active so other members see a "Join call" bar + get rung. A fresh
+                // call replaces the whole doc, so a stale recordId from an old call cannot survive.
+                let callDoc: [String: Any] = [
+                    "active": true,
+                    "startedBy": Auth.auth().currentUser?.uid ?? "",
+                    "video": video,
+                    "title": title,
+                    "startedAt": FieldValue.serverTimestamp(),
+                    "recordId": recordId,
+                ]
+                try? await ref.setData(callDoc)
+                await Self.writeRecord(cid: cid, id: recordId, video: video)
+            } else {
+                // owner audit 2026-10-06 #3: a JOINER only confirms the call is live. It used to
+                // write the full doc without merge, which erased the starter's recordId (so the
+                // chat's "ongoing" bubble was never closed) and reset startedAt/startedBy to the
+                // joiner's, so the length was measured from the wrong moment.
+                try? await ref.setData(["active": true], merge: true)
+            }
         } catch {
+            if gen != joinGeneration { await abandonJoin(); return }   // owner audit 2026-10-06 #4
             connecting = false
             // Only tear down if THIS task never established a call. Calling disconnect()
             // unconditionally is what let a losing second task kill the winner's live room.
@@ -217,9 +249,45 @@ final class GroupCallService: ObservableObject {
         Task { try? await room.localParticipant.setCamera(enabled: v) }
     }
 
-    func end() { Task { await disconnect() } }
+    func end() {
+        // owner audit 2026-10-06 #4: bumped HERE, synchronously, so a join still connecting sees
+        // it the moment it resumes, even if the disconnect below has not run yet.
+        joinGeneration &+= 1
+        Task { await disconnect() }
+    }
+
+    /// owner audit 2026-10-06 #4: the call screen went away (End, or swiped down). Before the room
+    /// is up there is no call to minimize to and no floating card to show, so closing the screen is
+    /// leaving, the rule the approval wait already had. A live call is left alone (it minimizes),
+    /// and so is a join minimized with the chevron: its card appears as soon as the room is up.
+    func screenClosed() {
+        guard !isActive, !minimized, connecting || waitingForApproval else { return }
+        end()
+    }
+
+    /// owner audit 2026-10-06 #4: a join the user already left. Whatever it got up is taken down
+    /// quietly: no notice, no call. Nothing else can have joined meanwhile, because every start
+    /// refuses while `connecting` is still true.
+    private func abandonJoin() async {
+        await room.disconnect()
+        resetRoomState()
+        connecting = false
+        reevaluateInvites()
+    }
+
+    /// owner audit 2026-10-06 #16: the room went to `.disconnected` on its own (kicked, token refused
+    /// on reconnect, reconnect gave up). Nothing watched for it, so the screen sat on "Waiting for
+    /// others…" with the doc still active and every new call refused until End was tapped. Clean
+    /// up exactly as hanging up does. Our own hang-up also fires this event; `leaving` and the
+    /// state check skip it.
+    fileprivate func roomDropped() {
+        guard isActive, !leaving, room.connectionState == .disconnected else { return }
+        Task { await disconnect() }
+    }
 
     private func disconnect() async {
+        leaving = true
+        defer { leaving = false }
         let cid = activeCid
         let adhoc = isAdhoc, link = isLink
         // Leaving while still waiting to be let in: withdraw the knock so the creator's list does
@@ -232,7 +300,11 @@ final class GroupCallService: ObservableObject {
         // case a stale doc creates (the last member force-quit, so nothing ever wrote active:false
         // and the Join bar stayed up for hours). Clearing it here means the first person to find the
         // room empty heals it for everyone, instead of the 4h age cap being the only cure (audit).
-        let wasLast = room.remoteParticipants.isEmpty   // I'm the only one → end the call for the group
+        // owner audit 2026-10-06 #17: only while the room is CONNECTED. Reconnecting (or already
+        // dropped), remoteParticipants is empty because MY link is down, not because the others
+        // left, and reading it then ended the call for everyone still in it. A dropped last member
+        // leaves the doc active; the 4h age cap and the next person to find the room empty heal it.
+        let wasLast = room.connectionState == .connected && room.remoteParticipants.isEmpty
         await room.disconnect()
         if let cid, wasLast, adhoc {
             // An ad-hoc call has no chat record to close; the last one out just stops the ringing.
@@ -318,15 +390,25 @@ final class GroupCallService: ObservableObject {
             "joined": [String](),
             "startedAt": FieldValue.serverTimestamp(),
         ]
+        let gen = joinGeneration   // owner audit 2026-10-06 #4
         do {
             try await db.collection("groupCalls").document(roomId).setData(doc)
         } catch {
+            if gen != joinGeneration { await abandonJoin(); return nil }
             await failJoin(Notice(title: "Call failed", message: nil))
             return nil
         }
         declinedInvites.insert(roomId)
         listenRoom(roomId)
-        guard await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video) else { return nil }
+        guard await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video, gen: gen) else {
+            // owner audit 2026-10-06 #4: hung up before the room was up. The doc written above is
+            // already ringing the others; stop it, or they answer into an empty call.
+            if gen != joinGeneration {
+                try? await db.collection("groupCalls").document(roomId)
+                    .updateData(["active": false, "endedAt": FieldValue.serverTimestamp()])
+            }
+            return nil
+        }
         await markJoined(roomId)
         return roomId
     }
@@ -340,7 +422,9 @@ final class GroupCallService: ObservableObject {
         presentsRoomScreen = true
         guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video
+        let gen = joinGeneration   // owner audit 2026-10-06 #4
         let snap = try? await db.collection("groupCalls").document(roomId).getDocument()
+        guard gen == joinGeneration else { await abandonJoin(); return }
         guard let d = snap?.data(with: .estimate), d["active"] as? Bool == true else {
             connecting = false
             notice = Notice(title: "Call ended", message: nil)
@@ -348,7 +432,7 @@ final class GroupCallService: ObservableObject {
         }
         apply(roomData: d)
         listenRoom(roomId)
-        if await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video) {
+        if await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video, gen: gen) {
             await markJoined(roomId)
         }
     }
@@ -392,6 +476,7 @@ final class GroupCallService: ObservableObject {
         connecting = true; isVideo = video
         callTitle = "Kulan Call"
         isLinkCreator = false
+        let gen = joinGeneration   // owner audit 2026-10-06 #4
         // The name is sealed with the link's key; only someone holding the link can read it.
         if let d = try? await db.collection("callLinks").document(roomId).getDocument().data() {
             if let enc = d["encName"] as? String, !enc.isEmpty,
@@ -399,7 +484,7 @@ final class GroupCallService: ObservableObject {
             isLinkCreator = (d["creatorUid"] as? String) == myUid
         }
         if await connect(payload: ["roomId": roomId, "link": true],
-                         room: .link(roomId: roomId, key: key), video: video),
+                         room: .link(roomId: roomId, key: key), video: video, gen: gen),
            isLinkCreator {
             listenRequests(roomId)
         }
@@ -423,12 +508,16 @@ final class GroupCallService: ObservableObject {
 
     /// Fetches a token for `payload` and joins the room. Returns false when it did not join; a
     /// `{pending: true}` answer for a link parks us in the waiting state instead of failing.
-    private func connect(payload: [String: Any], room r: GroupRoom, video: Bool) async -> Bool {
+    /// `gen` is `joinGeneration` as it was when the user started this join (owner audit 2026-10-06
+    /// #4); taken by the caller, not here, because the caller already waited once before calling.
+    private func connect(payload: [String: Any], room r: GroupRoom, video: Bool, gen: Int) async -> Bool {
+        guard gen == joinGeneration else { await abandonJoin(); return false }
         connecting = true
         var isLinkRoom = false
         if case .link(_, _) = r { isLinkRoom = true }
         do {
             let res = try await functions.httpsCallable("groupCallToken").call(payload)
+            guard gen == joinGeneration else { await abandonJoin(); return false }
             let d = res.data as? [String: Any]
             if d?["pending"] as? Bool == true, case .link(let roomId, let key) = r {
                 connecting = false
@@ -442,6 +531,9 @@ final class GroupCallService: ObservableObject {
             try await room.connect(url: url, token: token)
             try await room.localParticipant.setMicrophone(enabled: true)
             if video { try await room.localParticipant.setCamera(enabled: true) }
+            // owner audit 2026-10-06 #4: hung up while this was connecting. Before this the room came
+            // up anyway, mic on, with no screen and no card, and every other call was refused.
+            guard gen == joinGeneration else { await abandonJoin(); return false }
             switch r {
             case .group(let cid): activeCid = cid
             case .adhoc(let id): activeCid = id
@@ -451,6 +543,9 @@ final class GroupCallService: ObservableObject {
             waitingForApproval = false
             return true
         } catch {
+            // Hung up mid-connect: the room.disconnect() that hang-up ran is what threw here, and
+            // it is not a failure to report.
+            if gen != joinGeneration { await abandonJoin(); return false }
             connecting = false
             if activeCid == nil { await failJoin(Self.joinNotice(error, link: isLinkRoom)) }
             return false
@@ -471,6 +566,12 @@ final class GroupCallService: ObservableObject {
     private func failJoin(_ n: Notice) async {
         await room.disconnect()
         connecting = false
+        // owner audit 2026-10-06 #44: a speaker toggle made while connecting stayed set (and the
+        // audio preference with it) until some later hang-up, so the next call began on the
+        // earpiece. Same reset `disconnect()` does.
+        speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
+        // A join minimized with the chevron that then failed must not start the next call minimized.
+        minimized = false
         resetRoomState()
         notice = n
     }
@@ -487,6 +588,7 @@ final class GroupCallService: ObservableObject {
         roomListener?.remove(); roomListener = nil
         requestsListener?.remove(); requestsListener = nil
         myRequestListener?.remove(); myRequestListener = nil
+        linkDocListener?.remove(); linkDocListener = nil
         waitingLink = nil
         waitingForApproval = false
         activeRoom = nil
@@ -527,26 +629,54 @@ final class GroupCallService: ObservableObject {
                 let status = snap?.data()?["status"] as? String
                 Task { @MainActor [weak self] in self?.requestStatusChanged(status) }
             }
+        // owner audit 2026-10-06 #44: the server only answers requests one by one, so a joiner
+        // already waiting when the admin switched approval off stayed parked until someone answered
+        // the old request. Approval off on the link itself is a yes for everyone waiting.
+        linkDocListener?.remove()
+        linkDocListener = db.collection("callLinks").document(roomId)
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let r = snap?.data()?["restrictions"] as? String, r != "adminApproval" else { return }
+                Task { @MainActor [weak self] in self?.approvalTurnedOff() }
+            }
     }
 
     private func requestStatusChanged(_ status: String?) {
         guard waitingForApproval, let w = waitingLink else { return }
         switch status {
         case "approved":
-            myRequestListener?.remove(); myRequestListener = nil
-            waitingLink = nil
-            Task {
-                // Still reads "Waiting to be let in…" until the room is up; `connect` clears it.
-                if await self.connect(payload: ["roomId": w.roomId, "link": true],
-                                      room: .link(roomId: w.roomId, key: w.key), video: w.video),
-                   self.isLinkCreator {
-                    self.listenRequests(w.roomId)
-                }
-            }
+            admit(w)
         case "denied":
             Task { await self.failJoin(Notice(title: "Request denied", message: nil)) }
         default:
             break
+        }
+    }
+
+    /// owner audit 2026-10-06 #44: approval was switched off while I waited. The token function
+    /// mints straight away now; the old knock is withdrawn so the admin's list drops me.
+    private func approvalTurnedOff() {
+        guard waitingForApproval, let w = waitingLink else { return }
+        let request = db.collection("callLinks").document(w.roomId).collection("requests").document(myUid)
+        admit(w)
+        Task { try? await request.delete() }
+    }
+
+    /// Let in: join the room I was waiting on. Clearing `waitingLink` first makes this run once even
+    /// when the approval and the approval-off snapshot land together.
+    private func admit(_ w: (roomId: String, key: String, video: Bool)) {
+        myRequestListener?.remove(); myRequestListener = nil
+        linkDocListener?.remove(); linkDocListener = nil
+        waitingLink = nil
+        // owner audit 2026-10-06 #4: taken now, so End tapped while this connects (waitingLink is
+        // already gone, so the knock cleanup in disconnect() is skipped) still stops the join.
+        let gen = joinGeneration
+        Task {
+            // Still reads "Waiting to be let in…" until the room is up; `connect` clears it.
+            if await self.connect(payload: ["roomId": w.roomId, "link": true],
+                                  room: .link(roomId: w.roomId, key: w.key), video: w.video, gen: gen),
+               self.isLinkCreator {
+                self.listenRequests(w.roomId)
+            }
         }
     }
 
@@ -676,5 +806,16 @@ final class GroupCallService: ObservableObject {
         guard let i = incomingInvite else { return }
         incomingInvite = nil
         Task { await joinAdhoc(roomId: i.roomId, video: i.video) }
+    }
+}
+
+/// owner audit 2026-10-06 #16: tells the service when the LiveKit room goes to `.disconnected` by
+/// itself. A separate NSObject because RoomDelegate is an @objc protocol called off the main
+/// thread; the service decides on the main actor whether it was a drop or our own hang-up.
+private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendable {
+    func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState,
+              from oldConnectionState: ConnectionState) {
+        guard connectionState == .disconnected else { return }
+        Task { @MainActor in GroupCallService.shared.roomDropped() }
     }
 }

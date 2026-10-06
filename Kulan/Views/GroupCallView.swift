@@ -31,6 +31,11 @@ struct GroupCallView: View {
         // dark ground whatever the phone is set to.
         .environment(\.colorScheme, .dark)
         .onChange(of: service.activeCid) { _, cid in if cid == nil { dismiss() } }
+        // owner audit 2026-10-06 #4: swiped away while still connecting. Three different covers
+        // present this screen (chat, group info, the root layer) and only one had an onDismiss, so
+        // the join carried on into a live call with no screen and no card. Leaving is decided in
+        // one place; a live call is untouched here (its covers minimize it).
+        .onDisappear { service.screenClosed() }
         // 2026-09-24 decision D25: a start that failed or was refused says so, and OK closes the
         // screen. Held until the cover has finished coming up: a refusal lands within the same beat
         // as the tap, and an alert asked for mid-presentation is dropped by UIKit.
@@ -166,7 +171,13 @@ struct GroupCallView: View {
             // Speaker on / off (owner, 2026-10-04): a real switch with its state, not the route picker.
             ctrl(service.speakerOn ? "speaker.wave.2.fill" : "speaker.fill") { service.toggleSpeaker() }
                 .opacity(service.speakerOn ? 1 : 0.7)
-            ctrl("phone.down.fill", tint: Color(.systemRed)) { service.end() }
+            // owner audit 2026-10-06 #4: before the room is up `activeCid` never changes, so the
+            // onChange that closes this screen never fired and End looked dead. Close it here.
+            ctrl("phone.down.fill", tint: Color(.systemRed)) {
+                let wasUp = service.isActive
+                service.end()
+                if !wasUp { dismiss() }
+            }
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
