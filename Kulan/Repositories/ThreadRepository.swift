@@ -150,6 +150,7 @@ final class ThreadRepository {
     private var locallyDeleted: Set<String> = []
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
+    private var lastDocsFromCache = false   // owner audit 2026-10-06 chat #19: `lastDocs` came from the local cache
     private(set) var didInitialLoad = false
 
     /// Same rule as the chat list's: the skeleton is for a genuinely cold chat, not for the moment
@@ -772,7 +773,11 @@ final class ThreadRepository {
                 // history. Clearing only the sig cache makes applyLiveSnapshot re-decrypt the window while
                 // byId stays populated, so nothing ever goes blank and older messages are preserved.
                 self.rawReactions.removeAll()
-                self.applyLiveSnapshot(self.lastDocs, fromCache: false)
+                // Owner audit 2026-10-06 chat #19: replay the window AS WHAT IT WAS. This said
+                // `fromCache: false` always, so a window that came from the local cache was treated as
+                // the server's answer and its delete pass removed newer messages until the real
+                // server snapshot put them back.
+                self.applyLiveSnapshot(self.lastDocs, fromCache: self.lastDocsFromCache)
             }
         }
     }
@@ -845,9 +850,16 @@ final class ThreadRepository {
         let uploading = String(data["uploading"] as? Bool ?? false)
         let media = ["imageUrl", "videoUrl", "audioUrl", "fileUrl", "thumbUrl"]
             .map { data[$0] as? String ?? "" }.joined(separator: ",")
+        // Owner audit 2026-10-06 chat #18: THE SERVER STAMP, a fourth field that changes after the
+        // first sight. My own message is first seen from the local write, where `createdAt` is still
+        // pending, so `Message` falls back to this phone's clock with `hasServerTime == false`. The
+        // ack fills the stamp and nothing else, so the signature did not move and the row kept the
+        // phone's time (and its disappearing timer counted from it) until the chat was reopened.
+        // Display order is unaffected: the order key is sticky per row.
+        let stamp = (data["createdAt"] as? Timestamp).map { "\($0.seconds).\($0.nanoseconds)" } ?? "-"
         return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
             + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
-            + "|" + uploading + "|" + media
+            + "|" + uploading + "|" + media + "|" + stamp
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
@@ -889,6 +901,7 @@ final class ThreadRepository {
     // reconcile deletes within the window's time range, keep paged-older messages.
     private func applyLiveSnapshot(_ docs: [QueryDocumentSnapshot], fromCache: Bool) {
         lastDocs = docs   // remember the window so we can re-decrypt once the key arrives
+        lastDocsFromCache = fromCache   // #19: and where it came from
         snapshotSeq += 1
         let seq = snapshotSeq
         // Decrypt OFF the main thread. Opening a chat that already has cached history fires
