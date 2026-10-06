@@ -534,7 +534,9 @@ final class MessageRowView: UIView {
     private var forwardedLabel: UILabel?
     private var forwardedIcon: UIImageView?
     private var tombstoneIcon: UIImageView?
-    private var failBadge: UIImageView?
+    private var failBadge: UIButton?
+    /// The failed badge's menu items, asked for when it is tapped. Set by the cell.
+    var failMenuItems: (() -> [UIMenuElement])?
     private var reactionViews: [ReactionChipView] = []
     private var headerPill: RowNoticePillView?
     private var dividerLeft: UIView?
@@ -1387,11 +1389,20 @@ final class MessageRowView: UIView {
         let icon = failBadge ?? {
             // Their `error-circle`: an outlined ring with an exclamation, drawn at the badge's full
             // 24pt box. `contentMode = .center` keeps the glyph at its own size, as theirs does.
-            let v = UIImageView(image: UIImage(systemName: "exclamationmark.circle",
-                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 21, weight: .regular)))
-            v.contentMode = .center
+            // ⛔ A SYSTEM MENU BUTTON — owner, 2026-10-06: the "Message not sent" box just popped in,
+            // with none of iOS 26's opening motion. An arrowless popover has no source to grow from;
+            // a button's own menu grows out of the button, which is the system animation he means.
+            // The items are asked for at tap time (`failMenuItems`), so a reused cell never shows a
+            // stale row's actions.
+            let v = UIButton(type: .system)
+            v.setImage(UIImage(systemName: "exclamationmark.circle",
+                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 21, weight: .regular)),
+                       for: .normal)
             v.tintColor = BubblePalette.failRed
-            v.isUserInteractionEnabled = false   // the cell hit-tests the plan; see MessageRowCell
+            v.showsMenuAsPrimaryAction = true
+            v.menu = UIMenu(title: "Message not sent", children: [
+                UIDeferredMenuElement.uncached { [weak self] done in done(self?.failMenuItems?() ?? []) }
+            ])
             addSubview(v); failBadge = v; return v
         }()
         icon.isHidden = false

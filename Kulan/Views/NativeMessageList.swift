@@ -5543,6 +5543,25 @@ extension MessageListController: MessageRowCellDelegate {
         present(sheet, animated: true)
     }
 
+    /// The red (!) badge's own menu (owner, 2026-10-06): the badge is a system menu button, so the
+    /// menu grows out of it with iOS 26's motion. Same three outcomes as the old box.
+    func rowCellFailMenuItems(_ cell: MessageRowCell) -> [UIMenuElement] {
+        guard let id = cell.rowId else { return [] }
+        guard let a = failedActions(id) else {
+            return [UIAction(title: "Resend", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+                self?.onTapRetry(id)
+            }]
+        }
+        let items: [UIMenuElement] = [
+            UIAction(title: "Resend", image: UIImage(systemName: "arrow.clockwise")) { _ in a.resend() },
+            UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in a.delete() }
+        ]
+        if let why = a.message, !why.isEmpty {
+            return [UIMenu(title: why, options: .displayInline, children: items)]
+        }
+        return items
+    }
+
     func rowCellDidTapCancelUpload(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onCancelUpload(id)

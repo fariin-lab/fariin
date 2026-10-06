@@ -28,6 +28,8 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)
     func rowCellDidTapRetry(_ cell: MessageRowCell)
+    /// The failed badge's own menu (Resend / Delete), asked for when the badge is tapped.
+    func rowCellFailMenuItems(_ cell: MessageRowCell) -> [UIMenuElement]
     func rowCellDidTapCancelUpload(_ cell: MessageRowCell)
     func rowCellDidToggleSelection(_ cell: MessageRowCell)
     func rowCell(_ cell: MessageRowCell, didTapSender uid: String)
@@ -91,6 +93,10 @@ final class MessageRowCell: UICollectionViewCell {
         tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false   // the list's tap-to-dismiss-keyboard still gets its turn
         contentView.addGestureRecognizer(tap)
+        rowView.failMenuItems = { [weak self] in
+            guard let self else { return [] }
+            return self.delegate?.rowCellFailMenuItems(self) ?? []
+        }
         rowView.onVoicePlayToggle = { [weak self] in
             guard let self else { return }
             self.delegate?.rowCellDidToggleVoice(self)
@@ -366,10 +372,9 @@ final class MessageRowCell: UICollectionViewCell {
         case .bubble(let b):
             // The failed badge IS the retry button, and it is tested first: it sits outside the
             // bubble, so it can never be confused with anything drawn inside one.
-            if b.showsFailedBadge, rowView.hitsFailBadge(p) {
-                delegate?.rowCellDidTapRetry(self)
-                return
-            }
+            // The badge is a menu button now and opens its own menu; this tap only has to stay out
+            // of its way. Kept first so nothing under the badge reacts as well.
+            if b.showsFailedBadge, rowView.hitsFailBadge(p) { return }
             if rowView.hitsReactions(p) {
                 delegate?.rowCellDidTapReactions(self)
                 return
