@@ -48,10 +48,10 @@ enum CallPipMorph {
         box.addSubview(screen)
         win.addSubview(box)
         commit()
-        // Two turns: one for SwiftUI to take the cover down and lay the card out, one for the card's
-        // frame report to land.
-        DispatchQueue.main.async {
-            DispatchQueue.main.async {
+        // A beat for SwiftUI to take the cover down, lay the card out and report its frame. The
+        // overlay covers the whole screen meanwhile, so nothing is seen to wait.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+            do {
                 let target = CallService.shared.cardFrame
                 guard target.width > 1, win.bounds.contains(target.insetBy(dx: 4, dy: 4)) else {
                     // No card to fly to (a stashed tab, or not laid out): their fade alone.
@@ -90,14 +90,19 @@ enum CallPipMorph {
         if let win = keyWindow, from.width > 1,
            let card = win.resizableSnapshotView(from: from, afterScreenUpdates: false, withCapInsets: .zero) {
             pendingRestore = (from, card)
+            // A restore the call screen never picked up must not fire on some later call.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                if pendingRestore?.snapshot === card { pendingRestore = nil }
+            }
         }
         commit()
     }
 
     /// Called by the probe inside the call screen once it is in a window.
     fileprivate static func runRestoreIfPending(from probe: UIView) {
-        guard let (from, card) = pendingRestore else { return }
+        guard let pending = pendingRestore else { return }
         pendingRestore = nil
+        let from = pending.from, card = pending.snapshot
         guard let win = probe.window, let vc = presentedRoot(of: probe) else { return }
         let v = vc.view!
         // Hidden for the turn UIKit may still spend finishing the presentation (it sets the final

@@ -1406,7 +1406,8 @@ final class MessageRowView: UIView {
             addSubview(v); failBadge = v; return v
         }()
         icon.isHidden = false
-        icon.frame = rect
+        // The 40pt finger target `hitsFailBadge` has always promised; the glyph stays centred at 24.
+        icon.frame = rect.insetBy(dx: -8, dy: -8)
     }
 
     // MARK: - Helpers
