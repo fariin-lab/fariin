@@ -3326,6 +3326,9 @@ final class CallService: NSObject {
         if let obs = routeObserver { NotificationCenter.default.removeObserver(obs); routeObserver = nil }
         stopAudioRecoveryObservation()
         if let obs = thermalObserver { NotificationCenter.default.removeObserver(obs); thermalObserver = nil }
+        // Its pending step-up belongs to this call; left queued it restarted the NEXT call's capture
+        // once if that call began within 10s (owner audit 2026-10-06 #45).
+        thermalStepUpWork?.cancel(); thermalStepUpWork = nil
         stopHeartbeat()
         stopPathMonitor()
         // The camera used to keep capturing through the whole 1-2s .ended tail, because teardown only
