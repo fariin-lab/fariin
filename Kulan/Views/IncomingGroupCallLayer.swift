@@ -24,7 +24,18 @@ struct IncomingGroupCallLayer: View {
         .onChange(of: service.presentsRoomScreen) { _, want in
             guard want else { showRoom = false; return }
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 600_000_000)
+                // Owner, 2026-10-06: tapping a link row "has more lags". The fixed 0.6s beat was
+                // paid on every join, even from the plain list with nothing to wait for. Now it
+                // waits only while a sheet or the 1:1 screen is still on its way out (checked every
+                // 50ms, at most 0.8s), and goes at once when nothing is.
+                for _ in 0..<16 {
+                    guard let top = WebLink.topViewController() else { break }
+                    let leaving = top.isBeingDismissed || top.presentingViewController?.isBeingDismissed == true
+                        || top.transitionCoordinator != nil
+                    let onTop = top.presentingViewController != nil   // a sheet or cover still up
+                    if !leaving && !onTop { break }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
                 // Hard cut, no slide-up: the reference app swaps to its call window instantly.
                 if service.presentsRoomScreen {
                     InstantCover.run { showRoom = true }   // a cut, not a slide (see InstantCover)

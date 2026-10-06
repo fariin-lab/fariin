@@ -921,6 +921,16 @@ struct CallsView: View {
                     // history at all, simply show their answer.
                     .animation(.spring(response: 0.38, dampingFraction: 0.86), value: repo.calls.count)
                     .environment(\.defaultMinListRowHeight, 56)   // tight, compact rows
+                    // Owner, 2026-10-06, screenshot: a call link row stayed grey after tapping it to join.
+                    // Tapping a tagged row sets the List's selection, the call screen covers the list, and
+                    // nothing clears it on the way back: the row stays SELECTED. The chat list's two handlers,
+                    // same reason; outside Select there is no selected call.
+                    .onChange(of: selection) { _, sel in
+                        if !selecting, !sel.isEmpty { selection.removeAll() }
+                    }
+                    .onChange(of: selecting) { _, on in
+                        if !on, !selection.isEmpty { selection.removeAll() }
+                    }
                     .environment(\.editMode, .constant(selecting ? .active : .inactive))
                     // THE SELECTION TICK. Edit mode draws its circle in the TINT, and this app tints
                     // itself `.primary` — so the filled tick was a white disc with a white check
