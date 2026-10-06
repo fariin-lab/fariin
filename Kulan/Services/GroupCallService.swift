@@ -672,14 +672,20 @@ final class GroupCallService: ObservableObject {
         isLinkCreator = false
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         // The name is sealed with the link's key; only someone holding the link can read it.
-        if let d = try? await db.collection("callLinks").document(roomId).getDocument().data() {
-            if let enc = d["encName"] as? String, !enc.isEmpty,
-               let name = k.decryptName(enc), !name.isEmpty { callTitle = name }
-            isLinkCreator = (d["creatorUid"] as? String) == myUid
+        // Owner, 2026-10-06 (Join Call slow): this read ran BEFORE the join, adding a full round
+        // trip. It now runs alongside the token request; the title fills in when it lands.
+        let docTask = Task { @MainActor [db, myUid] in
+            if let d = try? await db.collection("callLinks").document(roomId).getDocument().data(),
+               gen == self.joinGeneration {   // not a join already left or failed
+                if let enc = d["encName"] as? String, !enc.isEmpty,
+                   let name = k.decryptName(enc), !name.isEmpty { self.callTitle = name }
+                self.isLinkCreator = (d["creatorUid"] as? String) == myUid
+            }
         }
-        if await connect(payload: ["roomId": roomId, "link": true],
-                         room: .link(roomId: roomId, key: key), video: video, gen: gen),
-           isLinkCreator {
+        let joined = await connect(payload: ["roomId": roomId, "link": true],
+                                   room: .link(roomId: roomId, key: key), video: video, gen: gen)
+        await docTask.value
+        if joined, isLinkCreator {
             listenRequests(roomId)
         }
     }

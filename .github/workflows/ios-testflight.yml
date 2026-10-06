@@ -79,7 +79,7 @@ jobs:
             HOST CONTROLS: the person who made the call (and group admins) can mute someone or remove them from the people list. A removed person can't rejoin. The host can End the call for everyone and Revoke the link mid-call. "Waiting for the host to let you in" shows while you wait for approval. All checked on the server, not just in the app.
             LINK CALLS: Add people in the people list opens your chats and sends the link to the people you pick. Make a New Link is on the link's own page (the old link stops working).
             GROUP CALLS: minimize zooms the screen down into the small card like a normal call (no more sliding to the bottom). The camera button works: it asks for camera access the first time, and says so if it can't turn on.
-            CALL LINK SHEET: tall enough to show every card, Call Type included.
+            CALL LINK SHEET: tall enough to show every card, Call Type included. Join Call opens the call screen much faster.
             ATTACH SHEET: swiping back from a folder (Videos, etc.) works every time. No black or white band at the bottom.
 
             PLEASE TEST: in a group call, turn the camera on and minimize; in a link call, tap the people button, Add people, send the link to a friend; mute and remove someone from another phone; swipe back from a folder in the + sheet.

@@ -177,10 +177,12 @@ struct CreateCallLinkSheet: View {
     private func join() {
         let d = draft
         dismiss()
+        // Owner, 2026-10-06: Join Call "takes too long to open". It used to wait for the list save
+        // to reach the server, then 0.35s more, before the join even began. The save now runs on
+        // its own, and the join starts at once; the call screen's presenter already holds a beat
+        // for this sheet to finish leaving (IncomingGroupCallLayer).
+        Task { await CallLinkService.shared.persist(d) }
         Task { @MainActor in
-            await CallLinkService.shared.persist(d)
-            // Let the sheet finish leaving before the call screen comes up over it.
-            try? await Task.sleep(nanoseconds: 350_000_000)
             await GroupCallService.shared.joinLink(key: d.key, video: false)
         }
     }
