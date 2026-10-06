@@ -29,7 +29,7 @@ struct GroupCallFocusView: View {
         let stripIds = others
         VStack(spacing: GroupCallMetrics.spacing) {
             if let tile = focusTile {
-                largeTile(tile)
+                largeTile(tile, hasStrip: !stripIds.isEmpty)
                     .modifier(FocusTileTransition(id: tile.id, namespace: namespace))
             } else {
                 // The focused person just left: keep the space still for the one frame before the
@@ -44,7 +44,7 @@ struct GroupCallFocusView: View {
         .animation(GroupCallMotion.layout, value: stripIds)
     }
 
-    private func largeTile(_ tile: CallTile) -> some View {
+    private func largeTile(_ tile: CallTile, hasStrip: Bool) -> some View {
         // A screen share is drawn with .fit by the tile view for style .focus (a cropped slide is
         // unreadable); a camera fills the frame.
         GroupCallTileView(
@@ -66,6 +66,8 @@ struct GroupCallFocusView: View {
         .overlay(alignment: .topLeading) { viewingLabel(tile) }
         .padding(.horizontal, GroupCallMetrics.inset)
         .padding(.top, GroupCallMetrics.inset)
+        // With the strip below, its own inset is the gap; without it the tile keeps the stage inset.
+        .padding(.bottom, hasStrip ? 0 : GroupCallMetrics.inset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityHint(Text(isAutoPresenter(tile) ? "" : "Double-tap to return to the grid"))
     }
