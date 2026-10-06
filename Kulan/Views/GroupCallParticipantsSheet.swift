@@ -7,6 +7,7 @@ import FirebaseFunctions
 /// come in, and (multi-person calls only) "Add people". The "In call" list reads the call stage, so
 /// it shows the same speaking / muted / camera / network state as the tiles (owner spec §8, §16), and
 /// a tap on someone shows them large: in a big call this is how you find and focus a person (§7, §13).
+/// Owner, 2026-10-06: also who has a hand up, and (link creator) how many are waiting to be let in.
 struct GroupCallParticipantsSheet: View {
     @ObservedObject private var service = GroupCallService.shared
     @StateObject private var stage: GroupCallStage
@@ -17,6 +18,10 @@ struct GroupCallParticipantsSheet: View {
     @State private var approvalFailed = false
     // Group call permissions, 2026-10-06: the owner's and admins' controls.
     @State private var removeTarget: CallTile?
+    /// Link calls, the link's owner: "Remove and Block" on this person, waiting for the confirmation.
+    @State private var blockTarget: CallTile?
+    /// The link creator's "N waiting to join" row opened the list of people asking.
+    @State private var showRequests = false
     @State private var confirmEnd = false
     @State private var confirmRevoke = false
     @State private var makingLink = false
@@ -81,6 +86,36 @@ struct GroupCallParticipantsSheet: View {
 
     // The list's sections, one property each: as one expression the body was too big for the
     // compiler to type-check in time (830 compile, 2026-10-06).
+
+    /// Owner, 2026-10-06: who has a hand up, first in the list while anyone has (the reference's
+    /// call sheet has this section too). Nothing at all with no hands up.
+    private var raisedHandsSection: some View {
+        GroupCallRaisedHandsSection(tiles: stage.tiles, myUid: service.myUid)
+    }
+
+    private var waitingTitle: String { "\(service.pendingRequests.count) waiting to join" }
+
+    /// Link creator, approval on: how many are knocking. Opens the list with Approve All / Deny All
+    /// (the cards over the call controls are behind this sheet while it is up).
+    @ViewBuilder private var waitingSection: some View {
+        if service.isLinkCreator && !service.pendingRequests.isEmpty {
+            Section {
+                Button { showRequests = true } label: {
+                    HStack(spacing: 8) {
+                        Label(waitingTitle, systemImage: "person.badge.clock")
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.forward")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityHint("Shows everyone waiting to be let in")
+            }
+        }
+    }
+
     @ViewBuilder private var shareSection: some View {
         if service.isAdhoc || link != nil {
             Section {
@@ -169,65 +204,105 @@ struct GroupCallParticipantsSheet: View {
     }
 
     private var removeTitle: String { removeTarget.map { "Remove \($0.name) from the call?" } ?? "" }
+    /// Decision 2026-10-06: on a link call Remove only puts them out, and they may knock again
+    /// (Block is the one that keeps them out). Group and multi-person calls keep their text.
+    private var removeMessage: String {
+        service.isLink ? "They can ask to join again." : "They won't be able to rejoin it."
+    }
     private var removeShown: Binding<Bool> {
         Binding(get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } })
+    }
+    private var blockTitle: String { blockTarget.map { "Block \($0.name)?" } ?? "" }
+    private var blockShown: Binding<Bool> {
+        Binding(get: { blockTarget != nil }, set: { if !$0 { blockTarget = nil } })
     }
     private var errorShown: Binding<Bool> {
         Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })
     }
 
-    var body: some View {
-        NavigationStack {
-            // Ticks so "Ringing…" turns into "Didn't join" without anyone touching the sheet.
-            TimelineView(.periodic(from: .now, by: 5)) { context in
-                List {
-                    shareSection
-                    hostSection
-                    inCallSection
-                    invitedSection(at: context.date)
-                    endSection
-                }
+    private var sheetTitle: String { aloneInCall ? "Waiting for others" : "Participants" }
+    private var errorTitle: String { actionError ?? "" }
+
+    // The body in three steps (the list, the link's alerts, the people alerts), for the same
+    // reason the sections are separate: one long chain is slow to type-check.
+    private var list: some View {
+        // Ticks so "Ringing…" turns into "Didn't join" without anyone touching the sheet.
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+            List {
+                raisedHandsSection
+                waitingSection
+                shareSection
+                hostSection
+                inCallSection
+                invitedSection(at: context.date)
+                endSection
             }
-            // Alone in the call, the sheet says what is happening, as the reference's does.
-            .navigationTitle(aloneInCall ? "Waiting for others" : "Participants")
-            .task {
-                guard ownsLink, let link, approval == nil else { return }
-                approval = await CallLinkService.shared.approval(for: link)
-                if await CallLinkService.shared.isRevoked(link) == true { service.noteLinkRevoked() }
-            }
+        }
+        // Alone in the call, the sheet says what is happening, as the reference's does.
+        .navigationTitle(sheetTitle)
+        .task {
+            guard ownsLink, let link, approval == nil else { return }
+            approval = await CallLinkService.shared.approval(for: link)
+            if await CallLinkService.shared.isRevoked(link) == true { service.noteLinkRevoked() }
+        }
+    }
+
+    private var listWithLinkAlerts: some View {
+        list
             .alert("Couldn't change setting", isPresented: $approvalFailed) {
                 Button("OK", role: .cancel) {}
             } message: { Text("Check your connection and try again.") }
+            .alert("Revoke this link?", isPresented: $confirmRevoke) {
+                Button("Revoke", role: .destructive) { revokeLink() }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("No one new can join with this link. The call continues.") }
+            .alert(errorTitle, isPresented: errorShown) {
+                Button("OK", role: .cancel) {}
+            }
+    }
+
+    private var listWithAlerts: some View {
+        listWithLinkAlerts
             .alert(removeTitle, isPresented: removeShown,
                    presenting: removeTarget) { t in
                 Button("Remove", role: .destructive) { run(.remove, target: t.uid) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("They won't be able to rejoin it.")
+                Text(removeMessage)
+            }
+            .alert(blockTitle, isPresented: blockShown,
+                   presenting: blockTarget) { t in
+                Button("Block", role: .destructive) { block(t) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("They won't be able to join this call again.")
             }
             .alert("End the call for everyone?", isPresented: $confirmEnd) {
                 Button("End Call", role: .destructive) { run(.end) }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("Everyone in the call will be disconnected.") }
-            .alert("Revoke this link?", isPresented: $confirmRevoke) {
-                Button("Revoke", role: .destructive) { revokeLink() }
-                Button("Cancel", role: .cancel) {}
-            } message: { Text("No one new can join with this link. The call continues.") }
-            .alert(actionError ?? "", isPresented: errorShown) {
-                Button("OK", role: .cancel) {}
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close")
+    }
+
+    var body: some View {
+        NavigationStack {
+            listWithAlerts
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { dismiss() } label: { Image(systemName: "xmark") }
+                            .accessibilityLabel("Close")
+                    }
                 }
-            }
         }
+        // Owner, 2026-10-06: opens at half height, so the call stays in view; pull up for the rest.
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         // Names and photos come from the service's member list; a stage built by the fallback init
         // has not had them yet, and an invite adds members while the sheet is open.
         .onAppear { stage.refreshProfiles(service.members) }
         .onChange(of: service.members) { _, members in stage.refreshProfiles(members) }
+        // Closes itself when the last person waiting has been answered.
+        .sheet(isPresented: $showRequests) { CallLinkBulkRequestsSheet() }
         .sheet(isPresented: $showAdd) {
             if service.isAdhoc {
                 AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid))) { people in
@@ -288,6 +363,17 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    /// Link calls only, and only the link's owner (the server checks both again): Remove puts
+    /// someone out and they may knock again; Block also keeps them from rejoining by this link.
+    private var canBlock: Bool { service.isLink && ownsLink }
+
+    private func block(_ t: CallTile) {
+        Task { @MainActor in
+            let done = await service.block(t.uid)
+            if !done { actionError = "Couldn't block \(t.name). Check your connection and try again." }
+        }
+    }
+
     private func revokeLink() {
         Task { @MainActor in
             do { try await service.revokeLink() }
@@ -329,7 +415,8 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
-    /// The trailing menu on a row the viewer may act on: Mute (while they are not muted) and Remove.
+    /// The trailing menu on a row the viewer may act on: Mute (while they are not muted), Remove,
+    /// and for a link's owner "Remove and Block".
     private func actionsMenu(_ t: CallTile) -> some View {
         Menu {
             if !t.isMuted {
@@ -339,6 +426,11 @@ struct GroupCallParticipantsSheet: View {
             }
             Button(role: .destructive) { removeTarget = t } label: {
                 Label("Remove from call", systemImage: "person.fill.xmark")
+            }
+            if canBlock {
+                Button(role: .destructive) { blockTarget = t } label: {
+                    Label("Remove and Block", systemImage: "nosign")
+                }
             }
         } label: {
             Image(systemName: "ellipsis.circle")
@@ -456,6 +548,70 @@ struct GroupCallParticipantsSheet: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The people sheet's "Raised hands" section: who has a hand up, the oldest first (the order they
+/// should be heard in). A view of its own, so only this section is drawn again when the social
+/// object changes; it publishes every emoji reaction too, and the whole list need not follow those.
+private struct GroupCallRaisedHandsSection: View {
+    @ObservedObject private var social = GroupCallSocial.shared
+    /// The stage's tiles: a person's photo, and their name as the tiles show it.
+    private let tiles: [CallTile]
+    private let myUid: String
+
+    init(tiles: [CallTile], myUid: String) {
+        self.tiles = tiles
+        self.myUid = myUid
+    }
+
+    private var hands: [GroupCallSocial.RaisedHand] { social.raisedHands }
+    private var headerLabel: String { "Raised hands, \(hands.count)" }
+
+    var body: some View {
+        if !hands.isEmpty {
+            Section {
+                ForEach(hands) { row($0) }
+            } header: {
+                // The same shape as "In call": bold title, count in regular weight.
+                HStack(spacing: 0) {
+                    Text("Raised hands").fontWeight(.semibold)
+                    Text(" · \(hands.count)")
+                }
+                .textCase(nil)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(headerLabel)
+                .accessibilityAddTraits(.isHeader)
+            }
+        }
+    }
+
+    /// Photo and name as the "In call" rows show them, the hand at the trailing edge. My own row
+    /// can take the hand down again.
+    private func row(_ hand: GroupCallSocial.RaisedHand) -> some View {
+        let mine = !hand.uid.isEmpty && hand.uid == myUid
+        let tile = tiles.first(where: { $0.uid == hand.uid })
+        let shownName: String = tile?.name ?? hand.name
+        let label: String = mine ? "You" : shownName
+        let spoken: String = "\(label), hand raised"
+        return HStack(spacing: 12) {
+            AvatarView(name: shownName, photoUrl: tile?.photoUrl, size: 36)
+            Text(label)
+                .lineLimit(1)
+                .accessibilityLabel(spoken)
+            Spacer(minLength: 8)
+            if mine {
+                Button("Lower") { social.setHand(false) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Lower my hand")
+            }
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 2)
     }
 }
 
