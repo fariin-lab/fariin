@@ -74,7 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 832: TWO PEOPLE IN A GROUP OR LINK CALL LOOK LIKE A NORMAL CALL.
+            BUILD 833: THE FULL GROUP CALL SYSTEM. NEEDS TWO PHONES TO TEST.
+
+            RINGING: being invited to a call (Add people), and a group chat's call starting, now RING like a real call, on the lock screen too, with Answer and Decline. If you are already in a call the caller sees "<Name> is busy". The ring stops when the caller hangs up, after 60 seconds, or when you answer or decline on your other phone. A late ring never rings. The caller sees "Ringing Alice..." and hears the ringing tone until someone joins. Answering a video invitation keeps your camera off if you never gave camera access.
+            BEFORE YOU JOIN A LINK: shows who is in the call ("Alice and Bob are in this call"), "Ask to Join" when the host approves people, and stays up with "Waiting to be let in" until you are in. A full call or a dead link says so.
+            HOST: people asking to join appear as cards above the buttons with X and check; Approve All / Deny All; Remove (they can ask again) and Remove and Block (they cannot come back) on link calls.
+            IN THE CALL: a new "..." button with emoji reactions, Raise Hand and Flip Camera. Notices name people ("Alice and Bob joined", "Alice muted you"). A spinner on someone still connecting. Long-press a person for Pin / Mute / Remove. With 3 or more people, swipe up for the big-speaker view.
+            SCREEN: alone, your camera fills the screen; 2 people looks like a normal call; 3 or more is the grid. The buttons hide after 5 seconds on any call with someone else in it; tap to bring them back. The small card shows whoever is speaking.
+            WHEN A CALL ENDS: it always says why (removed, ended by the host, call full, joined on another device, connection lost).
+
+            PLEASE TEST WITH TWO PHONES, RINGING FIRST: (1) lock phone B, from phone A in a 1:1 call tap Add people and pick B's account or a third one: B must ring on the lock screen; answer it. (2) Same, but decline; and once more while B is in another call (A should see "busy"). (3) Start a call in a small group chat: the others ring. (4) A link call: Ask to Join, approve from the card, Remove, then Block. (5) Reactions, Raise Hand, Flip Camera, swipe up with 3 people.
+
+            EARLIER (build 832): TWO PEOPLE IN A GROUP OR LINK CALL LOOK LIKE A NORMAL CALL.
 
             2 PEOPLE: the other person fills the screen, your camera is the small corner tile you can drag and tap to swap, a voice call shows their photo on their colour, the header shows their name and the call time, and on video the buttons hide after 5 seconds (tap to bring them back), just like a 1:1 call. A 3rd person joining switches to the group grid with a smooth fade, and it goes back when it is 2 again.
             CONNECTING: the call no longer says Connecting... while you are already in it; your mic and camera start right after you are in.
