@@ -29,8 +29,9 @@ struct GroupCallGridView: View {
 
     @ViewBuilder
     private func content(in size: CGSize) -> some View {
-        // Local goes to the pip once anyone else is present, so the grid is remotes only.
-        let remotes = stage.tiles.filter { !$0.isLocal }
+        // Local goes to the pip once anyone else is present, so the grid is remotes only. Live
+        // speech filled in for the ranking (the published tiles leave it out, see CallTile ==).
+        let remotes = stage.tilesWithLiveSpeech.filter { !$0.isLocal }
 
         if remotes.isEmpty {
             aloneTile(size: size)

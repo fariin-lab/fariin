@@ -35,11 +35,25 @@ struct CallTile: Identifiable, Equatable {
     var hasVideo: Bool          // camera published, enabled and not muted
     var isScreenShare: Bool     // this participant is presenting a screen
     var isMuted: Bool           // microphone off
-    var isSpeaking: Bool        // LiveKit's live flag (raw, flickers)
-    var lastSpokeAt: Date?      // LiveKit's last speech time
+    var isSpeaking: Bool        // LiveKit's live flag (raw, flickers); NOT part of ==, see below
+    var lastSpokeAt: Date?      // LiveKit's last speech time; NOT part of ==, see below
     var joinedAt: Date          // first seen by this phone
     var networkPoor: Bool       // connectionQuality .poor or .lost
     var isHost: Bool            // link creator / group admin / ad-hoc starter
+    var cameraTrackSid: String? // the live camera track; a republish is a new sid, so views rebind
+    var screenTrackSid: String? // the live screen share track, same reason
+
+    /// Speech is left out on purpose: the raw flag flips several times a second, and a tile that
+    /// differs only in speech must not republish `tiles` and re-render the whole stage (spec §12).
+    /// The live values sit in the stage's own store (`GroupCallStage.speech(for:)`), read whenever
+    /// the stage re-renders for a real change or a new active speaker.
+    static func == (a: CallTile, b: CallTile) -> Bool {
+        a.id == b.id && a.uid == b.uid && a.name == b.name && a.photoUrl == b.photoUrl
+            && a.isLocal == b.isLocal && a.hasVideo == b.hasVideo && a.isScreenShare == b.isScreenShare
+            && a.isMuted == b.isMuted && a.joinedAt == b.joinedAt && a.networkPoor == b.networkPoor
+            && a.isHost == b.isHost && a.cameraTrackSid == b.cameraTrackSid
+            && a.screenTrackSid == b.screenTrackSid
+    }
 }
 
 /// What the stage is showing.

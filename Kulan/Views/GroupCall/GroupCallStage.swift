@@ -39,6 +39,9 @@ final class GroupCallStage: ObservableObject {
     private var firstSeen: [String: Date] = [:]
     // When each remote started presenting: with two presenters the newest one takes the stage.
     private var shareStartedAt: [String: Date] = [:]
+    // Raw speech per tile id, refreshed on every tick and never published (spec §12: the raw flag
+    // flickers, and publishing it would re-render the whole stage several times a second).
+    private var speechById: [String: (isSpeaking: Bool, lastSpokeAt: Date?)] = [:]
     private var speakerTracker = GroupCallSpeakerTracker()
     private var refreshScheduled = false
     // nonisolated(unsafe) on these two: only touched on the main thread, but deinit is nonisolated.
@@ -81,8 +84,27 @@ final class GroupCallStage: ObservableObject {
     /// would show a frozen picture. Every caller (hasVideo, isScreenShare, videoTrack) goes through
     /// here, so a tile's flags and the track it is handed always agree.
     private static func liveVideo(_ pub: TrackPublication?) -> VideoTrack? {
-        guard let pub, !pub.isMuted, let track = pub.track, !track.isMuted else { return nil }
-        return track as? VideoTrack
+        livePublication(pub)?.track as? VideoTrack
+    }
+
+    private static func livePublication(_ pub: TrackPublication?) -> TrackPublication? {
+        guard let pub, !pub.isMuted, let track = pub.track, !track.isMuted, track is VideoTrack else { return nil }
+        return pub
+    }
+
+    /// Live speech for one tile, from the unpublished store (CallTile's == ignores speech).
+    func speech(for tileId: String) -> (isSpeaking: Bool, lastSpokeAt: Date?) {
+        speechById[tileId] ?? (false, nil)
+    }
+
+    /// `tiles` with the live speech filled in, for the ranking (spec §13 "recently speaking").
+    /// Read by the views when they re-render for a real tile change or a new active speaker.
+    var tilesWithLiveSpeech: [CallTile] {
+        tiles.map { tile in
+            var t = tile
+            if let s = speechById[t.id] { t.isSpeaking = s.isSpeaking; t.lastSpokeAt = s.lastSpokeAt }
+            return t
+        }
     }
 
     func togglePin(_ tileId: String) {
@@ -138,7 +160,9 @@ final class GroupCallStage: ObservableObject {
                 return isLocal ? "You" : "Member"
             }()
             let photo = isLocal ? (ProfileStore.shared.me?.photoUrl ?? member?.photoUrl) : member?.photoUrl
-            let sharing = Self.liveVideo(p.firstScreenSharePublication) != nil
+            let camera = Self.livePublication(p.firstCameraPublication)
+            let screen = Self.livePublication(p.firstScreenSharePublication)
+            let sharing = screen != nil
             if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now; newShare = true }
             if !sharing { shareStartedAt[id] = nil }
 
@@ -148,14 +172,16 @@ final class GroupCallStage: ObservableObject {
                 name: name,
                 photoUrl: photo,
                 isLocal: isLocal,
-                hasVideo: Self.liveVideo(p.firstCameraPublication) != nil,
+                hasVideo: camera != nil,
                 isScreenShare: sharing,
                 isMuted: !p.isMicrophoneEnabled(),
                 isSpeaking: p.isSpeaking,
                 lastSpokeAt: p.lastSpokeAt,
                 joinedAt: firstSeen[id] ?? now,
                 networkPoor: p.connectionQuality == .poor || p.connectionQuality == .lost,
-                isHost: !uid.isEmpty && hostUids.contains(uid)
+                isHost: !uid.isEmpty && hostUids.contains(uid),
+                cameraTrackSid: camera?.sid.stringValue,
+                screenTrackSid: screen?.sid.stringValue
             ))
         }
 
@@ -172,7 +198,12 @@ final class GroupCallStage: ObservableObject {
         firstSeen = firstSeen.filter { present.contains($0.key) }
         shareStartedAt = shareStartedAt.filter { present.contains($0.key) }
         participants = byId
+        // Before `tiles` publishes, so a re-render reads this tick's speech.
+        var speech: [String: (isSpeaking: Bool, lastSpokeAt: Date?)] = [:]
+        for t in built { speech[t.id] = (t.isSpeaking, t.lastSpokeAt) }
+        speechById = speech
 
+        // CallTile's == ignores speech: a speaking flag alone publishes nothing (spec §12).
         if built != tiles { tiles = built }
         if let pin = pinnedId, !present.contains(pin) { pinnedId = nil }   // didSet updates mode
         // A share that just started takes the stage over an older pin (the latest thing wins).

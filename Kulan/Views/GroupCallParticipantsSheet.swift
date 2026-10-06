@@ -156,7 +156,8 @@ struct GroupCallParticipantsSheet: View {
     // MARK: - In call rows
 
     private func isSpeaking(_ t: CallTile) -> Bool {
-        t.isSpeaking || t.id == stage.activeSpeakerId
+        // The tile's own flag is not republished on every flicker; the stage's store is live.
+        stage.speech(for: t.id).isSpeaking || t.id == stage.activeSpeakerId
     }
 
     /// A remote row shows that person large and closes the sheet. Already focused stays focused:

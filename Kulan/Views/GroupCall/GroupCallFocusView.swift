@@ -19,7 +19,7 @@ struct GroupCallFocusView: View {
     /// Everyone but the focused tile and the local participant, in spec §13 order, so the most
     /// relevant people sit at the visible start of the strip.
     private var others: [String] {
-        let rest = stage.tiles.filter { $0.id != focusId && !$0.isLocal }
+        let rest = stage.tilesWithLiveSpeech.filter { $0.id != focusId && !$0.isLocal }
         return GroupCallPriority.ranked(rest, focusedId: nil,
                                         speakerId: stage.activeSpeakerId, now: Date())
             .map(\.id)
