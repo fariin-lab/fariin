@@ -33,11 +33,17 @@ struct GroupCallGridView: View {
         // speech filled in for the ranking (the published tiles leave it out, see CallTile ==).
         let remotes = stage.tilesWithLiveSpeech.filter { !$0.isLocal }
 
-        if remotes.isEmpty {
-            aloneTile(size: size)
-        } else {
-            gridStage(remotes: remotes, size: size)
+        // Alone -> the first person arrives (and back): one cross-fade, not a hard cut (spec §12).
+        ZStack {
+            if remotes.isEmpty {
+                aloneTile(size: size)
+            } else {
+                gridStage(remotes: remotes, size: size)
+                    .transition(.opacity)
+            }
         }
+        .frame(width: size.width, height: size.height)
+        .animation(GroupCallMotion.fade, value: remotes.isEmpty)
     }
 
     // MARK: - Alone
