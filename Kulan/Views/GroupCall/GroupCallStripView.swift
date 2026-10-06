@@ -13,8 +13,14 @@ struct GroupCallStripView: View {
     /// Tile ids in display order.
     let ids: [String]
 
-    /// The self view pip floats over the strip's trailing edge, so the last tile scrolls clear of it.
-    private static let selfPipClearance: CGFloat = 90
+    /// The self view pip floats over the strip's trailing edge, so the last tile scrolls clear of it:
+    /// the pip's small width, its trailing inset and 4pt (the reference app's trim). The only place
+    /// this gap is kept; the grid and focus views do not pad the strip again.
+    private var selfPipClearance: CGFloat {
+        let remotes = stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 }
+        return GroupCallSelfView.size(remoteCount: remotes, expanded: false).width
+            + GroupCallSelfView.trailingInset + 4
+    }
 
     /// Height the parent reserves for the strip.
     static var height: CGFloat { GroupCallMetrics.stripTile + 2 * GroupCallMetrics.stripInset }
@@ -38,7 +44,7 @@ struct GroupCallStripView: View {
                 }
             }
             .padding(.leading, GroupCallMetrics.stripInset)
-            .padding(.trailing, GroupCallStripView.selfPipClearance)
+            .padding(.trailing, selfPipClearance)
             .padding(.vertical, GroupCallMetrics.stripInset)
         }
         .frame(height: GroupCallStripView.height)

@@ -19,9 +19,6 @@ struct GroupCallGridView: View {
 
     /// Strip row height: square tiles plus their inset above and below.
     private static let stripHeight: CGFloat = GroupCallMetrics.stripTile + 2 * GroupCallMetrics.stripInset
-    /// Width kept free at the strip's right end for the self pip (reference app: pip is 9:16 at the
-    /// strip tile height, 16pt from the edge, strip trimmed by pip width + 4 so no tile sits under it).
-    private static let pipReserve: CGFloat = GroupCallMetrics.stripTile * 9 / 16 + 16 + 4
 
     var body: some View {
         GeometryReader { geo in
@@ -99,9 +96,8 @@ struct GroupCallGridView: View {
             .animation(GroupCallMotion.layout, value: layout.frames)
 
             if !layout.overflow.isEmpty {
+                // The strip keeps its own trailing gap for the self pip (one place, not two).
                 GroupCallStripView(stage: stage, ids: layout.overflow)
-                    // Keep the bottom-right corner free for the self pip the parent draws there.
-                    .padding(.trailing, Self.pipReserve)
                     .frame(width: size.width, height: Self.stripHeight)
                     .transition(.opacity)
             }
