@@ -74,7 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            CALLS: STEADIER CALLS, GROUP CALLS, CALL LINKS.
+            BIG FIX BUILD: 130+ CALL AND CHAT FIXES FROM TWO DEEP AUDITS.
+
+            CALLS: hold no longer turns your camera back on. A normal call can't ring you during a group call. Speaker stays where you put it after a network blip. Other apps' music stops when you call. A call that fails on your side says Call failed, not Missed. Cancelling and quickly calling someone else no longer rings the first person. Answering just as they hang up no longer logs Answered. Minimize and restore use a quick 0.2s shrink and grow. The self-view tile stays in its corner. VoiceOver labels on every call button.
+            GROUP CALLS: joining no longer wipes the call record. Ending while connecting really ends it. A dropped room is noticed.
+            CALL LINKS: the video button joins with video. Renamed links keep their name. A link deleted on another phone can be removed.
+            CALL SECURITY: call setup is now end-to-end encrypted. Caller name and photo come from the real profile. Limits on repeated calls.
+            CHAT: opening a chat only marks as read what you actually see. The chat opens exactly on the Unread divider. Tapping a quote while older messages load no longer says Not loaded. Search no longer pulls you back. The composer no longer stays high after swiping back with the keyboard up. Touching the list mid-scroll no longer freezes new messages. Fewer jumps when reactions, photos or older pages land. GIFs scroll smoother. Typing is lighter.
+            ALSO: All Media shares videos and keeps its tabs in Select. Message not sent opens as a real menu. Fariin chat no longer borrows another chat's wallpaper. No grey row after swiping back.
+
+            PLEASE TEST: a call with someone on THIS build (an older build cannot answer an encrypted call from this one); hold a video call for a phone call; open a chat with many unread; tap a quote while scrolling up; swipe back from a chat with the keyboard up.
+
+            EARLIER (build 826): CALLS: STEADIER CALLS, GROUP CALLS, CALL LINKS.
 
             CALLS ENGINE: more of the connection and recovery work, so calls hold up better on a weak network.
             CALL SCREEN opens instantly when a call starts.
