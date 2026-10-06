@@ -757,7 +757,8 @@ struct CallsView: View {
             // Join straight from the list, on video, the way the link's own card joins.
             Button {
                 if bringLiveCallForward() { return }
-                Task { await GroupCallService.shared.joinLink(key: link.key, video: false) }
+                // Owner audit 2026-10-06 #5: this video.fill button joined as a voice call.
+                Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
             } label: {
                 Image(systemName: "video.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -1077,7 +1078,8 @@ private struct GroupCallHistoryRow: View {
         let cal = Calendar.current
         if cal.isDateInToday(d) { return d.formatted(date: .omitted, time: .shortened) }
         if cal.isDateInYesterday(d) { return "Yesterday" }
-        if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 7 {
+        // Owner audit 2026-10-06 #39: calendar-day difference (see CallHistoryRow.timeLabel).
+        if let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: Date())).day, days < 7 {
             return d.formatted(.dateTime.weekday(.wide))
         }
         return d.formatted(.dateTime.month(.abbreviated).day())
@@ -1181,7 +1183,9 @@ struct CallHistoryRow: View {
         let cal = Calendar.current
         if cal.isDateInToday(d) { return d.formatted(date: .omitted, time: .shortened) }
         if cal.isDateInYesterday(d) { return "Yesterday" }
-        if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 7 {
+        // Owner audit 2026-10-06 #39: calendar-day difference, not elapsed 24h blocks, so last week's
+        // same weekday (6 days + a few hours ago) shows a date, not today's weekday name.
+        if let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: Date())).day, days < 7 {
             return d.formatted(.dateTime.weekday(.wide))
         }
         return d.formatted(.dateTime.month(.abbreviated).day())
