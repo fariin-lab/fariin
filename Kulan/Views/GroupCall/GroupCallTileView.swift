@@ -113,8 +113,10 @@ struct GroupCallTileView: View {
         // The small self pip (40pt wide): a 28pt badge would cover most of it.
         let compact = style == .pip && width < 60
         ZStack {
-            // Muted: the reference app hides it on the big speaker tile and fullscreen.
-            if tile.isMuted && (style == .grid || style == .strip || style == .pip) {
+            // Muted, on every style. The reference app hides it on the big tile and fullscreen, but
+            // here the big tile is a pinned person (spec §16: who is muted) and fullscreen is me
+            // alone (I must see that I am muted).
+            if tile.isMuted {
                 badge("mic.slash.fill", size: compact ? 16 : 28, glyph: compact ? 9 : 16)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
