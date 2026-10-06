@@ -139,6 +139,17 @@ final class ThreadRepository {
     }
     var canLoadOlder = true
     var loadingOlder = false
+    /// Owner audit 2026-10-06 chat #1: completions of `loadOlder` calls made while a page was in
+    /// flight. They run when that page lands, never before.
+    @ObservationIgnored private var olderWaiters: [() -> Void] = []
+    /// Owner audit 2026-10-06 chat #69: the query of the first older page the LOCAL CACHE answered
+    /// (offline). Re-run once online, so a hole in the cache cannot become a hole in the history.
+    @ObservationIgnored private var resumeOlderQuery: Query?
+    /// The resume read was answered from the cache (database not reconnected); wait for the network.
+    @ObservationIgnored private var resumeHeld = false
+    /// Owner audit 2026-10-06 chat #68: the last older page failed or came from the cache only.
+    @ObservationIgnored private var olderNeedsRetry = false
+    @ObservationIgnored private var networkObserver: NSObjectProtocol?
 
     // Decrypt cache: id -> built message, plus the raw (encrypted) reactions we last
     // saw, so we only rebuild a message when its one mutable field actually changes.
@@ -151,6 +162,10 @@ final class ThreadRepository {
     private var oldestDoc: DocumentSnapshot?   // cursor for paging older
     private var lastDocs: [QueryDocumentSnapshot] = []   // last window, to re-decrypt once the key loads
     private var lastDocsFromCache = false   // owner audit 2026-10-06 chat #19: `lastDocs` came from the local cache
+    // Owner audit 2026-10-06 chat #17: the first SERVER window has been seen (it alone may end
+    // history), and `oldestDoc` still comes from a cache window (the server's replaces it).
+    @ObservationIgnored private var sawServerWindow = false
+    @ObservationIgnored private var oldestDocFromCacheWindow = false
     private(set) var didInitialLoad = false
 
     /// Same rule as the chat list's: the skeleton is for a genuinely cold chat, not for the moment
@@ -572,6 +587,21 @@ final class ThreadRepository {
                     self.start()
                 }
         }
+        // Owner audit 2026-10-06 chat #68: an older page that failed, or came only from the local
+        // cache, was not asked again until the reader scrolled; a reader resting at the top saw
+        // nothing arrive after the signal came back. Ask once more when it does, if they are still
+        // reading history. A beat late, so the database has reconnected and answers from the server.
+        if networkObserver == nil {
+            networkObserver = NotificationCenter.default.addObserver(
+                forName: .networkCameBack, object: nil, queue: .main) { [weak self] _ in
+                    self?.resumeHeld = false   // #69: the resume read may try the server again
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        guard let self, self.olderNeedsRetry, self.readerAwayFromBottom,
+                              self.listener != nil, !self.loadingOlder else { return }
+                        self.loadOlder()
+                    }
+                }
+        }
         // (`stop()` moved to the top of this function; see the note there.)
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
@@ -883,12 +913,20 @@ final class ThreadRepository {
     /// The message listener ended in an error and no snapshot has arrived since.
     private var listenerFailed = false
     private var recoveredObserver: NSObjectProtocol?
+    /// Owner audit 2026-10-06 chat #72: the pending retry, so `stop()` can cancel it. It used to be a
+    /// bare `asyncAfter` that nothing could take back: an error, then leaving the chat within the
+    /// backoff (up to a minute), and the retry re-attached all four listeners to a closed chat with
+    /// nothing left to stop them while anything still held the repository.
+    @ObservationIgnored private var retryWork: DispatchWorkItem?
     private func retryStartSoon() {
         listenerRetries += 1
         let delay = min(pow(2.0, Double(listenerRetries)), 60)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        retryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             self?.start()
         }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     // Monotonic snapshot sequencing: detached decrypt batches can finish out of order; the
@@ -955,7 +993,11 @@ final class ThreadRepository {
             // ghosts to the warm cache, so even reopening showed a fully-deleted conversation forever.
             byId.removeAll(); rawReactions.removeAll()
         } else if !fromCache, let oldest = docs.last, let cutoff = (oldest.data()["createdAt"] as? Timestamp)?.dateValue() {
-            for (id, m) in byId where m.createdAt >= cutoff && !windowIds.contains(id) {
+            // `>`, not `>=` — owner audit 2026-10-06 chat #71: a held message with EXACTLY the edge's
+            // stamp (a batch write, a bulk forward) can be one the `limit` cut off, not one that was
+            // deleted. Deleting it lost a real message; a hard delete at that exact stamp is the
+            // only thing `>` can miss, and a delete for everyone is a tombstone update anyway.
+            for (id, m) in byId where m.createdAt > cutoff && !windowIds.contains(id) {
                 byId.removeValue(forKey: id); rawReactions.removeValue(forKey: id)
             }
         }
@@ -966,10 +1008,20 @@ final class ThreadRepository {
         if !locallyDeleted.isEmpty {
             locallyDeleted = locallyDeleted.filter { byId[$0]?.deleted == false }
         }
-        if oldestDoc == nil { oldestDoc = docs.last }
-        if !didInitialLoad {
-            didInitialLoad = true
-            if docs.count < pageSize { canLoadOlder = false }   // short first page => no history
+        // Owner audit 2026-10-06 chat #17: ONLY THE SERVER CAN SAY HISTORY HAS ENDED, the rule
+        // `loadOlder` already follows. The first window used to decide it whatever its source, so a
+        // short answer from the local cache (a cold open on a slow line) switched paging off for the
+        // whole visit, and the server's full page that followed never got a say. The cursor follows
+        // the same rule: one taken from a cache window is replaced by the server's window, as long
+        // as no older page has moved it since.
+        if oldestDoc == nil || (oldestDocFromCacheWindow && !fromCache) {
+            oldestDoc = docs.last
+            oldestDocFromCacheWindow = fromCache
+        }
+        if !didInitialLoad { didInitialLoad = true }
+        if !fromCache && !sawServerWindow {
+            sawServerWindow = true
+            if docs.count < pageSize { canLoadOlder = false }   // short first SERVER page => no history
         }
         trimWindowIfNeeded()
         rebuild()
@@ -1057,7 +1109,11 @@ final class ThreadRepository {
     /// reads as the conversation itself failing to load. Theirs never shows one for this because a
     /// quoted reply resolves out of a local database; ours has to walk back a page at a time, so the
     /// least it can do is not narrate it in the wrong place.
-    private(set) var jumpPagingInFlight = false
+    var jumpPagingInFlight: Bool { jumpPagingDepth > 0 }
+    /// Owner audit 2026-10-06 chat #1: a COUNT, not a flag. Two jumps can page at once (a quote tap
+    /// and a search step), and the first to finish cleared the flag while the second was still
+    /// paging, so a live commit could trim away the pages the second had just loaded.
+    private var jumpPagingDepth = 0
 
     // LRU-drop the OLDEST messages once the window blows past the high-water mark (the standard 500-cap).
     // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
@@ -1069,6 +1125,9 @@ final class ThreadRepository {
             byId.removeValue(forKey: m.id); rawReactions.removeValue(forKey: m.id)
         }
         windowTrimmed = true
+        // #69: the oldest rows are gone, cache-only pages first among them; paging restarts from
+        // the oldest row kept, so an older resume point would jump over what was just dropped.
+        resumeOlderQuery = nil
         canLoadOlder = true   // the dropped history can page back in on scroll
     }
 
@@ -1277,7 +1336,14 @@ final class ThreadRepository {
     /// Page in the next older window (called on scroll-to-top). `completion` runs after
     /// the list updates so the view can restore the scroll anchor (no jump).
     func loadOlder(completion: @escaping () -> Void = {}) {
-        guard canLoadOlder, !loadingOlder else { completion(); return }
+        guard canLoadOlder else { completion(); return }
+        // Owner audit 2026-10-06 chat #1: BUSY IS NOT DONE. A call while a page is already in flight
+        // used to run its completion at once, as if a page had landed. `ensureLoaded` counted that as
+        // a page and spent its whole budget in microseconds, so a quote, search or pin jump tapped
+        // during a scroll-load said "isn't loaded" for a message one page away; a second scroll
+        // caller also restored its anchor before the list had changed. It now waits for the page in
+        // flight and runs when that page lands. Still only one fetch at a time.
+        if loadingOlder { olderWaiters.append(completion); return }
         let base = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
         // After a window trim the doc-snapshot cursor points BELOW the dropped range, so cursor by the
@@ -1286,9 +1352,23 @@ final class ThreadRepository {
         // above can put in a different order than the server's real `createdAt` (audit C30) — take
         // the smallest raw `createdAt` actually held, not `messages.first`, so the cursor can't sit
         // above history that display order happens to show later.
+        //
+        // Owner audit 2026-10-06 chat #71: `start(at:)`, not `start(after:)`, by value. Every message
+        // sharing the oldest kept stamp (a batch write, a bulk forward) was skipped, including ones
+        // the trim had dropped. `at` re-reads the tied ones already held (the build filter below
+        // skips them), and the page's own last document becomes the cursor from then on, so a run
+        // of identical stamps cannot hold the cursor in place.
         let query: Query
-        if windowTrimmed, let oldest = messages.map(\.createdAt).min() {
-            query = base.start(after: [Timestamp(date: oldest)])
+        let resumeQuery = (!resumeHeld && NetworkState.shared.isOnline) ? resumeOlderQuery : nil
+        let usedResume = resumeQuery != nil
+        if let resume = resumeQuery {
+            // Owner audit 2026-10-06 chat #69: pages answered from the LOCAL CACHE while offline may
+            // have holes (the cache only has what this phone happened to read). Paging on from their
+            // cursor once online skipped the hole for good, so the first online page re-reads from
+            // where the cache took over. Pages already held cost nothing to rebuild.
+            query = resume
+        } else if windowTrimmed, let oldest = messages.map(\.createdAt).min() {
+            query = base.start(at: [Timestamp(date: oldest)])
         } else if let cursor = oldestDoc {
             query = base.start(afterDocument: cursor)
         } else { completion(); return }
@@ -1298,7 +1378,28 @@ final class ThreadRepository {
             .getDocuments { [weak self] snap, _ in
                 guard let self else { return }
                 let docs = snap?.documents ?? []
-                if let last = docs.last { self.oldestDoc = last }
+                let fromServer = snap.map { !$0.metadata.isFromCache } ?? false
+                if usedResume && !fromServer {
+                    // #69: the phone has a path but the database has not reconnected, so the resume
+                    // read came back from the cache again. Keep the deeper cursor (offline reading
+                    // goes on) and try the resume again when the network next comes back, rather
+                    // than re-reading this same cached page on every scroll.
+                    self.resumeHeld = true
+                } else if let last = docs.last {
+                    self.oldestDoc = last
+                    self.oldestDocFromCacheWindow = false   // #17: an older page owns the cursor now
+                    self.windowTrimmed = false              // #71: this page's last doc is the cursor
+                }
+                // #69: remember where an unverified (cache) run began; a server answer clears it.
+                if fromServer {
+                    self.resumeOlderQuery = nil
+                    self.resumeHeld = false
+                } else if snap != nil, !docs.isEmpty, self.resumeOlderQuery == nil {
+                    self.resumeOlderQuery = query
+                }
+                // Owner audit 2026-10-06 chat #68: a failed or cache-only answer is asked again when
+                // the network comes back, instead of waiting for the reader to scroll.
+                self.olderNeedsRetry = !fromServer
                 // Only the SERVER can say history has ended (2026-09-24 audit). A failed fetch
                 // (snap nil) or an offline answer from the local cache (a partial page) used to
                 // switch paging off for the rest of the visit, so older messages never loaded
@@ -1317,8 +1418,17 @@ final class ThreadRepository {
                     self.loadingOlder = false
                     self.rebuild()
                     completion()
+                    // #1: everyone who asked while this page was in flight. Swapped out first, so a
+                    // waiter that starts the next page queues on a fresh list.
+                    let waiters = self.olderWaiters
+                    self.olderWaiters = []
+                    waiters.forEach { $0() }
                 }
                 guard !needBuild.isEmpty else { finish(); return }
+                // Owner audit 2026-10-06 chat #70: what each entry looked like when this page was
+                // read. The decrypt below is off the main thread, and a live snapshot can land in
+                // between; writing the page's older copy over it reverted a reaction or a delete.
+                let sigsBefore = self.rawReactions
                 let cidLocal = self.cid
                 Task.detached(priority: .userInitiated) { [weak self] in
                     let built: [(String, Message)] = needBuild.map { doc in
@@ -1326,7 +1436,13 @@ final class ThreadRepository {
                     }
                     await MainActor.run {
                         guard let self else { completion(); return }
-                        for (id, m) in built { self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? "" }
+                        // #70: the live window is the authority for what it covers, and an entry
+                        // that changed (or was removed) while this page decrypted keeps the newer
+                        // state. Only untouched entries outside the live window take the page's copy.
+                        let liveIds = Set(self.lastDocs.map(\.documentID))
+                        for (id, m) in built where !liveIds.contains(id) && self.rawReactions[id] == sigsBefore[id] {
+                            self.byId[id] = m; self.rawReactions[id] = sigs[id] ?? ""
+                        }
                         finish()
                     }
                 }
@@ -1337,8 +1453,8 @@ final class ThreadRepository {
     // far above the current window), or we run out of history. Bounded so a bad id can't loop forever.
     @MainActor
     func ensureLoaded(_ messageId: String, maxPages: Int = 12) async {   // 12×40 ≈ the window cap — never page unbounded history into memory
-        jumpPagingInFlight = true
-        defer { jumpPagingInFlight = false }
+        jumpPagingDepth += 1
+        defer { jumpPagingDepth -= 1 }
         var pages = 0
         while !items.contains(where: { $0.id == messageId }) && canLoadOlder && pages < maxPages {
             // Audit C29: leaving the quote jump cancels the caller's Task, but this loop kept paging
@@ -1397,6 +1513,10 @@ final class ThreadRepository {
         blockObserver = nil
         if let recoveredObserver { NotificationCenter.default.removeObserver(recoveredObserver) }
         recoveredObserver = nil
+        if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
+        networkObserver = nil
+        // #72: a backoff retry still waiting must not re-attach a chat that has been stopped.
+        retryWork?.cancel(); retryWork = nil
         convListener?.remove(); convListener = nil
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil
