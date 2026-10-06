@@ -8,6 +8,16 @@ struct GroupCallParticipantsSheet: View {
     @ObservedObject private var room = GroupCallService.shared.room
     @Environment(\.dismiss) private var dismiss
     @State private var showAdd = false
+    /// Link calls: the link's approval setting, read when the sheet opens (creator only).
+    @State private var approval: Bool?
+    @State private var approvalFailed = false
+
+    /// The link this call runs on, when it is a link call (owner, 2026-10-06: the people button
+    /// should offer Share link and Require approval, as the reference's call sheet does).
+    private var link: ActiveCallLink? {
+        if case .link(let roomId, let key)? = service.activeRoom { return ActiveCallLink(roomId: roomId, key: key) }
+        return nil
+    }
 
     private struct Row: Identifiable {
         let id: String
@@ -50,11 +60,25 @@ struct GroupCallParticipantsSheet: View {
             // Ticks so "Ringing…" turns into "Didn't join" without anyone touching the sheet.
             TimelineView(.periodic(from: .now, by: 5)) { context in
                 List {
-                    if service.isAdhoc {
+                    if service.isAdhoc || link != nil {
                         Section {
-                            Button { showAdd = true } label: {
-                                Label("Add people", systemImage: "person.badge.plus")
+                            if service.isAdhoc {
+                                Button { showAdd = true } label: {
+                                    Label("Add people", systemImage: "person.badge.plus")
+                                }
                             }
+                            if let url = link?.linkKey?.url {
+                                ShareLink(item: url) {
+                                    Label("Share link", systemImage: "link")
+                                }
+                            }
+                        }
+                    }
+                    if service.isLinkCreator, let link {
+                        Section {
+                            Toggle("Require approval to join",
+                                   isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
+                                .disabled(approval == nil)
                         }
                     }
                     Section("In call") {
@@ -68,7 +92,15 @@ struct GroupCallParticipantsSheet: View {
                     }
                 }
             }
-            .navigationTitle("Participants")
+            // Alone in the call, the sheet says what is happening, as the reference's does.
+            .navigationTitle(room.remoteParticipants.isEmpty ? "Waiting for others" : "Participants")
+            .task {
+                guard service.isLinkCreator, let link, approval == nil else { return }
+                approval = await CallLinkService.shared.approval(for: link)
+            }
+            .alert("Couldn't change setting", isPresented: $approvalFailed) {
+                Button("OK", role: .cancel) {}
+            } message: { Text("Check your connection and try again.") }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -83,6 +115,16 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    /// Saved at once; a refusal puts the switch back and says so (same as the link's own page).
+    private func setApproval(_ on: Bool, _ link: ActiveCallLink) {
+        let before = approval
+        approval = on
+        Task { @MainActor in
+            do { try await CallLinkService.shared.setApproval(link, on: on) }
+            catch { approval = before; approvalFailed = true }
+        }
+    }
+
     private func row(_ r: Row) -> some View {
         HStack(spacing: 12) {
             AvatarView(name: r.name, photoUrl: r.photoUrl, size: 40)
@@ -94,4 +136,10 @@ struct GroupCallParticipantsSheet: View {
             }
         }
     }
+}
+
+/// The link a running call is on, as a `CallLinkRef` for the link service.
+struct ActiveCallLink: CallLinkRef {
+    let roomId: String
+    let key: String
 }

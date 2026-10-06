@@ -85,6 +85,13 @@ struct GroupCallView: View {
         guard let uid = p.identity?.stringValue else { return nil }
         return service.members.first { $0.uid == uid }
     }
+    /// MY tile shows MY photo (owner, 2026-10-06: "my profile is not using my profile picture").
+    /// The invite list only exists for ad-hoc calls, so a link or group call found no photo for
+    /// anybody, me included; my own comes from my profile.
+    private func photo(_ p: Participant) -> String? {
+        if p is LocalParticipant { return ProfileStore.shared.me?.photoUrl ?? member(p)?.photoUrl }
+        return member(p)?.photoUrl
+    }
     private func displayName(_ p: Participant) -> String {
         if let n = p.name, !n.isEmpty { return n }
         return member(p)?.name ?? "Member"
@@ -112,7 +119,7 @@ struct GroupCallView: View {
                 dismiss()
             } label: {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)
-                    .frame(width: 38, height: 38).background(.white.opacity(0.15), in: Circle())
+                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
             }
             Spacer()
             VStack(spacing: 2) {
@@ -123,16 +130,20 @@ struct GroupCallView: View {
             Button { showParticipants = true } label: {
                 Image(systemName: "person.2.fill").font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 38, height: 38).background(.white.opacity(0.15), in: Circle())
+                    .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)   // owner, 2026-10-06: Liquid Glass
             }
         }
     }
 
     private var voiceGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96))], spacing: 22) {
+        // Fixed columns, as many as there are people up to three, so the grid is as wide as its
+        // tiles and sits in the middle (owner, 2026-10-06: alone, my tile sat at the left edge,
+        // because an adaptive grid fills the row from the left).
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(104), spacing: 22),
+                                 count: min(max(participants.count, 1), 3)), spacing: 22) {
             ForEach(participants, id: \.sid) { p in   // stable id: index-keyed tiles reused the wrong track on join/leave
                 VStack(spacing: 6) {
-                    AvatarView(name: displayName(p), photoUrl: member(p)?.photoUrl, size: 76)
+                    AvatarView(name: displayName(p), photoUrl: photo(p), size: 76)
                         .overlay(Circle().stroke(Color.green, lineWidth: p.isSpeaking ? 3 : 0))
                     Text(displayName(p)).font(.caption).foregroundStyle(.white).lineLimit(1)
                 }
@@ -149,7 +160,7 @@ struct GroupCallView: View {
                     } else {
                         ZStack {
                             Color.white.opacity(0.12)
-                            AvatarView(name: displayName(p), photoUrl: member(p)?.photoUrl, size: 56)
+                            AvatarView(name: displayName(p), photoUrl: photo(p), size: 56)
                         }
                     }
                     HStack(spacing: 4) {
