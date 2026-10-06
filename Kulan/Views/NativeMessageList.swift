@@ -1303,7 +1303,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // with nothing holding the reader. It is safe now for a structural reason: adoptHeight routes
             // through the layout, and a row further from the origin than the reader cannot move them at
             // all, which is every row you are scrolling towards in a conversation.
-            if let cached = self.heights[id], abs(cached - plan.height) > 2 {
+            // owner audit 2026-10-06 chat #57: a plan height has no rendering noise (it IS the
+            // frame the cell lays out in), so any real drift is adopted, not only drift over 2pt.
+            if let cached = self.heights[id], abs(cached - plan.height) > 0.5 {
                 DispatchQueue.main.async { [weak self] in self?.adoptHeight(plan.height, for: id) }
             }
         }
@@ -1612,6 +1614,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func reportHeight(_ h: CGFloat, for id: String) {
         let hh = ceil(h)
         guard hh > 0 else { return }
+        // owner audit 2026-10-06 chat #58: a hosted cell can still report while its row is leaving
+        // (a delete, a trim). Writing that id into `heights`, `renderedHeights` and the store kept
+        // heights for rows the list no longer holds, which the leave-time pruning had already passed.
+        guard currentIds.contains(id) else { return }
         if let old = heights[id] {
             guard abs(old - hh) > 2 else { return }   // ignore sub-pixel noise
         } else {
@@ -1702,7 +1708,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // lies ABOVE the reader's anchor; a row below the viewport moves nothing they can see.
     private func adoptHeight(_ h: CGFloat, for id: String) {
         RxTrace.log("adoptHeight id=\(id.suffix(5)) h=\(h) cached=\(heights[id] ?? -1)")
-        guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 2 else { return }
+        // owner audit 2026-10-06 chat #57: 0.5, not 2. The 2pt noise filter belongs to the SwiftUI
+        // height REPORTS and is applied there (`reportHeight`, `applyReportedHeight`) before they
+        // get here; here it also swallowed exact plan drifts of 1-2pt, leaving the frame off for good.
+        guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 0.5 else { return }
         guard canLandLoad else {
             pendingSettleHeights.insert(id)
             needsRefreshOnSettle = true
