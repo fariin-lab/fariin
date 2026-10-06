@@ -103,6 +103,7 @@ final class CallService: NSObject {
                 // talking monitor has to start HERE too, not only when you minimize.
                 startVoiceMonitor()
                 updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
+                reconnectIfDroppedDuringRing() // owner audit 2026-10-06 #15: path died while it rang
             }
             if state == .reconnecting, oldValue != .reconnecting, lastPeerBeatAt != nil {
                 // The liveness check counts their silence from HERE, not from their last beat before
@@ -2071,25 +2072,34 @@ final class CallService: NSObject {
         // The caller drives the ICE restart (avoids glare). The callee used to just wait for the
         // caller's own ICE to notice, which it may not for many seconds when only the CALLEE's
         // network moved; now it asks, and the caller restarts at once (see `requestIceRestart`).
-        guard isCaller else { requestIceRestart(); return }
+        // Owner audit 2026-10-06 #33: the callee asks after the SAME wait as the caller restarts. It
+        // used to ask at once, so every sub-second `disconnected` blip that would have healed by
+        // itself forced a full restart on the caller, one per blip. Re-arming on each new event
+        // (cancel below) is the debounce: only a drop that outlasts the wait sends a request.
         iceRestartWork?.cancel()
         let r = DispatchWorkItem { [weak self] in
             guard let self, self.state == .reconnecting else { return }
-            self.restartIce()
+            self.restartOrAsk()
             self.scheduleIceRestartRetry()
         }
         iceRestartWork = r
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: r)
     }
 
+    /// The caller restarts ICE itself; the callee asks the caller to (see `requestIceRestart`).
+    private func restartOrAsk() {
+        if isCaller { restartIce() } else { requestIceRestart() }
+    }
+
     /// One restart offer can be lost (signalling write on a dying network, or the answer never
     /// comes back). Re-offer every 8s while still reconnecting, up to the 30s give-up cap, instead
-    /// of sitting out the whole cap on a single attempt.
+    /// of sitting out the whole cap on a single attempt. #33: the callee's REQUEST is retried the
+    /// same way; it was sent once, and a lost write left the call on "Reconnecting" for the cap.
     private func scheduleIceRestartRetry() {
         iceRestartRetryWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
             guard let self, self.state == .reconnecting else { return }
-            self.restartIce()
+            self.restartOrAsk()
             self.scheduleIceRestartRetry()
         }
         iceRestartRetryWork = w
@@ -2102,6 +2112,22 @@ final class CallService: NSObject {
         guard !isCaller, let id = callId, state == .active || state == .reconnecting else { return }
         restartRequestsSent += 1
         db.collection("calls").document(id).updateData(["restartRequest": restartRequestsSent])
+    }
+
+    /// Owner audit 2026-10-06 #15: the path dropped while the phone was still ringing (a pre-negotiated
+    /// call). Set by the ICE delegate, cleared when the path comes back and at the end of every call.
+    private var iceDroppedDuringRing = false
+
+    /// Called when the call goes `.active`: a path that died during the ring and never came back
+    /// gets the ordinary reconnect (Reconnecting label, restart, 30s cap) instead of a call that
+    /// "connects" onto nothing. Async, because it changes `state` and runs from inside its didSet.
+    private func reconnectIfDroppedDuringRing() {
+        guard iceDroppedDuringRing else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.iceDroppedDuringRing, self.state == .active, !self.mediaReady else { return }
+            self.iceDroppedDuringRing = false
+            self.enterReconnecting(restartAfter: 0)
+        }
     }
 
     private func recovered() {
@@ -2121,9 +2147,13 @@ final class CallService: NSObject {
         guard pathMonitor == nil else { return }
         let m = NWPathMonitor()
         m.pathUpdateHandler = { [weak self] path in
-            // Which interfaces are usable, in order. Same key = same network, nothing to do.
+            // The interface the traffic actually goes out on. Same key = same route, nothing to do.
+            // Owner audit 2026-10-06 #34: this used to key on EVERY usable interface, so cellular
+            // flapping in the background while on Wi-Fi, or a spare interface coming and going,
+            // restarted ICE although the route in use never moved. The first available interface
+            // is the one the system routes through; its name tells two of one type apart.
             let key = path.status == .satisfied
-                ? path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
+                ? path.availableInterfaces.first.map { "\($0.type):\($0.name)" } ?? "none"
                 : "none"
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -2227,9 +2257,24 @@ final class CallService: NSObject {
         top.present(alert, animated: true)
     }
 
+    /// Owner audit 2026-10-06 #10: which dial this is. The mic prompt and the TURN wait can outlive a
+    /// cancel, and a cancel-then-redial put the state back to `.outgoing` before the first dial's
+    /// waits woke, so a state check alone let BOTH dials run: two call docs, the first person rung
+    /// for a call nobody controlled. Every deferred step of a dial compares this instead.
+    private var dialAttempt = 0
+
     func startCall(to uid: String, name: String, photo: String? = nil, video: Bool = false,
                    fromProfile: Bool = false) {
-        guard state == .idle, !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
+        guard !uid.isEmpty, !me.isEmpty else { return }   // never start with an empty caller id
+        // Owner audit 2026-10-06 #31: the 1-2s `.ended` tail is cosmetic (see observeIncoming), so a
+        // call placed inside it takes over instead of being dropped; and a call placed while another
+        // is live says so, with the same notice the group-call side already shows, instead of a
+        // button that silently does nothing.
+        closeEndedTail()
+        guard state == .idle else {
+            MainActor.assumeIsolated { GroupCallService.presentOverTop(GroupCallService.busyNotice) }
+            return
+        }
         // 2026-09-24 decision D25: a 1:1 call and a group call never run at once. Refused with a
         // message while a group call is live or joining. Every caller of startCall is a view, so this
         // runs on the main actor, where GroupCallService lives.
@@ -2282,6 +2327,8 @@ final class CallService: NSObject {
         resolvePeerTrust()   // decide direct-vs-relay now, while we are off the WebRTC threads
         otherName = Self.displayName(for: uid, fallback: name)
         otherPhotoUrl = photo
+        dialAttempt &+= 1
+        let attempt = dialAttempt
         state = .outgoing
         // iOS's own call UI and the recents list get the nickname too — the lock screen saying one
         // name while the app says another is worse than either being wrong on its own.
@@ -2290,22 +2337,36 @@ final class CallService: NSObject {
 
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
+            // #10: a late answer to the mic prompt belongs to the dial that asked. A "denied" landing
+            // after a cancel-and-redial used to end the NEW call.
+            guard self.dialAttempt == attempt else { return }
             guard granted else { self.endForDeniedMic(); return }   // no mic -> don't start a dead call
             // TURN creds must be in hand BEFORE makePeerConnection reads `config` — see awaitIceServers.
             Task { @MainActor in
                 await self.awaitIceServers()
                 await self.awaitPeerTrust()   // 2026-09-24 fix-all #231
                 await self.awaitRelayForStranger()
-                guard self.state == .outgoing else { return }   // cancelled while we waited
+                // cancelled while we waited, or cancelled and redialled (#10: same state, other call)
+                guard self.state == .outgoing, self.dialAttempt == attempt else { return }
                 // 2026-09-24 audit: no relay for a stranger → fail, never go direct.
                 if self.strangerWithoutRelay { self.endReason = .failed; self.hangUp(); return }
-                self.beginOutgoingMedia(to: uid)
+                self.beginOutgoingMedia(to: uid, attempt: attempt)
             }
         }
     }
 
+    /// Owner audit 2026-10-06 #9: a dial that broke on THIS phone (no offer, no local description,
+    /// the call doc refused or unreachable) is a failed call, not the other person's "No answer".
+    /// Only while it is still the same dial; a late error must not end a newer call.
+    private func failOutgoing(attempt: Int) {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.failOutgoing(attempt: attempt) }; return }
+        guard dialAttempt == attempt, state == .outgoing else { return }
+        endReason = .failed
+        hangUp()
+    }
+
     // The media half of startCall, split out so the TURN wait can sit between the mic prompt and here.
-    private func beginOutgoingMedia(to uid: String) {
+    private func beginOutgoingMedia(to uid: String, attempt: Int) {
             // RINGBACK IS STARTED BY THE AUDIO SESSION, NOT HERE (2026-07-29). Starting it at this
             // point plays into a session CallKit has not activated yet: on some devices that is silent,
             // on others briefly audible — and every scheme that then corrected it on activation was
@@ -2321,11 +2382,18 @@ final class CallService: NSObject {
             self.callId = ref.documentID
             self.pc = self.makePeerConnection()
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-            self.pc?.offer(for: constraints) { [weak self] sdp, _ in
-                guard let self, let sdp, let pc = self.pc else { return }
+            // #9: no peer connection, no offer, no local description = nothing ever left this phone.
+            // The dial's OWN connection is held here, so a late completion can never act on the
+            // connection of a newer dial (#10).
+            guard let dialPc = self.pc else { self.failOutgoing(attempt: attempt); return }
+            dialPc.offer(for: constraints) { [weak self] sdp, err in
+                guard let self else { return }
+                guard err == nil, let sdp else { self.failOutgoing(attempt: attempt); return }
+                guard let pc = self.pc, pc === dialPc else { return }   // this dial already torn down
                 let local = self.withOpusDtxAndRed(sdp)
-                pc.setLocalDescription(local) { _ in
-                    ref.setData([
+                pc.setLocalDescription(local) { err in
+                    if err != nil { self.failOutgoing(attempt: attempt); return }
+                    let data: [String: Any] = [
                         "caller": self.me,
                         "callee": uid,
                         "callerName": ProfileStore.shared.me?.name ?? "Caller",
@@ -2335,10 +2403,42 @@ final class CallService: NSObject {
                         "offer": ["sdp": local.sdp, "type": "offer"],
                         "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
                         "createdAt": FieldValue.serverTimestamp(),
-                    ]) { [weak self] err in
+                    ]
+                    // ⛔ ONLINE-ONLY CREATE (owner audit 2026-10-06 #9). A plain setData made offline is
+                    // QUEUED, never errors, and never completes: the caller sat on "Calling" for 45s,
+                    // logged a "Missed call", and when the network came back the queued create
+                    // flushed and the server rang the other phone for a call long over (the push
+                    // fires on create, and the end queued behind it is too late to stop it). A
+                    // transaction is never queued: it reaches the server or it fails, so an offline
+                    // dial ends as "Call failed" in seconds and can never ring anyone later. Same
+                    // single write, same rules, one round trip like the ack this used to wait for.
+                    self.db.runTransaction({ txn, _ -> Any? in
+                        txn.setData(data, forDocument: ref)
+                        return nil
+                    }) { [weak self] _, err in
                         guard let self else { return }
-                        if err != nil { self.hangUp(); return }   // write failed -> don't leave the caller ringing into the void
-                        if self.state != .outgoing {
+                        // write failed -> don't leave the caller ringing into the void, and say Failed
+                        if let err {
+                            // ⛔ EXCEPT A RULE REFUSAL. The rules refuse this create when the callee
+                            // blocked me, and a block must stay indistinguishable from a call nobody
+                            // took (block rebuild 2026-09-26). "Call failed" there would name it, so a
+                            // refusal ends exactly as it always did: "Couldn't reach them", the ended
+                            // tone, a missed row. 7 = permissionDenied by wire number, as PushManager.
+                            // `.declined` because finishCall turns a never-placed .none/.missed into
+                            // .failed; the caller's screen, tone and row treat .declined exactly like
+                            // .missed (declines are hidden everywhere, owner 2026-08-12).
+                            let ns = err as NSError
+                            if ns.domain == FirestoreErrorDomain, ns.code == 7 {
+                                if self.dialAttempt == attempt, self.state == .outgoing {
+                                    self.endReason = .declined
+                                    self.hangUp()
+                                }
+                                return
+                            }
+                            self.failOutgoing(attempt: attempt)
+                            return
+                        }
+                        if self.state != .outgoing || self.dialAttempt != attempt {
                             // Caller hung up while the create was in flight: finishCall's update hit a
                             // not-yet-existing doc, so end it here or it would ring the callee later.
                             ref.updateData(["status": "ended", "endReason": EndReason.hangup.rawValue])
@@ -3330,10 +3430,23 @@ final class CallService: NSObject {
             guard let roomId = await GroupCallService.shared.startAdhoc(with: invited, video: video) else {
                 // The room could not be made. The 1:1 is already gone here, so end it for the peer
                 // the ordinary way rather than leave them talking to nobody.
-                try? await ref.updateData(["status": "ended", "endReason": EndReason.hangup.rawValue])
+                await Self.writeWithRetry(ref, ["status": "ended", "endReason": EndReason.hangup.rawValue])
                 return
             }
-            try? await ref.updateData(["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue])
+            await Self.writeWithRetry(ref, ["moveTo": roomId, "status": "ended", "endReason": EndReason.hangup.rawValue])
+        }
+    }
+
+    /// Owner audit 2026-10-06 #45: the `moveTo` write was `try?`, so one failure left the peer on a
+    /// 1:1 this side had already torn down, talking to nobody until ICE gave up (~30s). Three tries,
+    /// a second apart, like `writeCandidate`. Nothing else is waiting on it, so failing quietly after
+    /// that is no worse than before.
+    private static func writeWithRetry(_ ref: DocumentReference, _ data: [String: Any]) async {
+        for attempt in 1...3 {
+            do { try await ref.updateData(data); return } catch {
+                print("call: moveToGroup write failed (try \(attempt)):", error)
+                if attempt < 3 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+            }
         }
     }
 
@@ -3349,6 +3462,13 @@ final class CallService: NSObject {
         guard state != .ended, state != .idle else { return }   // re-entry guard: only finish once
         cancelTimers()
         stopRingback()
+        // Owner audit 2026-10-06 #9: a dial whose call doc never reached the server was never placed.
+        // Unless I cancelled it myself, that is a failure on this phone, not the other person's
+        // "No answer" (the 45s ring-out used to land here as .missed on an offline dial).
+        let neverPlaced = isCaller && !callDocCreated && connectedDate == nil
+        if neverPlaced, !localUser, endReason == .none || endReason == .missed {
+            endReason = .failed
+        }
         if endReason == .none {
             // Connected → hang up. Not connected: the CALLER's end is a miss, and the CALLEE's end
             // is a decline ONLY when a human did it (`localUser` — the CallKit End/Decline path).
@@ -3364,7 +3484,9 @@ final class CallService: NSObject {
         // callId != nil matters: denying the mic on an OUTGOING call hangs up before the call doc is
         // ever created, and the `callId ?? UUID()` fallback below then wrote a phantom "Missed call" row
         // under a random id - for a call that was never placed, and undedupable against the other side.
-        if !recordWritten, !otherUid.isEmpty, callId != nil {
+        // #9: the same goes for a dial that failed before its doc existed: no row in the chat for a
+        // call the other person was never offered. (A dial I cancelled myself still logs, as before.)
+        if !recordWritten, !otherUid.isEmpty, callId != nil, !(neverPlaced && endReason == .failed) {
             recordWritten = true
             let connected = connectedDate != nil
             let dur = connected ? Int(Date().timeIntervalSince(connectedDate!)) : 0
@@ -3443,11 +3565,17 @@ final class CallService: NSObject {
         peerIsEstablishedContact = false   // never inherited by the next call
         peerTrustPending = false           // 2026-09-24 fix-all #231
         heldPreAnswer = nil                // 2026-09-24 fix-all #230
+        iceDroppedDuringRing = false       // owner audit 2026-10-06 #15: belongs to this call's path
         isCaller = false
 
         // Feedback tone for the non-initiating side / system-ended calls. Keep the audio
         // session alive until the tone finishes, THEN clear CallKit (which deactivates it).
         let reason = endReason
+        // Owner audit 2026-10-06 #45: which end this is. The tone and idle timers below used to check
+        // only `state == .ended`, so a later call that also ended inside an earlier call's window had
+        // its own tone and end label cut short by the earlier call's timers.
+        endSeq &+= 1
+        let thisEnd = endSeq
         if !localUser, reason != .none {
             playEndTone(reason)
             let toneDur = (reason == .busy) ? 2.0 : 0.6   // matches loops: 1 (declined plays the short ended tone now)
@@ -3456,7 +3584,7 @@ final class CallService: NSObject {
             // ended by the old call's cleanup. Only end the system call this call owned.
             let endingUUID = CallKitManager.shared.activeUUID
             DispatchQueue.main.asyncAfter(deadline: .now() + toneDur) {
-                if self.state == .ended { self.stopTone() }
+                if self.state == .ended, self.endSeq == thisEnd { self.stopTone() }
                 if clearCallKit, CallKitManager.shared.activeUUID == endingUUID {
                     CallKitManager.shared.reportEnded()
                 }
@@ -3478,9 +3606,11 @@ final class CallService: NSObject {
         // The mic-denied line needs time to be read; one second is gone before the eye lands on it.
         let idleDelay = ((!localUser && reason == .busy) || micDenied) ? 2.0 : 1.0
         DispatchQueue.main.asyncAfter(deadline: .now() + idleDelay) {
-            if self.state == .ended { self.state = .idle }
+            if self.state == .ended, self.endSeq == thisEnd { self.state = .idle }
         }
     }
+    /// Bumped once per finished call; see the #45 note in `finishCall`.
+    private var endSeq = 0
 }
 
 // MARK: - RTCPeerConnectionDelegate
@@ -3507,6 +3637,7 @@ extension CallService: RTCPeerConnectionDelegate {
         // elsewhere.
         let isRelay = candidate.sdp.contains(" typ relay")
         DispatchQueue.main.async {
+            guard peerConnection === self.pc else { return }   // #45: a closed call's late candidate
             self.mark("firstCandidate")
             if isRelay { self.mark("firstRelayCandidate") }
             // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
@@ -3516,8 +3647,14 @@ extension CallService: RTCPeerConnectionDelegate {
     }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         DispatchQueue.main.async {
+            // Owner audit 2026-10-06 #45: a state change queued by the connection a hang-up just
+            // closed used to run after the idle reset, and `.connected` set `mediaReady` again, so
+            // the NEXT call started its timer the instant it was accepted. finishCall nils `pc`, so
+            // anything not from the live connection is a leftover.
+            guard peerConnection === self.pc else { return }
             switch newState {
             case .connected, .completed:
+                self.iceDroppedDuringRing = false
                 // ⭐ THE MEDIA PATH BEING UP IS NO LONGER THE SAME EVENT AS THE CALL STARTING, and
                 // splitting those two is the whole of the pre-negotiation change.
                 //
@@ -3529,11 +3666,20 @@ extension CallService: RTCPeerConnectionDelegate {
                 self.mark("mediaReady")
                 self.recovered()                          // back to a healthy media path
                 self.beginConnectedCallIfAccepted()
-            case .disconnected:
-                // May self-heal, but 3s of dead air was the old wait; 1s is enough to skip a blip.
-                self.enterReconnecting(restartAfter: 1)
-            case .failed:
-                self.enterReconnecting(restartAfter: 0)   // won't self-heal; restart now
+            case .disconnected, .failed:
+                // Owner audit 2026-10-06 #15: the path is down, so it is no longer "ready". Left
+                // true, a drop during the ring let the accept start the call (timer, CallKit
+                // "connected") onto a dead path, and no later ICE event ever came to notice.
+                self.mediaReady = false
+                // Still ringing: there is no call to reconnect yet (enterReconnecting only runs
+                // from .active), so remember it and start the reconnect the moment it is answered.
+                if self.state == .incoming || self.state == .outgoing {
+                    self.iceDroppedDuringRing = true
+                    return
+                }
+                // `disconnected` may self-heal, but 3s of dead air was the old wait; 1s is enough to
+                // skip a blip. `failed` won't self-heal; restart now.
+                self.enterReconnecting(restartAfter: newState == .failed ? 0 : 1)
             case .closed:
                 if self.state == .active || self.state == .reconnecting {
                     self.endReason = .failed; self.hangUp()
@@ -3554,6 +3700,7 @@ extension CallService: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         guard dataChannel.label == Self.acceptChannelLabel else { return }
         DispatchQueue.main.async {
+            guard peerConnection === self.pc else { return }   // #45: never adopt a dead call's channel
             dataChannel.delegate = self
             self.acceptChannel = dataChannel
             // Answered already? Then the channel opened late and the message is owed right now.
@@ -3566,7 +3713,10 @@ extension CallService: RTCPeerConnectionDelegate {
         if let track = rtpReceiver.track as? RTCVideoTrack {
             // Just bind the remote feed for rendering. isVideo is driven by the consent handshake (or
             // the initial call type) — NOT flipped here, so an unsolicited track can't force video on.
-            DispatchQueue.main.async { self.remoteVideoTrack = track }
+            DispatchQueue.main.async {
+                guard peerConnection === self.pc else { return }   // #45: not after the reset nilled it
+                self.remoteVideoTrack = track
+            }
         }
     }
 }
