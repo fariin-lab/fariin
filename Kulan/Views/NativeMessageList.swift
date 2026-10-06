@@ -1521,6 +1521,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// The reader is held still by the same anchor the load paths use: rows above them that changed
     /// height move their content, and the delta puts it back.
     private func remeasureOffscreenChanged(_ changed: [String], visible: Set<String>) {
+        // owner audit 2026-10-06 chat #31: the VISIBLE changed rows go on to `refreshVisible`, whose
+        // `measure()` returned the stale rendered height for a row the sizer was once wrong about (photo,
+        // album, voice). The frame kept the old size, the new content drew over the next bubble, and
+        // only the late height report fixed it a frame later. Both callers pass every changed row
+        // here before refreshing, so the rendered height dies with the content for all of them, the
+        // same as the ids-changed path and the cancelled-tile watcher already do.
+        for id in changed where visible.contains(id) { invalidateRenderedHeight(id) }
         let width = collectionView.bounds.width
         guard width > 0 else { return }
         let offscreen = changed.filter { !visible.contains($0) }
@@ -1553,6 +1560,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !isUpdatingInsets else { return }
         let y = clampOffset(collectionView.contentOffset.y + landed.delta)
         guard abs(collectionView.contentOffset.y - y) > 0.5 else { return }
+        // owner audit 2026-10-06 chat #40: `setContentOffset(_:animated:)` is the call `stopScrolling()`
+        // uses to END a fling, so a row above changing height mid-fling stopped the list dead. Under a
+        // finger or a coast the offset is shifted through the plain property instead, which moves the
+        // content by the delta and leaves the deceleration (and the pan) running. At rest, unchanged.
+        if collectionView.isDecelerating || collectionView.isDragging || collectionView.isTracking {
+            UIView.performWithoutAnimation {
+                collectionView.contentOffset = CGPoint(x: 0, y: y)
+            }
+            return
+        }
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
         }
