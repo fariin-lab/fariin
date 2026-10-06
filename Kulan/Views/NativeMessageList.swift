@@ -1975,7 +1975,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                     - collectionView.adjustedContentInset.top
                                     - collectionView.adjustedContentInset.bottom)
             if visible.contains(attr.frame) { return }
-            scrollToOffset(clampOffset(attr.frame.midY - collectionView.bounds.height / 2), animated: true)
+            // owner audit 2026-10-06 chat #9: centre in the VISIBLE band (the same rect as the test
+            // above), not the full bounds. With the keyboard up the bottom inset is far larger than
+            // the top, and centring in the bounds put the row half a keyboard low, under the composer.
+            let bandShift = (collectionView.adjustedContentInset.bottom - collectionView.adjustedContentInset.top) / 2
+            scrollToOffset(clampOffset(attr.frame.midY - collectionView.bounds.height / 2 + bandShift),
+                           animated: true)
         case .initialPosition:
             // Nothing unread: the newest message, which is the bottom of the content.
             guard let target = initialScrollId,
