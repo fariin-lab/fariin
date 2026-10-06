@@ -7,8 +7,8 @@ import LiveKit
 ///   text is the header's job, not drawn here.
 /// - Others present: only remotes go on the grid; the local camera is the self pip, drawn by the
 ///   parent at the bottom-right.
-/// - Who gets a place: `GroupCallPriority.ranked` (spec §13), the first `capacity` of them, then put
-///   back in join order with `stableForGrid` so tiles do not jump when the speaker changes.
+/// - Who gets a place: `GroupCallStage.gridPlacement`, sticky cells (spec §12/§13): a placed tile
+///   keeps its cell, and an active speaker off the grid takes the least important person's cell.
 /// - The rest go to `GroupCallStripView` at the bottom, and the grid area shrinks by the strip.
 ///
 /// A ZStack with explicit frames (not a LazyVGrid) so join / leave / reflow animate as frame changes
@@ -65,12 +65,7 @@ struct GroupCallGridView: View {
 
     @ViewBuilder
     private func gridStage(remotes: [CallTile], size: CGSize) -> some View {
-        let geometry = Self.plan(
-            remotes: remotes,
-            pinnedId: stage.pinnedId,
-            speakerId: stage.activeSpeakerId,
-            size: size
-        )
+        let geometry = Self.plan(remotes: remotes, stage: stage, size: size)
         let byId = Dictionary(remotes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let layout = geometry.layout
         let placed = geometry.placedIds
@@ -107,7 +102,7 @@ struct GroupCallGridView: View {
         .animation(GroupCallMotion.fade, value: layout.overflow.isEmpty)
     }
 
-    // MARK: - Planning (pure)
+    // MARK: - Planning
 
     private struct Plan {
         var gridSize: CGSize
@@ -116,8 +111,10 @@ struct GroupCallGridView: View {
     }
 
     /// Decide the grid area, who is on it, and their frames.
-    private static func plan(remotes: [CallTile], pinnedId: String?, speakerId: String?, size: CGSize) -> Plan {
-        let ranked = GroupCallPriority.ranked(remotes, focusedId: pinnedId, speakerId: speakerId, now: Date())
+    @MainActor
+    private static func plan(remotes: [CallTile], stage: GroupCallStage, size: CGSize) -> Plan {
+        let ranked = GroupCallPriority.ranked(remotes, focusedId: stage.pinnedId,
+                                              speakerId: stage.activeSpeakerId, now: Date())
 
         // The strip only exists when the full stage cannot hold everyone; only then does the grid
         // give up the strip's height.
@@ -129,11 +126,11 @@ struct GroupCallGridView: View {
         )
         let capacity = max(0, GroupCallLayoutEngine.capacity(in: gridSize))
 
-        // Top `capacity` by priority, shown in join order; the rest follow so the engine hands them
-        // back as `overflow` in priority order.
-        let shown = GroupCallPriority.stableForGrid(Array(ranked.prefix(capacity)))
-        let rest = ranked.dropFirst(capacity)
-        let ids = shown.map(\.id) + rest.map(\.id)
+        // Sticky cells from the stage (a speaker change swaps one cell, never reshuffles); the rest
+        // follow in priority order, so the engine hands them back as `overflow` for the strip.
+        let cells = stage.gridPlacement(remotes, capacity: capacity)
+        let placedSet = Set(cells)
+        let ids = cells + ranked.filter { !placedSet.contains($0.id) }.map(\.id)
 
         let layout = GroupCallLayoutEngine.grid(ids: ids, in: gridSize)
         let placed = ids.filter { layout.frames[$0] != nil }

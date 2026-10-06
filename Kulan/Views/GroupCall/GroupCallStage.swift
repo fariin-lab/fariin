@@ -43,6 +43,8 @@ final class GroupCallStage: ObservableObject {
     // flickers, and publishing it would re-render the whole stage several times a second).
     private var speechById: [String: (isSpeaking: Bool, lastSpokeAt: Date?)] = [:]
     private var speakerTracker = GroupCallSpeakerTracker()
+    // The grid's cells in cell order, kept between renders so tiles stay put (see gridPlacement).
+    private var placedIds: [String] = []
     private var refreshScheduled = false
     // nonisolated(unsafe) on these two: only touched on the main thread, but deinit is nonisolated.
     nonisolated(unsafe) private var observer: StageRoomObserver?
@@ -105,6 +107,65 @@ final class GroupCallStage: ObservableObject {
             if let s = speechById[t.id] { t.isSpeaking = s.isSpeaking; t.lastSpokeAt = s.lastSpokeAt }
             return t
         }
+    }
+
+    /// Who sits in the grid's `capacity` cells, in cell order (spec §12: a tile keeps its cell).
+    /// Sticky: a placed person stays until they leave or the cells shrink. Only an active speaker who
+    /// is off the grid swaps in, and takes the exact cell of the least important placed person.
+    /// Free cells go to the most important unplaced people. The 30s "recently speaking" tier is not
+    /// used here: on a big call it would reshuffle the grid every time someone new speaks.
+    /// Called from the grid's body; it only mutates this unpublished cache, so no extra render.
+    func gridPlacement(_ remotes: [CallTile], capacity: Int) -> [String] {
+        guard capacity > 0 else { placedIds = []; return [] }
+        let byId = Dictionary(remotes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let speaker = activeSpeakerId.flatMap { byId[$0] != nil ? $0 : nil }
+        var cells = placedIds.filter { byId[$0] != nil }
+
+        // Fewer cells (the strip appeared, the phone turned): the least important leave first.
+        while cells.count > capacity,
+              let worst = weakest(cells, byId, keep: speaker), let i = cells.firstIndex(of: worst) {
+            cells.remove(at: i)
+        }
+        // Free cells: the most important unplaced people, added in join order.
+        if cells.count < capacity {
+            let taken = Set(cells)
+            let candidates = remotes.filter { !taken.contains($0.id) }.sorted { a, b in
+                let ta = placementTier(a), tb = placementTier(b)
+                if ta != tb { return ta < tb }
+                let la = a.lastSpokeAt ?? .distantPast, lb = b.lastSpokeAt ?? .distantPast
+                if la != lb { return la > lb }
+                return GroupCallPriority.joinOrder(a, b)
+            }
+            cells += GroupCallPriority.stableForGrid(Array(candidates.prefix(capacity - cells.count))).map(\.id)
+        }
+        // The speaker is off the grid: they take the least important person's cell.
+        if let speaker, !cells.contains(speaker),
+           let worst = weakest(cells, byId, keep: speaker), let i = cells.firstIndex(of: worst) {
+            cells[i] = speaker
+        }
+        placedIds = cells
+        return cells
+    }
+
+    /// Spec §13 order for a grid cell, without the "recent" tier: presenter, pinned, speaker,
+    /// camera on, audio only.
+    private func placementTier(_ t: CallTile) -> Int {
+        if t.isScreenShare { return 0 }
+        if t.id == pinnedId { return 1 }
+        if t.id == activeSpeakerId { return 2 }
+        return t.hasVideo ? 3 : 4
+    }
+
+    /// The placed person to give up a cell: lowest tier, then the one heard longest ago, then the
+    /// latest to join. Never `keep` (the active speaker).
+    private func weakest(_ cells: [String], _ byId: [String: CallTile], keep: String?) -> String? {
+        cells.compactMap { byId[$0] }.filter { $0.id != keep }.max { a, b in
+            let ta = placementTier(a), tb = placementTier(b)
+            if ta != tb { return ta < tb }
+            let la = a.lastSpokeAt ?? .distantPast, lb = b.lastSpokeAt ?? .distantPast
+            if la != lb { return la > lb }
+            return GroupCallPriority.joinOrder(a, b)
+        }?.id
     }
 
     func togglePin(_ tileId: String) {
