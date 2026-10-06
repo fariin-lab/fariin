@@ -54,6 +54,9 @@ struct GroupCallFocusView: View {
             isActiveSpeaker: stage.activeSpeakerId == tile.id,
             isPinned: stage.pinnedId == tile.id,
             onTap: {
+                // A presenter the stage put here by itself (nobody pinned) stays: the share holds
+                // the stage until it ends, so a pin would only add a badge and change nothing.
+                guard !isAutoPresenter(tile) else { return }
                 // Tap again to go back to the grid (owner spec §16: how to focus someone, and undo it).
                 withAnimation(GroupCallMotion.layout) { stage.togglePin(tile.id) }
             }
@@ -63,7 +66,12 @@ struct GroupCallFocusView: View {
         .padding(.horizontal, GroupCallMetrics.inset)
         .padding(.top, GroupCallMetrics.inset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityHint(Text("Double-tap to return to the grid"))
+        .accessibilityHint(Text(isAutoPresenter(tile) ? "" : "Double-tap to return to the grid"))
+    }
+
+    /// Shown large because they are presenting, not because the user pinned them.
+    private func isAutoPresenter(_ tile: CallTile) -> Bool {
+        tile.isScreenShare && stage.pinnedId != tile.id
     }
 
     /// Quiet capsule that names why this tile is large (spec §16: who they are viewing).
