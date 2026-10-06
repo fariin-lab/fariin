@@ -4595,6 +4595,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Restore the scroll pan HERE, at the single choke point, so a swipe can never leave the thread
         // unscrollable.
         collectionView.panGestureRecognizer.isEnabled = true
+        // Chat #64: a jump parked while the swipe owned the touch runs now. Next turn, because this
+        // is also reached from `didEndDisplaying`, inside a layout pass.
+        DispatchQueue.main.async { [weak self] in self?.releaseParkedNewestJump() }
         let bubble = (cell as? MessageRowCell)?.previewBubble
         let reset = { bubble?.transform = .identity; arrow?.alpha = 0 }
         if animated {
@@ -4763,6 +4766,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // passive 0.25s hold recognizer) to release it; a press let go between 0.20s and
                 // 0.25s hits neither, so new messages sat frozen for the full 8s (audit).
                 interactionHoldUntil = Date()
+                // Chat #64: no menu came, so a jump parked by this press runs now.
+                DispatchQueue.main.async { [weak self] in self?.releaseParkedNewestJump() }
             }
         default: break
         }
@@ -4931,6 +4936,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A reaction picked from this menu usually lands while the menu is still up, when
         // `restoreReaderPosition` stands down; this is the first moment it may act on it.
         restoreReaderPosition()
+        // Chat #64: a jump parked while the press owned the touch runs now (not on a screen that
+        // is leaving), on the next turn so it never runs inside the menu's teardown.
+        if restoringKeyboard {
+            DispatchQueue.main.async { [weak self] in self?.releaseParkedNewestJump() }
+        }
     }
 
     // THE REAL MENU LIFETIME, from UIKit, replacing a long-press proxy that could not see it.
@@ -4983,10 +4993,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if !decelerate { restoreReaderPosition(); recordDistanceFromBottom(); reportReadingPosition(); settleFlush() }
         // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
         // is about to coast or not: perform() kills the coast on its way past.
-        if let animated = pendingNewestJump {
-            pendingNewestJump = nil
-            perform(.newest(animated: animated))
-        }
+        releaseParkedNewestJump()
+    }
+
+    /// Owner audit 2026-10-06 chat #64: a drag also "ends" when a long press or a reply swipe takes
+    /// the touch over (the press cancels the pan, the swipe disables it). The finger is still down
+    /// there, on a lifting bubble or a swiped cell, and the parked jump used to run under it. It now
+    /// stays parked until the menu or the swipe is over (`customMenuDidEnd`, `resetSwipe`, a press
+    /// that dies before its menu), and runs then.
+    private var pressOrSwipeOwnsTouch: Bool {
+        activeMenu != nil || contextMenuVisible || swipingCell != nil
+            || customPress.state == .began || customPress.state == .changed
+    }
+    private func releaseParkedNewestJump() {
+        guard let animated = pendingNewestJump, !pressOrSwipeOwnsTouch else { return }
+        pendingNewestJump = nil
+        perform(.newest(animated: animated))
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
