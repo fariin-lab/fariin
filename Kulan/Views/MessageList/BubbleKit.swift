@@ -635,6 +635,10 @@ final class BubbleFillView: UIView {
                 return bv
             }()
             v.isHidden = false
+            // A growth still being followed belongs to the previous geometry (a reused row, or a
+            // second reaction): stop it before writing this one, or it would write its old final
+            // frame over this one when it ends. `animateGeometry` starts a new one when it animates.
+            BlurFollower.cancel(v)
             v.frame = CGRect(origin: .zero, size: b.size)
             blurMask.frame = CGRect(origin: .zero, size: b.size)
             blurMask.path = p.cgPath
@@ -677,33 +681,79 @@ final class BubbleFillView: UIView {
         add(shape, "path", old.cgPath)
         add(gradientMask, "path", old.cgPath)
         if let bv = blurView, !bv.isHidden {
-            // ⛔ A UIKit ANIMATION FOR THE BLUR, NOT A LAYER ONE — owner, 2026-10-05, a reaction on
-            // an incoming bubble over a wallpaper: a second, bigger dark bubble behind the bordered
-            // one. A bounds animation added straight to a UIVisualEffectView's layer does not reach
-            // the views the effect view keeps inside itself; they jumped to the new size while the
-            // rim and the shape were still growing. `UIView.animate` on its frame carries them, on
-            // the same curve. The mask's frame rides along too (it was only its path before).
-            let final = bv.frame
-            UIView.performWithoutAnimation {
-                bv.frame = CGRect(origin: .zero, size: size)
-                bv.layoutIfNeeded()
-            }
-            // The same curve as every other layer here: the timing function's own control points.
-            var p1: [Float] = [0, 0], p2: [Float] = [0, 0]
-            timing.getControlPoint(at: 1, values: &p1)
-            timing.getControlPoint(at: 2, values: &p2)
-            let curve = UICubicTimingParameters(
-                controlPoint1: CGPoint(x: CGFloat(p1[0]), y: CGFloat(p1[1])),
-                controlPoint2: CGPoint(x: CGFloat(p2[0]), y: CGFloat(p2[1])))
-            let animator = UIViewPropertyAnimator(duration: duration, timingParameters: curve)
-            animator.addAnimations {
-                bv.frame = final
-                bv.layoutIfNeeded()
-            }
-            animator.startAnimation()
-            add(blurMask, "bounds", NSValue(cgRect: oldBox))
-            add(blurMask, "position", NSValue(cgPoint: CGPoint(x: oldBox.midX, y: oldBox.midY)))
-            add(blurMask, "path", old.cgPath)
+            // ⛔ THE BLUR FOLLOWS THE SHAPE FRAME BY FRAME — owner, 2026-10-06 (second report, after
+            // 49808dc5 did not cure it): reacting to an incoming bubble over a wallpaper still drew a
+            // bigger dark bubble behind the bordered one while it grew. The blur is a
+            // UIVisualEffectView clipped by `blurMask`, and the effect view honours only the MODEL
+            // value of that mask: an animation added to the mask (path, bounds) is ignored, so the blur
+            // sat at the FINAL shape for the whole growth while the rim and the text were still small.
+            // Animating the effect view's frame (the 10-05 attempt) could not help with that.
+            //
+            // What IS honoured is a plain model write. `shape` animates correctly, so for the length of
+            // the growth a display link copies the shape's in-flight frame and path onto the blur and
+            // its mask every frame, with actions off, then writes the final values. One clock, the
+            // shape's own, so the two can never disagree. Outgoing, gradient and plain received
+            // bubbles have no blur view and never come here.
+            BlurFollower.start(shape: shape, blur: bv, mask: blurMask, duration: duration)
         }
+    }
+}
+
+/// Drives a blurred bubble's effect view and mask from its shape layer's presentation, once per
+/// frame, for one reaction growth (see `BubbleFillView.animateGeometry`).
+private final class BlurFollower: NSObject {
+    private weak var shape: CAShapeLayer?
+    private weak var blur: UIView?
+    private weak var mask: CAShapeLayer?
+    private let finalFrame: CGRect
+    private let finalPath: CGPath?
+    private let endsAt: CFTimeInterval
+    private var link: CADisplayLink?
+    /// One follower per blur view: a second reaction mid-growth replaces the first.
+    private static var live: [ObjectIdentifier: BlurFollower] = [:]
+
+    static func cancel(_ blur: UIView) { live[ObjectIdentifier(blur)]?.stop() }
+
+    static func start(shape: CAShapeLayer, blur: UIView, mask: CAShapeLayer, duration: CFTimeInterval) {
+        let key = ObjectIdentifier(blur)
+        live[key]?.stop()
+        let f = BlurFollower(shape: shape, blur: blur, mask: mask, duration: duration)
+        live[key] = f
+        f.tick()   // the first frame now, so the blur never shows the final shape even once
+        let link = CADisplayLink(target: f, selector: #selector(BlurFollower.tick))
+        link.add(to: .main, forMode: .common)
+        f.link = link
+    }
+
+    private init(shape: CAShapeLayer, blur: UIView, mask: CAShapeLayer, duration: CFTimeInterval) {
+        self.shape = shape; self.blur = blur; self.mask = mask
+        finalFrame = blur.frame
+        finalPath = mask.path
+        endsAt = CACurrentMediaTime() + duration + 0.02
+        super.init()
+    }
+
+    @objc private func tick() {
+        guard let shape, let blur, let mask else { stop(); return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if CACurrentMediaTime() >= endsAt || shape.animation(forKey: "reactionGrow.path") == nil {
+            blur.frame = finalFrame
+            mask.frame = CGRect(origin: .zero, size: finalFrame.size)
+            mask.path = finalPath
+            CATransaction.commit()
+            stop()
+            return
+        }
+        let pres = shape.presentation() ?? shape
+        blur.frame = pres.frame
+        mask.frame = CGRect(origin: .zero, size: pres.bounds.size)
+        mask.path = pres.path
+        CATransaction.commit()
+    }
+
+    private func stop() {
+        link?.invalidate(); link = nil
+        if let blur { Self.live[ObjectIdentifier(blur)] = nil }
     }
 }
