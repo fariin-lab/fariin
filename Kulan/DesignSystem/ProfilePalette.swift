@@ -176,6 +176,15 @@ extension ProfilePalette {
         return produce(image, key: url)
     }
 
+    /// The colour of a photo already decoded in hand, read on the spot (well under a millisecond,
+    /// then cached). For a screen that is ALREADY SHOWING the picture from the avatar loader's own
+    /// memory, which `warm` does not look in (owner, 2026-10-06: the call screen opened black and
+    /// turned to the person's colour seconds later, while their photo was on it from the start).
+    static func now(_ image: UIImage, url: String) -> ProfilePalette? {
+        guard !url.isEmpty else { return nil }
+        return produce(image, key: url)
+    }
+
     /// THE COLOUR OF SOMEBODY WHOSE PICTURE IS NOT HERE.
     ///
     /// ⚠️ This is not a nicety, it is the fix for a real report (owner, 2026-08-19, on a preview

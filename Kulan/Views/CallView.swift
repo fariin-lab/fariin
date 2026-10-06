@@ -356,8 +356,8 @@ struct CallView: View {
             // for the fraction of a second before the picture arrived and then never be seen again
             // — "first time it's showing profile color, after that opened camera". A video call
             // starts black and stays black behind the feed.
-            (call.isVideo ? Color.black : (peerPalette.map { Color($0.page) } ?? Color.black))
-                .animation(.easeOut(duration: 0.35), value: peerPalette?.key)
+            (call.isVideo ? Color.black : (shownPalette.map { Color($0.page) } ?? Color.black))
+                .animation(.easeOut(duration: 0.35), value: shownPalette?.key)
             if call.isVideo {
                 VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
@@ -445,9 +445,24 @@ struct CallView: View {
 
     /// The peer's extracted colour. Warm cache first so a person already seen paints on frame one;
     /// the full read follows. Nobody with no photo gets one, and the screen stays black.
+    /// The colour on the FIRST frame (owner, 2026-10-06: black first, their colour seconds later).
+    /// `peerPalette` is filled by a task that runs after the screen is first drawn; until then the
+    /// colour is read here from the caches the avatar itself is drawn from (memory hits, cheap).
+    private var shownPalette: ProfilePalette? {
+        if let peerPalette { return peerPalette }
+        guard let url = call.otherPhotoUrl, !url.isEmpty else { return nil }
+        if let warm = ProfilePalette.warm(url: url) { return warm }
+        guard let shown = ProfilePhotoLoader.shared.cachedAvatar(url) else { return nil }
+        return ProfilePalette.now(shown, url: url)
+    }
+
     private func loadPeerPalette() async {
         guard let url = call.otherPhotoUrl, !url.isEmpty else { peerPalette = nil; return }
         if let warm = ProfilePalette.warm(url: url) { peerPalette = warm; return }
+        // The avatar on this screen comes from the avatar loader's memory, which `warm` does not
+        // read; take the colour from that same picture so both land on the first frame.
+        if let shown = ProfilePhotoLoader.shared.cachedAvatar(url),
+           let p = ProfilePalette.now(shown, url: url) { peerPalette = p; return }
         peerPalette = await ProfilePalette.resolve(url: url)
     }
 
