@@ -58,7 +58,11 @@ struct GroupCallStatusBanner: View {
                 Text(item.text)
                     .font(.footnote.weight(.semibold))   // 13pt at default, follows Dynamic Type
                     .foregroundStyle(.white)
-                    .lineLimit(1)
+                    // A long name in a toast, or large Dynamic Type: wrap once, shrink a little,
+                    // rather than cut the name off.
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -76,6 +80,11 @@ struct GroupCallStatusBanner: View {
             takeBaseline()
         }
         .onChange(of: stage.connectionState) { old, new in
+            // The header subtitle shows "Reconnecting…" but a subtitle change is not spoken; the
+            // banner draws nothing for it, so VoiceOver hears it from here (spec §14, §16).
+            if new == .reconnecting && old != .reconnecting {
+                AccessibilityNotification.Announcement("Reconnecting").post()
+            }
             if case .connected = new {
                 wasConnected = true
                 // The people the room hands me on (re)connect were already there: they are the new
