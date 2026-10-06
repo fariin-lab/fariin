@@ -4733,7 +4733,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // same lift and must not treat it as a tap (see `MessagePressStamp`).
             MessagePressStamp.last = Date()
             if let menu = activeMenu {
-                menu.overlay.fingerEnded(at: g.location(in: nil))
+                // Owner audit 2026-10-06 chat #65: only a real lift may pick the highlighted row. A
+                // cancel (banner, call, app resigning) used to take this same path and could run it.
+                if g.state == .ended {
+                    menu.overlay.fingerEnded(at: g.location(in: nil))
+                } else {
+                    menu.overlay.fingerCancelled()
+                }
             } else {
                 squeezeToken &+= 1   // the press died while the squeeze ripened → no menu
                 // AND drop the land gate. beginCustomMenu holds it for 8s expecting the menu (or the

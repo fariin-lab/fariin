@@ -807,6 +807,16 @@ final class CMOverlay: UIView {
         if wasArmed.bar, bar?.selectFocused(at: convert(p, to: bar!)) == true { return }
     }
 
+    /// The initiating press was CANCELLED by the system (a banner, a call, the app resigning), not
+    /// lifted. Owner audit 2026-10-06 chat #65: this used to share `fingerEnded`, so a cancel with a
+    /// row highlighted ran that row, Delete included. A cancel selects nothing: the highlight and
+    /// focus are cleared and the menu stays up for the next touch, the same as a lift over nothing.
+    func fingerCancelled() {
+        installLocalPanIfNeeded()
+        card.clearHighlight()
+        bar?.clearFocus()
+    }
+
     /// After the initiating press ends, later drags are ours (the reference app swaps in a local pan too).
     private func installLocalPanIfNeeded() {
         guard localPan == nil else { return }
