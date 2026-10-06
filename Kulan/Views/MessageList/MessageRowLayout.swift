@@ -436,7 +436,11 @@ enum MessageRowLayout {
                 .font: BubbleMetrics.senderNameFont,
                 .foregroundColor: BubblePalette.senderColor(s.colorSeed)])
             senderNameAttr = attr
-            senderNameSize = BubbleText.size(attr, width: maxContent)
+            // ONE LINE, as it is drawn - owner audit 2026-10-06 chat #80. The label is a plain
+            // one-line UILabel that truncates, but a name wider than `maxContent` was measured
+            // wrapped, so the row reserved two lines above the bubble and drew one: a gap.
+            let oneLine = BubbleText.size(attr, width: .greatestFiniteMagnitude)
+            senderNameSize = CGSize(width: min(oneLine.width, maxContent), height: oneLine.height)
             y += senderNameSize.height + BubbleMetrics.senderNameGap
         }
 
