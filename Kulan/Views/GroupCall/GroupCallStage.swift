@@ -104,7 +104,7 @@ final class GroupCallStage: ObservableObject {
 
     /// Live speech for one tile, from the unpublished store (CallTile's == ignores speech).
     func speech(for tileId: String) -> (isSpeaking: Bool, lastSpokeAt: Date?) {
-        speechById[tileId] ?? (false, nil)
+        speechById[tileId] ?? (isSpeaking: false, lastSpokeAt: nil)
     }
 
     /// `tiles` with the live speech filled in, for the ranking (spec §13 "recently speaking").
