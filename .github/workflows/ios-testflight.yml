@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 830: CALL HOST CONTROLS, ADD PEOPLE TO A LINK CALL, ATTACH SHEET FIXES.
+            BUILD 831: A SCREEN BEFORE YOU JOIN A LINK CALL, CALL LINK SHEET FIXES.
+
+            LINK CALLS: tapping a call link (calls list, Join Call, a link in a chat) first shows your camera full screen with the call's name, camera and mic buttons, and Leave / Join. Join enters with the camera and mic as you left them. A Voice link keeps the camera off.
+            CALL LINK SHEET: the title and Done stay put; the sheet no longer scrolls when everything fits. Call Name comes up from the bottom with Cancel and Save.
+            LINK PAGE: Make a New Link is removed.
+
+            PLEASE TEST: tap a call link row, turn the mic off, Join, and check others hear nothing until you unmute; try Leave; open Call Name on a new link.
+
+            EARLIER (build 830): CALL HOST CONTROLS, ADD PEOPLE TO A LINK CALL, ATTACH SHEET FIXES.
 
             HOST CONTROLS: the person who made the call (and group admins) can mute someone or remove them from the people list. A removed person can't rejoin. The host can End the call for everyone and Revoke the link mid-call. "Waiting for the host to let you in" shows while you wait for approval. All checked on the server, not just in the app.
             LINK CALLS: Add people in the people list opens your chats and sends the link to the people you pick. Make a New Link is on the link's own page (the old link stops working).

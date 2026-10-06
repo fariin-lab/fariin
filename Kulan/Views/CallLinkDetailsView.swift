@@ -31,8 +31,7 @@ struct CallLinkDetailsView: View {
             // and Join, the three ways to pass it on as tiles, the two settings plain, Delete last.
             VStack(spacing: 22) {
                 CallLinkHero(key: current.key, title: current.title) {
-                    let key = current.key
-                    Task { await GroupCallService.shared.joinLink(key: key, video: false) }
+                    GroupCallService.shared.openLobby(key: current.key)   // pre-join screen (2026-10-06)
                 }
                 CallLinkShareRows(saved: current, compact: true)
                 if current.admin {

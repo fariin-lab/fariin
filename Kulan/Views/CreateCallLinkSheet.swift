@@ -196,9 +196,8 @@ struct CreateCallLinkSheet: View {
         // its own, and the join starts at once; the call screen's presenter already holds a beat
         // for this sheet to finish leaving (IncomingGroupCallLayer).
         Task { await CallLinkService.shared.persist(d) }
-        Task { @MainActor in
-            await GroupCallService.shared.joinLink(key: d.key, video: false)
-        }
+        // The pre-join screen first (owner, 2026-10-06); it waits for this sheet to finish leaving.
+        GroupCallService.shared.openLobby(key: d.key)
     }
 
     /// Saved to the server at once. The switch moves first; a refusal puts it back and says so.

@@ -741,7 +741,7 @@ struct CallsView: View {
         HStack(spacing: 12) {
             Button {
                 if bringLiveCallForward() { return }
-                Task { await GroupCallService.shared.joinLink(key: link.key, video: true) }
+                GroupCallService.shared.openLobby(key: link.key)   // pre-join screen (owner, 2026-10-06)
             } label: {
                 HStack(spacing: 12) {
                     CallLinkAvatar(key: link.key, size: 46)

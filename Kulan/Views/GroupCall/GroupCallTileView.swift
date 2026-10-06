@@ -177,7 +177,7 @@ struct GroupCallTileView: View {
 /// The blur is made ONCE per photo url, on a 64px copy, and cached (`TileBackdropBlur`): a live
 /// `.blur(radius:)` re-ran a full-size Gaussian on every frame of every reflow, for every camera-off
 /// tile of a big call (spec §10 performance).
-private struct TileBackdrop: View {
+struct TileBackdrop: View {   // also the pre-join screen's camera-off backdrop
     let photoUrl: String?
     @State private var image: UIImage?
 

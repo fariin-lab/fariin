@@ -130,7 +130,7 @@ struct KulanApp: App {
                 GroupCallService.presentOverTop(GroupCallService.busyNotice)
                 return
             }
-            await GroupCallService.shared.joinLink(key: key, video: false)
+            GroupCallService.shared.openLobby(key: key)   // the pre-join screen first (2026-10-06)
         }
     }
 

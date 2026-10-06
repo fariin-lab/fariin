@@ -112,6 +112,26 @@ final class GroupCallService: ObservableObject {
     @Published var activeCid: String?       // nil = no group call in progress
     @Published var isVideo = false
     @Published var micOn = true
+
+    /// ⛔ THE SCREEN BEFORE A LINK CALL — owner, 2026-10-06, with a screenshot of the reference
+    /// app's: tapping a call link first shows your own camera, the call's name, camera and mic
+    /// buttons, and Leave / Join. Set here, shown by `IncomingGroupCallLayer` (`CallLobbyView`).
+    struct Lobby: Identifiable, Equatable { let key: String; var id: String { key } }
+    @Published var lobby: Lobby?
+    /// The mic as the lobby left it. Read by `connect` (also after an approval wait), cleared with
+    /// the room.
+    private var startMuted = false
+
+    /// Opens the pre-join screen for a link. Busy (a call already up or starting) says so instead.
+    func openLobby(key: String) {
+        guard lobby == nil else { return }
+        guard activeCid == nil, !connecting, !waitingForApproval, CallService.shared.state == .idle else {
+            Self.presentOverTop(Self.busyNotice)
+            return
+        }
+        guard CallLinkKey(text: key) != nil else { Self.presentOverTop(Self.linkGone); return }
+        lobby = Lobby(key: key)
+    }
     @Published var cameraOn = false
     /// A VOICE call link (owner, 2026-10-06): nobody's camera can come on in this room. Set from the
     /// server's join answer; the media server enforces it too (the token can publish the mic only).
@@ -660,8 +680,9 @@ final class GroupCallService: ObservableObject {
 
     /// Joins a call link. With admin approval on, a non-creator is parked in `waitingForApproval`
     /// until the creator answers.
-    func joinLink(key: String, video: Bool) async {
+    func joinLink(key: String, video: Bool, mic: Bool = true) async {
         guard activeCid == nil, !connecting, !waitingForApproval else { return }
+        startMuted = !mic
         notice = nil
         presentsRoomScreen = true
         guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
@@ -734,7 +755,7 @@ final class GroupCallService: ObservableObject {
             cameraLocked = voiceOnly
             if voiceOnly { isVideo = false }
             try await room.connect(url: url, token: token)
-            try await room.localParticipant.setMicrophone(enabled: true)
+            try await room.localParticipant.setMicrophone(enabled: !startMuted)
             // Asked first (see toggleCamera); joining goes ahead camera-off if access is refused.
             let cameraOK = video ? await Self.cameraAllowed() : false
             if cameraOK { try await room.localParticipant.setCamera(enabled: true) }
@@ -746,7 +767,7 @@ final class GroupCallService: ObservableObject {
             case .adhoc(let id): activeCid = id
             case .link(let roomId, _): activeCid = roomId
             }
-            activeRoom = r; micOn = true; cameraOn = cameraOK; connecting = false
+            activeRoom = r; micOn = !startMuted; cameraOn = cameraOK; connecting = false
             waitingForApproval = false
             myRole = CallRole(attribute: d?["role"] as? String)
             return true
@@ -799,6 +820,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
+        startMuted = false
         roomListener?.remove(); roomListener = nil
         requestsListener?.remove(); requestsListener = nil
         myRequestListener?.remove(); myRequestListener = nil

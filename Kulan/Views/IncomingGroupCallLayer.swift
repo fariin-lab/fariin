@@ -6,6 +6,23 @@ import SwiftUI
 struct IncomingGroupCallLayer: View {
     @ObservedObject private var service = GroupCallService.shared
     @State private var showRoom = false
+    /// The pre-join screen for a link (`CallLobbyView`), following `service.lobby` after the same
+    /// wait for a closing sheet as the call screen.
+    @State private var shownLobby: GroupCallService.Lobby?
+
+    /// Waits only while a sheet or the 1:1 screen is still up or on its way out (checked every
+    /// 50ms, at most 0.8s); goes at once when nothing is. A cover asked for mid-dismissal is
+    /// dropped by UIKit.
+    private func waitForClearTop() async {
+        for _ in 0..<16 {
+            guard let top = WebLink.topViewController() else { break }
+            let leaving = top.isBeingDismissed || top.presentingViewController?.isBeingDismissed == true
+                || top.transitionCoordinator != nil
+            let onTop = top.presentingViewController != nil   // a sheet or cover still up
+            if !leaving && !onTop { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -25,17 +42,8 @@ struct IncomingGroupCallLayer: View {
             guard want else { showRoom = false; return }
             Task { @MainActor in
                 // Owner, 2026-10-06: tapping a link row "has more lags". The fixed 0.6s beat was
-                // paid on every join, even from the plain list with nothing to wait for. Now it
-                // waits only while a sheet or the 1:1 screen is still on its way out (checked every
-                // 50ms, at most 0.8s), and goes at once when nothing is.
-                for _ in 0..<16 {
-                    guard let top = WebLink.topViewController() else { break }
-                    let leaving = top.isBeingDismissed || top.presentingViewController?.isBeingDismissed == true
-                        || top.transitionCoordinator != nil
-                    let onTop = top.presentingViewController != nil   // a sheet or cover still up
-                    if !leaving && !onTop { break }
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                }
+                // paid on every join, even from the plain list with nothing to wait for.
+                await waitForClearTop()
                 // Hard cut, no slide-up: the reference app swaps to its call window instantly.
                 if service.presentsRoomScreen {
                     InstantCover.run { showRoom = true }   // a cut, not a slide (see InstantCover)
@@ -67,6 +75,20 @@ struct IncomingGroupCallLayer: View {
                 service.end()              // nobody let me in yet; closing the screen is leaving
             }
         }) { GroupCallView() }
+        .onChange(of: service.lobby) { _, lobby in
+            guard let lobby else { InstantCover.run { shownLobby = nil }; return }
+            Task { @MainActor in
+                await waitForClearTop()
+                if service.lobby == lobby { InstantCover.run { shownLobby = lobby } }
+            }
+        }
+        // On a child, so it never shares a view with the call screen's cover above.
+        .background {
+            Color.clear
+                .fullScreenCover(item: $shownLobby, onDismiss: {
+                    if service.lobby != nil { service.lobby = nil }   // swiped away = Leave
+                }) { CallLobbyView(lobby: $0) }
+        }
     }
 }
 
