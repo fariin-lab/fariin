@@ -2200,11 +2200,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // then dropped it, leaving `.willAnimate` stuck and the checkboxes missing until the next
         // unrelated land. Mirror apply()'s selection branch here.
         if selectionAnimationState == .willAnimate {
-            beginSelectionAnimationWindow()
-            lastRowSigs = rowSignatures
-            pendingSettleHeights.removeAll()
-            let live = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-            if !live.isEmpty { refreshVisible(live) }
+            landSelectionFlip()
             return
         }
         let visibleSet = Set(collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
@@ -2218,6 +2214,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let target = Array(Set(changed).union(heightIds))
         guard !target.isEmpty else { return }
         refreshVisible(target)
+    }
+
+    /// A selection flip lands as a refresh of EVERY live cell (see apply's selection branch).
+    ///
+    /// owner audit 2026-10-06 chat #34: both flip sites used to write `lastRowSigs = rowSignatures`
+    /// and refresh only the visible cells, so a row OFF screen whose content changed in the same land
+    /// (a reaction, an edit, the unread divider) was recorded as handled without being re-measured or
+    /// reconfigured, and no later diff could find it again. The off-screen half of the ordinary
+    /// signature diff now runs first. Parked late heights of visible rows are covered by the live
+    /// refresh; parked heights of off-screen rows stay parked instead of being thrown away.
+    private func landSelectionFlip() {
+        beginSelectionAnimationWindow()
+        let live = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        let liveSet = Set(live)
+        let allChanged = currentIds.filter { rowSignatures[$0] != lastRowSigs[$0] }
+        lastRowSigs = rowSignatures
+        remeasureOffscreenChanged(allChanged, visible: liveSet)
+        reconfigureOffscreenChanged(allChanged, visible: liveSet)
+        pendingSettleHeights.subtract(liveSet)
+        if !live.isEmpty { refreshVisible(live) }
     }
 
     // Split ids into (reconfigure, reload): a row whose RENDER ROUTE flipped since it was last configured
@@ -2571,10 +2587,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // slower way of reaching the same answer â€” and any row the diff misses keeps its checkbox
             // after you have left selection mode.
             if selectionAnimationState == .willAnimate {
-                beginSelectionAnimationWindow()
-                lastRowSigs = rowSignatures
-                let live = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-                if !live.isEmpty { refreshVisible(live) }
+                landSelectionFlip()   // owner audit 2026-10-06 chat #34: off-screen changes too
                 return
             }
             // Same rows, SwiftUI state changed (reaction added/removed, edit, media loaded, read tick).
