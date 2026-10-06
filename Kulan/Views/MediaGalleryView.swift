@@ -60,7 +60,7 @@ struct MediaGalleryView: View {
     // flying home to a tile near the top slides behind the All Media header exactly like the chat's
     // close slides behind the chat header (user report: the gallery close felt different).
     @State private var gridFrame: CGRect = .zero
-    @State private var shareItems: [Any]?
+    @State private var sharingBlocked = false   // the chat turns saving off; Share says so
     @State private var confirmDelete = false
     @State private var deleteFailed = false   // 2026-09-24 fix-all #233
     @State private var shareFailed = false    // 2026-10-06: nothing in the selection could be prepared
@@ -295,9 +295,6 @@ struct MediaGalleryView: View {
                               clipProvider: { gridFrame == .zero ? nil : gridFrame },
                               rectScope: .gallery)
         }
-        .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
-            if let items = shareItems { ActivityView(items: items) }
-        }
         .alert("Delete \(selecting ? "\(selection.count) item\(selection.count == 1 ? "" : "s")" : "item")?",
                isPresented: $confirmDelete) {
             Button("Cancel", role: .cancel) {}
@@ -308,6 +305,9 @@ struct MediaGalleryView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("The server refused the delete. The message is still there for both of you.")
+        }
+        .alert("Sharing is turned off in this chat", isPresented: $sharingBlocked) {
+            Button("OK", role: .cancel) {}
         }
         .alert("Couldn't share", isPresented: $shareFailed) {
             Button("OK", role: .cancel) {}
@@ -996,12 +996,30 @@ struct MediaGalleryView: View {
     }
 
     private func share(_ m: Message) {
-        guard !ChatRestrictions.isOn(.noSaving, cid: cid) else { return }
+        guard !ChatRestrictions.isOn(.noSaving, cid: cid) else { sharingBlocked = true; return }
         prepareShare([m])
     }
     private func shareSelected() {
-        guard !preparingShare, !ChatRestrictions.isOn(.noSaving, cid: cid) else { return }
+        guard !preparingShare else { return }
+        // Owner, 2026-10-06 (Share "still not working"): a chat with saving turned off made this
+        // tap do nothing at all. It now says why.
+        guard !ChatRestrictions.isOn(.noSaving, cid: cid) else { sharingBlocked = true; return }
         prepareShare(all.filter { selection.contains($0.id) })
+    }
+
+    /// ⛔ THE SHARE SHEET IS PRESENTED BY UIKIT, ON THE TOP-MOST SCREEN — owner, 2026-10-06, second
+    /// report: Share "still" did nothing. It went through a SwiftUI `.sheet` hung on this page, and
+    /// this page is itself a full-screen cover; a sheet asked for there while anything else is
+    /// presented or leaving is dropped without a word. Presenting on the top-most controller is the
+    /// path the rest of the app uses (WebLink.topViewController) and cannot be dropped that way.
+    private func presentShareSheet(_ items: [Any]) {
+        guard let top = WebLink.topViewController() else { shareFailed = true; return }
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        if let pop = vc.popoverPresentationController {   // iPad: anchor it somewhere sensible
+            pop.sourceView = top.view
+            pop.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.maxY - 80, width: 1, height: 1)
+        }
+        top.present(vc, animated: true)
     }
 
     /// ⛔ ONE PATH FOR EVERY KIND OF ITEM — owner, 2026-10-06: "the share button sometimes works,
@@ -1029,7 +1047,7 @@ struct MediaGalleryView: View {
             let items: [Any] = out.sorted { $0.0 < $1.0 }.map { $0.1 }
             await MainActor.run {
                 preparingShare = false
-                if items.isEmpty { shareFailed = true } else { shareItems = items }
+                if items.isEmpty { shareFailed = true } else { presentShareSheet(items) }
             }
         }
     }
