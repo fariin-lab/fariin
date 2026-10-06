@@ -261,7 +261,7 @@ final class ThreadMessageCache {
     /// `ThreadRepository.rebuild()` calls `store` on every snapshot — typing flags and read receipts
     /// included — and encoding a screen of messages for a change the screen cannot see is work for
     /// no one.
-    private var lastPersisted: [String: String] = [:]
+    private var lastPersisted: [String: [Message]] = [:]
 
     private func loadFromDisk(_ cid: String) -> [Message]? {
         guard let data = try? Data(contentsOf: Self.fileURL(cid)) else { return nil }
@@ -281,14 +281,15 @@ final class ThreadMessageCache {
         // the disk: after a relaunch the chat opened on the old copy and the reaction was missing
         // until the live listener caught up. A hash of each message's reactions, text, edit and
         // delete state costs microseconds for 60 messages and misses nothing the screen draws.
-        var h = Hasher()
-        for m in slice {
-            h.combine(m.id); h.combine(m.reactions); h.combine(m.text)
-            h.combine(m.edited); h.combine(m.deleted)
-        }
-        let stamp = "\(slice.count)|\(h.finalize())"
-        guard lastPersisted[cid] != stamp else { return }
-        lastPersisted[cid] = stamp
+        //
+        // Owner audit 2026-10-06 chat #20: it missed the media. A photo, video or voice note is
+        // written first with `uploading` and no url, then the url is attached; text, reactions, edit
+        // and delete are the same in both, so the stamp did not move, the file kept the empty first
+        // copy, and a relaunch opened on a placeholder. A hand-picked field list is the bug, for the
+        // fourth time in this code, so the comparison is now the whole message (`Message` is
+        // Equatable): every field, a few microseconds for 60 rows, nothing to forget next time.
+        guard lastPersisted[cid] != slice else { return }
+        lastPersisted[cid] = slice
         // X1: capture the generation now, on the caller's thread, the same way `prewarm` and
         // `loadAsync` do, so this write can tell a sign-out that happened after it was queued from
         // one that happened before.
