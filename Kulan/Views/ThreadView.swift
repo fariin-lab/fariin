@@ -1180,6 +1180,8 @@ struct ThreadView: View {
         .onDisappear {
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            // owner audit 2026-10-06 chat #44: the chat list shows the draft the moment you are back.
+            Drafts.shared.flush()
             // ⛔ A LOCKED RECORDING USED TO KEEP RUNNING AFTER YOU WALKED AWAY — mic live, clock
             // running, nothing anywhere on screen saying so. There is no recording twin of the
             // floating playback bar, so leaving the chat left a take with no timer, no stop and no
@@ -2182,7 +2184,22 @@ struct ThreadView: View {
         // Draft follows every edit (so the chat list is correct the moment you leave), but
         // NOT while inline-editing a sent message — that text is the message, not a draft.
         .onChange(of: input) { _, v in
+            // owner audit 2026-10-06 chat #44: `set` is cheap now; sealing and the disk write are
+            // coalesced inside Drafts and flushed on pause, on leaving and on backgrounding.
             if editingMessage == nil { Drafts.shared.set(cid, v) }
+        }
+        // owner audit 2026-10-06 chat #73: midnight (and a carrier time fix or DST), a time zone change
+        // and a locale or 12/24-hour change move every day label and time on the page while nothing
+        // in the data does. One tick re-keys the grouping, signature and row-model caches.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            dayTick &+= 1
+        }
+        // These two are not promised on the main thread, so they are hopped there before touching state.
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+            DispatchQueue.main.async { dayTick &+= 1 }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+            DispatchQueue.main.async { dayTick &+= 1 }
         }
     }
 
@@ -2207,37 +2224,152 @@ struct ThreadView: View {
     private static let cal = Calendar.autoupdatingCurrent
 
     private func shouldShowDate(at index: Int) -> Bool {
-        let items = repo.items
-        guard index > 0, index < items.count else { return true }
-        return !Self.cal.isDate(items[index - 1].createdAt, inSameDayAs: items[index].createdAt)
+        let rows = rowGeometry
+        guard index >= 0, index < rows.count else { return true }
+        return rows[index].showDate
     }
 
     // Grouping: tight (2pt) inside a same-sender cluster, standard (14pt) on a new
     // cluster. The date separator carries its own gap.
     private func topGap(at index: Int) -> CGFloat {
-        if shouldShowDate(at: index) { return 0 }
-        return isFirstInCluster(at: index) ? 14 : 2
+        let rows = rowGeometry
+        guard index >= 0, index < rows.count else { return 0 }
+        return rows[index].gap
     }
 
     private static let clusterGap: TimeInterval = 300   // 5 min breaks a cluster
 
     // A new cluster starts on a date change, a sender change, or a >5min time gap.
     private func isFirstInCluster(at index: Int) -> Bool {
-        let items = repo.items
-        guard index > 0, index < items.count else { return true }
-        if shouldShowDate(at: index) { return true }
-        if items[index - 1].authorId != items[index].authorId { return true }
-        return items[index].createdAt.timeIntervalSince(items[index - 1].createdAt) > Self.clusterGap
+        let rows = rowGeometry
+        guard index >= 0, index < rows.count else { return true }
+        return rows[index].first
     }
 
     // A cluster ends at the last message, a sender change, a date change, or a >5min gap.
     private func isLastInCluster(at index: Int) -> Bool {
+        let rows = rowGeometry
+        guard index >= 0, index < rows.count else { return true }
+        return rows[index].last
+    }
+
+    /// The day separator's text for the row at `index`, or nil when it has none. Same date the
+    /// separator decision used (see `rowGeometry`), so the label and the pill can never disagree.
+    private func dateLabel(at index: Int) -> String? {
+        let rows = rowGeometry
+        guard index >= 0, index < rows.count else { return nil }
+        return rows[index].dateLabel
+    }
+
+    /// owner audit 2026-10-06 chat #45. One row's grouping and date facts, worked out ONCE per data
+    /// change in a single pass over adjacent pairs. They used to be four index helpers that each
+    /// re-read `repo.items` and re-asked the calendar, called two or three times per row by BOTH the
+    /// signature build and the row-model build: in a 500-800 row window that was thousands of
+    /// calendar calls on the main thread every time a message or a read tick landed.
+    struct RowGeometry {
+        var showDate: Bool
+        var first: Bool
+        var last: Bool
+        var gap: CGFloat
+        var dateLabel: String?
+    }
+    /// A plain class box, like the two caches below: not observed state, so filling it never re-runs
+    /// the body.
+    private final class GeometryCache {
+        var key = ""
+        var rows: [RowGeometry] = []
+        /// Message id -> index. `repo.indexById` is keyed by ROW id (`clientId ?? id`), which is not
+        /// what a reply quote names, so the quote lookup kept its own O(n) scan per reply row.
+        var indexByMessageId: [String: Int] = [:]
+    }
+    @State private var geoCache = GeometryCache()
+    /// owner audit 2026-10-06 chat #73: bumped at midnight, on a time zone change and on a locale or
+    /// 12/24-hour change. Nothing else re-runs the caches while a chat sits open, so "Today" stayed
+    /// "Today" past midnight until the next message happened to land.
+    @State private var dayTick = 0
+
+    /// owner audit 2026-10-06 chat #47. A notice is not a bubble: a pin notice, a call row, a group
+    /// system row and the "update the app" card carry the ACTOR as their author, so the plain
+    /// same-sender test glued them into that person's cluster. Their text before the notice lost its
+    /// avatar and tail, and the text after it lost its sender name and sat 2pt under a pill.
+    /// Mirrors the routing in `rowView` and `MessageRowModelBuilder.model`.
+    private static func breaksCluster(_ m: Message) -> Bool {
+        if m.isCall || m.isSystem { return true }
+        // Every marker starts with this; the cheap prefix test keeps the regex below off plain text.
+        guard m.text.hasPrefix("fariin-") else { return false }
+        if m.pinNotice != nil { return true }
+        return m.isFeatureMarker && m.contactCard == nil && m.locationCard == nil && m.poll == nil
+    }
+
+    private var rowGeometry: [RowGeometry] {
         let items = repo.items
-        guard index >= 0, index < items.count - 1 else { return true }
-        let next = items[index + 1], cur = items[index]
-        if !Self.cal.isDate(cur.createdAt, inSameDayAs: next.createdAt) { return true }
-        if next.authorId != cur.authorId { return true }
-        return next.createdAt.timeIntervalSince(cur.createdAt) > Self.clusterGap
+        let key = "\(repo.itemsVersion)|\(items.count)|\(dayTick)"
+        if geoCache.key == key { return geoCache.rows }
+
+        // owner audit 2026-10-06 chat #48. A row the server has not stamped yet carries THIS phone's
+        // clock. With the clock a few minutes fast near midnight, my pending bubble drew a separator
+        // for tomorrow and lost it a second later when the echo brought the server time (and the same
+        // flicker on the 5 minute cluster gap). The ordering already projects an unstamped row by
+        // its author's measured clock offset (`ThreadRepository.assignOrderKeys`, rule 3); the date
+        // and cluster tests now use the same projection, measured the same way (median of
+        // server stamp minus tap time per author). Stamped rows use the server time, unchanged.
+        var offsets: [String: TimeInterval] = [:]
+        if items.contains(where: { !$0.hasServerTime }) {
+            var samples: [String: [TimeInterval]] = [:]
+            for m in items where m.hasServerTime {
+                if let tap = m.clientTs { samples[m.authorId, default: []].append(m.createdAt.timeIntervalSince(tap)) }
+            }
+            offsets = samples.compactMapValues { list in
+                let s = list.sorted()
+                return s.isEmpty ? nil : s[s.count / 2]
+            }
+        }
+        let when: [Date] = items.map { m in
+            m.hasServerTime ? m.createdAt : m.createdAt.addingTimeInterval(offsets[m.authorId] ?? 0)
+        }
+        let breaks: [Bool] = items.map { Self.breaksCluster($0) }
+
+        let n = items.count
+        // joins[i]: row i continues the cluster of row i-1 (same day, same sender, both bubbles,
+        // within 5 min). sameDay[i]: row i is on the same day as row i-1.
+        var sameDay = [Bool](repeating: false, count: n)
+        var joins = [Bool](repeating: false, count: n)
+        if n > 1 {
+            for i in 1..<n {
+                sameDay[i] = Self.cal.isDate(when[i - 1], inSameDayAs: when[i])
+                joins[i] = sameDay[i]
+                    && items[i - 1].authorId == items[i].authorId
+                    && !breaks[i - 1] && !breaks[i]
+                    && when[i].timeIntervalSince(when[i - 1]) <= Self.clusterGap
+            }
+        }
+        var out: [RowGeometry] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let showDate = i == 0 || !sameDay[i]
+            let first = !joins[i]                       // index 0: joins is false
+            let last = i == n - 1 || !joins[i + 1]
+            out.append(RowGeometry(
+                showDate: showDate, first: first, last: last,
+                gap: showDate ? 0 : (first ? 14 : 2),
+                dateLabel: showDate ? dayLabel(when[i]) : nil))
+        }
+        geoCache.key = key
+        geoCache.rows = out
+        geoCache.indexByMessageId = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) },
+                                               uniquingKeysWith: { a, _ in a })   // first wins, as `first(where:)` did
+        return out
+    }
+
+    /// The loaded message a reply quote points at (owner audit 2026-10-06 chat #45: a dictionary hit
+    /// instead of a scan of the whole window per reply row).
+    private func loadedMessage(id: String) -> Message? {
+        _ = rowGeometry   // makes sure the index is for the current items
+        guard let i = geoCache.indexByMessageId[id] else { return nil }   // not in the loaded window
+        guard i < repo.items.count, repo.items[i].id == id else {
+            return repo.items.first { $0.id == id }   // cannot happen with a current index; stay correct anyway
+        }
+        return repo.items[i]
     }
 
     /// ⛔ TWO FIXES HERE, AND THEY PULL IN OPPOSITE DIRECTIONS, so both are stated.
@@ -2560,7 +2692,9 @@ struct ThreadView: View {
         if shouldShowDate(at: index) {
             // Inline day separator: translucent pill. NOT Liquid Glass (user clarified 2026-07-14:
             // only the TOP floating "Today" pill is glass — the in-chat separators keep this look).
-            Text(dayLabel(msg.createdAt))
+            // owner audit 2026-10-06 chat #48: the label comes from the same projected date the
+            // separator decision used.
+            Text(dateLabel(at: index) ?? dayLabel(msg.createdAt))
                 .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -2686,7 +2820,7 @@ struct ThreadView: View {
                 restricted: iAmMuted,
                 onResend: { m in failedActionTarget = m },   // 2026-09-24 decision D14: ask first
                 onJumpTo: { id in jumpTo(id) },
-                resolveReplyOriginal: { id in repo.items.first { $0.id == id } },
+                resolveReplyOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
                 onTapStory: { id, author, anchor in openStory(id, author, anchorId: anchor) },
                 storyQuoteOpens: true,
                 isHighlighted: msg.id == highlightId,
@@ -2932,11 +3066,19 @@ struct ThreadView: View {
         // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
         // signature path. Reading it here also makes the body observe story changes at all.
         let storiesRepo = StoriesRepository.shared
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)"   // 2026-09-24 feature-audit: edit clock
+        // owner audit 2026-10-06 chat #84: the delivered cutoff is read by the hosted row (the single to
+        // double tick) exactly like the read cutoff, so it keys this cache and sits in each row's value.
+        let deliveredCutoff = repo.otherDeliveredMillis
+        // owner audit 2026-10-06 chat #73: group sender names are read while building a row too.
+        let nameTok = isGroup ? "\(conversation?.names.hashValue ?? 0)" : "-"
+        // owner audit 2026-10-06 chat #45: grouping and date facts from the one-pass cache.
+        let geo = rowGeometry
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
             for (i, m) in repo.items.enumerated() {
+                let g = i < geo.count ? geo[i] : RowGeometry(showDate: true, first: true, last: true, gap: 0, dateLabel: nil)
                 // CLUSTER GEOMETRY BELONGS IN THE SIGNATURE. The corner radii and top gap are read
                 // EAGERLY when a row view is built (rowView passes isFirstInCluster/isLastInCluster and
                 // applies topGap) and then frozen into the cell's UIHostingConfiguration. A hosted cell
@@ -2946,13 +3088,18 @@ struct ThreadView: View {
                 // repaintUikitCells pushes fresh radii onto those on every update; SwiftUI-hosted rows
                 // (every PENDING message, plus media/reply/reaction rows) have no such self-heal, which
                 // is exactly why the user saw it only on 0-mark bubbles.
-                // owner audit 2026-10-06 chat #32: the DATE PILL too. When a page of history lands, the
-                // old oldest row can lose its pill while staying first in its cluster (a different
-                // sender), so the string above did not change and the row kept the pill in a frame
-                // re-measured without it. The pill and the top gap both follow from these three.
-                let cluster = "\(shouldShowDate(at: i) ? "D" : "-")\(isFirstInCluster(at: i))\(isLastInCluster(at: i))"
+                //
+                // owner audit 2026-10-06 chat #32: AND THE DATE PILL AND THE TOP GAP, the same rule a
+                // sixth time. Paging older history in gives the old first row a same-day predecessor:
+                // it loses its pill and takes a different gap while its two cluster flags often stay
+                // the same, so its signature did not move and the cell kept the pill in a shorter frame.
+                let cluster = "\(g.first)\(g.last)|\(g.dateLabel ?? "-")|\(g.gap)"
                 let reactions = m.reactions.isEmpty ? "" : m.reactions.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ",")
-                let read = readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
+                // Ticks: the same gate rowView applies before it hands the cutoffs over (mine, not
+                // blocked, not held), so a row's value moves exactly when its drawn tick can.
+                let ticks = m.authorId == me && !repo.iBlocked && !m.held
+                let read = ticks && readCutoff >= m.createdAt.timeIntervalSince1970 * 1000
+                let delivered = ticks && deliveredCutoff >= m.createdAt.timeIntervalSince1970 * 1000   // chat #84
                 // View-once consumption (audit M2) — the bubble flips to "Viewed" only via reconfigure.
                 let once = m.viewOnce ? String(ViewedOnce.contains(m.id)) : "-"
                 // Search match (audit M3) — matching rows re-render their term highlight per keystroke.
@@ -3005,7 +3152,7 @@ struct ThreadView: View {
                 // recompute at all; this token is what makes the right row differ.)
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -3116,6 +3263,9 @@ struct ThreadView: View {
             "\(editPendingIds.count):\(editPendingIds.hashValue)",
             // The chat's timer draws the icon on messages the server has not stamped yet.
             "\(conversation?.disappearSeconds ?? 0)",
+            // owner audit 2026-10-06 chat #73: the day ("Today" becomes "Yesterday" at midnight, time
+            // zone, 12/24-hour) and the group's sender names are read while building a row as well.
+            "\(dayTick)", "\(conversation?.names.hashValue ?? 0)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
 
@@ -3138,7 +3288,7 @@ struct ThreadView: View {
             searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
-            resolveOriginal: { id in repo.items.first { $0.id == id } },
+            resolveOriginal: { id in loadedMessage(id: id) },   // owner audit 2026-10-06 chat #45
             quoteHiddenByBlock: { repo.isHiddenByBlock(id: $0) },
             storyIsLive: { storyId, author in
                 // Unknown until the stories repo has loaded: assume live, so a reply does not flash
@@ -3149,13 +3299,16 @@ struct ThreadView: View {
             timer: timerSeconds > 0 ? (timerSince, timerSeconds) : nil)
 
         var out: [String: MessageRowModel] = [:]
+        // owner audit 2026-10-06 chat #45: one pass for grouping and dates, shared with the signatures.
+        let geo = rowGeometry
         for (idx, m) in repo.items.enumerated() {
+            let g = idx < geo.count ? geo[idx] : RowGeometry(showDate: true, first: true, last: true, gap: 0, dateLabel: nil)
             guard let model = MessageRowModelBuilder.model(
                 for: m, at: idx, ctx: ctx,
-                isFirstInCluster: isFirstInCluster(at: idx),
-                isLastInCluster: isLastInCluster(at: idx),
-                dateHeader: shouldShowDate(at: idx) ? dayLabel(m.createdAt) : nil,
-                topSpacing: topGap(at: idx)) else { continue }
+                isFirstInCluster: g.first,
+                isLastInCluster: g.last,
+                dateHeader: g.showDate ? (g.dateLabel ?? dayLabel(m.createdAt)) : nil,
+                topSpacing: g.gap) else { continue }
             out[m.rowId] = model
         }
         uikitModelCache.key = key
@@ -5234,6 +5387,10 @@ struct ThreadView: View {
         // Show the bubble INSTANTLY (optimistic), then reconcile when the server echoes it.
         // Native: the bubble just appears (no custom spring), like a plain list insert.
         let clientId = UUID().uuidString
+        // owner audit 2026-10-06 chat #24: the tap time and this send's place in the chat's send line
+        // are taken HERE, synchronously, so two quick sends reach the server in the order tapped.
+        let tapTs = Date().timeIntervalSince1970 * 1000
+        let turn = ChatService.SendTurn.take(cid)
         // The composer's link-preview draft rides the send: the pending bubble carries the plaintext
         // card (its image under a local draft key), and the sealed copy travels with the message.
         // 2026-09-24 feature-audit: not on a send the rules would refuse for it (see `linkCardAllowed`).
@@ -5261,7 +5418,8 @@ struct ThreadView: View {
         // "typing…" every 10s forever and the other side never saw it stop (my own regression).
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
         Task {
-            await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft)
+            await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft,
+                          tapTs: tapTs, turn: turn)
         }
     }
 
@@ -5276,9 +5434,11 @@ struct ThreadView: View {
         lastSendAt = Date()
         if DemoMode.isDemoConversation(cid) { repo.addDemoMessage(marker, from: me); return }   // as send()
         let clientId = UUID().uuidString
+        let tapTs = Date().timeIntervalSince1970 * 1000      // owner audit 2026-10-06 chat #24, as send()
+        let turn = ChatService.SendTurn.take(cid)
         repo.addPending(Message(localText: marker, authorId: me, clientId: clientId, replyTo: nil,
                                 sendState: .sending))
-        Task { await deliver(text: marker, reply: nil, clientId: clientId) }
+        Task { await deliver(text: marker, reply: nil, clientId: clientId, tapTs: tapTs, turn: turn) }
     }
 
     /// Delete-for-me that also CANCELS an unsent message (audit): a pending or failed text has
@@ -5291,6 +5451,11 @@ struct ThreadView: View {
             if let clientId = m.clientId {
                 SendQueue.remove(clientId: clientId)
                 MediaSend.shared.cancel(clientId)   // a media upload mid-flight dies with the bubble
+                // owner audit 2026-10-06 chat #23: and a TEXT send still alive in this process. The
+                // fix above covered the relaunch; an offline send suspended inside `sendText` still
+                // wrote the deleted message when the signal came back. (A no-op for media: only the
+                // text path ever reads this.)
+                ChatService.cancelTextSend(cid: cid, clientId: clientId)
                 repo.removePending(clientId: clientId)
             }
             return
@@ -5782,7 +5947,11 @@ struct ThreadView: View {
     }
 
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
-                         draft: LinkPreviewService.LinkDraft? = nil) async {
+                         draft: LinkPreviewService.LinkDraft? = nil,
+                         tapTs: Double? = nil, turn: ChatService.SendTurn? = nil) async {
+        // owner audit 2026-10-06 chat #24: a place in the send line taken at the tap is given back on
+        // EVERY way out of here (the early return below included), or the next send would wait on it.
+        defer { turn?.finish() }
         // DURABLE: persist the send BEFORE the network call so a mid-send app kill doesn't lose the
         // message — it's re-driven on the next chat open (drainSendQueue). Removed once it lands.
         // 2026-09-24 fix-all #220: a Retry or a re-drive used to send bare text, dropping the
@@ -5812,7 +5981,7 @@ struct ThreadView: View {
             } ?? priorPreview   // 2026-09-24 fix-all #220
             try await ChatService.sendText(cid: cid, text: text, replyTo: reply, clientId: clientId,
                                            group: isGroup ? groupMembers : nil, mentions: mentions,
-                                           preview: preview)
+                                           preview: preview, tapTs: tapTs, turn: turn)
             SendQueue.remove(clientId: clientId)   // landed → no re-drive needed
         } catch {
             // Keep the message as a failed bubble (tap to retry); flag the encryption case. The queue
@@ -8000,15 +8169,29 @@ struct ThreadView: View {
 // bubble flips to "Viewed" and can never be reopened here).
 enum ViewedOnce {
     private static let key = "viewedOnceMessageIds"
+    /// owner audit 2026-10-06 chat #45: an in-memory mirror of the stored list. `contains` runs per
+    /// view-once row on every signature and row-model build, and each call read and bridged the whole
+    /// stored array (up to 500 ids). Only `mark` below writes the key, so the mirror cannot go stale.
+    /// Locked because the voice view and the row builders may ask from different threads.
+    private static let lock = NSLock()
+    private static var mirror: Set<String>?
     static func contains(_ id: String) -> Bool {
-        (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(id)
+        lock.withLock {
+            if let m = mirror { return m.contains(id) }
+            let m = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+            mirror = m
+            return m.contains(id)
+        }
     }
     static func mark(_ id: String) {
-        var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
-        guard !ids.contains(id) else { return }
-        ids.append(id)
-        if ids.count > 500 { ids.removeFirst(ids.count - 500) }   // bounded
-        UserDefaults.standard.set(ids, forKey: key)
+        lock.withLock {
+            var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
+            guard !ids.contains(id) else { return }
+            ids.append(id)
+            if ids.count > 500 { ids.removeFirst(ids.count - 500) }   // bounded
+            UserDefaults.standard.set(ids, forKey: key)
+            mirror = Set(ids)
+        }
     }
 
     /// The server burn for a view-once photo (`consumeOnceImage`: deletes the file and strips the
