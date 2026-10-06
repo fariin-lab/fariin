@@ -407,6 +407,8 @@ struct ChatListTable: UIViewControllerRepresentable {
     var onReachEnd: () -> Void = {}
     /// 2026-09-24 feature-audit: older chats are on their way; the end of the list shows a spinner.
     var loadingMore: Bool = false
+    /// Is a chat pushed over this list? Its true → false edge clears any grey row (2026-10-06).
+    var chatOpen: Bool = false
     /// ⛔ THE VOICE BAR'S ROOM IS GIVEN HERE, EXPLICITLY — owner, 2026-09-29, the THIRD report of the
     /// playing-note bar over "Pinned". The page mounts this table with
     /// `.ignoresSafeArea(.container, edges: [.top, .bottom])` (rows run under the header's soft
@@ -449,6 +451,7 @@ struct ChatListTable: UIViewControllerRepresentable {
         // the toolbar would say "2 Selected" over one visible tick. Syncing after the transaction
         // restores it from the id, which is the only thing that survives a re-sort.
         vc.syncTicks(selected: selection)
+        vc.setChatOpen(chatOpen)
         // ⛔ THE `.update` CASE MOVED INSIDE `apply`, AND THE CALL THAT USED TO BE HERE IS GONE.
         //
         // ⚠️ THIS LINE WAS THE LAST PIECE OF HIS PIN REPORT. It ran after EVERY apply, including
@@ -2037,6 +2040,30 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         }
         guard indexPath.section == last.section, indexPath.row == last.row else { return }
         host?.parent.onReachEnd()
+    }
+
+    /// ⛔ THE GREY ROW, THIRD PASS — owner, 2026-10-06, on 826: open a chat, open the keyboard,
+    /// swipe back, the row is still grey. The 826 fix hung on `viewWillAppear`/`viewDidAppear` of
+    /// this child controller, and on this path UIKit does not reliably send them to a controller
+    /// hosted inside SwiftUI's stack. This one does not ask UIKit: the chat list's own navigation
+    /// path going empty is the fact that no chat is open, and with no chat open and no Select mode
+    /// nothing in this list may be grey. Acts only on the open → closed edge, so the row still
+    /// stays pressed while a chat slides IN.
+    private var chatWasOpen = false
+    func setChatOpen(_ open: Bool) {
+        defer { chatWasOpen = open }
+        guard chatWasOpen, !open else { return }
+        // After the pop's own pass, so nothing the arrival does re-applies a selection under it.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.tableView.isEditing else { return }
+            for ip in self.tableView.indexPathsForSelectedRows ?? [] {
+                self.tableView.deselectRow(at: ip, animated: true)
+            }
+            for cell in self.tableView.visibleCells where cell.isSelected {
+                cell.setSelected(false, animated: true)
+            }
+            self.clearStuckHighlights(in: self.tableView)
+        }
     }
 
     private func clearStuckHighlights(in tableView: UITableView) {

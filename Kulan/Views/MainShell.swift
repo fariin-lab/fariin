@@ -2127,6 +2127,10 @@ struct ChatsView: View {
     /// ⚠️ EVERY CLOSURE HERE IS A LIFT, NOT A REWRITE. Each one is the body the SwiftUI row or menu
     /// already had, moved rather than re-derived, so the behaviour arguments settled over the last
     /// two weeks are not reopened by this migration.
+    /// The keyboard edges the list ignores: all of them while a chat is pushed over it, none on the
+    /// list itself. Spelled out as a property to keep the body's type-check cheap.
+    private var listKeyboardEdges: Edge.Set { path.isEmpty ? Edge.Set() : Edge.Set.all }
+
     private var chatListTable: some View {
         let split = chatSections
         return ChatListTable(
@@ -2244,7 +2248,8 @@ struct ChatsView: View {
             },
             // 2026-09-24 feature-audit: the loading-older row at the end of the list, for a page
             // asked for by scrolling and for a search or filter fetching the whole list.
-            loadingMore: repo.loadingOlder || repo.loadingWholeList
+            loadingMore: repo.loadingOlder || repo.loadingWholeList,
+            chatOpen: !path.isEmpty
         )
     }
 
@@ -2313,6 +2318,14 @@ struct ChatsView: View {
                           // still keeps the first row clear, exactly as `contentInset.bottom` does
                           // for the last one.
                           .ignoresSafeArea(.container, edges: [.top, .bottom])
+                          // ⛔ A CHAT'S KEYBOARD NEVER RESIZES THE LIST UNDER IT — owner, 2026-10-06:
+                          // open a chat, open the keyboard, swipe back, and the list underneath was
+                          // squeezed to the keyboard's height, then jumped to full height when the
+                          // keyboard left. SwiftUI's keyboard avoidance reaches every view in the
+                          // stack, the hidden list too. The reference app's list keeps its height
+                          // while a chat is over it. With no chat open (search typing) the list
+                          // still makes room, so the last results stay reachable above the keys.
+                          .ignoresSafeArea(.keyboard, edges: listKeyboardEdges)
                           // ⚠️ THE SECTION SPLIT MOVED INTO `chatListTable`, WHICH TAKES THE TWO
                           // HALVES SEPARATELY. The branch that used to flatten them into one
                           // `ForEach` when either was empty is gone and is not missed: an empty
