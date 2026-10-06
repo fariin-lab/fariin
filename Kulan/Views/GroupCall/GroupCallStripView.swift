@@ -33,7 +33,7 @@ struct GroupCallStripView: View {
                     if let tile = byId[id] {
                         GroupCallTileView(
                             tile: tile,
-                            track: stage.videoTrack(id),
+                            track: tile.hasVideo ? stage.videoTrack(id) : nil,
                             style: .strip,
                             isActiveSpeaker: stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,

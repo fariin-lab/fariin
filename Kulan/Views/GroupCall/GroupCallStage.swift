@@ -72,8 +72,17 @@ final class GroupCallStage: ObservableObject {
     func videoTrack(_ tileId: String) -> VideoTrack? {
         guard let p = participants[tileId] else { return nil }
         // My own screen is not drawn back to me (a hall of mirrors); my camera is.
-        if !(p is LocalParticipant), let screen = p.firstScreenShareVideoTrack { return screen }
-        return p.firstCameraVideoTrack
+        if !(p is LocalParticipant), let screen = Self.liveVideo(p.firstScreenSharePublication) { return screen }
+        return Self.liveVideo(p.firstCameraPublication)
+    }
+
+    /// A video track only while its publication exists, is not muted and holds a track (spec §14:
+    /// camera off draws the avatar). A muted track keeps its last frame, so a view attached to it
+    /// would show a frozen picture. Every caller (hasVideo, isScreenShare, videoTrack) goes through
+    /// here, so a tile's flags and the track it is handed always agree.
+    private static func liveVideo(_ pub: TrackPublication?) -> VideoTrack? {
+        guard let pub, !pub.isMuted, let track = pub.track, !track.isMuted else { return nil }
+        return track as? VideoTrack
     }
 
     func togglePin(_ tileId: String) {
@@ -129,7 +138,7 @@ final class GroupCallStage: ObservableObject {
                 return isLocal ? "You" : "Member"
             }()
             let photo = isLocal ? (ProfileStore.shared.me?.photoUrl ?? member?.photoUrl) : member?.photoUrl
-            let sharing = p.firstScreenShareVideoTrack != nil
+            let sharing = Self.liveVideo(p.firstScreenSharePublication) != nil
             if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now; newShare = true }
             if !sharing { shareStartedAt[id] = nil }
 
@@ -139,7 +148,7 @@ final class GroupCallStage: ObservableObject {
                 name: name,
                 photoUrl: photo,
                 isLocal: isLocal,
-                hasVideo: p.firstCameraVideoTrack != nil,
+                hasVideo: Self.liveVideo(p.firstCameraPublication) != nil,
                 isScreenShare: sharing,
                 isMuted: !p.isMicrophoneEnabled(),
                 isSpeaking: p.isSpeaking,

@@ -49,7 +49,8 @@ struct GroupCallFocusView: View {
         // unreadable); a camera fills the frame.
         GroupCallTileView(
             tile: tile,
-            track: stage.videoTrack(tile.id),
+            // Camera off and not presenting = the avatar (no frozen last frame).
+            track: (tile.hasVideo || tile.isScreenShare) ? stage.videoTrack(tile.id) : nil,
             style: .focus,
             isActiveSpeaker: stage.activeSpeakerId == tile.id,
             isPinned: stage.pinnedId == tile.id,
