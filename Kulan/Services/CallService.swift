@@ -2332,7 +2332,7 @@ final class CallService: NSObject {
         state = .outgoing
         // iOS's own call UI and the recents list get the nickname too — the lock screen saying one
         // name while the app says another is worse than either being wrong on its own.
-        CallKitManager.shared.startOutgoing(name: otherName)   // native call UI + audio session
+        CallKitManager.shared.startOutgoing(name: otherName, video: video)   // native call UI + audio session (#32: as video)
         CallKitManager.shared.reportConnecting()
 
         ensureMicPermission { [weak self] granted in
@@ -2539,6 +2539,7 @@ final class CallService: NSObject {
             if Self.answeredOnOtherDevice(d), self.state == .incoming, !self.wasAccepted {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
                 self.recordWritten = true
+                self.endedElsewhere = true   // #20: iOS Recents says "answered elsewhere", not missed
                 self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
             } else if self.preNegotiated, !self.wasAccepted, self.state == .incoming {
                 // our own pre-negotiation is in flight — nobody else has answered anything
@@ -2549,6 +2550,7 @@ final class CallService: NSObject {
                 // NOT log a missed call: the answering device writes the real record for this same
                 // callId, and ours would overwrite it with "missed".
                 self.recordWritten = true
+                self.endedElsewhere = true   // #20
                 self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
             }
         }
@@ -3267,9 +3269,14 @@ final class CallService: NSObject {
             guard let self, self.callId == id, self.state != .ended, self.state != .idle else { return }
             self.ringingWatcher?.remove(); self.ringingWatcher = nil
             self.recordWritten = true
+            self.endedElsewhere = true   // #20
             self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
         }
     }
+
+    /// Set right before finishing a ring that another of my devices answered, so the system call
+    /// is reported "answered elsewhere" (owner audit 2026-10-06 #20). Read and cleared by finishCall.
+    private var endedElsewhere = false
 
     /// The "I answered" write, no longer allowed to die silently (the 12:27 call: it never landed,
     /// the caller rang out on an answered call, and nothing anywhere noticed). Still a transaction —
@@ -3725,6 +3732,15 @@ final class CallService: NSObject {
         // Feedback tone for the non-initiating side / system-ended calls. Keep the audio
         // session alive until the tone finishes, THEN clear CallKit (which deactivates it).
         let reason = endReason
+        // What iOS is told (owner audit 2026-10-06 #20): it decides Recents. Answered on my other
+        // phone; a ring that never connected and that nobody here ended (caller cancelled, rang out);
+        // a failure; otherwise the plain remote end.
+        let kitEnd: CallKitManager.EndKind =
+            endedElsewhere ? .answeredElsewhere
+            : reason == .failed ? .failed
+            : (connectedDate == nil && !localUser) ? .unanswered
+            : .remote
+        endedElsewhere = false
         // Owner audit 2026-10-06 #45: which end this is. The tone and idle timers below used to check
         // only `state == .ended`, so a later call that also ended inside an earlier call's window had
         // its own tone and end label cut short by the earlier call's timers.
@@ -3740,11 +3756,11 @@ final class CallService: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + toneDur) {
                 if self.state == .ended, self.endSeq == thisEnd { self.stopTone() }
                 if clearCallKit, CallKitManager.shared.activeUUID == endingUUID {
-                    CallKitManager.shared.reportEnded()
+                    CallKitManager.shared.reportEnded(kitEnd)
                 }
             }
         } else if clearCallKit {
-            CallKitManager.shared.reportEnded()
+            CallKitManager.shared.reportEnded(kitEnd)
         }
 
         // I pressed End myself: close at once, no end label (owner's order 2026-10-04, the

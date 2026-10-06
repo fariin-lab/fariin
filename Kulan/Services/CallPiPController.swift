@@ -30,6 +30,12 @@ final class CallPiPController: NSObject {
     // Idempotent: builds the controller once for a given source view, then just (re)binds the feeds.
     func configure(sourceView: UIView, feeds: CallService.PiPFeeds) {
         guard isSupported else { return }
+        // A call that is over must not grow a new controller: the screen stays up for the 1-2s end
+        // label, any re-render lands here, and a new auto-PiP controller would start picture-in-
+        // picture for a dead call if the app went to the background in that second (owner audit
+        // 2026-10-06, CallKit/PiP section).
+        let state = CallService.shared.state
+        guard state != .ended, state != .idle else { return }
         if controller == nil || self.sourceView !== sourceView {
             buildController(sourceView: sourceView)
         }

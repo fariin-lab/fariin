@@ -61,11 +61,14 @@ final class CallKitManager: NSObject {
 
     // MARK: - Outgoing
     @discardableResult
-    func startOutgoing(name: String) -> UUID {
+    func startOutgoing(name: String, video: Bool = false) -> UUID {
         let uuid = UUID()
         activeUUID = uuid
         activeCallId = nil
         let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .generic, value: name))
+        // A video call shows as video in the system UI and Recents from the start, not only after
+        // the camera is toggled (owner audit 2026-10-06 #32).
+        action.isVideo = video
         controller.request(CXTransaction(action: action)) { error in
             // A FAILED start action (iOS refuses while a cellular call is up, etc.) means CallKit
             // never performs the action and never activates the audio session — so the call could
@@ -164,9 +167,21 @@ final class CallKitManager: NSObject {
             DispatchQueue.main.async { CallService.shared.endFromCallKit() }
         }
     }
+    /// Why a call ended without a user action here. iOS uses the reason for Recents: a ring answered
+    /// on my other phone must not log as missed, and a ring nobody picked up is "unanswered", not
+    /// "remote ended" (owner audit 2026-10-06 #20; the reference app reports each reason).
+    enum EndKind { case remote, unanswered, answeredElsewhere, failed }
+
     /// Remote hung up / call failed — clear the system UI without a user action.
-    func reportEnded() {
-        if let uuid = activeUUID { provider.reportCall(with: uuid, endedAt: nil, reason: .remoteEnded) }
+    func reportEnded(_ kind: EndKind = .remote) {
+        let reason: CXCallEndedReason
+        switch kind {
+        case .remote:            reason = .remoteEnded
+        case .unanswered:        reason = .unanswered
+        case .answeredElsewhere: reason = .answeredElsewhere
+        case .failed:            reason = .failed
+        }
+        if let uuid = activeUUID { provider.reportCall(with: uuid, endedAt: nil, reason: reason) }
         activeUUID = nil; activeCallId = nil
     }
 }
@@ -185,6 +200,10 @@ extension CallKitManager: CXProviderDelegate {
         action.fulfill()
     }
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        // Only OUR call's End tears the call down. A transient busy report (`reportIncoming`'s
+        // second-caller branch) has its own UUID; a Decline tapped on it in the instant it shows
+        // must not end the live call (owner audit 2026-10-06, CallKit section).
+        if let live = activeUUID, live != action.callUUID { action.fulfill(); return }
         CallService.shared.endFromCallKit()   // CallKit already ending -> don't double-report
         activeUUID = nil; activeCallId = nil
         action.fulfill()
@@ -193,6 +212,7 @@ extension CallKitManager: CXProviderDelegate {
     // Mute toggled from the SYSTEM call UI (lock screen / green pill) — mirror it into our engine,
     // else the system mute button did nothing (audio kept sending). Guarded so it can't loop.
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+        if let live = activeUUID, live != action.callUUID { action.fulfill(); return }   // not our call
         if CallService.shared.isMuted != action.isMuted { CallService.shared.toggleMute() }
         action.fulfill()
     }
@@ -202,6 +222,7 @@ extension CallKitManager: CXProviderDelegate {
     // and no explanation, with that dead air counted into the call duration. Now we actually go quiet and
     // tell them, and unhold restores whatever the user's own mute setting was.
     func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
+        if let live = activeUUID, live != action.callUUID { action.fulfill(); return }   // not our call
         CallService.shared.setHeld(action.isOnHold)
         action.fulfill()
     }
