@@ -81,8 +81,19 @@ final class CallService: NSObject {
                 // video at arm's length either way, so audio must go loud.
                 // (This comment used to describe a "camera-off-on-answer model". That is WRONG: three
                 // sites set cameraOn = isVideoCall on answer. Corrected so it stops misleading.)
-                if cameraOn || startedAsVideo { isSpeaker = true; wantsSpeaker = true }
+                // ONCE PER CALL (owner audit 2026-10-06 #6). `.active` is re-entered on every recovery
+                // from .reconnecting, and applying the default each time put a video call the person
+                // had moved to the earpiece back on the loudspeaker after any network blip. The
+                // default is the call's starting point, not a rule that outranks their choice.
+                if !videoSpeakerDefaultApplied, cameraOn || startedAsVideo {
+                    videoSpeakerDefaultApplied = true
+                    isSpeaker = true; wantsSpeaker = true
+                }
                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(isSpeaker ? .speaker : .none)
+                // Back from .reconnecting: re-send "can they hear me". A mute write made while the
+                // link was down can be lost, and the other side's muted icon would stay wrong until
+                // the next toggle (owner audit 2026-10-06 #36). One write per recovery.
+                if oldValue == .reconnecting { broadcastMuteState() }
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 startHeartbeat()             // prove we're alive; detect a force-quit on the other side
@@ -93,9 +104,17 @@ final class CallService: NSObject {
                 startVoiceMonitor()
                 updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
+            if state == .reconnecting, oldValue != .reconnecting, lastPeerBeatAt != nil {
+                // The liveness check counts their silence from HERE, not from their last beat before
+                // the drop (owner audit 2026-10-06 #13). A drop on both phones stops both beats at
+                // once, so the old origin was already ~5s stale, and a listener that had stalled
+                // earlier made it older still: a 1-2s blip then ended a healthy call on the next tick.
+                lastPeerBeatAt = Date()
+            }
             if state == .idle {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
+                videoSpeakerDefaultApplied = false   // the next call gets its own default (#6)
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
                 stopPathMonitor()
@@ -1347,7 +1366,14 @@ final class CallService: NSObject {
         // as a voice.
         guard micLive else { quietSince = nil; return false }
 
-        let threshold = max(Self.hardFloor, floor + Self.voiceGap)
+        // ⚠️ THE GAP SHRINKS IN A QUIET ROOM (owner audit 2026-10-06 #35). A flat `floor + voiceGap`
+        // is never below 0.04, so `hardFloor` could never act and a soft-spoken person under 0.04
+        // was never detected; their own voice then taught the floor and lifted the bar further.
+        // The gap now scales with the background (twice the floor, at least 0.01) and caps at
+        // `voiceGap`: a silent room bottoms out at `hardFloor` as the comment above promises, and a
+        // room with a floor of 0.02 or more gets exactly the old threshold.
+        let gap = min(Self.voiceGap, max(0.01, floor * 2))
+        let threshold = max(Self.hardFloor, floor + gap)
         let loud = level >= threshold
 
         // ⚠️ THE FLOOR TRACKS THE BACKGROUND, NOT THE SOUND. It learns quickly from the moments
@@ -1546,9 +1572,22 @@ final class CallService: NSObject {
     }
 
     // What the other side needs to know is simply "can they hear me right now", which is mute OR hold.
-    private func broadcastMuteState() {
+    ///
+    /// NOT FIRE-AND-FORGET (owner audit 2026-10-06 #36): a write that fails left the other side's
+    /// muted icon wrong until the next toggle. A failed write is retried a few times, and only while
+    /// the same call is live and the value is still the one we meant to send, so a stale retry can
+    /// never overwrite a newer toggle. Recovery from .reconnecting also re-sends (see `state`).
+    private func broadcastMuteState(attempt: Int = 0) {
         guard let id = callId else { return }
-        db.collection("calls").document(id).updateData(["muted.\(me)": isMuted || isHeld])
+        let value = isMuted || isHeld
+        db.collection("calls").document(id).updateData(["muted.\(me)": value]) { [weak self] err in
+            guard let self, err != nil, attempt < 3 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.callId == id, self.inLiveCall,
+                      (self.isMuted || self.isHeld) == value else { return }
+                self.broadcastMuteState(attempt: attempt + 1)
+            }
+        }
     }
 
     // MARK: - Peer liveness (force-quit detection)
@@ -1604,6 +1643,9 @@ final class CallService: NSObject {
     // tap made during "Calling…" (the "speaker sometimes doesn't work" bug). Intent is remembered
     // here and re-asserted whenever the system resets the route out from under it.
     private var wantsSpeaker = false
+    /// The video-call speaker default has been applied for THIS call (owner audit 2026-10-06 #6).
+    /// Reset at .idle. See the `.active` branch of `state`.
+    private var videoSpeakerDefaultApplied = false
 
     func toggleSpeaker() {
         isSpeaker.toggle()
@@ -1631,8 +1673,11 @@ final class CallService: NSObject {
         guard routeObserver == nil else { return }
         updateAudioRoute()
         routeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.updateAudioRoute()
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+                // The reason tells a person's pick in the system picker apart from a session reset
+                // (owner audit 2026-10-06 #7, see updateAudioRoute).
+                let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                self?.updateAudioRoute(reason: raw.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) })
         }
         startAudioRecoveryObservation()
     }
@@ -1662,6 +1707,10 @@ final class CallService: NSObject {
                     // Not while on hold: there the silence is deliberate and CallKit owns the unhold.
                     guard self.inLiveCall, !self.isHeld,
                           !RTCAudioSession.sharedInstance().isAudioEnabled else { return }
+                    // Re-set the call's category and mode FIRST (audit 05, low): enabling audio alone
+                    // skipped the half of didActivate that configures the session, so a speaker call
+                    // could come back on the earpiece-tuned echo canceller until the next route event.
+                    self.applyCallAudioCategory()
                     RTCAudioSession.sharedInstance().isAudioEnabled = true
                     try? AVAudioSession.sharedInstance().overrideOutputAudioPort(self.isSpeaker ? .speaker : .none)
                 }
@@ -1681,20 +1730,39 @@ final class CallService: NSObject {
         if let o = mediaResetObserver { NotificationCenter.default.removeObserver(o); mediaResetObserver = nil }
     }
 
-    private func updateAudioRoute() {
+    private func updateAudioRoute(reason: AVAudioSession.RouteChangeReason? = nil) {
         let session = AVAudioSession.sharedInstance()
         let outputs = session.currentRoute.outputs
+        let previous = audioRoute
         if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
         else if outputs.contains(where: { $0.portType == .builtInReceiver }) || outputs.isEmpty { audioRoute = .earpiece }
         else { audioRoute = .external }
         updateInCallScreenBehavior()
+        // Any external playback device around? Bluetooth headsets surface as available INPUTS
+        // during a playAndRecord call; a currently-external route obviously counts too.
+        let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
+                                                  .headphones, .headsetMic, .carAudio]
+        let hasExternalInput = (session.availableInputs ?? []).contains { external.contains($0.portType) }
         // The user asked for speaker but a system reset (CallKit re-activation at connect, WebRTC
         // reconfigure) bounced the route back to the earpiece → RE-ASSERT the choice. External devices
         // (AirPods/car) always win — never fight a real device route.
         if wantsSpeaker, audioRoute == .earpiece {
-            try? session.overrideOutputAudioPort(.speaker)
-            // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
-            return
+            // ⚠️ UNLESS THE PERSON PICKED "iPhone" (owner audit 2026-10-06 #7). On a video call
+            // wantsSpeaker is kept on purpose, and only the in-app toggle could clear it, so choosing
+            // the earpiece in the system picker bounced straight back to the speaker. The picker only
+            // exists while an external device is around (CallView.speakerCircle), and with one
+            // connected a reset lands on the device, not the earpiece. So: device still available,
+            // the route MOVED here, and the cause is not a category reset or a device leaving → that
+            // is a deliberate pick, and intent follows it.
+            let pickReason = reason.map { $0 != .categoryChange && $0 != .oldDeviceUnavailable } ?? false
+            let deliberatePick = hasExternalInput && previous != .earpiece && pickReason
+            if deliberatePick {
+                wantsSpeaker = false
+            } else {
+                try? session.overrideOutputAudioPort(.speaker)
+                // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
+                return
+            }
         }
         // ⚠️ AND THE SAME RE-ASSERT AGAINST BLUETOOTH, which is his report (2026-08-14: with AirPods
         // in, picking Speaker in the system picker jumps straight back to the AirPods, but picking
@@ -1715,7 +1783,16 @@ final class CallService: NSObject {
             try? session.overrideOutputAudioPort(.speaker)
             return
         }
-        if audioRoute == .speaker { speakerLandedAt = Date(); wantsSpeaker = true }
+        if audioRoute == .speaker {
+            // Stamp only a real ARRIVAL on the speaker (audit 05, low). Every notification that merely
+            // found the speaker (our own setMode below, a CallKit re-assert) used to refresh it, so
+            // the window above could reject AirPods connecting at any moment near those events. And
+            // not again inside an open window, so a headset that keeps reclaiming the route is
+            // fought for two seconds at most, never ping-ponged indefinitely.
+            let windowOpen = speakerLandedAt.map { Date().timeIntervalSince($0) < 2 } ?? false
+            if previous != .speaker, !windowOpen { speakerLandedAt = Date() }
+            wantsSpeaker = true
+        }
         // Keep the toggle state honest no matter WHAT moved the route (picker, AirPods
         // connecting mid-call, CallKit) — the button highlight reads from this.
         isSpeaker = audioRoute == .speaker
@@ -1740,11 +1817,6 @@ final class CallService: NSObject {
            !(speakerLandedAt.map { Date().timeIntervalSince($0) < 2 } ?? false) {
             wantsSpeaker = false
         }
-        // Any external playback device around? Bluetooth headsets surface as available INPUTS
-        // during a playAndRecord call; a currently-external route obviously counts too.
-        let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
-                                                  .headphones, .headsetMic, .carAudio]
-        let hasExternalInput = (session.availableInputs ?? []).contains { external.contains($0.portType) }
         externalAudioAvailable = hasExternalInput || audioRoute == .external
     }
 
@@ -1810,7 +1882,30 @@ final class CallService: NSObject {
     }
     private func stopRingback() {
         ringbackWatchdog?.invalidate(); ringbackWatchdog = nil
+        let wasPlaying = ringbackPlayer != nil
         ringbackPlayer?.stop(); ringbackPlayer = nil
+        // HAND THE SESSION BACK TO THE CALL (owner audit 2026-10-06 #8). startRingback swapped the
+        // options to include .mixWithOthers and nothing ever swapped them back, so the CALLER's whole
+        // call stayed mixable: music in another app kept playing under it, while the callee's call
+        // (no ringback) was exclusive. Only when the ringback ends because they ACCEPTED: a ringback
+        // that ends with the call (cancel, no answer) is followed by the end tone, which wants the
+        // mixable session anyway.
+        if wasPlaying, calleeAccepted { applyCallAudioCategory() }
+    }
+
+    /// The call's own session setup: the category and Bluetooth options CallKit's didActivate sets,
+    /// WITHOUT the .mixWithOthers the ringback and tones need. Mode follows where the sound comes out,
+    /// the same rule as updateAudioRoute (loudspeaker → .videoChat, anything else → .voiceChat).
+    /// The speaker override is re-applied after, since a category change can drop it.
+    private func applyCallAudioCategory() {
+        let session = AVAudioSession.sharedInstance()
+        let onSpeaker = session.currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+        let s = RTCAudioSession.sharedInstance()
+        s.lockForConfiguration()
+        try? s.setCategory(.playAndRecord, mode: onSpeaker ? .videoChat : .voiceChat,
+                           options: [.allowBluetooth, .allowBluetoothA2DP])
+        s.unlockForConfiguration()
+        try? session.overrideOutputAudioPort(isSpeaker ? .speaker : .none)
     }
 
     // The ringback must SURVIVE call-setup session churn: WebRTC's audio unit and CallKit both
