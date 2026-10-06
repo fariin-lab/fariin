@@ -29,13 +29,19 @@ struct IncomingGroupCallLayer: View {
             // A real, zero-sized anchor so the cover and listeners below always have a view to
             // hang on, and nothing takes space or touches while no invitation is up.
             Color.clear.frame(width: 0, height: 0).allowsHitTesting(false)
-            if let invite = service.incomingInvite {
+            // owner, 2026-10-06: not for a room already declined on the lock screen (the list of
+            // invitations can load after that decline).
+            if let invite = service.incomingInvite, !GroupCallRinging.shared.isDeclined(invite.roomId) {
                 IncomingGroupCallScreen(invite: invite)
                     .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: service.incomingInvite?.roomId)
         .onAppear { service.startInviteListener() }
+        // owner, 2026-10-06: and the service forgets that invitation too, so nothing waits behind.
+        .onChange(of: service.incomingInvite?.roomId) { _, roomId in
+            if let roomId, GroupCallRinging.shared.isDeclined(roomId) { service.declineInvite() }
+        }
         // Held a beat: the start usually comes from a sheet or the 1:1 screen closing on the same
         // tap, and a cover asked for mid-dismissal is dropped by UIKit.
         .onChange(of: service.presentsRoomScreen) { _, want in
@@ -53,6 +59,8 @@ struct IncomingGroupCallLayer: View {
         // Nothing rings during a 1:1. Once it is over, look again, after the handover to a
         // multi-person call has had its moment to join (so its own invite never flashes up).
         .onChange(of: CallService.shared.state) { _, state in
+            // owner, 2026-10-06: one ring at a time; the system ring for a group call stops too.
+            if state != .idle { GroupCallRinging.shared.oneToOneTookOver() }
             guard state == .idle else { service.reevaluateInvites(); return }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -110,10 +118,14 @@ private struct IncomingGroupCallScreen: View {
                     .font(.subheadline).foregroundStyle(.white.opacity(0.7))
                 Spacer()
                 HStack {
-                    button("Decline", icon: "phone.down.fill", tint: Color(.systemRed)) { service.declineInvite() }
+                    // owner, 2026-10-06: both go through GroupCallRinging, so the system ring for the
+                    // same call stops with them and a decline reaches the caller.
+                    button("Decline", icon: "phone.down.fill", tint: Color(.systemRed)) {
+                        GroupCallRinging.shared.declineFromScreen(invite)
+                    }
                     Spacer()
                     button("Join", icon: invite.video ? "video.fill" : "phone.fill",
-                           tint: Color(.systemGreen)) { service.acceptInvite() }
+                           tint: Color(.systemGreen)) { GroupCallRinging.shared.acceptFromScreen(invite) }
                 }
                 .padding(.horizontal, 48).padding(.bottom, 40)
             }

@@ -97,6 +97,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
                       for type: PKPushType, completion: @escaping () -> Void) {
         guard type == .voIP else { completion(); return }
         let d = payload.dictionaryPayload
+        // owner, 2026-10-06: a group ring (an invitation to a multi-person call, or a group chat's
+        // call starting). GroupCallRinging reports a call to CallKit on EVERY path and `completion`
+        // runs from that report, as iOS requires; nothing is awaited before it. The registry's
+        // queue is main; anywhere else still gets its CallKit report.
+        if d["kind"] as? String == "groupring" {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { GroupCallRinging.shared.handlePush(d, completion: completion) }
+            } else {
+                CallKitManager.shared.reportAndDiscard(completion: completion)
+            }
+            return
+        }
         let callId = d["callId"] as? String ?? ""
         // 2026-09-24 audit: no call id means no call document to ring for (an empty id is not a
         // valid Firestore path). Still reported to CallKit, as iOS requires, then ended at once.
@@ -105,6 +117,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let uid = d["callerUid"] as? String ?? ""
         let photo = d["photo"] as? String
         let video = (d["type"] as? String) == "video"   // M1: show the right CallKit UI for a video call
+        // owner, 2026-10-06: one ring at a time. A group ring still up stops for the 1:1 call;
+        // nothing below changes.
+        if Thread.isMainThread { MainActor.assumeIsolated { GroupCallRinging.shared.oneToOneTookOver() } }
         // iOS 13+: MUST report to CallKit before completion or the app is terminated.
         CallService.shared.prepareIncoming(callId: callId, name: name, uid: uid, photo: photo, video: video)
         CallKitManager.shared.reportIncoming(callId: callId, name: name, video: video,
@@ -336,6 +351,12 @@ enum Push {
     static func saveVoipToken() {
         guard let token = latestVoipToken, let uid = Auth.auth().currentUser?.uid else { return }
         saveToken(field: "voipTokens", token: token, uid: uid)
+        // owner, 2026-10-06: the same token again under `groupRingTokens`. That field tells the
+        // server this build understands a group ring; a phone without it keeps getting the plain
+        // notification. Written to the private push doc ONLY: it never lived on the user doc, so
+        // there is nothing to scrub there (and `saveToken`'s scrub would create the field).
+        Firestore.firestore().collection("users").document(uid).collection("push").document("tokens")
+            .setData(["groupRingTokens": FieldValue.arrayUnion([token])], merge: true)
         // And on this device's row, so a remote sign-out can pull this device's ring token.
         Task { @MainActor in DeviceRegistry.shared.recordVoipToken(token) }
     }
@@ -435,7 +456,11 @@ enum Push {
         for attempt in 0..<3 {
             let batch = db.batch()
             batch.updateData(updates, forDocument: doc)
-            batch.setData(updates, forDocument: doc.collection("push").document("tokens"), merge: true)
+            // owner, 2026-10-06: the group ring token leaves with the VoIP token. Push doc only:
+            // the user doc never had the field, and its rules must not be asked about it.
+            var pushUpdates = updates
+            if let voip = latestVoipToken { pushUpdates["groupRingTokens"] = FieldValue.arrayRemove([voip]) }
+            batch.setData(pushUpdates, forDocument: doc.collection("push").document("tokens"), merge: true)
             do { try await batch.commit(); return }
             catch {
                 if attempt == 2 { return }
