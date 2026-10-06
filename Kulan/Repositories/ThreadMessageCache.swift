@@ -213,22 +213,34 @@ final class ThreadMessageCache {
         let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                  appropriateFor: nil, create: true))
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        var dir = base.appendingPathComponent("threads-v1", isDirectory: true)
-        // ⛔ NEVER INTO A BACKUP. This folder holds the last sixty FULLY DECRYPTED messages of every
-        // conversation, and it was the one decrypted store in the app without this line — the audio
-        // cache, the video cache, the image cache and the gif cache all set it.
-        //
-        // That made it the single path by which chat plaintext leaves the phone. The identity key is
-        // written `…ThisDeviceOnly`, so it never enters a backup and cannot be restored elsewhere;
-        // the text it had already decrypted went anyway, and an unencrypted local backup is readable
-        // by anyone holding it.
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
-                                                 attributes: [.protectionKey: protection])
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? dir.setResourceValues(values)
+        let dir = base.appendingPathComponent("threads-v1", isDirectory: true)
+        makeDirectory(dir)
         return dir
     }()
+
+    /// Create the folder protected and OUT OF BACKUP.
+    ///
+    /// ⛔ NEVER INTO A BACKUP. This folder holds the last sixty FULLY DECRYPTED messages of every
+    /// conversation, and it was the one decrypted store in the app without this line — the audio
+    /// cache, the video cache, the image cache and the gif cache all set it.
+    ///
+    /// That made it the single path by which chat plaintext leaves the phone. The identity key is
+    /// written `…ThisDeviceOnly`, so it never enters a backup and cannot be restored elsewhere;
+    /// the text it had already decrypted went anyway, and an unencrypted local backup is readable
+    /// by anyone holding it.
+    ///
+    /// Owner audit 2026-10-06 chat #22: this used to run once, in the `directory` initialiser. The
+    /// flag lives on the FOLDER, and `removeAll` (sign-out) deletes the folder, so the next account
+    /// signed in without a relaunch had its decrypted messages written into a fresh folder `persist`
+    /// made without the flag — straight into the backup. Every creation goes through here now.
+    private static func makeDirectory(_ dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.protectionKey: protection])
+        var flagged = dir
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? flagged.setResourceValues(values)
+    }
 
     /// Two screens, not the 200 held in memory. The first frame needs what the first frame shows;
     /// the listener has the rest of the history a moment later, and writing 200 decrypted messages
@@ -290,7 +302,10 @@ final class ThreadMessageCache {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .secondsSince1970
             guard let data = try? encoder.encode(slice) else { return }
-            try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            // #22: a sign-out deleted the folder; re-create it WITH the backup exclusion, never bare.
+            if !FileManager.default.fileExists(atPath: Self.directory.path) {
+                Self.makeDirectory(Self.directory)
+            }
             let url = Self.fileURL(cid)
             try? data.write(to: url, options: [.atomic])
             try? FileManager.default.setAttributes([.protectionKey: Self.protection],
