@@ -38,9 +38,10 @@ struct GroupCallParticipantsSheet: View {
     /// After "Make a new link" this is the new one, so Share and Copy hand out the link that works.
     private var link: ActiveCallLink? { service.currentLink }
 
-    /// The link's owner, as the server's join answer named me. Hiding these is a convenience; the
-    /// link functions check the creator themselves.
-    private var ownsLink: Bool { link != nil && service.myRole == .owner }
+    /// The link's owner, as the server's join answer named me (or the link doc's `creatorUid`, which
+    /// only the server writes, for a server that does not send a role yet). Hiding these is a
+    /// convenience; the link functions check the creator themselves.
+    private var ownsLink: Bool { link != nil && (service.myRole == .owner || service.isLinkCreator) }
 
     private struct Row: Identifiable {
         let id: String
@@ -223,7 +224,10 @@ struct GroupCallParticipantsSheet: View {
     /// Their role as the server signed it into their join pass, never a flag of ours.
     private func role(of t: CallTile) -> CallRole {
         _ = service.rolesVersion   // redraw when anyone's attributes change
-        return CallRole(attribute: stage.participant(t.id)?.attributes["role"])
+        let attr = stage.participant(t.id)?.attributes["role"]
+        // No attribute (a server without roles yet): the tile's host mark, itself server-sourced.
+        if attr == nil, t.isHost { return .owner }
+        return CallRole(attribute: attr)
     }
 
     /// The access table: never myself (any of my devices), and only the roles my role reaches.

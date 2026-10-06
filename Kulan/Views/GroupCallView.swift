@@ -60,6 +60,7 @@ struct GroupCallView: View {
         .onChange(of: service.rolesVersion) { _, _ in syncHosts() }
         .onChange(of: stage.tiles.count) { _, _ in syncHosts() }
         .onChange(of: service.myRole) { _, _ in syncHosts() }   // set once the room is up
+        .onChange(of: service.isLinkCreator) { _, _ in syncHosts() }
     }
 
     /// The tiles' host mark: whoever the server signed in as owner (LiveKit attribute `role`, group
@@ -72,6 +73,9 @@ struct GroupCallView: View {
         for p in everyone where CallRole(attribute: p.attributes["role"]) == .owner {
             if let uid = p.identity?.stringValue, !uid.isEmpty { hosts.insert(uid) }
         }
+        // A server without roles yet: the link's creator (server-written `creatorUid`) as before.
+        let me = service.myUid
+        if service.isLinkCreator && !me.isEmpty { hosts.insert(me) }
         stage.hostUids = hosts
     }
 
