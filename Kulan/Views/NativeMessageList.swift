@@ -2498,7 +2498,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 return
             }
             // A jump with no data change (target already in the loaded window), behind the gate.
-            if let target = scrollTarget { performScrollTarget(target) }
+            // owner audit 2026-10-06 chat #91: before the first land `perform` refuses every move
+            // and the binding is one-shot, so a jump here was lost. It waits for the land instead.
+            if let target = scrollTarget {
+                if didFirstLand { performScrollTarget(target) } else { holdScrollTargetForFirstLand(target) }
+            }
             // Selection flip: refresh EVERY live cell, not the signature-diffed subset. Entering or
             // leaving selection changes the render route of every row at once, so a per-row diff is just a
             // slower way of reaching the same answer â€” and any row the diff misses keeps its checkbox
@@ -2537,7 +2541,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // new message in one emission) is handled by the same delta, not classified.
         let oldSet = Set(currentIds)
         let newlyNewest = ids.reversed().prefix(while: { !oldSet.contains($0) }).count
-        let wasAtNewest = isAtNewest
+        let oldNewestId = currentIds.last   // read now: `currentIds` is replaced before the glide test
 
         // Content changes that BATCH with an ids change (a reaction or read-tick arriving in the same repo
         // emission as a new message â€” constant with Firestore listener batches) must still reconfigure:
@@ -2575,6 +2579,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids â€” a
         // dirty layout preparing after the mutation would mix old counts with new heights.
         collectionView.layoutIfNeeded()
+        // owner audit 2026-10-06 chat #90: asked AFTER the settle above, never before it. `isAtNewest`
+        // reads the layout's content height, and a height change still waiting to be prepared made a
+        // reader who really was at the newest read as "not at it", so the incoming bubble did not glide.
+        let wasAtNewest = isAtNewest
         let beforeY = frameMinY(for: currentIds)
         // ⛔ THE ONE SITE WHERE THE BIAS IS A RUNTIME QUESTION, because this method lands every kind
         // of change. The reference app picks the bias from the load type: top-biased ONLY for
@@ -2654,6 +2662,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             landedAnchor = landed.anchor
             anchorsResolved = true
         }
+        // owner audit 2026-10-06 chat #39: a reaction that lands together with another change is
+        // reconfigured by THIS apply, and the cell reads the growth direction at configure time. It
+        // used to read whatever the last `refreshVisible` left. Decided here for this pass: the row
+        // grew up from its bottom only when the bottom-biased delta took its growth, which is when
+        // every changed row sits above the anchor row; otherwise it grew down from its top.
+        if !contentChanged.isEmpty {
+            reactionGrowsFromBottom = {
+                guard !pagedOlder, let anchorId = landedAnchor?.id,
+                      let anchorIdx = ids.firstIndex(of: anchorId) else { return false }
+                return contentChanged.allSatisfy { id in (ids.firstIndex(of: id) ?? anchorIdx) < anchorIdx }
+            }()
+        }
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
@@ -2667,6 +2687,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         layout.generation += 1   // ids/heights changed â†’ next prepare() rebuilds frames
 
         if !didFirstLand {
+            // owner audit 2026-10-06 chat #91: this branch never used the jump, and it had already
+            // been taken out of `pendingScrollTarget` above, so it was lost. It waits for the land.
+            if let target = scrollTarget { holdScrollTargetForFirstLand(target) }
             dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
                 self?.performFirstLandIfReady()
             }
@@ -2686,22 +2709,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // sends never bump `sendTick`, which is the text path's.)
         // `ids.count > oldSet.count`: the list GREW. A pending bubble swapped for its confirmed copy
         // (same count, new id) is not a new send and must not pull a reader who has scrolled away.
+        // owner audit 2026-10-06 chat #52: a send from THIS phone, not merely a message by me. `isMe`
+        // is also true for what my other phone sent, which pulled a reader out of history. Every
+        // optimistic row this phone inserts carries a send state (ticks `.sending` / `.failed`); a
+        // message that arrives from the server, from any device, has none.
         let ownSendLanded = newlyNewest > 0 && ids.count > oldSet.count
             && ids.suffix(newlyNewest).contains { id in
                 switch rowModels[id]?.content {
-                case .bubble(let b)?: return b.isMe
+                case .bubble(let b)?: return b.isMe && (b.meta.tick == .sending || b.meta.tick == .failed)
                 case .call(let c)?: return c.mine
                 default: return false
                 }
             }
-        let glide = ((wasAtNewest && newlyNewest == 1) || ownSendLanded)
+        // owner audit 2026-10-06 chat #53: two or more messages arriving in one emission at the newest
+        // glide like one does. Only a true append (the old newest row still sits right above the new
+        // rows), so a window swap is not mistaken for arrivals.
+        let pureAppend = newlyNewest > 0 && oldNewestId != nil
+            && ids.dropLast(newlyNewest).last == oldNewestId
+        let glide = ((wasAtNewest && (newlyNewest == 1 || pureAppend)) || ownSendLanded)
             && scrollTarget == nil && !isUserScrolling
         if glide { sendAnimating = true }
+        // owner audit 2026-10-06 chat #25: my own send that lands under a finger is not dropped. The
+        // glide is refused while the finger is down, so the move is parked for the lift, the way
+        // every automatic jump waits (`perform` parks it in `pendingNewestJump`).
+        let parkOwnSendForLift = ownSendLanded && scrollTarget == nil && !glide
         // The row this send was waiting for has landed: the hold is over, and `sendAnimating` (or,
         // for a row that does not glide, the ordinary path) owns the offset from here. Cleared for
-        // ANY new row, not only a glide — a send that arrived while the reader is up in history
-        // must not keep the hold either.
-        if newlyNewest > 0 { sendHoldUntil = .distantPast }
+        // a new row of MINE from anywhere in the list, not only a glide — a send that arrived while
+        // the reader is up in history must not keep the hold either.
+        // owner audit 2026-10-06 chat #92: only my own row ends the hold. Someone else's message
+        // landing first ended it early and let the composer's shrink walk the content down before
+        // my row arrived. A hold whose row never lands still expires on its own deadline.
+        if ownSendLanded { sendHoldUntil = .distantPast }
         if adjustment != 0 { layout.pendingContentOffsetAdjustment = adjustment }
 
         // THE GLIDE STARTS ON THE FRAME THE ROW LANDS. It used to start in the apply's completion,
@@ -2718,6 +2757,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let startGlide = { [weak self] in
             guard let self, glide, !glideStarted else { return }
             glideStarted = true
+            // owner audit 2026-10-06 chat #50: the reader is being moved on purpose, so the one-shot
+            // landing re-pin must not pull them back to where the chat opened.
+            self.awaitingInitialRepin = false
             self.collectionView.layoutIfNeeded()
             // ⚠️ TEMPORARY: one of three places can animate a reader to the newest message, and
             // his 717 log shows one of them doing it 2.3s after every re-entry. Naming them is
@@ -2765,8 +2807,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // reader moved — and re-pinning them from a recorded distance there would fight every
                 // ordinary message arrival with whatever rounding the record carries.
                 self.collectionView.layoutIfNeeded()
-                self.restoreRecordedDistance()
+                // owner audit 2026-10-06 chat #28: the distance only. The return-trip anchor belongs
+                // to `viewDidAppear`; taking it here used it up before the return had finished.
+                self.restoreRecordedDistance(useReturnAnchor: false)
             }
+            if parkOwnSendForLift { self.perform(.newest(animated: true)) }
             // ⛔ THE BOTTOM ANCHOR CANNOT SEE ITS OWN ROW GROW — owner, 2026-09-26 (a reaction on the
             // last message went under the composer). When the bottom-most visible row IS the one that
             // changed size, its top does not move, the delta is zero, and the growth goes downward past
@@ -2819,7 +2864,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     private var selectionWindowSeq = 0
 
+    /// owner audit 2026-10-06 chat #91: a jump that arrives before the first land waits for it in
+    /// `pendingScrollTarget`, and `performFirstLandIfReady` sends it through the ordinary gate once the
+    /// chat is drawn. "BOTTOM" is not held: before the land it is already answered by the land itself.
+    private func holdScrollTargetForFirstLand(_ target: String) {
+        guard target != "BOTTOM" else { return }
+        pendingScrollTarget = target
+    }
+
     private func performScrollTarget(_ target: String) {
+        // owner audit 2026-10-06 chat #50: a jump is the reader being moved on purpose, so the
+        // one-shot landing re-pin must not pull them back to where the chat opened.
+        awaitingInitialRepin = false
         // Sentinel: the scroll-to-latest button and an own send while scrolled up route here.
         if target == "BOTTOM" {
             perform(.newest(animated: true))
@@ -2903,6 +2959,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             DispatchQueue.main.async { [weak self] in self?.performFirstLandIfReady() }
             return
         }
+        // owner audit 2026-10-06 chat #54: the rows are measured BEFORE the insets, not after. The top
+        // inset of a short chat is how far the rows fall short of the screen (`bottomAlignShortfall`),
+        // read from the layout's content height. When the first apply came before the list had a
+        // width, nothing was measured yet, so that inset was built from placeholder heights and the
+        // first frame showed a wrong gap until the next layout pass. Measuring only needs the width.
+        measureMissing(currentIds, width: collectionView.bounds.width, landingOnly: true)
+        layout.generation += 1
+        layout.invalidateLayout()
+        collectionView.layoutIfNeeded()
         updateInsets()
         var initId = "nil"
         if let s = initialScrollId { initId = String(s.suffix(6)) }
@@ -2910,7 +2975,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
         let rowCount = currentIds.count
         let seeded = renderedHeights.count
-        measureMissing(currentIds, width: collectionView.bounds.width, landingOnly: true)
         layout.generation += 1
         layout.invalidateLayout()
         collectionView.layoutIfNeeded()
@@ -2932,8 +2996,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         recordDistanceFromBottom()
         // ⛔ REMEMBER WHICH TOP INSET THIS LANDING WAS COMPUTED AGAINST. See `repinIfTopInsetArrived`.
         landedTopInset = collectionView.adjustedContentInset.top
-        awaitingInitialRepin = initialScrollId != nil && initialScrollOffset != nil
+        // owner audit 2026-10-06 chat #50: the first-unread landing re-pins too. It sits 12pt under
+        // the bar measured against the inset of THIS moment, so a bar that arrives later hid the
+        // unread row under it, exactly as it put a restored row a bar-height low. Its row is the one
+        // landed now: `initialScrollId` for an unread landing is recomputed from the message count on
+        // every pass and moves on with each arrival, so the re-pin must not follow it.
+        awaitingInitialRepin = initialScrollId != nil
+        landedUnreadId = initialScrollOffset == nil ? initialScrollId : nil
         reveal()
+        // owner audit 2026-10-06 chat #91: a jump that arrived before the land goes now, through the
+        // same gate and retry every parked jump uses. It outranks the landing, so no re-pin after it.
+        if let target = pendingScrollTarget {
+            pendingScrollTarget = nil
+            awaitingInitialRepin = false
+            parkScrollTarget(target)
+        }
         // The guessed rows, once the push has finished sliding (about 0.35s), so the slide is not
         // sharing its frames with them. See `settleEstimatedHeights`.
         if !estimatedIds.isEmpty, !settlingEstimates {
@@ -2975,9 +3052,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard abs(top - landed) > 0.5 else { return }
         awaitingInitialRepin = false
         landedTopInset = top
-        perform(.initialPosition)
+        // owner audit 2026-10-06 chat #50: an unread landing re-pins the row it LANDED on (see
+        // `landedUnreadId`); the live id may have moved on with a message that arrived since.
+        if let unreadId = landedUnreadId {
+            let liveId = initialScrollId, liveOffset = initialScrollOffset
+            initialScrollId = unreadId
+            initialScrollOffset = nil   // the placement it landed with, whatever the live tiers say now
+            perform(.initialPosition)
+            initialScrollId = liveId
+            initialScrollOffset = liveOffset
+        } else {
+            perform(.initialPosition)
+        }
         recordDistanceFromBottom()
     }
+    /// The row an unread (or focus) landing put the reader on, for its one re-pin. Nil for a restored
+    /// landing, which re-pins against the live id and offset exactly as before.
+    private var landedUnreadId: String?
 
     private func reveal() {
         guard !didReveal, collectionView.bounds.height > 0 else { return }
@@ -3162,7 +3253,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// Called at the ONE moment we know we stood down while the geometry changed: coming back from a
     /// pushed screen, where the lockstep is gated shut by `isViewCompletelyAppeared` and
     /// `updateInsets` is edge-triggered, so the change is written once and never offered again.
-    private func restoreRecordedDistance() {
+    private func restoreRecordedDistance(useReturnAnchor: Bool = true) {
+        // owner audit 2026-10-06 chat #28: the return anchor is consumed by the return trip, BEFORE
+        // the guard. Cleared only past the guard, a restore refused on the return frame (keyboard
+        // still settling, a finger down) kept it, and a later return with no anchor of its own (an
+        // image cover closing) put the reader back at the earlier visit. The land path asks for the
+        // distance only (`useReturnAnchor: false`) and neither reads nor clears it.
+        defer { if useReturnAnchor { anchorOnDisappear = nil } }
         guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
@@ -3194,9 +3291,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the keyboard: it is an older place entirely.
         //
         // It answers exactly one return trip. Cleared the moment it is read, whether or not its row
-        // is still in the list, so nothing downstream can find it a second time.
-        defer { anchorOnDisappear = nil }
-        if let anchor = anchorOnDisappear,
+        // is still in the list, so nothing downstream can find it a second time (the `defer` at the
+        // top of this method, which also covers a refused call).
+        if useReturnAnchor, let anchor = anchorOnDisappear,
            let ip = dataSource.indexPath(for: anchor.rowId),
            let attr = collectionView.layoutAttributesForItem(at: ip) {
             // ⚠️ NO INSET HERE — `viewportAnchor()` measures this pair against the content offset
