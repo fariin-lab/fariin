@@ -301,7 +301,15 @@ struct NativeMessageList: UIViewControllerRepresentable {
         // atomically with it). Calling scrollTo after apply was a race: for a jump into older history
         // (ensureLoaded â†’ page older), apply's async completion ran AFTER the scroll had already happened
         // and stomped it ("reply/search jump doesn't work").
-        vc.apply(rowIds: rowIds, scrollTarget: scrollTarget)
+        // owner audit 2026-10-06 chat #85: the binding is only cleared on the next runloop turn, so
+        // any other update in the same turn handed the same target in again and the jump ran twice
+        // (a second glide on top of the first). A target is consumed once; the async clear below
+        // re-arms it, so tapping the same quote again later still jumps.
+        let coord = context.coordinator
+        let freshTarget: String? = (scrollTarget != nil && scrollTarget == coord.consumedScrollTarget)
+            ? nil : scrollTarget
+        if let t = scrollTarget { coord.consumedScrollTarget = t }
+        vc.apply(rowIds: rowIds, scrollTarget: freshTarget)
         // Belt-and-braces from the 325 field failure: push geometry-neutral model changes (read ticks)
         // STRAIGHT onto the visible uikit cells â€” even if the reconfigure chain misses, ticks repaint.
         // Only when the models actually changed: `repaintIfMetaChanged` reads nothing but the model, so an
@@ -311,14 +319,19 @@ struct NativeMessageList: UIViewControllerRepresentable {
             vc.lastRepaintedModelsVersion = uikitModelsVersion
             vc.repaintUikitCells()
         }
-        if scrollTarget != nil {
-            DispatchQueue.main.async { scrollTarget = nil }   // one-shot
+        if freshTarget != nil {
+            DispatchQueue.main.async {
+                scrollTarget = nil   // one-shot
+                coord.consumedScrollTarget = nil
+            }
         }
     }
 
     final class Coordinator {
         var parent: NativeMessageList
         weak var controller: MessageListController?
+        /// The jump already handed to the list and not yet cleared from the binding (chat #85).
+        var consumedScrollTarget: String?
         init(_ parent: NativeMessageList) { self.parent = parent }
     }
 }
