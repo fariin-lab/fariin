@@ -2604,7 +2604,10 @@ final class CallService: NSObject {
     /// call never run at once.) Both incoming paths run on the main thread: Firestore delivers on
     /// the main queue, PushKit is registered on `.main`, and the gate hops back with main.async.
     private var inGroupCall: Bool {
-        MainActor.assumeIsolated {
+        // `assumeIsolated` traps off the main thread. Both callers are on main today; if that ever
+        // changes, answering "not busy" (the old behaviour) beats crashing during an incoming ring.
+        guard Thread.isMainThread else { return false }
+        return MainActor.assumeIsolated {
             GroupCallService.shared.isActive || GroupCallService.shared.connecting
         }
     }
