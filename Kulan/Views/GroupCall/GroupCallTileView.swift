@@ -69,9 +69,13 @@ struct GroupCallTileView: View {
                     Color.black
                     SwiftUIVideoView(track, layoutMode: .fit, mirrorMode: .off)
                 }
+                // Keyed on the track sid: a republished share is a new track, and a fresh view
+                // binds to it cleanly instead of the old view swapping tracks under itself.
+                .id(tile.screenTrackSid)
             } else {
                 // `.auto` mirrors only the local front camera, the same as the old screen did.
                 SwiftUIVideoView(track, layoutMode: .fill)
+                    .id(tile.cameraTrackSid)   // same reason: a republished camera rebinds
             }
         } else {
             cameraOff(width: width, height: height)
