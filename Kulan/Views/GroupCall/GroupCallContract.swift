@@ -54,12 +54,16 @@ struct CallTile: Identifiable, Equatable {
     /// differs only in speech must not republish `tiles` and re-render the whole stage (spec §12).
     /// The live values sit in the stage's own store (`GroupCallStage.speech(for:)`), read whenever
     /// the stage re-renders for a real change or a new active speaker.
+    /// A guard chain, not one long `&&` expression: thirteen mixed-type comparisons in one
+    /// expression can time out the type checker.
     static func == (a: CallTile, b: CallTile) -> Bool {
-        a.id == b.id && a.uid == b.uid && a.name == b.name && a.photoUrl == b.photoUrl
-            && a.isLocal == b.isLocal && a.hasVideo == b.hasVideo && a.isScreenShare == b.isScreenShare
-            && a.isMuted == b.isMuted && a.joinedAt == b.joinedAt && a.networkPoor == b.networkPoor
-            && a.isHost == b.isHost && a.cameraTrackSid == b.cameraTrackSid
-            && a.screenTrackSid == b.screenTrackSid
+        guard a.id == b.id, a.uid == b.uid, a.name == b.name else { return false }
+        guard a.photoUrl == b.photoUrl, a.isLocal == b.isLocal else { return false }
+        guard a.hasVideo == b.hasVideo, a.isScreenShare == b.isScreenShare else { return false }
+        guard a.isMuted == b.isMuted, a.joinedAt == b.joinedAt else { return false }
+        guard a.networkPoor == b.networkPoor, a.isHost == b.isHost else { return false }
+        guard a.cameraTrackSid == b.cameraTrackSid else { return false }
+        return a.screenTrackSid == b.screenTrackSid
     }
 }
 
