@@ -465,6 +465,24 @@ final class Crypto {
         return "enc1:\(nonceB64):\(boxB64)"
     }
 
+    /// The same seal as `encryptForConversation` (same "enc1:" format, so `decrypt` opens it), but
+    /// SYNCHRONOUS and from keys already in memory or on disk only: nil means "not ready", never a
+    /// network wait. Owner audit 2026-10-06 #27: call signalling is sealed inside WebRTC completions
+    /// whose ordering is timing-critical (held pre-answer, candidate buffer), where an await would
+    /// reorder writes. The caller prefetches the peer key at dial / ring time so this normally hits.
+    func encryptForConversationIfCached(_ cid: String, _ text: String) -> String? {
+        warmIfNeeded()
+        guard let sk = lock.withLock({ mySecretKey }),
+              let otherPub = lock.withLock({ pubCache[otherUid(cid)] }) else { return nil }
+        guard let sealed: (authenticatedCipherText: Bytes, nonce: Box.Nonce) =
+                sodium.box.seal(message: Bytes(text.utf8), recipientPublicKey: otherPub, senderSecretKey: sk) else {
+            return nil
+        }
+        let nonceB64 = Data(sealed.nonce).base64EncodedString()
+        let boxB64 = Data(sealed.authenticatedCipherText).base64EncodedString()
+        return "enc1:\(nonceB64):\(boxB64)"
+    }
+
     /// True once my keys and the recipient's public key are both available.
     func recipientReady(_ cid: String) async -> Bool {
         do {

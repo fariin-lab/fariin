@@ -141,6 +141,7 @@ final class CallService: NSObject {
                 // which is the worst kind of bug to chase.
                 acceptChannel?.close(); acceptChannel = nil
                 pendingOffer = nil
+                sealSignalling = false   // #27: each call decides its own sealing
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
@@ -486,6 +487,82 @@ final class CallService: NSObject {
     private var ringingWatcher: ListenerRegistration?   // while .incoming: detect caller-cancel before answer
 
     private var me: String { Auth.auth().currentUser?.uid ?? "" }
+
+    // MARK: - Sealed signalling (owner audit 2026-10-06 #27)
+    //
+    // The offer, the answer, every ICE-restart offer/answer and every ICE candidate used to sit in
+    // the call document as plain text: IP addresses and the DTLS fingerprint, readable (and the
+    // fingerprint swappable) by anyone with server access. The reference app carries all call
+    // signalling inside its end-to-end channel. Each payload is now sealed with the 1:1 chat crypto
+    // (same keys, same conversation id) and only ciphertext is written: `offerEnc`, `answerEnc`,
+    // `restartOffer.enc`, `restartAnswer.enc`, candidate `enc`, plus `sig: 2` on the call doc.
+    //
+    // DECIDED ONCE PER CALL. The caller seals when it holds the callee's key at offer time; with no
+    // key (a stranger who never published one) it falls back to the old plaintext for the WHOLE
+    // call and writes no `sig`, so the call still connects. The callee seals only when the offer
+    // it opened was sealed: a call from an older build (plaintext offer) is answered in plaintext,
+    // which that build can read. Once a call is sealed, a plaintext SDP on it is refused: that is
+    // exactly what a swapped fingerprint would look like. Plaintext candidates are still taken
+    // (DTLS, whose fingerprint is sealed, makes an injected route useless).
+    private var sealSignalling = false
+    private var signalCid: String { ChatService.convId(me, otherUid) }
+
+    /// Seal one signalling payload for this call, or nil when this call is not sealed. A seal that
+    /// fails on a sealed call (key dropped from the cache mid-call) is logged and the caller sends
+    /// plaintext, so a reconnect is late rather than lost.
+    private func sealSignal(_ text: String) -> String? {
+        guard sealSignalling, !otherUid.isEmpty else { return nil }
+        let s = Crypto.shared.encryptForConversationIfCached(signalCid, text)
+        if s == nil { print("call: #27 seal failed on a sealed call, sending this one unsealed") }
+        return s
+    }
+
+    /// Open one sealed payload. nil = not sealed, or not openable yet (key not in memory): the
+    /// marker strings `decrypt` returns for those are never valid SDP or candidate JSON.
+    private func openSignal(_ raw: String?) -> String? {
+        guard let raw, raw.hasPrefix("enc1:"), !otherUid.isEmpty else { return nil }
+        let out = Crypto.shared.decrypt(raw, cid: signalCid)
+        guard out != raw, out != "…", out != "🔒", out != "[old message]" else {
+            warmSignalKey()
+            return nil
+        }
+        return out
+    }
+
+    /// An SDP from the call doc: the sealed field first; the old plaintext one only on a call that
+    /// is not sealed (see the note above).
+    private func signalSdp(sealed: Any?, plain: Any?) -> String? {
+        if let s = openSignal(sealed as? String) { return s }
+        guard !sealSignalling else { return nil }
+        return plain as? String
+    }
+
+    /// The offer of a call document, read by the callee. Decides this call's mode: a sealed offer
+    /// that opens makes the call sealed; a plaintext one (older build, or the caller's no-key
+    /// fallback) keeps it plain. nil when absent or sealed but not openable yet; the key warm is
+    /// already started and the callers' own retries pick it up.
+    private func readOffer(_ d: [String: Any]) -> String? {
+        if let enc = d["offerEnc"] as? String {
+            guard let sdp = openSignal(enc) else { return nil }
+            sealSignalling = true
+            return sdp
+        }
+        sealSignalling = false
+        return (d["offer"] as? [String: String])?["sdp"]
+    }
+
+    /// Get the peer's key into memory, off the hot path (dial / ring time), so sealing and opening
+    /// never wait on a network read. `fresh` (caller) re-reads it from the server: a key cached
+    /// from before the callee reinstalled would seal an offer their phone can never open.
+    private func warmSignalKey(fresh: Bool = false) {
+        let peer = otherUid
+        guard !peer.isEmpty else { return }
+        Task.detached {
+            try? await Crypto.shared.ensureReady()
+            if fresh, case .key = await Crypto.shared.fetchFreshKey(peer) { return }
+            _ = await Crypto.shared.preloadKey(peer)
+        }
+    }
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -2187,8 +2264,11 @@ final class CallService: NSObject {
             // the moment the network is already bad enough to need a reconnect.
             let local = self.withOpusDtxAndRed(sdp)
             pc.setLocalDescription(local) { _ in
+                // #27: sealed on a sealed call; the version stays readable (ordering, not secret).
+                let payload: [String: Any] = self.sealSignal(local.sdp).map { enc -> [String: Any] in ["enc": enc, "version": v] }
+                    ?? ["sdp": local.sdp, "version": v]
                 self.db.collection("calls").document(id)
-                    .updateData(["restartOffer": ["sdp": local.sdp, "version": v]])
+                    .updateData(["restartOffer": payload])
             }
         }
     }
@@ -2325,6 +2405,7 @@ final class CallService: NSObject {
         isCaller = true
         otherUid = uid
         resolvePeerTrust()   // decide direct-vs-relay now, while we are off the WebRTC threads
+        warmSignalKey(fresh: true)   // #27: the callee's key, fresh, while the dial waits on TURN
         otherName = Self.displayName(for: uid, fallback: name)
         otherPhotoUrl = photo
         dialAttempt &+= 1
@@ -2393,17 +2474,29 @@ final class CallService: NSObject {
                 let local = self.withOpusDtxAndRed(sdp)
                 pc.setLocalDescription(local) { err in
                     if err != nil { self.failOutgoing(attempt: attempt); return }
-                    let data: [String: Any] = [
+                    var data: [String: Any] = [
                         "caller": self.me,
                         "callee": uid,
                         "callerName": ProfileStore.shared.me?.name ?? "Caller",
                         "callerPhoto": ProfileStore.shared.me?.photoUrl ?? "",
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
-                        "offer": ["sdp": local.sdp, "type": "offer"],
                         "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
                         "createdAt": FieldValue.serverTimestamp(),
                     ]
+                    // Owner audit 2026-10-06 #27: the offer goes out sealed, and that decides the
+                    // whole call (see `sealSignalling`). Keys come from memory or disk only (warmed
+                    // at dial), so this never waits on the network. No key for the callee yet = the
+                    // old plaintext offer and no `sig`, so the call still connects.
+                    if let enc = Crypto.shared.encryptForConversationIfCached(ChatService.convId(self.me, uid), local.sdp) {
+                        self.sealSignalling = true
+                        data["offerEnc"] = enc
+                        data["sig"] = 2
+                    } else {
+                        self.sealSignalling = false
+                        print("call: #27 no key for the callee yet, this call's signalling goes unsealed")
+                        data["offer"] = ["sdp": local.sdp, "type": "offer"]
+                    }
                     // ⛔ ONLINE-ONLY CREATE (owner audit 2026-10-06 #9). A plain setData made offline is
                     // QUEUED, never errors, and never completes: the caller sat on "Calling" for 45s,
                     // logged a "Missed call", and when the network came back the queued create
@@ -2412,8 +2505,9 @@ final class CallService: NSObject {
                     // transaction is never queued: it reaches the server or it fails, so an offline
                     // dial ends as "Call failed" in seconds and can never ring anyone later. Same
                     // single write, same rules, one round trip like the ack this used to wait for.
+                    let createData = data   // a constant for the transaction block (#27 made `data` a var)
                     self.db.runTransaction({ txn, _ -> Any? in
-                        txn.setData(data, forDocument: ref)
+                        txn.setData(createData, forDocument: ref)
                         return nil
                     }) { [weak self] _, err in
                         guard let self else { return }
@@ -2716,6 +2810,7 @@ final class CallService: NSObject {
             self.callId = doc.documentID
             self.otherUid = caller
             self.resolvePeerTrust()
+            self.warmSignalKey()   // #27: the caller's key, to open the sealed offer
             self.otherName = Self.displayName(for: caller,
                                               fallback: d["callerName"] as? String ?? "Caller")
             let photo = d["callerPhoto"] as? String ?? ""
@@ -2727,7 +2822,8 @@ final class CallService: NSObject {
             self.cameraOn = isVideoCall
             self.startedAsVideo = isVideoCall
             self.noteVideo()
-            self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
+            // cache → answer with no server round-trip. #27: opened here if sealed (`readOffer`).
+            if let sdp = self.readOffer(d) { self.pendingOffer = ["sdp": sdp, "type": "offer"] }
             if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
             self.state = .incoming
             // TURN starts fetching AT RING TIME on this path too — the push path has done
@@ -2750,6 +2846,10 @@ final class CallService: NSObject {
             // least is the one that got it.
             if let sdp = self.pendingOffer?["sdp"] {
                 self.preNegotiate(callId: doc.documentID, offerSdp: sdp)
+            } else if d["offerEnc"] != nil {
+                // #27: sealed, and the caller's key is still on its way (warmed above). The push
+                // path's ring-time retry reads it again once the key lands and pre-negotiates.
+                self.prefetchOffer(callId: doc.documentID, attempt: 1)
             }
             self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
             self.armCalleeRingTimeout(doc.documentID) // and end as MISSED if nobody ever does either
@@ -2832,6 +2932,7 @@ final class CallService: NSObject {
         self.otherName = Self.displayName(for: uid, fallback: name)
         self.otherUid = uid
         self.resolvePeerTrust()
+        self.warmSignalKey()   // #27: the caller's key, to open the sealed offer during the ring
         self.otherPhotoUrl = (photo?.isEmpty == false) ? photo : nil
         self.isCaller = false
         self.state = .incoming   // so the UI can present once answered
@@ -2895,7 +2996,10 @@ final class CallService: NSObject {
             // Still the same call, still ringing. A late reply must not write over a call that has
             // since been answered, cancelled or replaced by a different one.
             guard self.state == .incoming, self.callId == callId, self.pendingOffer == nil else { return }
-            if let d = snap?.data(), let offer = d["offer"] as? [String: String], offer["sdp"] != nil {
+            // #27: a sealed offer whose key is not here yet reads as "not yet"; `readOffer` has
+            // started the key warm and the retry below picks it up.
+            if let d = snap?.data(), let offerSdp = self.readOffer(d) {
+                let offer = ["sdp": offerSdp, "type": "offer"]
                 self.pendingOffer = offer
                 self.mark("offerReady")   // if this lands before "answerTapped", the prefetch paid off
                 // Take the type and the camera state from the document too. The push payload is the
@@ -3104,7 +3208,7 @@ final class CallService: NSObject {
         ref.getDocument(source: .server) { [weak self] snap, _ in
             guard let self else { return }
             guard self.state == .active else { return }   // cancelled / ended while retrying
-            if let d = snap?.data(), let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] {
+            if let d = snap?.data(), let sdp = self.readOffer(d) {   // #27: sealed or plaintext
                 self.startedAsVideo = (d["type"] as? String == "video")
                 self.cameraOn = self.startedAsVideo   // accepting a video call opens the camera
                 if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
@@ -3170,7 +3274,9 @@ final class CallService: NSObject {
                     // write round trip after the tap; the connection, the gathered candidates and
                     // the published candidates are all still ready.
                     DispatchQueue.main.async {
-                        var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"]]
+                        // #27: sealed when the offer was (`readOffer` decided), else the old field.
+                        var data: [String: Any] = self.sealSignal(local.sdp).map { enc -> [String: Any] in ["answerEnc": enc] }
+                            ?? ["answer": ["sdp": local.sdp, "type": "answer"]]
                         data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
                         guard self.wasAccepted else { self.heldPreAnswer = data; return }
                         data["status"] = "active"
@@ -3415,8 +3521,9 @@ final class CallService: NSObject {
                 self.beginConnectedCallIfAccepted()
             }
             // Caller applies the answer once it arrives → connected.
-            if self.isCaller, let answer = d["answer"] as? [String: String], let sdp = answer["sdp"],
-               self.pc?.remoteDescription == nil {
+            // #27: the sealed answer first; the plaintext one only on an unsealed call.
+            if self.isCaller, self.pc?.remoteDescription == nil,
+               let sdp = self.signalSdp(sealed: d["answerEnc"], plain: (d["answer"] as? [String: String])?["sdp"]) {
                 self.noAnswerWork?.cancel()
                 self.acceptedConnectWork?.cancel()
                 self.stopRingback()
@@ -3427,9 +3534,9 @@ final class CallService: NSObject {
             }
             // Callee applies an ICE-restart OFFER (reconnection) and answers it.
             if !self.isCaller, let ro = d["restartOffer"] as? [String: Any],
-               let sdp = ro["sdp"] as? String,
                let v = (ro["version"] as? NSNumber)?.intValue, v > self.appliedRemoteRestart,
-               let pc = self.pc {
+               let pc = self.pc,
+               let sdp = self.signalSdp(sealed: ro["enc"], plain: ro["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
                 pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { _ in
                     self.flushPendingCandidates()
@@ -3438,7 +3545,9 @@ final class CallService: NSObject {
                         guard let ans else { return }
                         let local = self.withOpusDtxAndRed(ans)
                         pc.setLocalDescription(local) { _ in
-                            ref.updateData(["restartAnswer": ["sdp": local.sdp, "version": v]])
+                            let payload: [String: Any] = self.sealSignal(local.sdp).map { enc -> [String: Any] in ["enc": enc, "version": v] }
+                                ?? ["sdp": local.sdp, "version": v]   // #27
+                            ref.updateData(["restartAnswer": payload])
                         }
                     }
                 }
@@ -3452,9 +3561,9 @@ final class CallService: NSObject {
             }
             // Caller applies the ICE-restart ANSWER.
             if self.isCaller, let ra = d["restartAnswer"] as? [String: Any],
-               let sdp = ra["sdp"] as? String,
                let v = (ra["version"] as? NSNumber)?.intValue,
-               v == self.negotiationVersion, v > self.appliedRemoteRestart, let pc = self.pc {
+               v == self.negotiationVersion, v > self.appliedRemoteRestart, let pc = self.pc,
+               let sdp = self.signalSdp(sealed: ra["enc"], plain: ra["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
@@ -3494,7 +3603,18 @@ final class CallService: NSObject {
             guard let self else { return }
             snap?.documentChanges.forEach { change in
                 guard change.type == .added else { return }
-                let c = change.document.data()
+                var c = change.document.data()
+                // #27: a sealed candidate carries only `enc` (JSON of the three fields inside).
+                // Plaintext ones (older build, unsealed call) are still taken: their route is
+                // useless to anyone without the sealed DTLS fingerprint.
+                if let enc = c["enc"] as? String {
+                    guard let json = self.openSignal(enc)?.data(using: .utf8),
+                          let inner = (try? JSONSerialization.jsonObject(with: json)) as? [String: Any] else {
+                        print("call: #27 sealed candidate could not be opened, skipped")
+                        return
+                    }
+                    c = inner
+                }
                 guard let sdp = c["candidate"] as? String else { return }
                 let candidate = RTCIceCandidate(
                     sdp: sdp,
@@ -3544,13 +3664,28 @@ final class CallService: NSObject {
     /// tries a second apart, and only while it is still the same call.
     private func writeCandidate(_ data: [String: Any], to col: CollectionReference, attempt: Int = 1) {
         let id = callId
-        col.addDocument(data: data) { [weak self] err in
+        // #27: sealed once, on the first try; the retries resend the same sealed document.
+        let payload = attempt == 1 ? sealedCandidate(data) : data
+        col.addDocument(data: payload) { [weak self] err in
             guard err != nil, attempt < 3 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard let self, self.callId == id, id != nil else { return }
-                self.writeCandidate(data, to: col, attempt: attempt + 1)
+                self.writeCandidate(payload, to: col, attempt: attempt + 1)
             }
         }
+    }
+
+    /// Owner audit 2026-10-06 #27: on a sealed call a candidate (the IP addresses) leaves this phone
+    /// as one `enc` field holding the three fields as JSON. Unsealed calls write it as before.
+    private func sealedCandidate(_ data: [String: Any]) -> [String: Any] {
+        guard sealSignalling, let sdp = data["candidate"] as? String else { return data }
+        var inner: [String: Any] = ["candidate": sdp,
+                                    "sdpMLineIndex": Int((data["sdpMLineIndex"] as? Int32) ?? 0)]
+        if let mid = data["sdpMid"] as? String { inner["sdpMid"] = mid }
+        guard let json = try? JSONSerialization.data(withJSONObject: inner),
+              let text = String(data: json, encoding: .utf8),
+              let enc = sealSignal(text) else { return data }   // sealSignal logs the fallback
+        return ["enc": enc]
     }
 
     // MARK: - Hang up / cleanup
