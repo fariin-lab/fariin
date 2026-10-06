@@ -74,7 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BIG FIX BUILD: 130+ CALL AND CHAT FIXES FROM TWO DEEP AUDITS.
+            BUILD 828: THE + CRASH IS FIXED, PLUS CALL LINK AND CALL FIXES.
+
+            + BUTTON: opening the attach sheet no longer crashes the app.
+            ALL MEDIA: Share works for photos, videos, voice, files, GIFs and links every time. The Share / Selected / Delete bar is Apple's own bottom toolbar.
+            CALLS: minimize and restore move slower and smoother. A ringing video call's small card shows your camera.
+            CALL LINKS: rows work like call rows (tap to join, (i) for details, the time). Create a Call Link is instant. Blue glass Done button, rounder cards. NEW Call Type: Video or Voice (a Voice link keeps every camera off).
+            GROUP CALLS: your own photo shows, your tile is centred, glass top buttons, and the people button opens Waiting for others with Share link and Require approval.
+            CHAT: your reaction shows at once on old messages too, and removing it works. On a wallpaper, an incoming bubble grows cleanly when you react.
+
+            PLEASE TEST: tap + in a chat; share a mix from All Media; make a Voice call link and join it from another phone; react to an old message.
+
+            EARLIER (build 827): BIG FIX BUILD: 130+ CALL AND CHAT FIXES FROM TWO DEEP AUDITS.
 
             CALLS: hold no longer turns your camera back on. A normal call can't ring you during a group call. Speaker stays where you put it after a network blip. Other apps' music stops when you call. A call that fails on your side says Call failed, not Missed. Cancelling and quickly calling someone else no longer rings the first person. Answering just as they hang up no longer logs Answered. Minimize and restore use a quick 0.2s shrink and grow. The self-view tile stays in its corner. VoiceOver labels on every call button.
             GROUP CALLS: joining no longer wipes the call record. Ending while connecting really ends it. A dropped room is noticed.
