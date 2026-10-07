@@ -86,10 +86,23 @@ final class LinkPreviewBubbleView: UIView {
     private let divider = UIView()
     private let button = UIView()
     private let buttonLabel = UILabel()
+    // A call card's circle and glyph (inside the card) and its Join button (under the words, so
+    // on this view itself — `backing` clips to the card).
+    private let glyphCircle = UIView()
+    private let glyphIcon = UIImageView()
+    private let joinButton = UIView()
+    private let joinLabel = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        glyphCircle.layer.cornerCurve = .circular
+        glyphIcon.contentMode = .center
+        joinButton.layer.cornerRadius = 10
+        joinButton.layer.cornerCurve = .continuous
+        joinLabel.textAlignment = .center
+        addSubview(joinButton)
+        addSubview(joinLabel)
         backing.layer.cornerRadius = 12
         backing.layer.cornerCurve = .continuous
         backing.clipsToBounds = true
@@ -107,10 +120,36 @@ final class LinkPreviewBubbleView: UIView {
         backing.addSubview(button)
         buttonLabel.textAlignment = .center
         backing.addSubview(buttonLabel)
+        backing.addSubview(glyphCircle)
+        glyphCircle.addSubview(glyphIcon)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ p: BubbleBody.LinkPreview, plan: LinkPreviewPlan, tint: UIColor, cid: String) {
+        if let rect = plan.glyph {
+            glyphCircle.isHidden = false
+            glyphCircle.frame = rect
+            glyphCircle.layer.cornerRadius = rect.width / 2
+            glyphCircle.backgroundColor = tint.withAlphaComponent(0.16)
+            glyphIcon.frame = glyphCircle.bounds
+            glyphIcon.image = UIImage(systemName: "video.fill",
+                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold))
+            glyphIcon.tintColor = tint
+        } else {
+            glyphCircle.isHidden = true
+        }
+        if let rect = plan.join, let labelRect = plan.joinLabel, let attr = plan.joinAttr {
+            joinButton.isHidden = false; joinLabel.isHidden = false
+            joinButton.frame = rect
+            // The contact card's button recipe: the bubble's own text colour, faint, so it reads on
+            // the blue bubble, a chat colour and the incoming grey alike.
+            joinButton.backgroundColor = tint.withAlphaComponent(0.12)
+            joinLabel.frame = labelRect
+            joinLabel.attributedText = attr
+        } else {
+            joinButton.isHidden = true; joinLabel.isHidden = true
+        }
+
         backing.frame = plan.card
         backing.backgroundColor = tint.withAlphaComponent(0.10)
 

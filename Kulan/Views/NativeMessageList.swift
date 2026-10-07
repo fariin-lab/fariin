@@ -764,6 +764,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var configuredRoutes: [String: Bool] = [:]
     private var doubleTapGesture: UITapGestureRecognizer!
     private var bubbleTapStamp: UITapGestureRecognizer!
+    /// When a call card last opened the lobby (`rowCellDidTapCallJoin`'s debounce).
+    private var lastCallJoinAt: CFTimeInterval = 0
 
     @objc private func stampBubbleTap(_ g: UITapGestureRecognizer) {
         guard g.state == .ended else { return }
@@ -4964,6 +4966,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if case .bubble(let row)? = rowModels[id]?.content, row.opensOnTap {
                 return cell.hitsMediaCaption(loc, in: collectionView)
             }
+            // A call card's Join button is a button: a double tap on it joins (once, debounced)
+            // and never reacts. Anywhere else on the bubble, the card included, still reacts.
+            if cell.hitsCallJoin(loc, in: collectionView) { return false }
             let p = collectionView.convert(loc, to: cell.previewBubble)
             return cell.previewBubble.bounds.contains(p)
         }
@@ -6136,6 +6141,19 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapLinkProfile(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapLinkProfile(id)
+    }
+
+    /// A call card's Join button or card body: straight to the pre-join lobby, the same door a
+    /// tapped call link takes. Debounced, because the cell's single-tap recogniser fires on EACH
+    /// tap of a double tap, and two lobby opens in a row would stack.
+    func rowCellDidTapCallJoin(_ cell: MessageRowCell) {
+        guard let id = cell.rowId,
+              case .bubble(let row)? = rowModels[id]?.content, case .text(let t) = row.body,
+              case .call(let key)? = t.linkPreview?.shape else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastCallJoinAt > 1.0 else { return }
+        lastCallJoinAt = now
+        CallLinkDoor.open(key: key)
     }
 
     func rowCellDidTapFile(_ cell: MessageRowCell) {

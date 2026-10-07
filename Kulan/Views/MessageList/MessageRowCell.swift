@@ -23,6 +23,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidToggleVoice(_ cell: MessageRowCell)
     func rowCellDidTapLinkCard(_ cell: MessageRowCell)
     func rowCellDidTapLinkProfile(_ cell: MessageRowCell)
+    func rowCellDidTapCallJoin(_ cell: MessageRowCell)
     func rowCellDidTapLocation(_ cell: MessageRowCell)
     func rowCellDidTapContactCard(_ cell: MessageRowCell)
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
@@ -56,6 +57,11 @@ final class MessageRowCell: UICollectionViewCell {
     /// `MessageRowView.hitsMediaCaption`.
     func hitsMediaCaption(_ point: CGPoint, in view: UIView) -> Bool {
         rowView.hitsMediaCaption(view.convert(point, to: rowView))
+    }
+
+    /// A call card's Join button — the list keeps its double-tap reaction off it.
+    func hitsCallJoin(_ point: CGPoint, in view: UIView) -> Bool {
+        rowView.hitsCallJoin(view.convert(point, to: rowView))
     }
 
     /// How much this row's bubble just grew (or shrank, negative) from a reaction, read once. The list
@@ -435,6 +441,16 @@ final class MessageRowCell: UICollectionViewCell {
             if rowView.hitsStoryReply(p) {
                 rowView.refreshFlightRects()
                 delegate?.rowCellDidTapStoryReply(self)
+                return
+            }
+            // A call card's Join button, and its card body, both open the call (the body does what
+            // tapping the link does). The list debounces, so a double tap joins once.
+            if rowView.hitsCallJoin(p) {
+                delegate?.rowCellDidTapCallJoin(self)
+                return
+            }
+            if rowView.hitsLinkCard(p), case .text(let t) = b.body, case .call? = t.linkPreview?.shape {
+                delegate?.rowCellDidTapCallJoin(self)
                 return
             }
             // The card's BUTTON before the card, for the same reason the contact card's is.

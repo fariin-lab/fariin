@@ -233,7 +233,9 @@ enum MessageRowModelBuilder {
                 mentionTokens: msg.mentions.map { "@\(ctx.nameFor($0))" },
                 // Only what TRAVELLED with the message renders — there is no viewer-side fetch, so
                 // an older message without an embedded preview stays a plain link.
-                linkPreview: msg.linkPreview.map(linkPreviewBody)))
+                // A call link takes the call card whatever preview travelled with it: the web page
+                // behind the link knows nothing about the call, and older messages carry none.
+                linkPreview: callLinkPreview(text) ?? msg.linkPreview.map(linkPreviewBody)))
         }
 
         // MY fill is the chat colour if one is set, else the default blue — a colour is a colour and
@@ -537,6 +539,27 @@ enum MessageRowModelBuilder {
                 && PlayedVoice.shared.isUnplayed(cid: ctx.cid, messageId: m.id, createdAt: m.createdAt),
             // Still uploading: everything is drawn, only the disc spins. See `VoiceBody.loading`.
             loading: m.pendingMediaKind == "audio")
+    }
+
+    /// The call card for the first call link in `text`, or nil. The key is validated by the same
+    /// parser the app uses when the link is tapped (`KulanApp.route`), so a card never offers to
+    /// join something the tap would refuse. The title is always "Kulan Call": the link's own name
+    /// is encrypted in its server document, and fetching it would make this builder async.
+    private static func callLinkPreview(_ text: String) -> BubbleBody.LinkPreview? {
+        // Cheap gate first: this runs for every text message the list builds.
+        guard text.range(of: "fariin.com/call", options: .caseInsensitive) != nil else { return nil }
+        let edges = CharacterSet(charactersIn: ".,;:!?()[]{}<>\"'")
+        for token in text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }) {
+            var s = String(token).trimmingCharacters(in: edges)
+            guard s.range(of: "fariin.com/call", options: .caseInsensitive) != nil else { continue }
+            if !s.lowercased().hasPrefix("https://") { s = "https://" + s }
+            guard let url = URL(string: s), case .call(let key)? = KulanApp.route(from: url) else { continue }
+            return BubbleBody.LinkPreview(
+                shape: .call(key: key), url: url.absoluteString,
+                title: "Kulan Call", desc: "Use this link to join a Kulan call", host: "fariin.com",
+                imageUrl: nil, imageEnc: nil)
+        }
+        return nil
     }
 
     private static func linkPreviewBody(_ p: Message.LinkPreviewData) -> BubbleBody.LinkPreview {

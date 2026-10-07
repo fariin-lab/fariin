@@ -182,6 +182,13 @@ struct LinkPreviewPlan {
     var button: CGRect?
     var buttonLabel: CGRect?
     var buttonAttr: NSAttributedString?
+    /// A call card's 44pt tinted circle with the video glyph, in CARD coordinates.
+    var glyph: CGRect? = nil
+    /// A call card's "Join Call" button. ⚠️ BUBBLE coordinates, not card ones: it sits under the
+    /// words and the time, outside the card, and is placed by the bubble layout.
+    var join: CGRect? = nil
+    var joinLabel: CGRect? = nil
+    var joinAttr: NSAttributedString? = nil
 }
 
 struct BubblePlan {
@@ -715,6 +722,23 @@ enum MessageRowLayout {
             metaRect = CGRect(x: hPad + contentW - metaSize.width,
                               y: innerY - metaSize.height - 1,
                               width: metaSize.width, height: metaSize.height)
+        }
+
+        // A call link's "Join Call" button: full width under the words and the time. Added to
+        // `innerY` here, so the bubble, and the off-screen sizer that measures through this same
+        // function, both carry its height.
+        if case .call? = linkCard?.shape, var placed = linkPlan {
+            innerY += 8
+            let button = CGRect(x: hPad, y: innerY, width: contentW, height: 36)
+            let attr = NSAttributedString(string: "Join Call", attributes: [
+                .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
+            let size = lineSizeOf(attr)
+            placed.join = button
+            placed.joinAttr = attr
+            placed.joinLabel = CGRect(x: button.midX - size.width / 2, y: button.midY - size.height / 2,
+                                      width: size.width, height: size.height)
+            linkPlan = placed
+            innerY += button.height
         }
 
         let bubbleW = contentW + hPad * 2
@@ -1723,6 +1747,42 @@ enum MessageRowLayout {
                                     host: nil, hostAttr: nil,
                                     divider: divider, button: button,
                                     buttonLabel: buttonLabel, buttonAttr: buttonAttr))
+
+        case .call:
+            // The profile card's row, with a tinted circle and a video glyph where the photo sits,
+            // and a third line for the domain. The Join button is NOT in the card; the bubble
+            // layout puts it under the words.
+            let circle: CGFloat = 44, gap: CGFloat = 10
+            y = 10
+            let textX = pad + circle + gap
+            let textW = max(1, width - textX - pad)
+            let titleAttr = NSAttributedString(string: p.title, attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: textColor])
+            let subAttr = NSAttributedString(string: p.desc, attributes: [
+                .font: UIFont.systemFont(ofSize: 13),
+                .foregroundColor: textColor.withAlphaComponent(0.75)])
+            let hostAttr = NSAttributedString(string: p.host, attributes: [
+                .font: UIFont.systemFont(ofSize: 11),
+                .foregroundColor: textColor.withAlphaComponent(0.55)])
+            let tH = lineSizeOf(titleAttr, cap: textW).height
+            let sH = cappedHeight(subAttr, width: textW, lines: 2)
+            let hH = lineSizeOf(hostAttr, cap: textW).height
+            let stackH = tH + 1 + sH + 1 + hH
+            let rowH = max(circle, stackH)
+            let stackTop = y + (rowH - stackH) / 2
+            let glyph = CGRect(x: pad, y: y + (rowH - circle) / 2, width: circle, height: circle)
+            let title = CGRect(x: textX, y: stackTop, width: textW, height: tH)
+            let subtitle = CGRect(x: textX, y: title.maxY + 1, width: textW, height: sH)
+            let host = CGRect(x: textX, y: subtitle.maxY + 1, width: textW, height: hH)
+            y += rowH + 10
+
+            return (CGSize(width: width, height: y),
+                    LinkPreviewPlan(card: .zero, hero: nil, avatar: nil,
+                                    title: title, titleAttr: titleAttr,
+                                    subtitle: subtitle, subtitleAttr: subAttr,
+                                    host: host, hostAttr: hostAttr,
+                                    divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil,
+                                    glyph: glyph))
         }
     }
 

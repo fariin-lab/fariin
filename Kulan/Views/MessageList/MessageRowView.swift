@@ -1100,6 +1100,13 @@ final class MessageRowView: UIView {
         return l.card.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
     }
 
+    /// A call card's "Join Call" button. Its rect is already in bubble coordinates.
+    func hitsCallJoin(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body,
+              let l = b.linkPlan, let join = l.join else { return false }
+        return join.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
+    }
+
     func hitsLinkButton(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body,
               let l = b.linkPlan, let button = l.button else { return false }

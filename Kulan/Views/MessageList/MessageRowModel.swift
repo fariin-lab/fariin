@@ -297,6 +297,10 @@ enum BubbleBody: Equatable {
             /// The account could not be resolved when this was sent: deleted, renamed, or never
             /// existed. The card says so rather than leaving a link that looks live.
             case profileUnavailable
+            /// Our own call link (https://fariin.com/call/#key=…). Built on the VIEWER's side from
+            /// the message text, not from a stored preview, so every call link ever sent gets the
+            /// card. The bubble adds a "Join Call" button under the words.
+            case call(key: String)
         }
         var shape: Shape
         var url: String
