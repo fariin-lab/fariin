@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import Combine
 import LiveKit
 import AVFoundation
 import FirebaseFunctions
@@ -824,7 +825,7 @@ final class GroupCallService: ObservableObject {
         guard isActive, !cameraLocked, !shareBusy else { return }
         let enable = !screenSharing
         let gen = joinGeneration
-        if enable { shareAsked = true }
+        if enable { shareAsked = true; lateShareWatch = nil }   // audit M-106: this share is wanted
         shareBusy = true
         Task { @MainActor in
             defer { shareBusy = false }
@@ -855,8 +856,33 @@ final class GroupCallService: ObservableObject {
     /// asked to finish so the red recording pill does not outlive the call.
     private func stopScreenShare() {
         if screenSharing || shareAsked { BroadcastManager.shared.requestStop() }
+        // Audit M-106, 2026-10-07: a share asked for but never started (the system sheet still
+        // open as the call ends) can still be started from that sheet afterwards, and nothing
+        // would ever tell it to stop. For a minute, a broadcast that starts is told to stop, as
+        // long as no call is up that could own it (a new group call, or a 1:1 call's share).
+        if shareAsked, !screenSharing { watchForLateShare() }
         screenSharing = false
         shareAsked = false
+    }
+
+    private var lateShareWatch: AnyCancellable?
+    private var lateShareExpiry: Task<Void, Never>?
+    private func watchForLateShare() {
+        lateShareExpiry?.cancel()
+        lateShareWatch = KSDarwinNotificationCenter.shared.publisher(for: .broadcastStarted)
+            .sink { _ in
+                Task { @MainActor in
+                    let service = GroupCallService.shared
+                    guard service.lateShareWatch != nil, !service.isActive, !service.connecting,
+                          CallService.shared.state == .idle else { return }
+                    BroadcastManager.shared.requestStop()
+                }
+            }
+        lateShareExpiry = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.lateShareWatch = nil
+        }
     }
 
     // MARK: - Ringing, as the caller hears and sees it
@@ -1676,10 +1702,20 @@ final class GroupCallService: ObservableObject {
         // earpiece. Same reset `disconnect()` does.
         speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
         // A join minimized with the chevron that then failed must not start the next call minimized.
+        let wasMinimized = minimized
         minimized = false
         let inLobby = lobbyJoin && lobby != nil   // read before the reset clears it
         resetRoomState()
-        if inLobby { lobbyError = n.message ?? n.title } else { notice = n }
+        if inLobby {
+            lobbyError = n.message ?? n.title
+        } else if wasMinimized {
+            // Audit M-087, 2026-10-07: minimized while joining there is no call screen to show the
+            // notice, so the failure was silent. An alert on whatever is on top says it instead.
+            notice = nil
+            Self.presentOverTop(n)
+        } else {
+            notice = n
+        }
     }
 
     private func markJoined(_ roomId: String) async {
