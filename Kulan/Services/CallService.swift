@@ -1273,7 +1273,7 @@ final class CallService: NSObject {
         screenShareSession = session
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, !self.screenSharing else { return }
-            self.stopScreenShare(requestExtensionStop: false, signal: false)
+            self.stopScreenShare(requestExtensionStop: true, signal: false)   // a sheet finished after the wait must not leave the extension recording with no one listening
         }
         screenSharePendingTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: timeout)

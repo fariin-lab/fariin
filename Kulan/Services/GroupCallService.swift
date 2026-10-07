@@ -616,6 +616,9 @@ final class GroupCallService: ObservableObject {
         // A late event from a room already left must not show a share in the next call.
         guard isActive || !published else { return }
         screenSharing = published
+        // A share started from Control Center or the red pill was never asked for here; it still
+        // belongs to this call, so leaving the call must stop the extension too.
+        if published { shareAsked = true }
     }
 
     /// Every way out of a room ends my share: the track goes with the room, and the extension is
