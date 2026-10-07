@@ -82,7 +82,23 @@ struct AdhocInvite: Identifiable, Equatable {
 @MainActor
 final class GroupCallService: ObservableObject {
     static let shared = GroupCallService()
-    private init() { room.add(delegate: roomObserver) }
+    private init() {
+        room.add(delegate: roomObserver)
+        // Audit M-081, 2026-10-07: the camera stops while the app is in the background and comes
+        // back with it (see `appWentToBackground`).
+        let center = NotificationCenter.default
+        appObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                               queue: .main) { _ in
+                Task { @MainActor in GroupCallService.shared.appWentToBackground() }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil,
+                               queue: .main) { _ in
+                Task { @MainActor in GroupCallService.shared.appCameBack() }
+            },
+        ]
+    }
+    private var appObservers: [NSObjectProtocol] = []
 
     /// owner audit 2026-10-06 #4: bumped by `end()`. A join in flight (token fetch, room.connect)
     /// carries the value it started with and checks it after every wait; a mismatch means the user
@@ -204,7 +220,9 @@ final class GroupCallService: ObservableObject {
         lobbyError = nil
         lobby = Lobby(key: key)
     }
-    @Published var cameraOn = false
+    @Published var cameraOn = false {
+        didSet { updateGroupScreenBehavior() }   // audit M-096
+    }
     /// A VOICE call link (owner, 2026-10-06): nobody's camera can come on in this room. Set from the
     /// server's join answer; the media server enforces it too (the token can publish the mic only).
     @Published private(set) var cameraLocked = false
@@ -434,13 +452,17 @@ final class GroupCallService: ObservableObject {
         ], merge: true)
     }
 
+    /// Audit M-002, 2026-10-07: each tap used to start its own unordered Task, so a Mute tapped
+    /// while the join's first publish was still running found no publication, did nothing, and the
+    /// publish then went out with the button saying muted. Now the tap only changes the wish and
+    /// `syncMic` applies the latest wish, one SDK call at a time.
     func toggleMic() {
-        micOn.toggle(); let v = micOn
-        micChangesInFlight += 1
-        Task {
-            try? await room.localParticipant.setMicrophone(enabled: v)
-            micChangesInFlight -= 1
-        }
+        guard !leaving else { return }   // audit M-060: the dead call screen's buttons do nothing
+        micOn.toggle()
+        // Still joining: the wish is what the join publishes with (`startMuted`), not a call on a
+        // room that is not up yet.
+        guard isActive else { startMuted = !micOn; return }
+        syncMic()
     }
 
     // MARK: - Owner and moderator controls (group call permissions, 2026-10-06)
@@ -545,31 +567,137 @@ final class GroupCallService: ObservableObject {
     /// button was the system route picker drawn under a speaker glyph, which never showed a state
     /// and on a phone with no headset offered nothing to pick. Now it flips LiveKit's own output
     /// preference (speaker vs earpiece), the way the one-to-one call's speaker button works.
-    @Published var speakerOn = true
+    @Published var speakerOn = true {
+        didSet { updateGroupScreenBehavior() }   // audit M-096: proximity follows the earpiece
+    }
     func toggleSpeaker() {
         speakerOn.toggle()
         AudioManager.shared.isSpeakerOutputPreferred = speakerOn
     }
     func toggleCamera() {
         guard !cameraLocked else { return }   // a voice call link: no camera for anybody
-        cameraOn.toggle(); let v = cameraOn
-        Task { @MainActor in
-            // Owner, 2026-10-06: "when I open camera, group call is not working". The camera was
-            // started without asking for access, and any failure was swallowed, so the button said
-            // on while no picture went out. Ask first (as the 1:1 call does), and on a failure put
-            // the button back and say why.
-            if v, !(await Self.cameraAllowed()) {
-                cameraOn = false
-                showToast("Allow camera access in Settings")
-                return
+        guard !leaving else { return }        // audit M-060
+        cameraOn.toggle()
+        // Owner, 2026-10-06: "when I open camera, group call is not working". The camera was
+        // started without asking for access, and any failure was swallowed, so the button said
+        // on while no picture went out. `syncCamera` asks first (as the 1:1 call does), and on a
+        // failure puts the button back and says why. Audit M-002: one change at a time, latest wish
+        // wins, so two quick taps can no longer leave the camera out while the button says off.
+        // Still joining: the join's own start sets the camera, as before.
+        if isActive { syncCamera() }
+    }
+
+    // MARK: - Mic and camera, one change at a time (audit M-002, M-084, M-085, 2026-10-07)
+
+    /// The running chain for each source. While one runs, a new wish needs nothing more: the chain
+    /// re-reads `micOn` / the camera wish after every SDK call and goes again until what is
+    /// published matches.
+    private var micChain: Task<Void, Never>?
+    private var cameraChain: Task<Void, Never>?
+    /// The lobby hand-over's `cameraReady`, run when the join's camera chain settles.
+    private var pendingCameraReady: (() -> Void)?
+    /// Audit M-081: the camera was switched off because the app went to the background. `cameraOn`
+    /// stays true as the INTENT (the 1:1 call's rule), so it comes back with the app.
+    private var cameraPausedByBackground = false
+    private var cameraWanted: Bool { cameraOn && !cameraPausedByBackground && !cameraLocked }
+
+    private func syncMic() {
+        guard micChain == nil, isActive, !leaving else { return }
+        let gen = joinGeneration
+        // Counted for the whole chain, the join's first publish too: a mute event while it runs is
+        // mine, not an owner's (`localMicMuteChanged`).
+        micChangesInFlight += 1
+        micChain = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var tries = 0
+            // Audit M-085: never past the call it was started for. `leaving` is set first thing by
+            // `disconnect()`, which waits for this chain before it closes the room.
+            while gen == self.joinGeneration, self.isActive, !self.leaving, tries < 4 {
+                let want = self.micOn
+                if self.room.localParticipant.isMicrophoneEnabled() == want { break }
+                tries += 1
+                do { try await self.room.localParticipant.setMicrophone(enabled: want) }
+                catch {
+                    guard gen == self.joinGeneration, !self.leaving else { break }
+                    // Audit M-084: a refused microphone (permission off) used to fail silently with
+                    // the button on. The button now shows what is really published, and says so.
+                    let live = self.room.localParticipant.isMicrophoneEnabled()
+                    if self.micOn != live {
+                        self.micOn = live
+                        self.showToast(want ? "Couldn't turn the microphone on" : "Couldn't turn the microphone off")
+                    }
+                    break
+                }
             }
-            do { try await room.localParticipant.setCamera(enabled: v) }
-            catch {
-                guard cameraOn == v else { return }   // toggled again meanwhile
-                cameraOn = !v
-                showToast(v ? "Couldn't turn the camera on" : "Couldn't turn the camera off")
-            }
+            self.micChain = nil
+            self.micChangesInFlight -= 1
         }
+    }
+
+    private func syncCamera() {
+        guard cameraChain == nil, isActive, !leaving else { return }
+        let gen = joinGeneration
+        cameraChain = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var tries = 0
+            while gen == self.joinGeneration, self.isActive, !self.leaving, tries < 4 {
+                let want = self.cameraWanted
+                if self.room.localParticipant.isCameraEnabled() == want { break }
+                tries += 1
+                if want, !(await Self.cameraAllowed()) {
+                    if gen == self.joinGeneration, !self.leaving {
+                        self.cameraOn = false
+                        self.showToast("Allow camera access in Settings")
+                    }
+                    break
+                }
+                guard gen == self.joinGeneration, !self.leaving else { break }
+                if want != self.cameraWanted { continue }   // changed while access was asked
+                // At once, with the lobby's preview still running: the newer capture session takes
+                // the camera and the lobby's picture holds its last frame until the swap, so there
+                // is no moment without a picture and no wait for the preview to stop first.
+                do { try await self.room.localParticipant.setCamera(enabled: want) }
+                catch {
+                    guard gen == self.joinGeneration, !self.leaving else { break }
+                    if want == self.cameraWanted {
+                        self.cameraOn = self.room.localParticipant.isCameraEnabled()
+                        self.showToast(want ? "Couldn't turn the camera on" : "Couldn't turn the camera off")
+                    }
+                    break
+                }
+            }
+            self.cameraChain = nil
+            let ready = self.pendingCameraReady
+            self.pendingCameraReady = nil
+            ready?()
+        }
+    }
+
+    /// Audit M-081, 2026-10-07: the group call's camera cannot keep capturing in the background,
+    /// so everyone saw a frozen picture with my camera still "on". Now it stops publishing (they
+    /// see my photo) and comes back when the app does. Not while sharing the screen: the share
+    /// is what they are looking at then, and the shared screen keeps moving.
+    private func appWentToBackground() {
+        guard isActive, cameraOn, !screenSharing, !cameraPausedByBackground else { return }
+        cameraPausedByBackground = true
+        syncCamera()
+    }
+
+    private func appCameBack() {
+        guard cameraPausedByBackground else { return }
+        cameraPausedByBackground = false
+        syncCamera()
+    }
+
+    /// Audit M-096, 2026-10-07: group, ad-hoc and link calls let the screen lock mid-call and had
+    /// no proximity sensor. Like the 1:1 call (`CallService.updateInCallScreenBehavior`): the screen
+    /// stays awake while the room is up, and a voice call on the earpiece blanks it at the ear.
+    /// Never touches the proximity sensor while a 1:1 call owns it.
+    private func updateGroupScreenBehavior() {
+        let live = isActive && !leaving
+        if live { SleepBlocker.shared.add("group-call") } else { SleepBlocker.shared.remove("group-call") }
+        guard live || CallService.shared.state == .idle else { return }
+        UIDevice.current.isProximityMonitoringEnabled = live && !speakerOn && !cameraOn && !screenSharing
     }
 
     /// ⛔ IN THE ROOM IS IN THE CALL — owner, 2026-10-06, screenshots of a live call (the other
@@ -585,34 +713,18 @@ final class GroupCallService: ObservableObject {
         joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
         micOn = mic
         cameraOn = video
-        let gen = joinGeneration
         // The mic and the camera start side by side: the camera no longer waits behind the mic's
         // publish, which is most of what "Join is slow" was on a video link (owner, 2026-10-07).
-        Task { @MainActor in
-            do { try await room.localParticipant.setMicrophone(enabled: mic) }
-            catch {
-                guard gen == joinGeneration, mic else { return }
-                micOn = false
-                showToast("Couldn't turn the microphone on")
-            }
-        }
-        Task { @MainActor in
-            defer { cameraReady?() }
-            guard video else { return }
-            guard await Self.cameraAllowed() else {
-                if gen == joinGeneration { cameraOn = false; showToast("Allow camera access in Settings") }
-                return
-            }
-            guard gen == joinGeneration, cameraOn else { return }   // turned off meanwhile
-            // At once, with the lobby's preview still running: the newer capture session takes the
-            // camera and the lobby's picture holds its last frame until the swap, so there is no
-            // moment without a picture and no wait for the preview to stop first.
-            do { try await room.localParticipant.setCamera(enabled: true) }
-            catch {
-                guard gen == joinGeneration else { return }
-                cameraOn = false
-                showToast("Couldn't turn the camera on")
-            }
+        // Audit M-002, 2026-10-07: through the same one-at-a-time chains as the buttons, so a Mute
+        // or camera-off tapped while these first publishes run is applied after them, never lost.
+        syncMic()
+        pendingCameraReady = cameraReady
+        syncCamera()
+        // Voice: the camera chain has nothing to do and has already settled. Run the hand-over a
+        // beat later, as before, so it lands after `didJoinRoom`.
+        if cameraChain == nil, let ready = pendingCameraReady {
+            pendingCameraReady = nil
+            Task { @MainActor in ready() }
         }
     }
 
@@ -631,6 +743,7 @@ final class GroupCallService: ObservableObject {
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
         updateRingback()
+        updateGroupScreenBehavior()   // audit M-096
     }
 
     // MARK: - Camera position
@@ -661,7 +774,9 @@ final class GroupCallService: ObservableObject {
     /// `setScreenShare(true)` only opens the system's broadcast sheet and returns nothing, and the
     /// track goes up later, when the person taps Start there (or never, if they cancel). Stopping
     /// from the red status pill or Control Center unpublishes the track too, so this follows that.
-    @Published private(set) var screenSharing = false
+    @Published private(set) var screenSharing = false {
+        didSet { updateGroupScreenBehavior() }   // audit M-096: a share is never blanked at the ear
+    }
     /// Set once this call has asked for a share, so leaving knows to tell the extension to stop.
     /// A plain "is anything broadcasting" check could stop a share that belongs to a 1:1 call.
     private var shareAsked = false
@@ -858,6 +973,11 @@ final class GroupCallService: ObservableObject {
     private func disconnect() async {
         leaving = true
         defer { leaving = false; hangingUp = false }
+        // Audit M-085, 2026-10-07: a mic or camera change still in flight (the join's first publish,
+        // a tap) finishes before the room closes, and `leaving` stops it from going again; so
+        // nothing is left capturing and nothing is published into the next call.
+        await micChain?.value
+        await cameraChain?.value
         let cid = activeCid
         let adhoc = isAdhoc, link = isLink
         // Leaving while still waiting to be let in: withdraw the knock so the creator's list does
@@ -1356,6 +1476,9 @@ final class GroupCallService: ObservableObject {
     private func resetRoomState() {
         stopScreenShare()   // every leave path comes through here
         startMuted = false
+        cameraPausedByBackground = false   // audit M-081
+        pendingCameraReady = nil
+        updateGroupScreenBehavior()        // audit M-096: the screen may lock again
         lobbyJoin = false
         lobbyCameraFree = false
         // The call ran inside the lobby's cover: that cover closes with the call. A lobby still
