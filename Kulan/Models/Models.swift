@@ -847,6 +847,9 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var markedUnread: [String: Bool]
     var pinnedMessageId: String        // a pinned message in this chat ("" = none)
     var disappearSeconds: Int          // auto-delete timer (0 = off), shared by both members
+    /// When the newest message falls due on the timer (server-written beside `expiresAt` on the
+    /// message, 2026-10-07). The chat list burns a CLOSED chat on it; see ConversationsRepository.
+    var lastExpiresAt: Date? = nil
     /// Restricted chat (owner, 2026-10-03). Shared by both members, like the timer: either may set
     /// them and they bind both. See `ChatRestrictions`.
     var noScreenshots = false
@@ -936,6 +939,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.markedUnread = boolMap(data["markedUnread"])   // 2026-09-24 decision D13
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
+        self.lastExpiresAt = (data["lastExpiresAt"] as? Timestamp)?.dateValue()
         // ⛔ EACH PERSON'S OWN SWITCH — owner, 2026-10-03, the reference app's private-chat rule:
         // `restrictedBy[uid]` is set by that person alone; the chat is restricted while ANYONE'S is
         // on. The three older fields (one shared switch, 2026-10-03 morning) still count until a

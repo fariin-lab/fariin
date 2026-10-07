@@ -2,6 +2,8 @@ import Foundation
 import Observation
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
+import UIKit
 
 /// Live chat list.
 ///
@@ -87,6 +89,13 @@ final class ConversationsRepository {
     var loadingOlder = false
     @ObservationIgnored private var listenerUid: String?
 
+    /// Disappearing messages in chats that are NOT open (owner, 2026-10-07). See `scheduleListBurn`.
+    @ObservationIgnored private var listBurnTimer: Timer?
+    @ObservationIgnored private var listBurnAsked: [String: Date] = [:]
+    @ObservationIgnored private var foregroundObserver: NSObjectProtocol?
+    /// The last list the listener handed `publish`, kept so a timer can re-publish it without a snapshot.
+    @ObservationIgnored private var lastRaw: [Conversation] = []
+
     /// 2026-09-24 feature-audit: there is an older page and the window may still grow to fetch it.
     var canLoadOlder: Bool { hasOlder && windowLimit < Self.maxWindow }
 
@@ -131,6 +140,15 @@ final class ConversationsRepository {
         // to listen to. This is NOT the "Demo chats" switch, which leaves the real listener running
         // and has its rows added in `publish`.
         if DemoMode.active { hasLoaded = true; return }
+        // 2026-10-07: coming back to the front re-checks every chat's newest expiry at once, instead
+        // of waiting on a timer that could not fire while the app was asleep. One observer for the life
+        // of the app; this method runs again on every re-attach.
+        if foregroundObserver == nil {
+            foregroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.listBurnTick()
+                }
+        }
         // Media a Sign Out kept on this phone: back to its own account, or wiped before anyone else's
         // session sees it. A no-op unless a keep is pending. (2026-09-26)
         if let signedIn = Auth.auth().currentUser?.uid { SessionWipe.claimKeptMedia(for: signedIn) }
@@ -169,6 +187,7 @@ final class ConversationsRepository {
             // 2026-09-26 block rebuild: through the block filter too. The disk copy is the RAW list,
             // and `BlockList.start()` above has already put this account's saved list in memory.
             let cached = hideAccountBlocked(ConversationsDiskCache.shared.load(uid: uid), me: uid)
+                .map(Self.burnedIfDue)   // a message that ran out while the app was closed is not shown again
             if !cached.isEmpty {
                 conversations = cached
                 hasLoaded = true
@@ -399,10 +418,14 @@ final class ConversationsRepository {
     }
 
     private func publish(_ raw: [Conversation]) {
+        lastRaw = raw
+        scheduleListBurn()   // what is due now is burned, and the next expiry gets its timer
         // The demo chats are added HERE and nowhere else. The live listener reassigns the whole
         // array on every snapshot, so injecting them at the switch would have them wiped a second
         // later by the next presence or typing flag. A no-op unless the switch is on.
-        let convs = DemoMode.withDemoChats(raw)
+        // `burnedIfDue`: a summary whose timer has run out is shown blank until the server's rewrite
+        // lands, the same hide-first rule the open thread follows for its bubbles.
+        let convs = DemoMode.withDemoChats(raw).map(Self.burnedIfDue)
         if !convs.isEmpty { rememberHadChats() }
         prefetchArrivedVoice(convs)
         // Warm the chats that just changed, so opening one lands on a full screen instead of drawing
@@ -592,6 +615,68 @@ final class ConversationsRepository {
     func stop() {
         listener?.remove()
         listener = nil
+        listBurnTimer?.invalidate(); listBurnTimer = nil
+    }
+
+    // MARK: - Disappearing messages in chats that are not open (owner, 2026-10-07)
+    //
+    // The thread's own burn timer runs only while a chat is on screen (ThreadRepository). Every other
+    // chat had nothing watching it: a message due at 9:00 stayed in the chat list, on this phone and
+    // on the other person's, until the server's five-minute sweep. The server now stamps the newest
+    // message's expiry on the conversation (`lastExpiresAt`), so this list can do for a closed chat
+    // what the thread does for an open one: hide first, then ask the server to delete, and the
+    // server's summary rewrite is what the listener brings back.
+
+    /// The list's copy of a summary whose timer has run out, blanked. Derived from the data on every
+    /// publish rather than remembered, so it ends by itself when the server rewrites the summary (which
+    /// moves or clears `lastExpiresAt`) and never hides a message that is still alive.
+    private static func burnedIfDue(_ c: Conversation) -> Conversation {
+        guard let due = c.lastExpiresAt, due <= Date() else { return c }
+        var m = c
+        m.lastMessageCipher = ""
+        m.lastImageUrl = nil
+        m.lastImageEnc = nil
+        m.lastImages = []
+        return m
+    }
+
+    /// One timer for the whole list, re-armed from every publish: burns what is due, then waits for the
+    /// next expiry. Something due that the server has not rewritten yet (offline, or still working)
+    /// gets a retry every 30s, so a chat is never left half-burned.
+    private func scheduleListBurn() {
+        listBurnTimer?.invalidate(); listBurnTimer = nil
+        let now = Date()
+        let due = lastRaw.filter { c in c.lastExpiresAt.map { $0 <= now } ?? false }
+        if !due.isEmpty { burnList(due) }
+        var next = lastRaw.compactMap(\.lastExpiresAt).filter { $0 > now }.min()
+        if !due.isEmpty { next = min(next ?? .distantFuture, now.addingTimeInterval(30)) }
+        guard let next, next != .distantFuture else { return }
+        // A fifth of a second past the mark, so the message is genuinely due when it is looked at.
+        let delay = max(0.2, next.timeIntervalSince(now) + 0.2)
+        listBurnTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.listBurnTick()
+        }
+    }
+
+    /// Re-publish the last list: blanks what has just fallen due, burns it, re-arms the timer.
+    private func listBurnTick() {
+        guard !lastRaw.isEmpty else { return }   // nothing has arrived yet; the first snapshot will do all of this
+        publish(lastRaw)
+    }
+
+    /// Ask the server to delete what is due in each chat. No ids: the server finds them itself
+    /// (`burnExpiredMessages`), and the deletion is the server's, so the other person's copy goes too.
+    private func burnList(_ due: [Conversation]) {
+        let now = Date()
+        for c in due where !DemoMode.isDemoConversation(c.id) {
+            // One ask per chat per 20s: the server answers by rewriting the summary, and until that
+            // lands the chat still looks due on every tick.
+            if let asked = listBurnAsked[c.id], now.timeIntervalSince(asked) < 20 { continue }
+            listBurnAsked[c.id] = now
+            Functions.functions(region: "me-central1").httpsCallable("burnExpiredMessages")
+                .call(["cid": c.id, "ids": [String]()]) { _, _ in }
+        }
+        NotificationCleaner.pruneExpired()
     }
 
     /// The "Demo chats" switch was flipped. Redraw the list from what is already in memory rather

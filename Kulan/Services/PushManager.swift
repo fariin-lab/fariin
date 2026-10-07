@@ -282,6 +282,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
 
 // Clear a chat's delivered notifications + fix the app badge when you read it.
 enum NotificationCleaner {
+    /// Banners for messages whose disappearing timer has run out (owner, 2026-10-07: the message
+    /// went from the chat but its notification stayed). The push carries the message's `expiresAt`
+    /// in milliseconds, so the phone can tell without opening the chat. Run from the chat list's
+    /// burn tick and when the app comes to the front.
+    static func pruneExpired() {
+        let center = UNUserNotificationCenter.current()
+        let now = Date().timeIntervalSince1970 * 1000
+        center.getDeliveredNotifications { notes in
+            let ids = notes.filter { note in
+                guard let raw = note.request.content.userInfo["expiresAt"],
+                      let ms = Double("\(raw)") else { return false }
+                return ms <= now
+            }.map { $0.request.identifier }
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
     static func clear(cid: String) {
         let center = UNUserNotificationCenter.current()
         center.getDeliveredNotifications { notes in
