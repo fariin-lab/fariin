@@ -9,6 +9,22 @@ import FirebaseFunctions   // 2026-09-24 decision D12: consumeOnceImage call
 import UniformTypeIdentifiers
 import QuickLook
 
+/// THE ONE DOOR FROM A TAPPED CALL LINK TO ITS LOBBY (owner, 2026-10-07: "when I click a group call
+/// link it shows 'Open link?'; open the page straight away, not the browser"). Inside the app our own
+/// call link never asks and never reaches a web sheet: the answer is the pre-join screen, the same one
+/// the app opens when the link is tapped from outside (KulanApp.joinCallLink), with the same refusal
+/// over a live call. Both link routers in this file come here, the UIKit rows' and the SwiftUI rows'.
+enum CallLinkDoor {
+    @MainActor static func open(key: String) {
+        guard !GroupCallService.shared.isActive, !GroupCallService.shared.connecting,
+              CallService.shared.state == .idle else {
+            GroupCallService.presentOverTop(GroupCallService.busyNotice)
+            return
+        }
+        GroupCallService.shared.openLobby(key: key)
+    }
+}
+
 // Gallery-video handoff: PhotosPicker exports the movie to a temp FILE (no giant Data
 // copy through memory); we transcode from that URL and delete it after.
 struct PickedMovie: Transferable {
@@ -3641,6 +3657,14 @@ struct ThreadView: View {
     /// forty live cells each carrying their own `confirmationDialog` is forty presentation machines,
     /// and a dialog anchored inside a recycled cell can be torn down under the user's finger.
     private func routeThreadURL(_ url: URL) {
+        // ⛔ A CALL LINK OPENS THE PRE-JOIN SCREEN, NOT "Open link?" — owner, 2026-10-07, screenshot:
+        // tapping https://fariin.com/call/#key=… in a message asked "Open link?" and then went to a
+        // web sheet. It is our own link: the same route the app takes when it is tapped from outside
+        // (KulanApp.handleDeepLink), straight to the lobby.
+        if case .call(let key)? = KulanApp.route(from: url) {
+            CallLinkDoor.open(key: key)
+            return
+        }
         // ⛔ A USERNAME LINK OPENS THE CHAT, NOT A WEB PAGE — owner, 2026-10-03: tapping
         // https://fariin.com/u/kream in a message must open kream's chat in the app, the way the
         // reference app treats its own username links. Only the old kulan:// form was caught here,
@@ -3999,6 +4023,13 @@ struct ThreadView: View {
                 if AppRouter.shared.pendingMessageId != nil { return nil }
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.offsetFromTop
+            }(),
+            // The top inset that offset was measured against, so the list can tell whether the bar's
+            // inset has arrived before it shows the restored row (owner, 2026-10-07: the reopen jump).
+            initialScrollTopInset: {
+                if AppRouter.shared.pendingMessageId != nil { return nil }
+                if unreadOnOpen > 0 { return nil }
+                return ChatScrollStore.shared.position(for: cid)?.topInset
             }(),
             // ⛔ THE SAVED ROW IS NOT LOADED YET: hold the first land while the `.task` pages it in,
             // so the saved tier above can win when the land finally happens. See `savedRowNeedsPaging`.
@@ -8991,6 +9022,12 @@ struct MessageBubble: View, Equatable {
     // Route a tapped link: web URL -> "Open link?" confirm; kulan://u/<handle> -> open the
     // person (or show "doesn't exist"). Returns .handled so iOS never opens it directly.
     private func routeTappedURL(_ url: URL) -> OpenURLAction.Result {
+        // Our own call link: the lobby, never the "Open link?" confirm (owner, 2026-10-07). Same
+        // door as `routeThreadURL` on the UIKit rows.
+        if case .call(let key)? = KulanApp.route(from: url) {
+            CallLinkDoor.open(key: key)
+            return .handled
+        }
         if url.scheme == "kulan", url.host == "u" {
             let handle = url.lastPathComponent
             Task { @MainActor in
