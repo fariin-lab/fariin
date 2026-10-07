@@ -501,7 +501,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // its snapshot in first; the row being landed on may be in that very apply. Idempotent by
         // `didFirstLand`, so an apply completion getting there first costs nothing.
         if !hold, !didFirstLand {
-            DispatchQueue.main.async { [weak self] in self?.performFirstLandIfReady() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // An EMPTY chat with a stale saved position: the hold skipped the empty-state reveal
+                // and the land bails on no rows, so without this the chat stayed blank (check,
+                // 2026-10-07). The same one-shot reveal the unheld path schedules.
+                if self.currentIds.isEmpty { self.scheduleEmptyReveal() } else { self.performFirstLandIfReady() }
+            }
         }
     }
     var lastRepaintedModelsVersion = -1       // -1 so the first update always repaints
