@@ -58,6 +58,9 @@ struct SettingsView: View {
     /// at launch, so the switch survives a restart the way every other setting does. The row that
     /// shows it is gated on `DemoMode.isAvailable` — debug or TestFlight, never the App Store.
     @AppStorage("demoChats") private var demoChats = false
+    /// Settings > Group Call Demo (owner, 2026-10-07): the simulated group call, isolated from the
+    /// real call system (Views/GroupCallDemo).
+    @State private var showGroupCallDemo = false
     @State private var showEdit = false
     @State private var showQR = false
     @State private var showPhoto = false          // tap the avatar → full-screen photo morph
@@ -234,6 +237,11 @@ struct SettingsView: View {
                                 // half-broken: chats appear at once, stories only tomorrow.
                                 StoriesRepository.shared.refreshForDemo()
                             }
+                        Button { showGroupCallDemo = true } label: {
+                            Label("Group Call Demo", systemImage: "person.3.fill")
+                        }
+                        .tint(.orange)
+                        .fullScreenCover(isPresented: $showGroupCallDemo) { DemoGroupCallView() }
                     } footer: {
                         Text("Testers only. Adds seven local chats to your list and two people to the story row, for taking screenshots. They are made on this device, never uploaded, and nobody else can see them. Your own chats and your own story are not touched.")
                     }
