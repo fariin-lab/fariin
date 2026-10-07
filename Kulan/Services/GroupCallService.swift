@@ -405,14 +405,27 @@ final class GroupCallService: ObservableObject {
                     "startedAt": FieldValue.serverTimestamp(),
                     "recordId": recordId,
                 ]
-                try? await ref.setData(callDoc)
-                await Self.writeRecord(cid: cid, id: recordId, video: video)
+                // Audit M-020, 2026-10-07: the chat record only once the doc write went through.
+                // A refused start (the rules keep a stale active doc of someone else's) used to
+                // leave an "ongoing" bubble no doc pointed to.
+                let started: Bool
+                do { try await ref.setData(callDoc); started = true } catch { started = false }
+                if started, gen == joinGeneration, activeCid == cid {
+                    groupRecordId = recordId
+                    await Self.writeRecord(cid: cid, id: recordId, video: video)
+                } else if started {
+                    // Audit M-139, 2026-10-07: ended (or left) while the start write was out. The
+                    // leave's own end write may have run before this landed, which would leave the
+                    // call active with nobody in it. Close it here, only if the doc is still mine.
+                    await Self.closeCall(cid: cid, adhoc: false, recordId: recordId, answered: false)
+                }
             } else {
-                // owner audit 2026-10-06 #3: a JOINER only confirms the call is live. It used to
-                // write the full doc without merge, which erased the starter's recordId (so the
-                // chat's "ongoing" bubble was never closed) and reset startedAt/startedBy to the
-                // joiner's, so the length was measured from the wrong moment.
-                try? await ref.setData(["active": true], merge: true)
+                // owner audit 2026-10-06 #3: a JOINER no longer writes the full doc (it erased the
+                // starter's recordId and reset startedAt/startedBy). Audit M-020, 2026-10-07: its
+                // `active: true` merge was refused by the rules for every non-starter anyway, so it
+                // is gone; the joiner only reads which call it is in, so its leave closes that one.
+                let d = try? await ref.getDocument().data()
+                if gen == joinGeneration, activeCid == cid { groupRecordId = d?["recordId"] as? String }
             }
         } catch {
             if gen != joinGeneration { await abandonJoin(); return }   // owner audit 2026-10-06 #4
@@ -554,7 +567,28 @@ final class GroupCallService: ObservableObject {
     }
 
     /// Someone came or went. The caller's ringing tone stops with the first arrival.
-    fileprivate func remotePeopleChanged() { updateRingback() }
+    fileprivate func remotePeopleChanged() { noteRoomPeople(); updateRingback() }
+
+    /// Audit M-019 / M-088, 2026-10-07: what the room looked like while MY link was up. Read only
+    /// while connected: when my link drops, the SDK empties the list because I am gone, not because
+    /// the others left (owner audit 2026-10-06 #17).
+    /// `aloneSince`: alone in a connected room since then. A drop's own cleanup can only make this
+    /// a moment old, so `disconnect()` trusts it for a dropped room only when it is a few seconds old.
+    /// `someoneJoined`: anybody else was ever in the room with me, so the record says "answered".
+    private var aloneSince: Date?
+    private var someoneJoined = false
+    private func noteRoomPeople() {
+        guard isActive, room.connectionState == .connected else { return }
+        if room.remoteParticipants.isEmpty {
+            if aloneSince == nil { aloneSince = Date() }
+        } else {
+            aloneSince = nil
+            someoneJoined = true
+        }
+    }
+    /// The chat record of the group conversation call I am in (`recordId` on its doc): written by me
+    /// as the starter, read once as a joiner. The last-out end write checks it (audit M-033).
+    private var groupRecordId: String?
 
     /// Someone's LiveKit attributes changed; mine may carry a new role.
     fileprivate func attributesChanged() {
@@ -742,6 +776,8 @@ final class GroupCallService: ObservableObject {
         usingFrontCamera = true
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
+        aloneSince = nil; someoneJoined = false
+        noteRoomPeople()              // audit M-019 / M-088: who was already here when I came in
         updateRingback()
         updateGroupScreenBehavior()   // audit M-096
     }
@@ -927,9 +963,13 @@ final class GroupCallService: ObservableObject {
     }
 
     /// owner audit 2026-10-06 #4: a join the user already left. Whatever it got up is taken down
-    /// quietly: no notice, no call. Nothing else can have joined meanwhile, because every start
-    /// refuses while `connecting` is still true.
+    /// quietly: no notice, no call.
+    /// Audit M-061, 2026-10-07: `disconnect()` (which every `end()` runs) now clears `connecting`
+    /// for a join left mid-way, so the phone is not "busy" until this old join wakes up. That end
+    /// already closed the room and reset the state. If a NEW join (or call) owns the shared room by
+    /// the time this one wakes, it is left alone; if the end is still running, it does the cleanup.
     private func abandonJoin() async {
+        guard !connecting, activeCid == nil, !leaving else { return }
         await room.disconnect()
         resetRoomState()
         connecting = false
@@ -970,7 +1010,19 @@ final class GroupCallService: ObservableObject {
         }
     }
 
+    /// Audit M-124, 2026-10-07: one leave at a time. "End for everyone" ran it twice (the room's
+    /// deleted event and the admin call's own end), and the second run could tear down whatever
+    /// had started in between. A second caller now waits for the run in progress.
+    private var disconnectRun: Task<Void, Never>?
     private func disconnect() async {
+        if let running = disconnectRun { await running.value; return }
+        let run = Task { @MainActor in await self.runDisconnect() }
+        disconnectRun = run
+        await run.value
+        disconnectRun = nil
+    }
+
+    private func runDisconnect() async {
         leaving = true
         defer { leaving = false; hangingUp = false }
         // Audit M-085, 2026-10-07: a mic or camera change still in flight (the join's first publish,
@@ -980,12 +1032,10 @@ final class GroupCallService: ObservableObject {
         await cameraChain?.value
         let cid = activeCid
         let adhoc = isAdhoc, link = isLink
-        // Leaving while still waiting to be let in: withdraw the knock so the creator's list does
-        // not keep a person who has gone.
-        if let w = waitingLink, waitingForApproval {
-            try? await db.collection("callLinks").document(w.roomId)
-                .collection("requests").document(myUid).delete()
-        }
+        // Leaving while still waiting to be let in: the knock is withdrawn (below, after the local
+        // state is cleared) so the creator's list does not keep a person who has gone.
+        let knock = waitingForApproval ? waitingLink?.roomId : nil
+        let me = myUid
         // "I am the only one left" is also true when I JOINED an empty room — which is exactly the
         // case a stale doc creates (the last member force-quit, so nothing ever wrote active:false
         // and the Join bar stayed up for hours). Clearing it here means the first person to find the
@@ -994,34 +1044,111 @@ final class GroupCallService: ObservableObject {
         // dropped), remoteParticipants is empty because MY link is down, not because the others
         // left, and reading it then ended the call for everyone still in it. A dropped last member
         // leaves the doc active; the 4h age cap and the next person to find the room empty heal it.
-        let wasLast = room.connectionState == .connected && room.remoteParticipants.isEmpty
+        // Audit M-019, 2026-10-07: the client half of "nobody is left". A room that dropped on its
+        // own (my link gave up) has an empty list because I am gone; but if I had already been
+        // alone in it, connected, for a few seconds before that, I was the last one, and nobody else
+        // will ever write the end. (The server's room watcher is the full fix.)
+        // Audit M-033, 2026-10-07: read as late as possible, right before the room closes.
+        let state = room.connectionState
+        let wasLast = (state == .connected && room.remoteParticipants.isEmpty)
+            || (state == .disconnected && (aloneSince.map { Date().timeIntervalSince($0) > 3 } ?? false))
+        let answered = someoneJoined   // audit M-088
+        let recordId = groupRecordId
         await room.disconnect()
-        if let cid, wasLast, adhoc {
-            // An ad-hoc call has no chat record to close; the last one out just stops the ringing.
-            try? await db.collection("groupCalls").document(cid)
-                .updateData(["active": false, "endedAt": FieldValue.serverTimestamp()])
-        } else if let cid, wasLast, !link {
-            let ref = Firestore.firestore().collection("groupCalls").document(cid)
-            // 2026-09-24 fix-all #97: the last one out closes the call's record with its length.
-            let snap = try? await ref.getDocument()
-            try? await ref.setData(["active": false], merge: true)
-            if let d = snap?.data(), d["active"] as? Bool == true, let recordId = d["recordId"] as? String,
-               let started = (d["startedAt"] as? Timestamp)?.dateValue() {
-                let secs = max(0, Int(Date().timeIntervalSince(started)))
-                try? await Firestore.firestore().collection("conversations").document(cid)
-                    .collection("messages").document(recordId)
-                    .updateData(["callOutcome": "answered", "callDuration": secs])
-            }
-        }
+        // Audit M-060, 2026-10-07: the local state goes first. It used to wait for the end writes
+        // below, so on a slow network the phone stayed "busy" and the dead call screen kept working
+        // buttons for seconds.
         activeCid = nil; micOn = true; cameraOn = false; isVideo = false; callTitle = ""
         cameraLocked = false
         usingFrontCamera = true; lobbyError = nil
         // The next group call starts on the speaker again, as group calls always have.
         speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
         minimized = false
+        // Audit M-061, 2026-10-07: a join left mid-way (the lobby closed, the screen swiped away)
+        // kept `connecting` until that join woke up, so reopening the link or any incoming call was
+        // refused as busy. Every `end()` comes through here; the old join's generation check (and
+        // `abandonJoin`'s own guard) keep it from touching anything newer.
+        connecting = false
+        groupRecordId = nil; aloneSince = nil; someoneJoined = false
         resetRoomState()
         presentsRoomScreen = false
         reevaluateInvites()
+        // The network part, after the phone is free. Audit M-099: with background time, so ending
+        // from the lock screen does not lose the end write and the chat record.
+        let closes = cid != nil && wasLast && !link
+        guard knock != nil || closes else { return }
+        Self.withBackgroundTime("group-call-end") {
+            if let knock {
+                try? await Firestore.firestore().collection("callLinks").document(knock)
+                    .collection("requests").document(me).delete()
+            }
+            // Link calls have no doc to end here; the ad-hoc doc has no chat record to close.
+            // A record that is not known to be mine (a stale doc found empty) keeps the old rule:
+            // closed "answered" with its length, never turned into a missed call.
+            if closes, let cid {
+                await Self.closeCall(cid: cid, adhoc: adhoc, recordId: recordId,
+                                     answered: answered || recordId == nil)
+            }
+        }
+    }
+
+    /// The last one out ends the call's doc and (group conversations) closes its chat record.
+    /// Audit M-033 / M-034, 2026-10-07: in ONE transaction that ends only the call I was in. It
+    /// used to be a blind write decided at the tap, so it could switch off a call someone had just
+    /// started, and a leave queued offline could end a later call. A transaction needs the server,
+    /// so nothing is queued; and for a group conversation it ends the doc only while its
+    /// `recordId` is still the one of my call (when I know it).
+    /// Audit M-088, 2026-10-07: a call nobody else ever joined is closed "missed", with no length.
+    private static func closeCall(cid: String, adhoc: Bool, recordId: String?, answered: Bool) async {
+        let db = Firestore.firestore()
+        let ref = db.collection("groupCalls").document(cid)
+        let ended: [String: Any]? = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
+            db.runTransaction({ txn, errPtr -> Any? in
+                let snap: DocumentSnapshot
+                do { snap = try txn.getDocument(ref) } catch {
+                    errPtr?.pointee = error as NSError
+                    return nil
+                }
+                guard let d = snap.data(), d["active"] as? Bool == true else { return NSNull() }
+                if !adhoc, let recordId, d["recordId"] as? String != recordId { return NSNull() }   // a newer call
+                // The group rules let a member change `active` and nothing else; an ad-hoc doc also
+                // takes `endedAt`.
+                if adhoc {
+                    txn.updateData(["active": false, "endedAt": FieldValue.serverTimestamp()], forDocument: ref)
+                } else {
+                    txn.updateData(["active": false], forDocument: ref)
+                }
+                return d
+            }, completion: { result, error in
+                cont.resume(returning: error == nil ? result as? [String: Any] : nil)
+            })
+        }
+        // 2026-09-24 fix-all #97: the last one out closes the call's record.
+        guard !adhoc, let d = ended, let rid = d["recordId"] as? String else { return }
+        let record = db.collection("conversations").document(cid).collection("messages").document(rid)
+        if answered, let started = (d["startedAt"] as? Timestamp)?.dateValue() {
+            let secs = max(0, Int(Date().timeIntervalSince(started)))
+            try? await record.updateData(["callOutcome": "answered", "callDuration": secs])
+        } else if !answered {
+            try? await record.updateData(["callOutcome": "missed"])
+        }
+    }
+
+    /// Audit M-099, 2026-10-07: end-of-call writes get the short background time iOS grants, given
+    /// back when they finish or after 10 s, whichever comes first.
+    private static func withBackgroundTime(_ name: String, _ work: @escaping @MainActor () async -> Void) {
+        let hold = BackgroundTimeHold()
+        hold.id = UIApplication.shared.beginBackgroundTask(withName: name) {
+            MainActor.assumeIsolated { hold.end() }
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            hold.end()
+        }
+        Task { @MainActor in
+            await work()
+            hold.end()
+        }
     }
 
     // MARK: - Multi-person calls
@@ -1763,6 +1890,18 @@ final class GroupCallService: ObservableObject {
         // is answered with the camera on only when access was already given.
         let video = i.video && AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         Task { await joinAdhoc(roomId: i.roomId, video: video) }
+    }
+}
+
+/// Audit M-099, 2026-10-07: one background-time assertion, given back once (the work finished, the
+/// 10 s cap, or iOS asking for it back, whichever is first).
+@MainActor
+private final class BackgroundTimeHold {
+    var id: UIBackgroundTaskIdentifier = .invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }
 
