@@ -1967,11 +1967,22 @@ final class CallService: NSObject {
     private func stopHeartbeat() {
         heartbeatTimer?.invalidate(); heartbeatTimer = nil
         lastPeerBeatAt = nil; lastPeerBeatValue = 0
+        lastOwnBeatAckAt = nil
     }
+
+    /// Audit M-040, 2026-10-07: when the server last CONFIRMED one of my own beats. Proof that my
+    /// side can reach the signalling at all, which is what the liveness check below needs before it
+    /// may blame the other phone.
+    private var lastOwnBeatAckAt: Date?
 
     private func writeHeartbeat() {
         guard let id = callId, state == .active || state == .reconnecting else { return }
-        db.collection("calls").document(id).updateData(["hb.\(me)": Date().timeIntervalSince1970])
+        db.collection("calls").document(id).updateData(["hb.\(me)": Date().timeIntervalSince1970]) { [weak self] err in
+            // The completion only fires once the server has the write (offline it waits), so a nil
+            // error means we were online just now.
+            guard let self, err == nil, self.callId == id else { return }
+            self.lastOwnBeatAckAt = Date()
+        }
     }
 
     private func notePeerHeartbeat(_ d: [String: Any]) {
@@ -1984,6 +1995,13 @@ final class CallService: NSObject {
     private func checkPeerLiveness() {
         guard state == .reconnecting, let last = lastPeerBeatAt else { return }
         guard Date().timeIntervalSince(last) > 15 else { return }
+        // Audit M-040, 2026-10-07: their silence only counts while MY beats are getting through.
+        // When it was our own network that dropped, their beats cannot reach us either, and the
+        // check ended a call that was about to recover, 15-20s in, well inside the 30s reconnect cap.
+        // Now the server must have taken one of my beats more than 10s after their last one: I am
+        // demonstrably online and they still say nothing. 10, not 15: my queued beats are confirmed
+        // in a burst on reconnect, a moment before the snapshot carrying their newest beat.
+        guard let ack = lastOwnBeatAckAt, ack.timeIntervalSince(last) > 10 else { return }
         endReason = .failed
         hangUp()   // ~15s instead of frozen for 30s+
     }
