@@ -122,6 +122,7 @@ final class CallService: NSObject {
                 stopPathMonitor()
                 restartRequestsSent = 0; restartRequestsSeen = 0
                 restartInFlightAt = nil; pcIceServersFetchedAt = nil   // audit M-117, M-009
+                transportFailed = false                                // audit M-042
                 stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 callAudioLive = false
@@ -2479,6 +2480,9 @@ final class CallService: NSObject {
     /// Owner audit 2026-10-06 #15: the path dropped while the phone was still ringing (a pre-negotiated
     /// call). Set by the ICE delegate, cleared when the path comes back and at the end of every call.
     private var iceDroppedDuringRing = false
+    /// Audit M-042, 2026-10-07: the connection failed with ICE still up (a DTLS failure). Set by the
+    /// connection-state delegate, cleared at the end of every call.
+    private var transportFailed = false
 
     /// Called when the call goes `.active`: a path that died during the ring and never came back
     /// gets the ordinary reconnect (Reconnecting label, restart, 30s cap) instead of a call that
@@ -4292,6 +4296,9 @@ extension CallService: RTCPeerConnectionDelegate {
             guard peerConnection === self.pc else { return }
             switch newState {
             case .connected, .completed:
+                // Audit M-042: ICE up over a failed DTLS transport is not media. Stay down; the
+                // reconnect cap ends the call.
+                guard !self.transportFailed else { break }
                 self.iceDroppedDuringRing = false
                 // ⭐ THE MEDIA PATH BEING UP IS NO LONGER THE SAME EVENT AS THE CALL STARTING, and
                 // splitting those two is the whole of the pre-negotiation change.
@@ -4325,6 +4332,36 @@ extension CallService: RTCPeerConnectionDelegate {
             default:
                 break
             }
+        }
+    }
+    /// Audit M-042, 2026-10-07: the WHOLE connection's state, ICE plus DTLS. "Connected" was judged
+    /// by ICE alone, so a DTLS handshake that failed on a path ICE called good left a call that read
+    /// connected and carried nothing, with no reconnect and no give-up. `.failed` here now takes the
+    /// same road as ICE `.failed`: Reconnecting, a restart, and the 30s cap ends it if nothing heals.
+    /// The other states are left to the ICE handler above, which already owns them.
+    ///
+    /// Only a failure with ICE still up is handled here: an ICE failure also fails the whole
+    /// connection, and the ICE handler already takes that one. A failed DTLS transport does not come
+    /// back, and ICE reconnecting after a restart must not read as recovered on top of it, so
+    /// `transportFailed` holds `mediaReady` down for the rest of the call (see the ICE handler).
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        guard newState == .failed else { return }
+        // Read here, on the signalling thread the delegate runs on, before the hop.
+        let ice = peerConnection.iceConnectionState
+        guard ice == .connected || ice == .completed else { return }
+        DispatchQueue.main.async {
+            guard peerConnection === self.pc else { return }   // #45: not a closed call's leftover
+            print("call: M-042 connection failed with ICE up (DTLS)")
+            self.transportFailed = true
+            self.mediaReady = false
+            // Still ringing: the same "dropped during the ring" mark the ICE handler sets, so the
+            // answer goes to Reconnecting. Answered: Reconnecting now. Either way the 30s cap ends
+            // it as Failed.
+            if self.state == .incoming || self.state == .outgoing {
+                self.iceDroppedDuringRing = true
+                return
+            }
+            self.enterReconnecting(restartAfter: 0)
         }
     }
     // Unused delegate methods (required by protocol).
