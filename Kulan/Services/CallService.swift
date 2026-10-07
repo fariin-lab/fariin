@@ -69,7 +69,9 @@ final class CallService: NSObject {
         didSet {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
-            if state == .outgoing, cameraOn {
+            // Audit M-049, 2026-10-07: not with AirPods, a headset or a car connected. The override
+            // pulled a video call's audio out of the AirPods onto the loudspeaker.
+            if state == .outgoing, cameraOn, !externalOutputAround {
                 // Outgoing VIDEO call: ringback through the LOUDSPEAKER — you're looking at
                 // your preview at arm's length, not holding the phone to your ear.
                 isSpeaker = true; wantsSpeaker = true
@@ -85,7 +87,10 @@ final class CallService: NSObject {
                 // from .reconnecting, and applying the default each time put a video call the person
                 // had moved to the earpiece back on the loudspeaker after any network blip. The
                 // default is the call's starting point, not a rule that outranks their choice.
-                if !videoSpeakerDefaultApplied, cameraOn || startedAsVideo {
+                // Audit M-010 / M-049, 2026-10-07: never over the person's own pick (a speaker tap
+                // during "Calling..." used to be overruled here), and never with a device connected.
+                if !videoSpeakerDefaultApplied, cameraOn || startedAsVideo,
+                   !speakerChosenByUser, !externalOutputAround {
                     videoSpeakerDefaultApplied = true
                     isSpeaker = true; wantsSpeaker = true
                 }
@@ -117,6 +122,7 @@ final class CallService: NSObject {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 videoSpeakerDefaultApplied = false   // the next call gets its own default (#6)
+                speakerChosenByUser = false          // audit M-010: so does its own choice
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
                 stopPathMonitor()
@@ -1254,6 +1260,13 @@ final class CallService: NSObject {
     ///    wearing AirPods, contradicting "external devices always win" three lines away in updateAudioRoute.
     ///  • their camera turning on flipped MY proximity sensor off (updateInCallScreenBehavior gates on
     ///    audioRoute == .earpiece) while leaving me on the earpiece — a live screen against the cheek.
+    ///
+    /// Audit M-010, 2026-10-07: THE ROUTE NO LONGER FOLLOWS EVERY CAMERA EVENT. It ran on every `cams`
+    /// change, and the other side's camera pauses for a weak link, a background or a hold all arrive
+    /// as `cams` false, so their network moved MY audio between loudspeaker and earpiece, over a
+    /// choice I had just made with the speaker button. Now the speaker default is applied once per
+    /// call, on the first time any video shows, and only if the person has not chosen a route
+    /// themselves; a camera turning off never moves the route. The mode switch stays as it was.
     private func applyVideoAudioPolicy() {
         let session = AVAudioSession.sharedInstance()
         let videoShowing = cameraOn || remoteCameraOn
@@ -1262,17 +1275,29 @@ final class CallService: NSObject {
         // .videoChat is tuned for the loudspeaker, .voiceChat for the earpiece. The wrong one is the
         // hear-your-own-voice bug.
         try? session.setMode(videoShowing ? .videoChat : .voiceChat)
-        // An external device ALWAYS wins. Never yank audio out of someone's AirPods.
-        guard audioRoute != .external else { return }
-        if videoShowing {
-            isSpeaker = true
-            wantsSpeaker = true            // survives CallKit re-activating and resetting the route
-            try? session.overrideOutputAudioPort(.speaker)
-        } else {
-            isSpeaker = false
-            wantsSpeaker = false           // without this, updateAudioRoute re-asserts loudspeaker forever
-            try? session.overrideOutputAudioPort(.none)
-        }
+        // Audit M-050, 2026-10-07: no video and the sound is in a device, so a speaker intent left over
+        // from the video part is stale. Kept, it put the call on the loudspeaker the moment the
+        // AirPods came out. Cleared BEFORE the device guard below, which used to skip this.
+        if !videoShowing, audioRoute == .external { wantsSpeaker = false }
+        guard videoShowing, !videoSpeakerDefaultApplied, !speakerChosenByUser else { return }
+        // An external device ALWAYS wins. Never yank audio out of someone's AirPods. Audit M-049: a
+        // device that is merely connected counts too; the default waits for a later video edge.
+        guard audioRoute != .external, !externalOutputAround else { return }
+        videoSpeakerDefaultApplied = true
+        isSpeaker = true
+        wantsSpeaker = true            // survives CallKit re-activating and resetting the route
+        try? session.overrideOutputAudioPort(.speaker)
+    }
+
+    /// Audit M-049, 2026-10-07: a headset, AirPods or car is the current output or is connected.
+    /// Read live from the session, because the `.outgoing` default runs before route observation
+    /// starts. Same port list as `updateAudioRoute`.
+    private var externalOutputAround: Bool {
+        let session = AVAudioSession.sharedInstance()
+        let ports: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
+                                               .headphones, .headsetMic, .carAudio]
+        return session.currentRoute.outputs.contains { ports.contains($0.portType) }
+            || (session.availableInputs ?? []).contains { ports.contains($0.portType) }
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
@@ -2013,10 +2038,15 @@ final class CallService: NSObject {
     /// The video-call speaker default has been applied for THIS call (owner audit 2026-10-06 #6).
     /// Reset at .idle. See the `.active` branch of `state`.
     private var videoSpeakerDefaultApplied = false
+    /// Audit M-010, 2026-10-07: the person picked a route themselves this call (the speaker button,
+    /// or a deliberate pick in the system picker). From then on no camera event and no video
+    /// default moves the route. Reset at .idle.
+    private var speakerChosenByUser = false
 
     func toggleSpeaker() {
         isSpeaker.toggle()
         wantsSpeaker = isSpeaker
+        speakerChosenByUser = true   // audit M-010
         // Use AVAudioSession directly — CallKit owns the session in manual mode and
         // RTCAudioSession.lockForConfiguration() can deadlock when called while CallKit
         // is also configuring the session (e.g. right after answer/connect).
@@ -2125,6 +2155,7 @@ final class CallService: NSObject {
             let deliberatePick = hasExternalInput && previous != .earpiece && pickReason
             if deliberatePick {
                 wantsSpeaker = false
+                speakerChosenByUser = true   // audit M-010: their pick, not ours to undo
             } else {
                 try? session.overrideOutputAudioPort(.speaker)
                 // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
