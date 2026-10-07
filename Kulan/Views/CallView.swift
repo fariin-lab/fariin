@@ -45,6 +45,11 @@ struct CallView: View {
     // shrinks your preview continuously into the corner, revealing the other person underneath —
     // FaceTime's connect transition. Live video the whole way; no snapshot, no branch swap.
     @State private var tileEntering = false
+    /// Audit M-056, 2026-10-07: this screen showed MY ringing self-preview full screen, which is the
+    /// only thing the accept hand-off exists to shrink away. Set while a video call rings out, spent
+    /// by the hand-off. Without it the hand-off also ran when the OTHER camera came on mid-call (the
+    /// tile newly appears then too), and blew my avatar or my black tile up over their new video.
+    @State private var ringingPreviewShown = false
 
     // MARK: - Auto-hiding controls (the standard video-call behaviour)
 
@@ -128,7 +133,7 @@ struct CallView: View {
         switch call.state {
         // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…" — the
         // standard messenger order — while the SDP answer is still being built on their phone.
-        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
+        case .outgoing:     return CallStageWords.progress(call) ?? ""   // M-055: one source of words
         // 2026-09-24 fix-all #107: no `.incoming` label. This screen is never up while a call is
         // incoming (`CallContainer.isActive` leaves that state out on purpose: the system's own
         // incoming-call screen answers it), so "Incoming…" could not be drawn. Decision: incoming
@@ -136,8 +141,13 @@ struct CallView: View {
         // The weak-signal notice displaces the duration deliberately: while the camera is down, WHY it
         // is down is the only thing the user actually wants, and without it a paused camera reads as
         // the app being broken. The timer comes straight back when the link recovers.
-        case .active:       return call.videoPausedForNetwork ? "Video paused, weak signal" : durationText
-        case .reconnecting: return "Reconnecting…"
+        // Audit M-057, 2026-10-07: a call put on hold by a phone call also pauses the video, and it
+        // was labelled "Video paused, weak signal", which blames the network for the user's own hold.
+        // Hold says so; the weak-signal words are only for a real network pause.
+        case .active:
+            if call.isHeld { return "On hold" }
+            return call.videoPausedForNetwork ? "Video paused, weak signal" : durationText
+        case .reconnecting: return CallStageWords.progress(call) ?? ""
         case .ended:        return endedText
         default:            return ""
         }
@@ -241,6 +251,19 @@ struct CallView: View {
                             .allowsHitTesting(false)       // decoration: let the show/hide tap through
                         Spacer()
                     }
+                    // Audit M-011, 2026-10-07: the camera was refused, so the camera button cannot do
+                    // anything and the other side sees no video. Say where to fix it, just above the
+                    // controls, in the status line's style. `cameraDenied` is set by CallService.
+                    if call.cameraDenied {
+                        Text("Allow camera access in Settings")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .frame(maxWidth: .infinity)
+                            .padding(.bottom, 10)
+                            .opacity(controlsVisible ? 1 : 0)
+                            .accessibilityHidden(!controlsVisible)
+                            .allowsHitTesting(false)
+                    }
                     controlBar
                         .frame(maxWidth: .infinity)        // centered control pill
                         .padding(.bottom, winInsets.bottom + 22)
@@ -263,7 +286,11 @@ struct CallView: View {
             .task(id: call.otherPhotoUrl ?? "") { await loadPeerPalette() }
             // Connecting, and a voice call turning into a video call, both restart the clock: show the
             // controls for the moment something changes, then get out of the way again.
-            .onChange(of: call.state) { _, _ in showControls() }
+            .onChange(of: call.state) { _, state in
+                showControls()
+                if state == .outgoing, call.cameraOn { ringingPreviewShown = true }   // M-056
+            }
+            .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
             .onChange(of: call.isVideo) { _, _ in showControls() }
             // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
             // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
@@ -421,7 +448,9 @@ struct CallView: View {
                         // outright, and that notice is the one thing that explains a frozen camera.
                         // Both apply → the slashed mic still says muted, the words say why the video
                         // stopped.
-                        Text(call.videoPausedForNetwork ? "Video paused, weak signal" : "Muted")
+                        // M-057: hold is named as hold, not as a weak signal.
+                        Text(call.isHeld ? "On hold"
+                             : (call.videoPausedForNetwork ? "Video paused, weak signal" : "Muted"))
                             .font(.system(size: 15, weight: .medium))
                     }
                     .foregroundStyle(.white.opacity(0.75))
@@ -445,7 +474,9 @@ struct CallView: View {
                     Label(call.screenSharing ? "Stop Sharing" : "Share Screen",
                           systemImage: call.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
                 }
-                .disabled(!(call.state == .active && call.connectedDate != nil))
+                // Audit M-165, 2026-10-07: STOPPING is never disabled. During "Reconnecting…" the
+                // rule above greyed out Stop Sharing too, and the share could not be ended from here.
+                .disabled(!call.screenSharing && !(call.state == .active && call.connectedDate != nil))
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -614,6 +645,9 @@ struct CallView: View {
         // the tile NEWLY appearing while the call is video and the local feed is not user-expanded.
         .onChange(of: visible) { was, shows in
             guard shows, !was, call.isVideo, !isLocalExpanded else { return }
+            // M-056: only the first connect of a call that was showing my live camera full screen.
+            guard ringingPreviewShown, call.cameraOn, call.localVideoTrack != nil else { return }
+            ringingPreviewShown = false
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { tileEntering = true }
@@ -646,6 +680,19 @@ struct CallView: View {
         }
     }
 
+    /// Audit M-052, 2026-10-07: the camera button worked only in `.active`, so during "Reconnecting…"
+    /// (and while a video call rang out) there was no way to turn the camera OFF. Now: on or off while
+    /// connected or reconnecting, and off (never on) while still ringing out. The service applies the
+    /// same rule in `setMyCamera`. Still dimmed while my screen is shared (the share owns the video).
+    private var cameraButtonEnabled: Bool {
+        guard !call.screenSharing else { return false }
+        switch call.state {
+        case .active, .reconnecting: return true
+        case .outgoing:              return call.cameraOn
+        default:                     return false
+        }
+    }
+
     // MARK: - Control capsule (dark, icon-only, red end)
 
     private var controlBar: some View {
@@ -655,13 +702,13 @@ struct CallView: View {
             callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
                        label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
             // MY camera — turn it on/off freely (the other side just sees it, no
-            // permission). Only once CONNECTED; dimmed while still Calling/Ringing.
+            // permission). When it can be pressed: see `cameraButtonEnabled` (M-052).
             callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
                        label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
                 // Dimmed while my screen is shared too: the share owns my video until it stops, and
                 // stopping brings the camera back exactly as it was.
-                .disabled(call.state != .active || call.screenSharing)
-                .opacity(call.state == .active && !call.screenSharing ? 1 : 0.4)
+                .disabled(!cameraButtonEnabled)
+                .opacity(cameraButtonEnabled ? 1 : 0.4)
             // Flip front/back only while my camera is on (and actually showing, not a shared screen).
             if call.cameraOn && !call.screenSharing {
                 callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
@@ -819,10 +866,20 @@ struct CallContainer<Content: View>: View {
     private var call: CallService { CallService.shared }
     @ObservedObject private var group = GroupCallService.shared
     @State private var showGroupRestore = false   // bar tap re-presents the group call UI
+    /// Audit M-087, 2026-10-07: a multi-person call that is up OR still joining. The card, its tap
+    /// and the restore cover all follow this, so a call minimized mid-join can be brought back.
+    private var groupLive: Bool { group.isActive || group.connecting }
 
     private var isActive: Bool {
         switch call.state {
-        case .outgoing, .active, .reconnecting, .ended: return true
+        case .outgoing, .active, .reconnecting: return true
+        // Audit M-012, 2026-10-07: `.ended` counts only for a call this phone was already SHOWING,
+        // on the cover or on the card. Keyed on state alone, a callee who never answered (the caller
+        // cancelled, or it rang out) had the black call cover hard-cut over whatever they were doing
+        // for the 1s end label, with the caller's wording ("Couldn't reach them") and the keyboard
+        // dropped. A call that was on screen keeps its end label exactly as before. The service's end
+        // path is untouched; this only decides whether the root puts anything up for it.
+        case .ended: return coverUp || call.minimized
         default: return false
         }
     }
@@ -837,6 +894,12 @@ struct CallContainer<Content: View>: View {
     /// no-animation transaction so the cut is instant both ways.
     private var wantsCover: Bool { isActive && !call.minimized }
     @State private var coverUp = false
+    /// Audit M-032, 2026-10-07: the call screen really reached the window (its own appear), and the
+    /// number of the latest request for it, so a late check only judges the request it belongs to.
+    @State private var coverShown = false
+    @State private var coverAsk = 0
+    @State private var groupRestoreShown = false   // the same pair for the group restore cover
+    @State private var groupRestoreAsk = 0
     /// Shared by the cover's zoom and the card. See `CallZoomNamespaceKey`.
     @Namespace private var callZoom
 
@@ -847,7 +910,10 @@ struct CallContainer<Content: View>: View {
         // full-width "Return to call" bar was the old UI). Tapping it clears `minimized`, and the
         // onChange below re-presents the call screen from HERE, so it works from any screen.
         .overlay {
-            if group.isActive && group.minimized { GroupFloatingCallWindow() }
+            // Audit M-087, 2026-10-07: also while the join is still in flight. Minimized during
+            // "Connecting…" there was no card at all (`isActive` waits for the room), so a call
+            // that was joining, mic about to open, had nothing on screen pointing back to it.
+            if groupLive && group.minimized { GroupFloatingCallWindow() }
         }
         .overlay {
             if showsFloatingCall {
@@ -916,33 +982,40 @@ struct CallContainer<Content: View>: View {
             CallView()
                 .background(CallPipMorphProbe())
                 .presentationBackground(.black)
+                .onAppear { coverShown = true }      // M-032: see `askForCover`
+                .onDisappear { coverShown = false }
         }
         .onAppear { if wantsCover { presentCover(animated: false) } }
         .onChange(of: wantsCover) { _, want in
             // In: animated only when coming back from the card (it has existed this call).
             // Out: animated only when minimizing; a call that has ended just goes.
             // Both ways a hard cut; the card flight is `CallPipMorph`'s (2026-10-06).
-            if want { presentCover(animated: false) } else { dismissCover(animated: false) }
+            // Audit M-147, 2026-10-07: wanted back while still shrinking into the card (their camera
+            // came on mid-flight) → the flight's overlay goes first, or it draws over the call screen.
+            if want { CallPipMorph.cancelMinimizeFlight(); presentCover(animated: false) } else { dismissCover(animated: false) }
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
         // GroupCallView's own swipe-down sets `minimized` back to true, but a swipe on the COVER
         // itself only closes the cover, and `minimized` was already false — so the group call lost
         // its return bar too. Restoring the flag on dismiss puts the bar back either way.
         .fullScreenCover(isPresented: $showGroupRestore, onDismiss: {
-            if group.isActive { group.minimized = true }
+            if groupLive { group.minimized = true }
         }) {
             // The probe picks up a pending restore from the card (`CallPipMorph.restore`), so the
             // group call grows out of its card like a 1:1 call instead of cutting in (owner,
             // 2026-10-07: "the opening animation is too fast").
             GroupCallView().background(CallPipMorphProbe())
+                .onAppear { groupRestoreShown = true }      // M-032, as the 1:1 cover
+                .onDisappear { groupRestoreShown = false }
         }
         // 2026-09-24 decision D26: clearing `minimized` from anywhere else (the Calls tab row) brings
         // the group call forward the same way the bar's tap does. Only `disconnect()` also clears it,
         // and by then the call is no longer active.
         .onChange(of: group.minimized) { _, minimized in
             // Same hard cut as the 1:1 cover (the reference app uses one call window for both).
-            if !minimized, group.isActive, !showGroupRestore {
-                InstantCover.run { showGroupRestore = true }
+            if !minimized, groupLive, !showGroupRestore {
+                CallPipMorph.cancelMinimizeFlight()   // M-147, as the 1:1 cover
+                presentGroupRestore()
             }
         }
         // A multi-person (ad-hoc or link) call's FIRST screen is put up by `IncomingGroupCallLayer`
@@ -955,8 +1028,74 @@ struct CallContainer<Content: View>: View {
     private func presentCover(animated: Bool) {
         guard !coverUp else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        if animated { coverUp = true; return }
-        InstantCover.run { coverUp = true }
+        // Audit M-032, 2026-10-07: a cover asked for while something else is still on its way in or
+        // out (a sheet closing on the same tap, a notification tap mid-transition) is dropped by
+        // UIKit. `coverUp` was already true, so nothing retried, and `minimized` was false, so there
+        // was no card either: a live call with nothing on screen. Wait for the top to settle first
+        // (the same check `IncomingGroupCallLayer` makes, capped at 0.8s); with nothing in motion this
+        // goes straight on, so the usual hard cut is unchanged.
+        if Self.topIsMoving() {
+            Task { @MainActor in
+                for _ in 0..<16 {
+                    guard Self.topIsMoving() else { break }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                guard wantsCover, !coverUp else { return }
+                askForCover(animated: animated)
+            }
+            return
+        }
+        askForCover(animated: animated)
+    }
+
+    private func askForCover(animated: Bool) {
+        if animated { coverUp = true } else { InstantCover.run { coverUp = true } }
+        // M-032, the net: UIKit can still refuse (a sheet that is up and staying). If the call screen
+        // has not appeared half a second later, give the call back its card instead of nothing. The
+        // card is what a minimize leaves, and tapping it asks again.
+        coverAsk &+= 1
+        let ask = coverAsk
+        // Judged only in the foreground: a cover asked for while the app is in the background (their
+        // camera came on, `CallService` clears `minimized` so the return lands on the call) may be
+        // put up only when the app comes back, and must not be turned into a card before that.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard ask == coverAsk, coverUp, !coverShown,
+                  UIApplication.shared.applicationState == .active else { return }
+            coverUp = false
+            switch call.state {
+            case .outgoing, .active, .reconnecting: call.minimized = true
+            default: break
+            }
+        }
+    }
+
+    /// A presentation or dismissal is in flight at the top of the stack (M-032).
+    @MainActor private static func topIsMoving() -> Bool {
+        guard let top = WebLink.topViewController() else { return false }
+        return top.isBeingDismissed || top.isBeingPresented
+            || top.presentingViewController?.isBeingDismissed == true
+            || top.transitionCoordinator != nil
+    }
+
+    /// M-032 on the group side: the same wait for a settled top, the same hard cut, and the same net.
+    /// A refused restore used to leave the group call with `minimized` false (so no card) and no
+    /// screen; it now falls back to the card.
+    private func presentGroupRestore() {
+        Task { @MainActor in
+            for _ in 0..<16 {
+                guard Self.topIsMoving() else { break }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard !group.minimized, groupLive, !showGroupRestore else { return }
+            InstantCover.run { showGroupRestore = true }
+            groupRestoreAsk &+= 1
+            let ask = groupRestoreAsk
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard ask == groupRestoreAsk, showGroupRestore, !groupRestoreShown,
+                  UIApplication.shared.applicationState == .active else { return }
+            showGroupRestore = false
+            if groupLive { group.minimized = true }
+        }
     }
 
     /// Out, the same way: the zoom into the card when minimizing, a hard cut when the call is over.
@@ -1244,6 +1383,9 @@ struct FloatingCallWindow: View {
                             }
                     )
                     .onTapGesture {
+                        // Audit M-146, 2026-10-07: the card stays up for the 1s end label, and a tap in
+                        // that second grew a dead call back to full screen. Over is over: ignored.
+                        guard call.state != .ended, call.state != .idle else { return }
                         // The reference app's 0.2s grow out of the card (`CallPipMorph`).
                         CallPipMorph.restore { call.minimized = false }
                     }
@@ -1304,6 +1446,15 @@ struct FloatingCallWindow: View {
             }
         }
         .frame(width: tabW, height: tabH)
+        // Audit M-053, 2026-10-07: the PiP source view lived only on the video CARD, so a video call
+        // parked as this tab had none, and leaving the app then had no window to detach into: the
+        // capture was interrupted and the other side dropped to the avatar. The tab carries one too
+        // (only one of card / tab exists at a time, so there is still a single source).
+        .background {
+            if call.isVideoCall {
+                CallView.CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { call.cardStashed = false }
@@ -1316,7 +1467,10 @@ struct FloatingCallWindow: View {
     private var tabShape: WedgeTab { WedgeTab(pointsRight: !stashedLeft) }
 
     @ViewBuilder private func tabLabel(_ now: Date) -> some View {
-        if let start = call.connectedDate {
+        // Audit M-055, 2026-10-07: a clock only while the call screen would show one. `connectedDate`
+        // stays set through "Reconnecting…" and the end label, so the tab kept counting on a call
+        // that was frozen or already over.
+        if call.state == .active, CallStageWords.progress(call) == nil, let start = call.connectedDate {
             Text(CallDuration.clock(max(0, Int(now.timeIntervalSince(start)))))
                 .font(.system(size: 14, weight: .bold))
                 .monospacedDigit()
@@ -1401,11 +1555,12 @@ struct FloatingCallWindow: View {
     /// stage halfway through it.
     private var stageLabel: String? {
         switch call.state {
-        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
         // 2026-09-24 fix-all #107: `.incoming` removed here too; the card is never shown in that state.
-        case .reconnecting: return "Reconnecting…"
         case .ended:        return "Call ended"
-        default:            return nil   // .active — the two faces carry it
+        // Audit M-055, 2026-10-07: the same words as the call screen, from the same helper. An
+        // accepted call still forming its connection (`.active`, no `connectedDate`) used to fall
+        // to nil here, so the card looked connected while the screen said "Connecting…".
+        default:            return CallStageWords.progress(call)   // nil = connected, the faces carry it
         }
     }
 
@@ -1532,6 +1687,24 @@ struct FloatingCallWindow: View {
         }
         // The card's frame, corner, border, controls and shadow are applied ONCE in `window`, so the
         // voice half and the video half cannot drift apart into two different-looking cards.
+    }
+}
+
+// MARK: - CallStageWords
+
+/// Audit M-055, 2026-10-07: ONE place that says what a 1:1 call is doing, read by the call screen,
+/// the floating card and the side tab, so minimizing never renames the stage or starts a clock the
+/// screen is not showing. Returns nil only for a connected call that is simply counting.
+enum CallStageWords {
+    static func progress(_ call: CallService) -> String? {
+        switch call.state {
+        // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…".
+        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
+        // Signalled but no media yet (the callee right after Accept): not connected, so no clock.
+        case .active:       return call.connectedDate == nil ? "Connecting…" : nil
+        case .reconnecting: return "Reconnecting…"
+        default:            return nil
+        }
     }
 }
 
