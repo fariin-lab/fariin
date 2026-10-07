@@ -128,7 +128,7 @@ struct CallView: View {
         switch call.state {
         // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…" — the
         // standard messenger order — while the SDP answer is still being built on their phone.
-        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
+        case .outgoing:     return CallStageWords.progress(call) ?? ""   // M-055: one source of words
         // 2026-09-24 fix-all #107: no `.incoming` label. This screen is never up while a call is
         // incoming (`CallContainer.isActive` leaves that state out on purpose: the system's own
         // incoming-call screen answers it), so "Incoming…" could not be drawn. Decision: incoming
@@ -136,8 +136,13 @@ struct CallView: View {
         // The weak-signal notice displaces the duration deliberately: while the camera is down, WHY it
         // is down is the only thing the user actually wants, and without it a paused camera reads as
         // the app being broken. The timer comes straight back when the link recovers.
-        case .active:       return call.videoPausedForNetwork ? "Video paused, weak signal" : durationText
-        case .reconnecting: return "Reconnecting…"
+        // Audit M-057, 2026-10-07: a call put on hold by a phone call also pauses the video, and it
+        // was labelled "Video paused, weak signal", which blames the network for the user's own hold.
+        // Hold says so; the weak-signal words are only for a real network pause.
+        case .active:
+            if call.isHeld { return "On hold" }
+            return call.videoPausedForNetwork ? "Video paused, weak signal" : durationText
+        case .reconnecting: return CallStageWords.progress(call) ?? ""
         case .ended:        return endedText
         default:            return ""
         }
@@ -421,7 +426,9 @@ struct CallView: View {
                         // outright, and that notice is the one thing that explains a frozen camera.
                         // Both apply → the slashed mic still says muted, the words say why the video
                         // stopped.
-                        Text(call.videoPausedForNetwork ? "Video paused, weak signal" : "Muted")
+                        // M-057: hold is named as hold, not as a weak signal.
+                        Text(call.isHeld ? "On hold"
+                             : (call.videoPausedForNetwork ? "Video paused, weak signal" : "Muted"))
                             .font(.system(size: 15, weight: .medium))
                     }
                     .foregroundStyle(.white.opacity(0.75))
@@ -445,7 +452,9 @@ struct CallView: View {
                     Label(call.screenSharing ? "Stop Sharing" : "Share Screen",
                           systemImage: call.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
                 }
-                .disabled(!(call.state == .active && call.connectedDate != nil))
+                // Audit M-165, 2026-10-07: STOPPING is never disabled. During "Reconnecting…" the
+                // rule above greyed out Stop Sharing too, and the share could not be ended from here.
+                .disabled(!call.screenSharing && !(call.state == .active && call.connectedDate != nil))
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -646,6 +655,19 @@ struct CallView: View {
         }
     }
 
+    /// Audit M-052, 2026-10-07: the camera button worked only in `.active`, so during "Reconnecting…"
+    /// (and while a video call rang out) there was no way to turn the camera OFF. Now: on or off while
+    /// connected or reconnecting, and off (never on) while still ringing out. The service applies the
+    /// same rule in `setMyCamera`. Still dimmed while my screen is shared (the share owns the video).
+    private var cameraButtonEnabled: Bool {
+        guard !call.screenSharing else { return false }
+        switch call.state {
+        case .active, .reconnecting: return true
+        case .outgoing:              return call.cameraOn
+        default:                     return false
+        }
+    }
+
     // MARK: - Control capsule (dark, icon-only, red end)
 
     private var controlBar: some View {
@@ -655,13 +677,13 @@ struct CallView: View {
             callCircle(call.isMuted ? "mic.slash.fill" : "mic.fill", active: call.isMuted,
                        label: call.isMuted ? "Unmute" : "Mute") { call.toggleMute() }
             // MY camera — turn it on/off freely (the other side just sees it, no
-            // permission). Only once CONNECTED; dimmed while still Calling/Ringing.
+            // permission). When it can be pressed: see `cameraButtonEnabled` (M-052).
             callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
                        label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
                 // Dimmed while my screen is shared too: the share owns my video until it stops, and
                 // stopping brings the camera back exactly as it was.
-                .disabled(call.state != .active || call.screenSharing)
-                .opacity(call.state == .active && !call.screenSharing ? 1 : 0.4)
+                .disabled(!cameraButtonEnabled)
+                .opacity(cameraButtonEnabled ? 1 : 0.4)
             // Flip front/back only while my camera is on (and actually showing, not a shared screen).
             if call.cameraOn && !call.screenSharing {
                 callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
@@ -1411,7 +1433,10 @@ struct FloatingCallWindow: View {
     private var tabShape: WedgeTab { WedgeTab(pointsRight: !stashedLeft) }
 
     @ViewBuilder private func tabLabel(_ now: Date) -> some View {
-        if let start = call.connectedDate {
+        // Audit M-055, 2026-10-07: a clock only while the call screen would show one. `connectedDate`
+        // stays set through "Reconnecting…" and the end label, so the tab kept counting on a call
+        // that was frozen or already over.
+        if call.state == .active, CallStageWords.progress(call) == nil, let start = call.connectedDate {
             Text(CallDuration.clock(max(0, Int(now.timeIntervalSince(start)))))
                 .font(.system(size: 14, weight: .bold))
                 .monospacedDigit()
@@ -1496,11 +1521,12 @@ struct FloatingCallWindow: View {
     /// stage halfway through it.
     private var stageLabel: String? {
         switch call.state {
-        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
         // 2026-09-24 fix-all #107: `.incoming` removed here too; the card is never shown in that state.
-        case .reconnecting: return "Reconnecting…"
         case .ended:        return "Call ended"
-        default:            return nil   // .active — the two faces carry it
+        // Audit M-055, 2026-10-07: the same words as the call screen, from the same helper. An
+        // accepted call still forming its connection (`.active`, no `connectedDate`) used to fall
+        // to nil here, so the card looked connected while the screen said "Connecting…".
+        default:            return CallStageWords.progress(call)   // nil = connected, the faces carry it
         }
     }
 
@@ -1627,6 +1653,24 @@ struct FloatingCallWindow: View {
         }
         // The card's frame, corner, border, controls and shadow are applied ONCE in `window`, so the
         // voice half and the video half cannot drift apart into two different-looking cards.
+    }
+}
+
+// MARK: - CallStageWords
+
+/// Audit M-055, 2026-10-07: ONE place that says what a 1:1 call is doing, read by the call screen,
+/// the floating card and the side tab, so minimizing never renames the stage or starts a clock the
+/// screen is not showing. Returns nil only for a connected call that is simply counting.
+enum CallStageWords {
+    static func progress(_ call: CallService) -> String? {
+        switch call.state {
+        // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…".
+        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
+        // Signalled but no media yet (the callee right after Accept): not connected, so no clock.
+        case .active:       return call.connectedDate == nil ? "Connecting…" : nil
+        case .reconnecting: return "Reconnecting…"
+        default:            return nil
+        }
     }
 }
 
