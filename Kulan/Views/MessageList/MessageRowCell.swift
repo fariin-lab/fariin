@@ -335,6 +335,17 @@ final class MessageRowCell: UICollectionViewCell {
         rowView.prepareForReuse()
     }
 
+    /// ⛔ THE WALLPAPER SLICES ARE MEASURED AGAIN WHERE THE CELL LANDS — owner, 2026-10-07: in a run
+    /// of incoming bubbles over a wallpaper the first kept its dark fill and the rest showed only
+    /// the rim. `configure` runs BEFORE the list hands the cell its frame, so the slice measured the
+    /// cell's old place (off the screen, where recycled cells come from), and a list at rest sends
+    /// no scroll tick to correct it. Placement is the one moment that always comes after both.
+    override func apply(_ layoutAttributes: UICollectionViewLayoutAttributes) {
+        super.apply(layoutAttributes)
+        WallpaperBlurSliceView.reposition(in: self)
+        BubbleFillView.repositionGradients(in: self)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         // The row view is sized from the plan, never from the cell: if the two ever disagree the

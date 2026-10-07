@@ -518,6 +518,12 @@ final class BubbleFillView: UIView {
         for v in liveGradients.allObjects { v.positionGradient() }
     }
 
+    /// The gradients inside one cell the list has just placed — the same stale-measure case as
+    /// `WallpaperBlurSliceView.reposition(in:)`.
+    static func repositionGradients(in root: UIView) {
+        for v in liveGradients.allObjects where v.isDescendant(of: root) { v.positionGradient() }
+    }
+
     /// The view the whole gradient spans: the message list's own view, which fills the screen and
     /// slides with the chat, as theirs is the conversation controller's view. Off the list (a preview,
     /// a sheet), the window.
