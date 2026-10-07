@@ -361,6 +361,25 @@ import UIKit
         for v in live.allObjects { v.reposition() }
     }
 
+    /// Every live slice inside `root`, for a cell the list has just PLACED (see
+    /// `MessageRowCell.apply(_:)`). A cell is configured before the list hands it its frame, so the
+    /// `reposition` inside `BubbleFillView.apply` measures the cell where it USED to be: a recycled
+    /// cell that went out of the screen, or a fresh one not placed yet. The image is the size of the
+    /// screen, so a cell measured off the screen carries an image that misses the bubble entirely
+    /// once it lands, and only the rim is left. A scroll tick corrects it; a list at rest never does.
+    static func reposition(in root: UIView) {
+        for v in live.allObjects where v.isDescendant(of: root) {
+            guard !v.isHidden, v.window != nil else { continue }
+            // Device evidence for the next test: which of the two empty-bubble states this was.
+            if v.state == nil {
+                NSLog("[WPSlice] visible slice has no picture (state nil)")
+            } else if !v.imageView.frame.intersects(v.bounds) {
+                NSLog("[WPSlice] slice was off its picture before placement, corrected")
+            }
+            v.reposition()
+        }
+    }
+
     /// The picture for a chat changed: every live slice of THAT chat takes it, on screen or not.
     /// See the note at the call site in `WallpaperBlur.state(for:dark:frame:)` for why this is a
     /// broadcast and not something each row is trusted to pick up.
