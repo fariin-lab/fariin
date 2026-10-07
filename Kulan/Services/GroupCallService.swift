@@ -241,7 +241,9 @@ final class GroupCallService: ObservableObject {
     var isActive: Bool { activeCid != nil }
 
     // MARK: Multi-person (ad-hoc) and link calls
-    @Published var activeRoom: GroupRoom?            // set with activeCid; nil while no call is up
+    @Published var activeRoom: GroupRoom? {          // set with activeCid; nil while no call is up
+        didSet { if activeRoom != oldValue { followGroupRoles() } }   // audit M-072, 2026-10-07
+    }
     @Published var members: [CallMember] = []        // ad-hoc: everyone invited, live from the doc
     @Published var joinedUids: Set<String> = []      // ad-hoc: everyone who ever connected
     @Published var roomStartedAt: Date?              // ad-hoc: drives "Ringing…" vs "Didn't join"
@@ -270,8 +272,63 @@ final class GroupCallService: ObservableObject {
     private var inviteUid: String?
     private var inviteDocs: [(id: String, data: [String: Any])] = []
     private var declinedInvites: Set<String> = []
-    /// Opened from a tapped push: shown even past the 90s ring window, as long as the call is live.
+    /// Opened from a tapped push: shown even past the ring minute, as long as the call is live.
     private var ageExemptInvites: Set<String> = []
+    /// audit M-097, 2026-10-07: the account a tapped push raised an invitation for. On a cold launch
+    /// the tap lands before the auth listener's first start, and that start used to wipe the
+    /// invitation the tap had just raised. A start for this same account keeps it.
+    private var tappedInviteUid: String?
+    /// audit M-094, 2026-10-07: two people who started a multi-person call to each other at the same
+    /// moment. The one whose room id sorts higher gives its room up and joins the other's; this is
+    /// the room to join once its own room is down (`reevaluateInvites`), and when that was decided.
+    private var glareJoin: (roomId: String, video: Bool, at: Date)?
+
+    /// audit M-065 / M-094 / M-102 / M-164, 2026-10-07: what the ad-hoc room's doc says beyond the
+    /// member list. Kept with the room id it came from, so one call's values never leak into the
+    /// next (everything here is read through `currentAdhocDoc`, which checks that id).
+    ///   invitedAt: per person, when they were added (the doc's `invitedAt` map, or this phone's own
+    ///              add while the server copy is not there yet). Each person rings for their own minute.
+    ///   startedBy: who started the room.
+    ///   removed:   people the owner removed (`removedUids`, server-written). They cannot be added again.
+    ///   added:     people this phone just added, to notice the server dropping one again (a block).
+    private struct AdhocDocState {
+        let roomId: String
+        var invitedAt: [String: Date] = [:]
+        var startedBy: String?
+        var removed: Set<String> = []
+        var added: [String: (name: String, at: Date, seen: Bool)] = [:]
+    }
+    @Published private var adhocDoc: AdhocDocState?
+    /// The ad-hoc room I am in or joining, if any.
+    private var currentAdhocRoomId: String? {
+        if case .adhoc(let id)? = activeRoom { return id }
+        if let j = joiningRoomId, j.hasPrefix("adhoc_") { return j }
+        return nil
+    }
+    private var currentAdhocDoc: AdhocDocState? {
+        guard let s = adhocDoc, s.roomId == currentAdhocRoomId else { return nil }
+        return s
+    }
+    /// audit M-065, 2026-10-07: when `uid`'s ring minute started in the running multi-person call.
+    /// Their own add time when the doc (or this phone) has one, the call's start otherwise. Read by
+    /// the people sheet's "Ringing..." too.
+    func inviteStart(for uid: String) -> Date? {
+        currentAdhocDoc?.invitedAt[uid] ?? roomStartedAt
+    }
+    /// audit M-102, 2026-10-07: people the owner removed from the running multi-person call. The
+    /// server refuses to put them back on the list, and one of them in an add made the whole add fail.
+    var removedUids: Set<String> { currentAdhocDoc?.removed ?? [] }
+    /// The same per-person start, read from an invitation's doc on the invited phone.
+    private static func inviteStart(in d: [String: Any], for uid: String) -> Date? {
+        if let m = d["invitedAt"] as? [String: Any], let t = (m[uid] as? Timestamp)?.dateValue() { return t }
+        return (d["startedAt"] as? Timestamp)?.dateValue()
+    }
+
+    /// audit M-072, 2026-10-07: a group conversation's call roles follow the group itself. The join
+    /// answer's role was kept for the whole call, so a new owner or a demoted admin saw the wrong
+    /// buttons until they rejoined. The server still checks every action itself.
+    private var groupRoleListener: ListenerRegistration?
+    private var groupConv: Conversation?
 
     /// 2026-09-24 decision D25: a 1:1 call and a group call never run at once. Shared by both sides.
     static let busyNotice = Notice(title: "Can't Call", message: "You're already in a call.")
@@ -417,19 +474,25 @@ final class GroupCallService: ObservableObject {
         switch r {
         case .group(let cid): target = ["kind": "group", "id": cid]
         case .adhoc(let id): target = ["kind": "adhoc", "id": id]
-        case .link(let roomId, _): target = ["kind": "link", "id": roomId]
+        // audit M-022, 2026-10-07: after "Make a new link" the link being handed out is the new one,
+        // and the server checks a block against the link people come in by. Naming the old link here
+        // wrote the block where the new link never looked, so a blocked person walked back in.
+        case .link(let roomId, _): target = ["kind": "link", "id": currentLink?.roomId ?? roomId]
         }
         var payload: [String: Any] = ["room": target, "action": action.rawValue]
         if let uid { payload["targetUid"] = uid }
+        // audit M-152, 2026-10-07: the answer can land after this call is gone (or another one has
+        // started). Only the call that asked acts on it.
+        let gen = joinGeneration
         if action == .end { endingForAll = true }
         do {
             _ = try await functions.httpsCallable("callAdmin").call(payload)
         } catch {
-            if action == .end { endingForAll = false }
+            if action == .end, gen == joinGeneration, activeRoom == r { endingForAll = false }
             throw error
         }
         // The server closed the room and the call's record; I leave quietly, like any hang-up.
-        if action == .end { end() }
+        if action == .end, gen == joinGeneration, activeRoom == r { end() }
     }
 
     /// Link calls: the link people should be sent now (the new one after "Make a new link").
@@ -442,7 +505,9 @@ final class GroupCallService: ObservableObject {
     /// Owner: no one new can join with the link; the call goes on.
     func revokeLink() async throws {
         guard let link = currentLink else { return }
+        let gen = joinGeneration, r = activeRoom   // audit M-152, 2026-10-07
         try await CallLinkService.shared.revoke(link)
+        guard gen == joinGeneration, activeRoom == r else { return }
         linkRevoked = true
     }
 
@@ -453,7 +518,11 @@ final class GroupCallService: ObservableObject {
     /// in my Calls list. Share and Copy hand out the new one from now on.
     func makeNewLink() async throws {
         guard let link = currentLink else { return }
+        let gen = joinGeneration, r = activeRoom   // audit M-152, 2026-10-07
         let fresh = try await CallLinkService.shared.regenerate(link)
+        // The call ended (or another began) while the server made the link: the new link is in the
+        // Calls list either way, but it must not become the next call's link or listener.
+        guard gen == joinGeneration, activeRoom == r else { return }
         replacedLink = fresh
         linkRevoked = false
         // People knocking on the NEW link: its requests live under its own id. The server leads the
@@ -499,7 +568,40 @@ final class GroupCallService: ObservableObject {
     fileprivate func attributesChanged() {
         rolesVersion &+= 1
         guard isActive, let r = room.localParticipant.attributes["role"] else { return }
-        myRole = CallRole(attribute: r)
+        // audit M-072, 2026-10-07: in a group conversation's call my attribute is the role from my
+        // join, frozen; the group's own doc is newer when it has loaded.
+        myRole = groupRole(of: myUid) ?? CallRole(attribute: r)
+    }
+
+    /// audit M-072, 2026-10-07: watches the group conversation while its call is up, so roles follow
+    /// the group (owner handed over, admin added or demoted, "Manage video chats" taken away). Runs
+    /// from `activeRoom`'s didSet: on for a group call, off for anything else or no call.
+    private func followGroupRoles() {
+        groupRoleListener?.remove(); groupRoleListener = nil
+        groupConv = nil
+        guard case .group(let cid)? = activeRoom else { return }
+        groupRoleListener = db.collection("conversations").document(cid).addSnapshotListener { [weak self] snap, _ in
+            guard let snap, let data = snap.data() else { return }
+            let id = snap.documentID
+            Task { @MainActor [weak self] in
+                guard let self, case .group(let now)? = self.activeRoom, now == cid else { return }
+                self.groupConv = Conversation(id: id, data: data)
+                if let mine = self.groupRole(of: self.myUid), mine != self.myRole { self.myRole = mine }
+                self.rolesVersion &+= 1   // other people's badges and buttons redraw too
+            }
+        }
+    }
+
+    /// audit M-072, 2026-10-07: `uid`'s role in the running group conversation's call, from the
+    /// group's own doc, by the server's rule (`roleIn`): the creator is the owner; an admin is a
+    /// moderator unless their rights leave out "Manage video chats" (audit M-073); a member who left
+    /// has no say. nil when this is not a group call or the group has not loaded: the caller then
+    /// keeps the server's attribute.
+    func groupRole(of uid: String) -> CallRole? {
+        guard !uid.isEmpty, case .group(let cid)? = activeRoom, let c = groupConv, c.id == cid else { return nil }
+        if c.isOwner(uid) { return .owner }
+        if c.users.contains(uid), c.adminCan(uid, .manageCalls) { return .moderator }
+        return .participant
     }
 
     /// ⛔ A REAL SPEAKER SWITCH — owner, 2026-10-04: "the speaker, I can't turn it on and off". The
@@ -686,13 +788,15 @@ final class GroupCallService: ObservableObject {
     }
 
     /// The same people as `ringingNames`, with their photos (the ringing screen, 2026-10-07).
+    /// audit M-065, 2026-10-07: each person inside THEIR OWN ring minute (`inviteStart(for:)`).
+    /// "Add people" used to restart one clock for the whole room, so everyone rang again.
     func ringingMembers(at now: Date) -> [CallMember] {
-        guard isAdhoc, isActive, let start = roomStartedAt,
-              now.timeIntervalSince(start) < Self.ringWindow else { return [] }
+        guard isAdhoc, isActive else { return [] }
         let me = myUid
         return members
             .filter { $0.uid != me && !joinedUids.contains($0.uid)
-                && !declinedUids.contains($0.uid) && !busyUids.contains($0.uid) }
+                && !declinedUids.contains($0.uid) && !busyUids.contains($0.uid)
+                && inviteStart(for: $0.uid).map { start in now.timeIntervalSince(start) < Self.ringWindow } == true }
     }
 
     /// The room a join is running for, from the tap until it is joined or dropped. With `activeCid`
@@ -710,22 +814,59 @@ final class GroupCallService: ObservableObject {
         return oneToOne.state != .idle && !callerUid.isEmpty && oneToOne.otherUid == callerUid
     }
 
+    /// audit M-094, 2026-10-07: two people who start a multi-person call to each other at the same
+    /// moment each got the other's ring while their own room was starting, and both answered "busy":
+    /// nobody connected. A ring is such a crossing when it comes from someone on MY ad-hoc room's
+    /// list, I started that room, and nobody has come into it yet. The lower room id wins: its
+    /// starter stays and the other one gives their room up and joins it (`yieldToCrossedCall`).
+    /// Anything else is a real "busy", exactly as before. Also for `GroupCallRinging`'s push path.
+    enum CrossedCall { case none, iWin, iLose }
+    func crossedCall(roomId: String, callerUid: String) -> CrossedCall {
+        let me = myUid
+        guard !me.isEmpty, !callerUid.isEmpty, callerUid != me, roomId.hasPrefix("adhoc_"),
+              let mine = currentAdhocRoomId, mine != roomId, !waitingForApproval,
+              (currentAdhocDoc?.startedBy ?? members.first?.uid) == me,
+              members.contains(where: { $0.uid == callerUid }),
+              room.remoteParticipants.isEmpty,
+              joinedUids.subtracting([me]).isEmpty else { return .none }
+        return roomId < mine ? .iLose : .iWin
+    }
+
+    /// audit M-094, 2026-10-07: the losing side of a crossing. My own room stops ringing and goes
+    /// down; once it is down `reevaluateInvites` joins `roomId` (the other person's room).
+    func yieldToCrossedCall(roomId: String) {
+        guard let mine = currentAdhocRoomId, glareJoin?.roomId != roomId else { return }
+        glareJoin = (roomId: roomId, video: isVideo, at: Date())
+        incomingInvite = nil
+        // Ended here, not only by the last-one-out write: a room still connecting skips that write.
+        let ref = db.collection("groupCalls").document(mine)
+        Task { try? await ref.updateData(["active": false, "endedAt": FieldValue.serverTimestamp()]) }
+        end()
+    }
+
     /// The tone the caller hears while the call rings and nobody has come yet: the 1:1 call's own
     /// tone (`RingbackTone`). The reference app stops it the moment the first person joins.
     private var ringback: AVAudioPlayer?
     private var ringbackTimeout: Task<Void, Never>?
     fileprivate func updateRingback() {
+        let now = Date()
+        let rung = ringingMembers(at: now)
         let ringing = isActive && room.connectionState == .connected && room.remoteParticipants.isEmpty
-            && !ringingNames(at: Date()).isEmpty
+            && !rung.isEmpty
         guard ringing else { stopRingback(); return }
-        guard ringback == nil else { return }
-        let player = try? AVAudioPlayer(data: RingbackTone.wavData())
-        player?.numberOfLoops = -1
-        player?.play()
-        ringback = player
-        // The ring minute ends by the clock, with no event to hang the stop on.
+        if ringback == nil {
+            let player = try? AVAudioPlayer(data: RingbackTone.wavData())
+            player?.numberOfLoops = -1
+            player?.play()
+            ringback = player
+        }
+        // The ring minute ends by the clock, with no event to hang the stop on. audit M-065,
+        // 2026-10-07: it ends with the LAST person's minute, and is set again on every pass, so a
+        // person added while the tone plays keeps it going for their minute (it used to stop on the
+        // first clock, or never re-arm and play on).
         ringbackTimeout?.cancel()
-        let left = Self.ringWindow - Date().timeIntervalSince(roomStartedAt ?? Date())
+        let newest = rung.compactMap { inviteStart(for: $0.uid) }.max() ?? now
+        let left = Self.ringWindow - now.timeIntervalSince(newest)
         ringbackTimeout = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(max(1, left + 0.5) * 1_000_000_000))
             guard !Task.isCancelled else { return }
@@ -976,7 +1117,9 @@ final class GroupCallService: ObservableObject {
     func invite(_ people: [CallMember]) async {
         guard case .adhoc(let roomId)? = activeRoom else { return }
         let known = Set(members.map(\.uid))
-        var seen = known
+        // audit M-102, 2026-10-07: people the owner removed are never added back (the server
+        // refuses it, and one of them in the list made the whole add fail).
+        var seen = known.union(removedUids)
         let fresh = people.filter { seen.insert($0.uid).inserted }
         guard !fresh.isEmpty else { return }
         let all = members + fresh
@@ -987,15 +1130,33 @@ final class GroupCallService: ObservableObject {
         for m in fresh {
             fields["names.\(m.uid)"] = m.name
             if let p = m.photoUrl, !p.isEmpty { fields["photos.\(m.uid)"] = p }
+            // audit M-065, 2026-10-07: each new person's own add time, for every phone's ring minute
+            // (the invitation, the busy answer, "Ringing..."). In the SAME write as `members`: the
+            // rules allow an `invitedAt` key only for a person that write adds. ⛔ Needs the rules
+            // deploy first; the old rules refuse the key and the whole add with it. Phones read the
+            // call's start when it is missing, as before.
+            fields["invitedAt.\(m.uid)"] = FieldValue.serverTimestamp()
         }
         members = all   // on screen at once; the room listener confirms
-        // Their ring window starts now, not when the call started.
-        roomStartedAt = Date()
+        // Their ring window starts now, not when the call started. audit M-065, 2026-10-07: THEIR
+        // window only. This used to reset `roomStartedAt`, which restarted the ring minute for
+        // everyone still unanswered on this phone.
+        var state = currentAdhocDoc ?? AdhocDocState(roomId: roomId)
+        let now = Date()
+        for m in fresh {
+            state.invitedAt[m.uid] = now
+            state.added[m.uid] = (name: m.name, at: now, seen: false)   // audit M-164
+        }
+        adhocDoc = state
+        let ref = db.collection("groupCalls").document(roomId)
         do {
-            try await db.collection("groupCalls").document(roomId).updateData(fields)
+            try await ref.updateData(fields)
         } catch {
             members.removeAll { m in fresh.contains { $0.uid == m.uid } }
-            notice = Notice(title: "Couldn't add people", message: nil)
+            if adhocDoc?.roomId == roomId { for m in fresh { adhocDoc?.added[m.uid] = nil } }
+            // audit M-159, 2026-10-07: a line over the stage, not the alert. `notice` is the
+            // failed-start alert, and its OK closes the call screen of a call that is still running.
+            showToast("Couldn't add people")
         }
     }
 
@@ -1042,10 +1203,18 @@ final class GroupCallService: ObservableObject {
         guard case .link(_, _)? = activeRoom, let roomId = currentLink?.roomId, isLinkCreator,
               let who = pendingRequests.first(where: { $0.uid == uid }) else { return }
         pendingRequests.removeAll { $0.uid == uid }
+        let gen = joinGeneration, r = activeRoom   // audit M-152, 2026-10-07
         do {
             _ = try await functions.httpsCallable("answerCallLinkRequest")
                 .call(["roomId": roomId, "uid": uid, "approve": approve])
         } catch {
+            // audit M-152, 2026-10-07: the call is gone (or another began): its card must not
+            // turn up in the next call's list.
+            guard gen == joinGeneration, activeRoom == r else { return }
+            // audit M-127, 2026-10-07: "not found" means they withdrew (or the link is gone).
+            // There is nothing left to answer, and putting the card back left a ghost that stuck.
+            let ns = error as NSError
+            if ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.notFound.rawValue { return }
             // Still waiting on the server, so it goes back in the list.
             if !pendingRequests.contains(who) { pendingRequests.append(who) }
         }
@@ -1057,10 +1226,12 @@ final class GroupCallService: ObservableObject {
         guard case .link(_, _)? = activeRoom, let roomId = currentLink?.roomId, isLinkCreator, !pendingRequests.isEmpty else { return }
         let before = pendingRequests
         pendingRequests = []
+        let gen = joinGeneration, r = activeRoom   // audit M-152, 2026-10-07
         do {
             _ = try await functions.httpsCallable("answerAllCallLinkRequests")
                 .call(["roomId": roomId, "approve": approve])
         } catch {
+            guard gen == joinGeneration, activeRoom == r else { return }   // audit M-152
             if pendingRequests.isEmpty { pendingRequests = before }
             showToast("Couldn't answer everyone. Try again.")
         }
@@ -1347,21 +1518,27 @@ final class GroupCallService: ObservableObject {
         toastTask?.cancel(); toastTask = nil; toast = nil
     }
 
-    private func apply(roomData d: [String: Any]) {
+    /// `roomId`: the room the doc is for, when the caller knows it (the room listener). Without it
+    /// the per-room extras (`adhocDoc`) are left for the listener's own snapshot.
+    private func apply(roomData d: [String: Any], roomId: String? = nil) {
         let names = d["names"] as? [String: String] ?? [:]
         let photos = d["photos"] as? [String: String] ?? [:]
         let uids = d["members"] as? [String] ?? []
         members = uids.map { CallMember(uid: $0, name: names[$0] ?? "Member", photoUrl: photos[$0]) }
         joinedUids = Set(d["joined"] as? [String] ?? [])
         if roomStartedAt == nil, let t = (d["startedAt"] as? Timestamp)?.dateValue() { roomStartedAt = t }
+        if let roomId { applyAdhocExtras(d, roomId: roomId, uids: uids) }
         // Invited people who said no or were busy (written by the server's `groupRingAnswer`). The
         // people in the call are told once, by name; what was already there when I joined is not news.
         let declined = Set(d["declined"] as? [String] ?? [])
         let busy = Set(d["busy"] as? [String] ?? [])
         if roomAnswersSeeded, isActive {
-            if let uid = busy.subtracting(busyUids).first, let name = names[uid] {
+            // audit M-104, 2026-10-07: not for someone who is in the call. The same account on a
+            // second phone said no (or busy) while the first one was already here.
+            let here = joinedUids.union(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
+            if let uid = busy.subtracting(busyUids).subtracting(here).first, let name = names[uid] {
                 showToast("\(name) is busy")
-            } else if let uid = declined.subtracting(declinedUids).first, let name = names[uid] {
+            } else if let uid = declined.subtracting(declinedUids).subtracting(here).first, let name = names[uid] {
                 showToast("\(name) declined")
             }
         }
@@ -1372,13 +1549,46 @@ final class GroupCallService: ObservableObject {
         if !t.isEmpty { callTitle = t }
     }
 
+    /// audit M-065 / M-102 / M-164, 2026-10-07: the room doc's per-person add times, its starter and
+    /// its removed list, kept under `roomId` (`adhocDoc`). And a person this phone added who drops
+    /// off the list again within seconds was refused by the server (a block, or their call privacy,
+    /// `onAdhocCallWritten`): say so, instead of "Ringing..." and then nothing.
+    private func applyAdhocExtras(_ d: [String: Any], roomId: String, uids: [String]) {
+        var s = (adhocDoc?.roomId == roomId ? adhocDoc : nil) ?? AdhocDocState(roomId: roomId)
+        var stamps: [String: Date] = [:]
+        for (uid, v) in d["invitedAt"] as? [String: Any] ?? [:] {
+            if let t = (v as? Timestamp)?.dateValue() { stamps[uid] = t }
+        }
+        // This phone's own add stands until the server copy is there.
+        for (uid, at) in s.invitedAt where stamps[uid] == nil && uids.contains(uid) { stamps[uid] = at }
+        s.invitedAt = stamps
+        s.startedBy = d["startedBy"] as? String
+        s.removed = Set(d["removedUids"] as? [String] ?? [])
+        let listed = Set(uids)
+        let now = Date()
+        var refused: [String] = []
+        for (uid, a) in s.added {
+            if now.timeIntervalSince(a.at) > 20 { s.added[uid] = nil; continue }
+            if listed.contains(uid) {
+                var seen = a; seen.seen = true
+                s.added[uid] = seen
+            } else if a.seen {
+                // On the list once, now gone, and not the owner's Remove: the server took them off.
+                s.added[uid] = nil
+                if !s.removed.contains(uid) { refused.append(a.name) }
+            }
+        }
+        adhocDoc = s
+        if let name = refused.first, isActive { showToast("Couldn't add \(name)") }
+    }
+
     private func listenRoom(_ roomId: String) {
         roomListener?.remove()
         roomListener = db.collection("groupCalls").document(roomId).addSnapshotListener { [weak self] snap, _ in
             guard let d = snap?.data(with: .estimate) else { return }
             Task { @MainActor [weak self] in
                 guard let self, self.roomListener != nil else { return }
-                self.apply(roomData: d)
+                self.apply(roomData: d, roomId: roomId)
             }
         }
     }
@@ -1446,20 +1656,64 @@ final class GroupCallService: ObservableObject {
 
     private func listenRequests(_ roomId: String) {
         requestsListener?.remove()
+        requestDocs = []; requestSeen = [:]   // audit M-070: another link's list starts afresh
         requestsListener = db.collection("callLinks").document(roomId).collection("requests")
             .whereField("status", isEqualTo: "pending")
             .addSnapshotListener { [weak self] snap, _ in
                 guard let snap else { return }
-                let list = snap.documents.map { doc -> CallMember in
+                let list = snap.documents.map { doc -> (member: CallMember, at: Date?) in
                     let d = doc.data()
-                    return CallMember(uid: doc.documentID, name: d["name"] as? String ?? "Member",
-                                      photoUrl: d["photoUrl"] as? String)
+                    return (member: CallMember(uid: doc.documentID, name: d["name"] as? String ?? "Member",
+                                               photoUrl: d["photoUrl"] as? String),
+                            at: (d["at"] as? Timestamp)?.dateValue())
                 }
                 Task { @MainActor [weak self] in
                     guard let self, self.requestsListener != nil else { return }
-                    self.pendingRequests = list
+                    // audit M-070, 2026-10-07: when this phone last saw each request change. A
+                    // waiting joiner's knock is renewed while they wait (its `at` moves); one that has
+                    // not moved for `requestFreshness` belongs to someone who left without a clean
+                    // exit, and is hidden. Timed on THIS phone's clock from the moment it saw the
+                    // change, so a phone clock that is off cannot hide a fresh request.
+                    let now = Date()
+                    var seen: [String: (at: Date?, seen: Date)] = [:]
+                    for r in list {
+                        if let old = self.requestSeen[r.member.uid], old.at == r.at {
+                            seen[r.member.uid] = old
+                        } else {
+                            seen[r.member.uid] = (at: r.at, seen: now)
+                        }
+                    }
+                    self.requestSeen = seen
+                    self.requestDocs = list.map(\.member)
+                    self.refreshPendingRequests()
                 }
             }
+    }
+
+    /// audit M-070, 2026-10-07: the creator's raw request list, and when each was last seen to change.
+    private var requestDocs: [CallMember] = []
+    private var requestSeen: [String: (at: Date?, seen: Date)] = [:]
+    private var requestExpiry: Task<Void, Never>?
+    /// A knock not renewed for this long is from someone who has gone (about three minutes; a joiner
+    /// still waiting renews it well inside that).
+    private static let requestFreshness: TimeInterval = 180
+
+    /// audit M-070, 2026-10-07: shows the live requests, and comes back when the next one goes stale.
+    private func refreshPendingRequests() {
+        let now = Date()
+        let live = requestDocs.filter { m in
+            requestSeen[m.uid].map { now.timeIntervalSince($0.seen) < Self.requestFreshness } ?? true
+        }
+        if live != pendingRequests { pendingRequests = live }
+        requestExpiry?.cancel(); requestExpiry = nil
+        let next = live.compactMap { requestSeen[$0.uid]?.seen }.min()
+        guard let next else { return }
+        let wait = max(1, Self.requestFreshness - now.timeIntervalSince(next) + 0.5)
+        requestExpiry = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.requestsListener != nil else { return }
+            self.refreshPendingRequests()
+        }
     }
 
     // MARK: - Incoming multi-person invites
@@ -1484,8 +1738,15 @@ final class GroupCallService: ObservableObject {
         guard uid != inviteUid else { return }
         inviteUid = uid
         inviteListener?.remove(); inviteListener = nil
-        inviteDocs = []; declinedInvites = []; ageExemptInvites = []
-        incomingInvite = nil
+        inviteDocs = []; declinedInvites = []
+        // audit M-097, 2026-10-07: an invitation a tapped push raised for this same account stays
+        // (on a cold launch the tap lands before this first start). Any other account's goes.
+        if uid == nil || uid != tappedInviteUid {
+            ageExemptInvites = []
+            incomingInvite = nil
+            tappedInviteUid = nil
+        }
+        glareJoin = nil
         guard let uid else { return }
         inviteListener = db.collection("groupCalls")
             // array-contains ALONE: adding `active ==` / `kind ==` here needs a composite index that
@@ -1506,10 +1767,15 @@ final class GroupCallService: ObservableObject {
     }
 
     /// Picks the invite to show, if any: not mine, not answered here or on another phone, not
-    /// declined, and still inside the 90s ring window. Nothing rings while I am already in a call.
+    /// declined, and still inside my ring minute. Nothing rings while I am already in a call.
+    /// audit M-065 / M-126, 2026-10-07: the minute is `ringWindow` (the caller's own ring length; this
+    /// was 90 s, so the invitation outlived the ring by half a minute), counted from when I was added
+    /// (`invitedAt`), not from the call's start, so a person added late is rung and told busy too.
+    /// audit M-076, 2026-10-07: never from someone I blocked, and no "busy" back to them either.
     func reevaluateInvites() {
         let me = myUid
         let now = Date()
+        let blocks = BlockList.snapshot
         guard !me.isEmpty, activeCid == nil, !connecting, !waitingForApproval,
               CallService.shared.state == .idle else {
             // In another call: the invitation is not shown, and the people ringing me are told
@@ -1519,30 +1785,51 @@ final class GroupCallService: ObservableObject {
                 for doc in inviteDocs {
                     let d = doc.data
                     guard d["active"] as? Bool == true,
+                          doc.id != glareJoin?.roomId,   // audit M-094: the room I am about to join
                           let by = d["startedBy"] as? String, by != me,
+                          !blocks.contains(by),
                           !ringIsMine(roomId: doc.id, callerUid: by),
                           !(d["joined"] as? [String] ?? []).contains(me),
                           !(d["declined"] as? [String] ?? []).contains(me),
                           !(d["busy"] as? [String] ?? []).contains(me),
                           !declinedInvites.contains(doc.id),
-                          let at = (d["startedAt"] as? Timestamp)?.dateValue(),
+                          let at = Self.inviteStart(in: d, for: me),
                           now.timeIntervalSince(at) < Self.ringWindow else { continue }
+                    // audit M-094, 2026-10-07: a crossed start is not "busy" (see `crossedCall`).
+                    switch crossedCall(roomId: doc.id, callerUid: by) {
+                    case .iWin: continue
+                    case .iLose: yieldToCrossedCall(roomId: doc.id); return
+                    case .none: break
+                    }
                     GroupCallRinging.shared.reportBusy(roomKind: "adhoc", roomId: doc.id)
                 }
             }
             incomingInvite = nil
             return
         }
+        // audit M-094, 2026-10-07: my own room is down after a crossed start; go into theirs, the
+        // way the reference app puts both people in one call. Only while it is still live and fresh.
+        if let g = glareJoin {
+            glareJoin = nil
+            if now.timeIntervalSince(g.at) < 30,
+               inviteDocs.contains(where: { $0.id == g.roomId && $0.data["active"] as? Bool == true }) {
+                let video = g.video && AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+                Task { await joinAdhoc(roomId: g.roomId, video: video) }
+                return
+            }
+        }
         for doc in inviteDocs {
             let d = doc.data
             guard let by = d["startedBy"] as? String, by != me,
+                  !blocks.contains(by),
                   !(d["joined"] as? [String] ?? []).contains(me),
                   // Said no on my other phone, or on this one's lock screen before the app's own
                   // list loaded (the server keeps the answer on the call's doc).
                   !(d["declined"] as? [String] ?? []).contains(me),
                   !declinedInvites.contains(doc.id),
                   let invite = makeInvite(id: doc.id, data: d),
-                  ageExemptInvites.contains(doc.id) || now.timeIntervalSince(invite.startedAt) < 90
+                  let start = Self.inviteStart(in: d, for: me),
+                  ageExemptInvites.contains(doc.id) || now.timeIntervalSince(start) < Self.ringWindow
             else { continue }
             if incomingInvite != invite { incomingInvite = invite }
             return
@@ -1575,9 +1862,12 @@ final class GroupCallService: ObservableObject {
               !(d["joined"] as? [String] ?? []).contains(me),
               activeCid == nil, !connecting, !waitingForApproval,
               CallService.shared.state == .idle,
-              let invite = makeInvite(id: roomId, data: d) else { return }
+              let invite = makeInvite(id: roomId, data: d),
+              !BlockList.snapshot.contains(invite.startedBy)   // audit M-076, 2026-10-07
+        else { return }
         declinedInvites.remove(roomId)
         ageExemptInvites.insert(roomId)
+        tappedInviteUid = me   // audit M-097, 2026-10-07: survives the listener's first start
         incomingInvite = invite
     }
 
