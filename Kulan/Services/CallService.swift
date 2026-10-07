@@ -527,6 +527,12 @@ final class CallService: NSObject {
     /// Audit M-107, 2026-10-07: the share's own weak-link windows and whether its cap is lowered.
     @ObservationIgnored private var shareLinkPolicy = WeakLinkPolicy(floorBitrate: 800_000, pauseAfter: 5, resumeAfter: 15)
     @ObservationIgnored private var shareBitrateLowered = false
+    /// Audit round 2 (V1 new bug 3, M-107), 2026-10-07: the RESTORE windows, used only while the cap
+    /// is lowered. The 800 kbps floor above can never be crossed from under a 600 kbps cap (the
+    /// estimate tracks what is sent), so a lowered share stayed blurred for good. Restoring needs
+    /// 15s at or above 500 kbps, which a healthy link at the lowered cap reaches; if the link is
+    /// still weak at 2 Mbps, the floor above lowers it again 5s later.
+    @ObservationIgnored private var shareRestorePolicy = WeakLinkPolicy(floorBitrate: 500_000, pauseAfter: 5, resumeAfter: 15)
     private(set) var callId: String?
     /// Readable so the call screen can draw a verified mark beside the name. Still only writable in
     /// here: who is on the other end of a call is decided by the signalling, never by a view.
@@ -1433,7 +1439,7 @@ final class CallService: NSObject {
             capturer.setLive(true)
         }
         localVideoTrack?.isEnabled = true   // a voice call's track is disabled until now
-        shareBitrateLowered = false; shareLinkPolicy.reset()   // audit M-107: each share starts at full rate
+        shareBitrateLowered = false; shareLinkPolicy.reset(); shareRestorePolicy.reset()   // audit M-107: each share starts at full rate
         applyScreenShareEncoding(true)
         broadcastScreenState()
         updateInCallScreenBehavior()
@@ -1459,7 +1465,7 @@ final class CallService: NSObject {
         if requestExtensionStop, pendingOnly { armLateShareStop() }
         guard screenSharing else { return }
         screenSharing = false
-        shareBitrateLowered = false; shareLinkPolicy.reset()   // audit M-107
+        shareBitrateLowered = false; shareLinkPolicy.reset(); shareRestorePolicy.reset()   // audit M-107
         applyScreenShareEncoding(false)
         // The camera comes back only if it was on before the share and nothing else holds it now
         // (hold, weak link, call ending). An interrupted camera is left to its own retry, which
@@ -1885,13 +1891,22 @@ final class CallService: NSObject {
     }
 
     /// Audit M-107, 2026-10-07: under about 800 kbps for 5s, the share's cap drops to about 600 kbps;
-    /// back to 2 Mbps after 15s above it. Lowered, not ended: the encoder already keeps the
-    /// resolution and drops frames, so text stays readable. Main only.
+    /// back to 2 Mbps after 15s at or above 500 kbps (round 2: `shareRestorePolicy`, a level the
+    /// lowered cap can reach). Lowered, not ended: the encoder already keeps the resolution and drops
+    /// frames, so text stays readable. Main only.
     private func applyShareLinkQuality(_ bitrate: Double?) {
-        switch shareLinkPolicy.evaluate(bitrate: bitrate, paused: shareBitrateLowered, now: Date()) {
-        case .pause:  shareBitrateLowered = true;  applyScreenShareEncoding(true)
-        case .resume: shareBitrateLowered = false; applyScreenShareEncoding(true)
-        case .none:   break
+        let now = Date()
+        if shareBitrateLowered {
+            // Only the restore decision applies while lowered (paused = true asks for .resume only).
+            guard shareRestorePolicy.evaluate(bitrate: bitrate, paused: true, now: now) == .resume else { return }
+            shareBitrateLowered = false
+            shareLinkPolicy.reset(); shareRestorePolicy.reset()
+            applyScreenShareEncoding(true)
+        } else {
+            guard shareLinkPolicy.evaluate(bitrate: bitrate, paused: false, now: now) == .pause else { return }
+            shareBitrateLowered = true
+            shareLinkPolicy.reset(); shareRestorePolicy.reset()
+            applyScreenShareEncoding(true)
         }
     }
 
@@ -2253,6 +2268,21 @@ final class CallService: NSObject {
         let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
                                                   .headphones, .headsetMic, .carAudio]
         let hasExternalInput = (session.availableInputs ?? []).contains { external.contains($0.portType) }
+        // Audit round 2 (V1 new bug 1, from M-049), 2026-10-07: a video call that STARTED with AirPods
+        // never got its speaker default (the device was connected), so when they came out the call
+        // landed on the earpiece: a video call held at arm's length with the sound at the ear. The
+        // device leaving is the moment the default is owed, unless the person picked a route
+        // themselves. Only on `.oldDeviceUnavailable` landing on the earpiece, and only with no other
+        // device still around, so a person's own pick of "iPhone" is never overruled. Proximity is not
+        // involved: updateInCallScreenBehavior keeps it off whenever video shows.
+        if reason == .oldDeviceUnavailable, audioRoute == .earpiece, !hasExternalInput,
+           cameraOn || remoteCameraOn, !speakerChosenByUser, !wantsSpeaker {
+            videoSpeakerDefaultApplied = true
+            wantsSpeaker = true   // the re-assert below now holds it against session resets
+            try? session.overrideOutputAudioPort(.speaker)
+            // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
+            return
+        }
         // The user asked for speaker but a system reset (CallKit re-activation at connect, WebRTC
         // reconfigure) bounced the route back to the earpiece → RE-ASSERT the choice. External devices
         // (AirPods/car) always win — never fight a real device route.
