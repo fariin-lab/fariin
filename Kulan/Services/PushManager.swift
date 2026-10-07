@@ -126,7 +126,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // Audit M-004, 2026-10-07: the caller hung up before an answer (server cancel push). The
         // ring for that call stops here; a late ring push for it is not rung at all. PushKit still
         // gets its report, like every other push.
-        if Self.isCancelPush(d) {
+        // The server's payload: {callId, kind: "callcancel", cancel: true, ...} (F6).
+        if d["kind"] as? String == "callcancel" || Self.isCancelPush(d) {
             Self.noteCancelled(callId)
             CallKitManager.shared.reportAndDiscard(completion: completion)
             CallKitManager.shared.endCancelledRing(callId: callId)
@@ -435,8 +436,12 @@ enum Push {
         // server this build understands a group ring; a phone without it keeps getting the plain
         // notification. Written to the private push doc ONLY: it never lived on the user doc, so
         // there is nothing to scrub there (and `saveToken`'s scrub would create the field).
+        // Audit M-004, 2026-10-07: and under `voipCancelTokens`, in the same write. That field tells
+        // the server this build handles a cancel push (kind "callcancel" / "groupringcancel"); the
+        // server sends those only there, so an older build never gets a push it would ring for.
         Firestore.firestore().collection("users").document(uid).collection("push").document("tokens")
-            .setData(["groupRingTokens": FieldValue.arrayUnion([token])], merge: true)
+            .setData(["groupRingTokens": FieldValue.arrayUnion([token]),
+                      "voipCancelTokens": FieldValue.arrayUnion([token])], merge: true)
         // And on this device's row, so a remote sign-out can pull this device's ring token.
         Task { @MainActor in DeviceRegistry.shared.recordVoipToken(token) }
     }
@@ -539,7 +544,10 @@ enum Push {
             // owner, 2026-10-06: the group ring token leaves with the VoIP token. Push doc only:
             // the user doc never had the field, and its rules must not be asked about it.
             var pushUpdates = updates
-            if let voip = latestVoipToken { pushUpdates["groupRingTokens"] = FieldValue.arrayRemove([voip]) }
+            if let voip = latestVoipToken {
+                pushUpdates["groupRingTokens"] = FieldValue.arrayRemove([voip])
+                pushUpdates["voipCancelTokens"] = FieldValue.arrayRemove([voip])   // audit M-004
+            }
             batch.setData(pushUpdates, forDocument: doc.collection("push").document("tokens"), merge: true)
             do { try await batch.commit(); return }
             catch {
