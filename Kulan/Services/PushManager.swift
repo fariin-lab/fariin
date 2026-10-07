@@ -131,6 +131,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             Self.noteCancelled(callId)
             CallKitManager.shared.reportAndDiscard(completion: completion)
             CallKitManager.shared.endCancelledRing(callId: callId)
+            // CallService's own side of the cancel, at once (F1's hook): a suspended app's ring
+            // watcher may not be running to notice the caller gave up.
+            Task { @MainActor in CallService.shared.remoteCancelled(callId: callId) }
             return
         }
         // Audit M-157, 2026-10-07: nobody signed in here (a sign-out whose token cleanup did not
