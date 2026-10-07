@@ -135,7 +135,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             CallKitManager.shared.endCancelledRing(callId: callId, endReason: d["endReason"] as? String)
             // CallService's own side of the cancel, at once (F1's hook): a suspended app's ring
             // watcher may not be running to notice the caller gave up.
-            Task { @MainActor in CallService.shared.remoteCancelled(callId: callId) }
+            // With the reason (round 2): busy / declined on my other phone ends quietly, no
+            // "Missed call" row; hangup / timeout stay missed.
+            let reason = d["endReason"] as? String
+            Task { @MainActor in CallService.shared.remoteCancelled(callId: callId, reason: reason) }
             return
         }
         // Audit M-157, 2026-10-07: nobody signed in here (a sign-out whose token cleanup did not
