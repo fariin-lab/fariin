@@ -101,6 +101,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // call starting). GroupCallRinging reports a call to CallKit on EVERY path and `completion`
         // runs from that report, as iOS requires; nothing is awaited before it. The registry's
         // queue is main; anywhere else still gets its CallKit report.
+        // Audit M-004, 2026-10-07: the group ring stopped on the server (the call ended, or I
+        // answered or declined elsewhere): functions-groups sends kind "groupringcancel". Reported
+        // to CallKit first, as every push must be, then the ring for that room stops.
+        if d["kind"] as? String == "groupringcancel" {
+            CallKitManager.shared.reportAndDiscard(completion: completion)
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { GroupCallRinging.shared.handleCancelPush(d) }
+            }
+            return
+        }
         if d["kind"] as? String == "groupring" {
             if Thread.isMainThread {
                 MainActor.assumeIsolated { GroupCallRinging.shared.handlePush(d, completion: completion) }
@@ -113,17 +123,67 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // 2026-09-24 audit: no call id means no call document to ring for (an empty id is not a
         // valid Firestore path). Still reported to CallKit, as iOS requires, then ended at once.
         guard !callId.isEmpty else { CallKitManager.shared.reportAndDiscard(completion: completion); return }
+        // Audit M-004, 2026-10-07: the caller hung up before an answer (server cancel push). The
+        // ring for that call stops here; a late ring push for it is not rung at all. PushKit still
+        // gets its report, like every other push.
+        // The server's payload: {callId, kind: "callcancel", cancel: true, ...} (F6).
+        if d["kind"] as? String == "callcancel" || Self.isCancelPush(d) {
+            Self.noteCancelled(callId)
+            CallKitManager.shared.reportAndDiscard(completion: completion)
+            CallKitManager.shared.endCancelledRing(callId: callId)
+            return
+        }
+        // Audit M-157, 2026-10-07: nobody signed in here (a sign-out whose token cleanup did not
+        // land). The ghost-call guard reads the call doc, which a signed-out phone cannot do, so it
+        // rang anyway. Reported, as iOS requires, and ended at once.
+        guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId) else {
+            CallKitManager.shared.reportAndDiscard(completion: completion)
+            return
+        }
         let name = d["callerName"] as? String ?? "Call"
         let uid = d["callerUid"] as? String ?? ""
         let photo = d["photo"] as? String
         let video = (d["type"] as? String) == "video"   // M1: show the right CallKit UI for a video call
-        // owner, 2026-10-06: one ring at a time. A group ring still up stops for the 1:1 call;
-        // nothing below changes.
-        if Thread.isMainThread { MainActor.assumeIsolated { GroupCallRinging.shared.oneToOneTookOver() } }
         // iOS 13+: MUST report to CallKit before completion or the app is terminated.
         CallService.shared.prepareIncoming(callId: callId, name: name, uid: uid, photo: photo, video: video)
+        // owner, 2026-10-06: one ring at a time. A group ring still up stops for the 1:1 call;
+        // nothing below changes.
+        // Audit M-046, 2026-10-07: only once this push really became the ringing call. It ran
+        // before any check, so a refused, duplicate, busy or blocked 1:1 push killed the group ring
+        // and marked it finished for 30 minutes. Before `reportIncoming`, as before, so the group
+        // ring's CallKit call is gone when the 1:1 one is reported.
+        let service = CallService.shared
+        if service.state == .incoming, service.callId == callId, Thread.isMainThread {
+            MainActor.assumeIsolated { GroupCallRinging.shared.oneToOneTookOver() }
+        }
+        // M-001: `fromPush`, so a push for a call the listener already rang is still reported.
         CallKitManager.shared.reportIncoming(callId: callId, name: name, video: video,
-                                            callerUid: uid) { completion() }
+                                            callerUid: uid, fromPush: true) { completion() }
+    }
+
+    // MARK: - Cancelled 1:1 rings (audit M-004, 2026-10-07)
+
+    /// Call ids the server said were cancelled, kept a few minutes so a ring push delivered after
+    /// its cancel (APNs does not keep order) never rings. Main queue only (PushKit's queue).
+    nonisolated(unsafe) private static var cancelledCalls: [String: Date] = [:]
+
+    /// The server's cancel push carries `cancel: true` (a JSON boolean; a 1 or "true" is taken too).
+    static func isCancelPush(_ d: [AnyHashable: Any]) -> Bool {
+        if let b = d["cancel"] as? Bool { return b }
+        if let n = d["cancel"] as? NSNumber { return n.boolValue }
+        if let s = d["cancel"] as? String { return s == "true" || s == "1" }
+        return false
+    }
+
+    private static func noteCancelled(_ callId: String) {
+        let now = Date()
+        cancelledCalls = cancelledCalls.filter { now.timeIntervalSince($0.value) < 300 }
+        cancelledCalls[callId] = now
+    }
+
+    private static func wasCancelled(_ callId: String) -> Bool {
+        guard let at = cancelledCalls[callId] else { return false }
+        return Date().timeIntervalSince(at) < 300
     }
 
     func application(_ application: UIApplication,
@@ -186,7 +246,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // Vibrate / Preview did nothing at all: the banner appeared and the tone played regardless,
         // and vibrate could never fire. This is the surviving foreground path, so it owns them.
         let d = UserDefaults.standard
-        let wantPreview = d.object(forKey: "notif.inAppPreview") as? Bool ?? true
+        // Audit M-030, 2026-10-07: no banner while the screen is being recorded, mirrored or
+        // shared. The banner carries the decrypted message, restricted chats included, and anyone
+        // watching the capture read it. The sound, vibration and badge still come.
+        let captured = await MainActor.run { UIScreen.main.isCaptured }
+        let wantPreview = !captured && (d.object(forKey: "notif.inAppPreview") as? Bool ?? true)
         let wantSound = d.object(forKey: "notif.inAppSound") as? Bool ?? true
         let wantVibrate = d.object(forKey: "notif.inAppVibrate") as? Bool ?? true
         if wantPreview {
@@ -372,8 +436,12 @@ enum Push {
         // server this build understands a group ring; a phone without it keeps getting the plain
         // notification. Written to the private push doc ONLY: it never lived on the user doc, so
         // there is nothing to scrub there (and `saveToken`'s scrub would create the field).
+        // Audit M-004, 2026-10-07: and under `voipCancelTokens`, in the same write. That field tells
+        // the server this build handles a cancel push (kind "callcancel" / "groupringcancel"); the
+        // server sends those only there, so an older build never gets a push it would ring for.
         Firestore.firestore().collection("users").document(uid).collection("push").document("tokens")
-            .setData(["groupRingTokens": FieldValue.arrayUnion([token])], merge: true)
+            .setData(["groupRingTokens": FieldValue.arrayUnion([token]),
+                      "voipCancelTokens": FieldValue.arrayUnion([token])], merge: true)
         // And on this device's row, so a remote sign-out can pull this device's ring token.
         Task { @MainActor in DeviceRegistry.shared.recordVoipToken(token) }
     }
@@ -476,7 +544,10 @@ enum Push {
             // owner, 2026-10-06: the group ring token leaves with the VoIP token. Push doc only:
             // the user doc never had the field, and its rules must not be asked about it.
             var pushUpdates = updates
-            if let voip = latestVoipToken { pushUpdates["groupRingTokens"] = FieldValue.arrayRemove([voip]) }
+            if let voip = latestVoipToken {
+                pushUpdates["groupRingTokens"] = FieldValue.arrayRemove([voip])
+                pushUpdates["voipCancelTokens"] = FieldValue.arrayRemove([voip])   // audit M-004
+            }
             batch.setData(pushUpdates, forDocument: doc.collection("push").document("tokens"), merge: true)
             do { try await batch.commit(); return }
             catch {

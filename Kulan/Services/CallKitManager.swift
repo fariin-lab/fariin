@@ -86,7 +86,15 @@ final class CallKitManager: NSObject {
             // signal, "connect", and carry NO audio in either direction, with the error thrown away
             // (audit). Tear it down instead of leaving a silent call standing.
             guard error != nil else { return }
-            DispatchQueue.main.async { CallService.shared.endFromCallKit() }
+            DispatchQueue.main.async {
+                // Audit M-003, 2026-10-07: let go of the handles too. They were cleared only by the
+                // CXEndCallAction delegate callback, which never runs for a call iOS refused to
+                // start, so `activeUUID` stayed set and every later 1:1 ring took the "a different
+                // call is live" branch: transient report, ended at once, never rang.
+                let me = CallKitManager.shared
+                if me.activeUUID == uuid { me.activeUUID = nil; me.activeCallId = nil }
+                CallService.shared.endFromCallKit()
+            }
         }
         return uuid
     }
@@ -97,24 +105,78 @@ final class CallKitManager: NSObject {
         guard let u = activeUUID else { return }
         controller.request(CXTransaction(action: CXSetMutedCallAction(call: u, muted: muted))) { _ in }
     }
-    func reportConnected() { if let u = activeUUID { provider.reportOutgoingCall(with: u, connectedAt: nil) } }
+    func reportConnected() {
+        guard let u = activeUUID else { return }
+        // Audit M-045, 2026-10-07: armed BEFORE the report, since CallKit's automatic unmute follows
+        // it. Only for a caller who is muted, and only for a few seconds, so a real unmute tapped
+        // on the lock screen later is never the one swallowed.
+        if CallService.shared.isMuted {
+            stateLock.lock(); connectUnmuteUntil = Date().addingTimeInterval(3); stateLock.unlock()
+        }
+        provider.reportOutgoingCall(with: u, connectedAt: nil)
+    }
+
+    /// Guards the two values below, which CallKit's delegate may read off the main thread.
+    private let stateLock = NSLock()
+    /// Audit M-045: until when CallKit's automatic unmute at connect is expected.
+    private var connectUnmuteUntil: Date?
+    /// Audit M-082, 2026-10-07: the group call's speaker choice, kept here for `didActivate`.
+    /// It read `GroupCallService.speakerOn` only when on the main thread and fell back to the
+    /// loudspeaker otherwise, so an answered call the user had moved to the earpiece came back on
+    /// the loudspeaker at the next session activation. Fed by GroupCallRinging's speaker sink.
+    private var groupSpeakerChoice = true
+
+    /// True once, inside the window armed by `reportConnected`.
+    private func takeConnectUnmute() -> Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        guard let until = connectUnmuteUntil else { return false }
+        connectUnmuteUntil = nil
+        return Date() < until
+    }
+
+    func noteGroupSpeaker(_ on: Bool) {
+        stateLock.lock(); groupSpeakerChoice = on; stateLock.unlock()
+    }
+    private var groupSpeaker: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return groupSpeakerChoice
+    }
 
     // MARK: - Incoming (idempotent per callId so two paths can't make two UUIDs)
     /// `callerUid` is only used to find the per-chat Call Sound. The ringtone has to be set on the
     /// PROVIDER before the call is reported — there is no per-call ringtone property — so the config
     /// is swapped here, right before reporting.
+    ///
+    /// `fromPush`: this report answers a VoIP push. Audit M-001, 2026-10-07: the same-call early
+    /// return below used to run for pushes too. With the app open the Firestore listener rings a
+    /// call first, and the VoIP push for that same call lands seconds later; it was completed with
+    /// NOTHING reported. The PushKit contract is per PUSH, not per call: every missed report counts
+    /// against the app, and enough of them get it killed and its VoIP pushes throttled ("sometimes
+    /// it doesn't ring, sometimes late"). A push for a call already reported now reports a
+    /// transient call and ends it at once (`reportAndDiscard`); the listener keeps the silent return.
     func reportIncoming(callId: String, name: String, video: Bool = false,
-                        callerUid: String? = nil, completion: (() -> Void)? = nil) {
-        if activeCallId == callId, activeUUID != nil { completion?(); return }
+                        callerUid: String? = nil, fromPush: Bool = false, completion: (() -> Void)? = nil) {
+        if activeCallId == callId, activeUUID != nil {
+            if fromPush { reportAndDiscard { completion?() } } else { completion?() }
+            return
+        }
         applyRingtone(callerUid: callerUid)
         // A DIFFERENT call is already live/ringing: iOS requires reporting something for a VoIP
         // push, but this second caller must NOT steal activeUUID (End would then target the wrong
         // system call). Report a transient call and end it immediately (busy).
-        if activeUUID != nil {
+        // Audit M-047, 2026-10-07: a live, joining or waiting GROUP call is busy here too. It holds
+        // no `activeUUID`, so a 1:1 push during a group call took the branch below and showed a REAL
+        // ringing CallKit call until CallService ended it on the next run-loop turn.
+        // Not when CallService itself took this very call as ringing (its own group check is
+        // narrower until it also counts the approval wait): a transient report then would leave it
+        // ringing on the caller's side with no system call here, so it rings as before.
+        let serviceRingsThis = CallService.shared.callId == callId && CallService.shared.state == .incoming
+        if activeUUID != nil || (groupCallBusy && !serviceRingsThis) {
             let uuid = UUID()
             let update = CXCallUpdate()
             update.remoteHandle = CXHandle(type: .generic, value: name)
             update.hasVideo = video
+            Self.limitControls(update)
             provider.reportNewIncomingCall(with: uuid, update: update) { [provider] _ in
                 provider.reportCall(with: uuid, endedAt: nil, reason: .unanswered)
                 completion?()
@@ -127,19 +189,46 @@ final class CallKitManager: NSObject {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.hasVideo = video
+        Self.limitControls(update)
         provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
             // If iOS REFUSES to report it (its own block list, a Focus filter), there is no ring and
             // no system call — but activeUUID/activeCallId were left pointing at it, so the app sat
             // in .incoming with no UI and End could not clear it until the caller's 45s timeout
             // (audit). Release the handles and tear our side down.
+            // Audit M-044, 2026-10-07: only when the refused report is STILL the current call. The
+            // teardown used to sit outside that check and ended whatever call was current by then
+            // (a later call that had taken over). And it ends as MISSED, not as the user's decline:
+            // nobody tapped anything, iOS refused to ring.
             if error != nil {
                 DispatchQueue.main.async {
-                    if self?.activeUUID == uuid { self?.activeUUID = nil; self?.activeCallId = nil }
-                    CallService.shared.endFromCallKit()
+                    guard self?.activeUUID == uuid else { return }
+                    self?.activeUUID = nil; self?.activeCallId = nil
+                    let service = CallService.shared
+                    if service.callId == callId, service.state == .incoming { service.endReason = .missed }
+                    service.endFromCallKit()
                 }
             }
             completion?()
         }
+    }
+
+    /// Audit M-047, 2026-10-07: a group call this phone is in, joining, or waiting to be let into.
+    /// GroupCallService is main-actor state; CallKit and PushKit both deliver on the main queue
+    /// here, and anywhere else this answers "not busy", which is the old behaviour.
+    private var groupCallBusy: Bool {
+        guard Thread.isMainThread else { return false }
+        return MainActor.assumeIsolated {
+            let g = GroupCallService.shared
+            return g.isActive || g.connecting || g.waitingForApproval
+        }
+    }
+
+    /// Audit M-115, 2026-10-07: the system call screen offered a keypad and call merging, and
+    /// nothing here handles either. Every update we report says so.
+    private static func limitControls(_ update: CXCallUpdate) {
+        update.supportsDTMF = false
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
     }
 
     /// 2026-09-24 audit: a VoIP push that names no call. iOS still requires a report for every VoIP
@@ -149,10 +238,26 @@ final class CallKitManager: NSObject {
         let uuid = UUID()
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: "Call")
+        Self.limitControls(update)
         provider.reportNewIncomingCall(with: uuid, update: update) { [provider] _ in
             provider.reportCall(with: uuid, endedAt: nil, reason: .failed)
             completion()
         }
+    }
+
+    /// Audit M-004, 2026-10-07: the caller hung up before an answer and the server sent a cancel
+    /// push. A ring started by a push could only be stopped by a Firestore listener or a timer in
+    /// a process iOS may suspend seconds after the push, so a locked phone kept ringing into a dead
+    /// call. Stops the system ring for that call only, if it is still ringing unanswered here.
+    /// CallService's own ring watcher then reads the ended doc and finishes its side as before
+    /// (its `reportEnded` finds nothing left to end). True if a ring was stopped.
+    @discardableResult
+    func endCancelledRing(callId: String) -> Bool {
+        guard activeUUID != nil, activeCallId == callId else { return false }
+        let service = CallService.shared
+        guard service.callId == callId, service.state == .incoming else { return false }
+        reportEnded(.unanswered)   // what CallService itself tells iOS for a cancelled ring
+        return true
     }
 
     // Reflect a mid-call video<->voice switch in the system call UI (green pill shows the camera glyph).
@@ -180,6 +285,7 @@ final class CallKitManager: NSObject {
         update.remoteHandle = CXHandle(type: .generic, value: name)
         update.hasVideo = video
         update.supportsHolding = false
+        Self.limitControls(update)
         provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
             // Refused by iOS (Focus, its block list): no ring and no system call. Let go of it.
             if error != nil {
@@ -232,11 +338,21 @@ final class CallKitManager: NSObject {
             CallService.shared.endFromCallKit()
             return
         }
-        controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { error in
+        controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { [provider] error in
             // Same reasoning as the nil-UUID branch above: if the end action itself fails, the End
             // button silently did nothing. Fall back to tearing our side down directly.
             guard error != nil else { return }
-            DispatchQueue.main.async { CallService.shared.endFromCallKit() }
+            DispatchQueue.main.async {
+                // Audit M-003, 2026-10-07: the failed action never reaches the CXEndCallAction
+                // handler, the one place the handles were cleared, so the phone treated every later
+                // 1:1 ring as busy. Close the system call ourselves and let go of it.
+                let me = CallKitManager.shared
+                if me.activeUUID == uuid {
+                    provider.reportCall(with: uuid, endedAt: nil, reason: .failed)
+                    me.activeUUID = nil; me.activeCallId = nil
+                }
+                CallService.shared.endFromCallKit()
+            }
         }
     }
     /// Why a call ended without a user action here. iOS uses the reason for Recents: a ring answered
@@ -267,17 +383,42 @@ extension CallKitManager: CXProviderDelegate {
             onMain { GroupCallRinging.shared.providerReset() }
         }
         CallService.shared.hangUp()
+        // Audit M-003, 2026-10-07: every system call is gone after a reset, ours included. The
+        // handles were left set, so the phone stayed "busy" for every later 1:1 ring. Cleared AFTER
+        // hangUp, so its delayed end (which compares against the UUID it saw) still matches only
+        // this call and can never end a new one that rings inside the tone window.
+        activeUUID = nil; activeCallId = nil
     }
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         configureAudio()
         action.fulfill()
         provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: nil)
+        // Audit M-115, 2026-10-07: an outgoing call has no CXCallUpdate of its own, so the keypad
+        // and merge buttons are switched off here.
+        let update = CXCallUpdate()
+        Self.limitControls(update)
+        provider.reportCall(with: action.callUUID, updated: update)
     }
+
+    // Audit M-115, 2026-10-07: never offered (see `limitControls`); answered so nothing waits on them.
+    func provider(_ provider: CXProvider, perform action: CXPlayDTMFCallAction) { action.fulfill() }
+    func provider(_ provider: CXProvider, perform action: CXSetGroupCallAction) { action.fulfill() }
+
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         // owner, 2026-10-06: a group ring answered in CallKit. Audio per the SDK's CallKit recipe,
         // set up BEFORE the room connects; the join itself runs on the main actor.
         if let group = groupUUID, group == action.callUUID {
+            // Audit M-153, 2026-10-07: the same room is already joining (or up) inside the app,
+            // from its Join bar or invitation while CallKit still rang. A second join was started
+            // under it, refused because one was connecting, and then "the join never became a
+            // call" ended the CallKit call and put the audio defaults back under the live join.
+            // Now the ring just ends as answered elsewhere, and the audio is never switched over.
+            if Thread.isMainThread,
+               MainActor.assumeIsolated({ GroupCallRinging.shared.answerFindsRoomJoining(uuid: group) }) {
+                action.fulfill()
+                return
+            }
             groupAudioUnderCallKit = true
             GroupCallKitAudio.prepare()
             onMain {
@@ -289,6 +430,9 @@ extension CallKitManager: CXProviderDelegate {
             action.fulfill()
             return
         }
+        // Audit M-116, 2026-10-07: an answer for a call that is not ours (a transient busy report
+        // answered in the instant it shows) used to answer whatever 1:1 call was current.
+        guard let live = activeUUID, live == action.callUUID else { action.fail(); return }
         configureAudio()
         CallService.shared.answer()
         action.fulfill()
@@ -305,7 +449,9 @@ extension CallKitManager: CXProviderDelegate {
         // Only OUR call's End tears the call down. A transient busy report (`reportIncoming`'s
         // second-caller branch) has its own UUID; a Decline tapped on it in the instant it shows
         // must not end the live call (owner audit 2026-10-06, CallKit section).
-        if let live = activeUUID, live != action.callUUID { action.fulfill(); return }
+        // Audit M-116, 2026-10-07: and with no call of ours at all, an unknown UUID no longer ends
+        // whatever 1:1 call is current; it is acknowledged and nothing else happens.
+        guard let live = activeUUID, live == action.callUUID else { action.fulfill(); return }
         CallService.shared.endFromCallKit()   // CallKit already ending -> don't double-report
         activeUUID = nil; activeCallId = nil
         action.fulfill()
@@ -318,12 +464,28 @@ extension CallKitManager: CXProviderDelegate {
             let muted = action.isMuted
             onMain {
                 let service = GroupCallService.shared
-                if service.isActive, service.micOn == muted { service.toggleMic() }
+                if service.isActive {
+                    if service.micOn == muted { service.toggleMic() }
+                } else {
+                    // Audit M-083, 2026-10-07: still joining. This was dropped, yet fulfilled, so
+                    // the system screen said muted while the join then opened the mic.
+                    GroupCallRinging.shared.callKitMuteBeforeJoin(uuid: group, muted: muted)
+                }
             }
             action.fulfill()
             return
         }
-        if let live = activeUUID, live != action.callUUID { action.fulfill(); return }   // not our call
+        // Audit M-116, 2026-10-07: not our call (or no call of ours): refused, never applied to
+        // whatever call is current.
+        guard let live = activeUUID, live == action.callUUID else { action.fail(); return }
+        // Audit M-045, 2026-10-07: CallKit turns the mic back on by itself when an outgoing call
+        // connects. A caller who muted during "Calling..." had their mic opened with no tap. That
+        // one automatic unmute is acknowledged, not applied, and the system screen is put back.
+        if !action.isMuted, CallService.shared.isMuted, takeConnectUnmute() {
+            action.fulfill()
+            setMuted(true)
+            return
+        }
         if CallService.shared.isMuted != action.isMuted { CallService.shared.toggleMute() }
         action.fulfill()
     }
@@ -336,7 +498,8 @@ extension CallKitManager: CXProviderDelegate {
         // owner, 2026-10-06: a group call is not held by us; the audio session going away and
         // coming back (didDeactivate / didActivate below) is what stops and restarts its sound.
         if let group = groupUUID, group == action.callUUID { action.fulfill(); return }
-        if let live = activeUUID, live != action.callUUID { action.fulfill(); return }   // not our call
+        // Audit M-116, 2026-10-07: not our call (or no call of ours): refused, never applied.
+        guard let live = activeUUID, live == action.callUUID else { action.fail(); return }
         CallService.shared.setHeld(action.isOnHold)
         action.fulfill()
     }
@@ -346,9 +509,9 @@ extension CallKitManager: CXProviderDelegate {
         // only now; the 1:1 engine below is not touched.
         if groupAudioUnderCallKit {
             groupAudioSessionLive = true
-            var speaker = true   // group calls start on the speaker
-            if Thread.isMainThread { speaker = MainActor.assumeIsolated { GroupCallService.shared.speakerOn } }
-            GroupCallKitAudio.activated(audioSession, speaker: speaker)
+            // Audit M-082, 2026-10-07: the copy kept by `noteGroupSpeaker`, on whatever thread
+            // CallKit calls from (group calls start on the speaker; see GroupCallRinging).
+            GroupCallKitAudio.activated(audioSession, speaker: groupSpeaker)
             return
         }
         groupAudioSessionLive = false
