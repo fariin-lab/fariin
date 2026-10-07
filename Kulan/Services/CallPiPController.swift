@@ -24,6 +24,26 @@ final class CallPiPController: NSObject {
     private weak var bigTrack: RTCVideoTrack?
     private weak var tileTrack: RTCVideoTrack?
     private weak var sourceView: UIView?
+    /// Audit M-054, 2026-10-07: the feeds the window WOULD show, and whether frames are flowing into
+    /// it. Both feeds used to be converted to sample buffers and queued on the main thread for the
+    /// whole call, in the foreground too, where nobody can see the PiP window. Frames are now attached
+    /// only when picture-in-picture can be about to start (the app is resigning active, or PiP says it
+    /// is starting) and detached again once the app is back and no PiP window is up.
+    private weak var wantedBig: RTCVideoTrack?
+    private weak var wantedTile: RTCVideoTrack?
+    private var framesLive = false
+
+    override init() {
+        super.init()
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.controller != nil else { return }
+            self.attachFrames()
+        }
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.detachFramesIfIdle()
+        }
+    }
 
     var isSupported: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
 
@@ -46,8 +66,30 @@ final class CallPiPController: NSObject {
         bigView.setPlaceholder(name: feeds.bigName, photoUrl: feeds.bigPhotoUrl, visible: feeds.big == nil)
         tileView.setPlaceholder(name: feeds.tileName, photoUrl: feeds.tilePhotoUrl, visible: feeds.tile == nil)
         tileView.isHidden = !feeds.showsTile
-        bind(feeds.big, to: bigView, renderer: &bigRenderer, attached: &bigTrack)
-        bind(feeds.tile, to: tileView, renderer: &tileRenderer, attached: &tileTrack)
+        // M-054: remembered always, bound only while frames are wanted (see `framesLive`).
+        wantedBig = feeds.big
+        wantedTile = feeds.tile
+        if framesLive {
+            bind(feeds.big, to: bigView, renderer: &bigRenderer, attached: &bigTrack)
+            bind(feeds.tile, to: tileView, renderer: &tileRenderer, attached: &tileTrack)
+        }
+    }
+
+    /// M-054: start feeding the window. Idempotent; `bind` skips a track that is already attached.
+    private func attachFrames() {
+        framesLive = true
+        bind(wantedBig, to: bigView, renderer: &bigRenderer, attached: &bigTrack)
+        bind(wantedTile, to: tileView, renderer: &tileRenderer, attached: &tileTrack)
+    }
+
+    /// M-054: stop feeding it, but never while a PiP window (normal or stashed) is still up, and never
+    /// while the app is not in front (PiP may be about to start).
+    private func detachFramesIfIdle() {
+        guard framesLive, !isSystemPiPActive,
+              UIApplication.shared.applicationState == .active else { return }
+        framesLive = false
+        bind(nil, to: bigView, renderer: &bigRenderer, attached: &bigTrack)
+        bind(nil, to: tileView, renderer: &tileRenderer, attached: &tileTrack)
     }
 
     private func buildController(sourceView: UIView) {
@@ -121,6 +163,7 @@ final class CallPiPController: NSObject {
         if let t = tileTrack, let r = tileRenderer { t.remove(r) }
         bigRenderer = nil; tileRenderer = nil
         bigTrack = nil; tileTrack = nil
+        wantedBig = nil; wantedTile = nil; framesLive = false   // M-054
         controller = nil
         callVC = nil
         sourceView = nil
@@ -270,6 +313,12 @@ final class SampleBufferView: UIView {
 }
 
 extension CallPiPController: AVPictureInPictureControllerDelegate {
+    /// M-054: the window is about to open; make sure its frames are flowing (normally already done at
+    /// resign-active, this covers a start that comes some other way).
+    func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        attachFrames()
+    }
+
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     failedToStartPictureInPictureWithError error: Error) {
         print("[PiP] failed to start: \(error.localizedDescription)")
@@ -292,9 +341,10 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
 
     /// Only now is the system window genuinely gone. Ours is the single floating window from here.
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
-        // Nothing to tear down: the renderers stay bound for the life of the call so a re-background can
-        // start PiP again instantly. This exists so the state is observable and the lifecycle is closed
-        // rather than assumed.
+        // Audit M-054, 2026-10-07: this used to keep the renderers bound for the life of the call so a
+        // re-background could start PiP instantly. They are re-attached at resign-active now, which
+        // comes before any automatic start, so with the app back in front they are let go here.
+        detachFramesIfIdle()
     }
 }
 

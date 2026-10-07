@@ -1433,6 +1433,15 @@ struct FloatingCallWindow: View {
             }
         }
         .frame(width: tabW, height: tabH)
+        // Audit M-053, 2026-10-07: the PiP source view lived only on the video CARD, so a video call
+        // parked as this tab had none, and leaving the app then had no window to detach into: the
+        // capture was interrupted and the other side dropped to the avatar. The tab carries one too
+        // (only one of card / tab exists at a time, so there is still a single source).
+        .background {
+            if call.isVideoCall {
+                CallView.CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { call.cardStashed = false }
