@@ -139,8 +139,15 @@ final class GroupCallService: ObservableObject {
             // The lobby went away (Leave, or swiped down) with a join or a knock still running
             // from it: that is leaving, exactly as closing the call screen while connecting is.
             if lobby == nil, oldValue != nil, lobbyJoin, !isActive, connecting || waitingForApproval { end() }
+            // Audit 11-2: Leave (or a swipe) in the gap between the room connecting and the call
+            // screen taking the lobby's place ended nothing: `lobbyJoin` was already cleared, so the
+            // call ran on with no screen. The person was still looking at the lobby: that is leaving.
+            if lobby == nil, oldValue != nil, lobbySwapPending { lobbySwapPending = false; end() }
         }
     }
+    /// A lobby join whose room is up but whose call screen has not yet taken the lobby's place
+    /// (it waits for the camera, `swapToRoom`). While on, nothing may clear the lobby on its own.
+    private var lobbySwapPending = false
     /// ⛔ THE LOBBY STAYS UP UNTIL I AM IN (owner 2026-10-06, reference study). Join used to close
     /// the lobby at once and put up the call screen on "Connecting…"; with approval on, the wait
     /// happened on that second screen. Now a join started from the lobby (`joinLink(fromLobby: true)`)
@@ -565,7 +572,10 @@ final class GroupCallService: ObservableObject {
         // Any call that is now up closes a lobby still open for some other link (an invitation
         // answered while looking at one): there is one call at a time. Not the lobby whose cover
         // now holds this very call (`roomInLobbyCover`).
-        if lobby != nil, !roomInLobbyCover { lobbyJoin = false; lobby = nil }
+        // Audit 11-1 (critical, build 841): this ran right after a lobby join's own room came up,
+        // BEFORE the camera-ready swap set `roomInLobbyCover`, so it closed the very lobby the call
+        // screen was about to replace and left a live call with no screen. A pending swap keeps it.
+        if lobby != nil, !roomInLobbyCover, !lobbySwapPending { lobbyJoin = false; lobby = nil }
         usingFrontCamera = true
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
@@ -1171,8 +1181,10 @@ final class GroupCallService: ObservableObject {
             let swapToRoom: () -> Void = { [weak self] in
                 guard let self, fromLobby, !swapped, swapGen == self.joinGeneration else { return }
                 swapped = true
+                self.lobbySwapPending = false
                 self.roomInLobbyCover = true
             }
+            if fromLobby { lobbySwapPending = true }
             startLocalMedia(mic: !startMuted, video: video, cameraReady: swapToRoom)
             if fromLobby {
                 Task { @MainActor in
@@ -1243,6 +1255,9 @@ final class GroupCallService: ObservableObject {
         // The call ran inside the lobby's cover: that cover closes with the call. A lobby still
         // waiting (a failed join shows its error there) is left alone.
         if roomInLobbyCover { roomInLobbyCover = false; if lobby != nil { lobby = nil } }
+        // A call that ends before its screen replaced the lobby closes that lobby too. The flag is
+        // cleared FIRST: `lobby`'s didSet would otherwise read it and call end() again.
+        if lobbySwapPending { lobbySwapPending = false; if lobby != nil { lobby = nil } }
         joiningRoomId = nil
         joinedAt = nil
         stopRingback()
