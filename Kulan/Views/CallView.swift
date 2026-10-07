@@ -196,6 +196,14 @@ struct CallView: View {
         GeometryReader { geo in
             ZStack {
                 background(geo)
+                // The system broadcast picker, invisible: "..." › Share Screen presses its button
+                // (CallService.toggleScreenShare -> ScreenSharePicker.show). It has to be in the window
+                // for its sheet to present, so it is mounted, 1pt and transparent, not left out.
+                ScreenSharePickerView()
+                    .frame(width: 1, height: 1)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 if call.isVideo {
                     // The whole layout, not one feed — see CallService.pipFeeds.
                     CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
@@ -329,7 +337,7 @@ struct CallView: View {
     // `isLocalExpanded`, which left that case as a black screen.
     private var showAvatar: Bool {
         if !call.isVideo { return true }
-        if showLocalFull { return !call.cameraOn }   // my feed owns the big view
+        if showLocalFull { return !(call.cameraOn || call.screenSharing) }   // my feed owns the big view
         return !hasRemote
     }
 
@@ -341,7 +349,7 @@ struct CallView: View {
         // Only show a fullscreen feed that is ACTUALLY LIVE. Otherwise hide the renderer (opacity 0) so
         // the shared Metal view doesn't keep its last frame on screen — that stale frame was YOUR frozen
         // ringing-preview showing as the background behind the avatar when the other camera is off.
-        let canShow = full != nil && (showLocalFull ? call.cameraOn : hasRemote)
+        let canShow = full != nil && (showLocalFull ? (call.cameraOn || call.screenSharing) : hasRemote)
         // STABILITY (LiveKit pattern): never swap view-tree branches. The gradient/avatar-blur is
         // a permanent base, and ONE Metal renderer stays mounted on top for the whole video call —
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
@@ -359,7 +367,10 @@ struct CallView: View {
             (call.isVideo ? Color.black : (shownPalette.map { Color($0.page) } ?? Color.black))
                 .animation(.easeOut(duration: 0.35), value: shownPalette?.key)
             if call.isVideo {
-                VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
+                // A shared screen is never mirrored (mine) and never cropped (theirs: shown whole).
+                VideoRendererView(track: full,
+                                  mirror: showLocalFull && call.usingFrontCamera && !call.screenSharing,
+                                  fit: !showLocalFull && call.remoteScreenSharing)
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
                     // natural dimensions) that can exceed the screen and oversize the ZStack, which
@@ -428,6 +439,13 @@ struct CallView: View {
                 // multi-person one would invite people to a conversation that never started.
                 Button { showAddPeople = true } label: { Label("Add people", systemImage: "person.badge.plus") }
                     .disabled(!(call.state == .active && call.connectedDate != nil))
+                // Same rule as Add people: a call that has not connected has nobody to show it to.
+                // Starting opens the system's broadcast sheet; its countdown is the consent.
+                Button { call.toggleScreenShare() } label: {
+                    Label(call.screenSharing ? "Stop Sharing" : "Share Screen",
+                          systemImage: call.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                }
+                .disabled(!(call.state == .active && call.connectedDate != nil))
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -610,7 +628,9 @@ struct CallView: View {
     @ViewBuilder
     private func tileContent(track: RTCVideoTrack?, isLocal: Bool, feeds: CallService.PiPFeeds) -> some View {
         if let track {
-            VideoRendererView(track: track, mirror: isLocal && call.usingFrontCamera)
+            VideoRendererView(track: track,
+                              mirror: isLocal && call.usingFrontCamera && !call.screenSharing,
+                              fit: !isLocal && call.remoteScreenSharing)
         } else {
             ZStack {
                 Color.black
@@ -638,10 +658,12 @@ struct CallView: View {
             // permission). Only once CONNECTED; dimmed while still Calling/Ringing.
             callCircle(call.cameraOn ? "video.fill" : "video.slash.fill", active: !call.cameraOn,
                        label: call.cameraOn ? "Turn camera off" : "Turn camera on") { call.toggleCamera() }
-                .disabled(call.state != .active)
-                .opacity(call.state == .active ? 1 : 0.4)
-            // Flip front/back only while my camera is on.
-            if call.cameraOn {
+                // Dimmed while my screen is shared too: the share owns my video until it stops, and
+                // stopping brings the camera back exactly as it was.
+                .disabled(call.state != .active || call.screenSharing)
+                .opacity(call.state == .active && !call.screenSharing ? 1 : 0.4)
+            // Flip front/back only while my camera is on (and actually showing, not a shared screen).
+            if call.cameraOn && !call.screenSharing {
                 callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
             }
             speakerCircle
@@ -1467,7 +1489,9 @@ struct FloatingCallWindow: View {
         return ZStack(alignment: .bottomTrailing) {
             Color.black
             if let big = feeds.big {
-                VideoRendererView(track: big, mirror: feeds.mirrorBig)
+                VideoRendererView(track: big,
+                                  mirror: feeds.mirrorBig && !call.screenSharing,
+                                  fit: call.remoteScreenSharing && big === call.remoteVideoTrack)
                     .frame(width: w, height: h)
                     .clipped()
             } else {
@@ -1480,7 +1504,9 @@ struct FloatingCallWindow: View {
                 let tw = w * 0.34
                 Group {
                     if let tile = feeds.tile {
-                        VideoRendererView(track: tile, mirror: feeds.mirrorTile)
+                        VideoRendererView(track: tile,
+                                          mirror: feeds.mirrorTile && !call.screenSharing,
+                                          fit: call.remoteScreenSharing && tile === call.remoteVideoTrack)
                     } else {
                         ZStack {
                             Color.black
