@@ -196,7 +196,7 @@ final class GroupCallService: ObservableObject {
     /// Opens the pre-join screen for a link. Busy (a call already up or starting) says so instead.
     func openLobby(key: String) {
         guard lobby == nil else { return }
-        guard activeCid == nil, !connecting, !waitingForApproval, CallService.shared.state == .idle else {
+        guard activeCid == nil, !connecting, !waitingForApproval, !Self.oneToOneLive else {   // audit M-111
             Self.presentOverTop(Self.busyNotice)
             return
         }
@@ -295,16 +295,40 @@ final class GroupCallService: ObservableObject {
         top.present(alert, animated: true)
     }
 
-    func start(cid: String, title: String, video: Bool) async {
+    /// Audit M-111, 2026-10-07: a 1:1 call counts as "in a call" only while it rings or runs. Its
+    /// 1-2 s `.ended` tail used to refuse every group start, join and lobby as busy.
+    private static var oneToOneLive: Bool {
+        [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
+    }
+
+    /// Audit M-083, 2026-10-07: Mute pressed on the system call screen for a group ring that is
+    /// still joining (`CallKitManager`'s set-muted action, while `isActive` is false). The ring join
+    /// then publishes with the mic off. Ignored once the call is up: `toggleMic` handles that.
+    /// Cleared with the room, like the lobby's choice.
+    func setStartMuted(_ muted: Bool) {
+        guard !isActive else { return }
+        startMuted = muted
+    }
+
+    /// `requireLive` (audit M-059, 2026-10-07): true for every way in that means "join the call that
+    /// is ringing or showing" (a ring answered from CallKit, a chat's Join bar). If the room turns
+    /// out to be empty, the call's doc is read from the server and an inactive call is refused with
+    /// "Call ended" instead of starting a brand-new call that rings the whole group again. False
+    /// (the default) only for an explicit Call button, which is allowed to create.
+    func start(cid: String, title: String, video: Bool, requireLive: Bool = false) async {
         // `!connecting` too (audit): activeCid is only set AFTER connect succeeds, so a second tap
         // during the ~0.3s before the call UI covers the button started a SECOND task on the shared
         // room. Its connect threw "already connected", and its catch called disconnect() — which
         // tore down the live call the first tap had just established, for everyone in it.
         guard activeCid == nil, !connecting else { return }
         notice = nil
+        // Audit M-016, 2026-10-07: waiting at a link's door is already a call claimed; a second join
+        // here would run two connects on the one shared room.
+        guard !waitingForApproval else { notice = Self.busyNotice; return }
         closeLobbyForAnotherJoin()
-        // 2026-09-24 decision D25: refused while a 1:1 call is ringing, live or closing.
-        guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
+        // 2026-09-24 decision D25: refused while a 1:1 call is ringing or live (audit M-111: not in
+        // its closing tail).
+        guard !Self.oneToOneLive else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
         joiningRoomId = cid
         let gen = joinGeneration   // owner audit 2026-10-06 #4
@@ -327,9 +351,24 @@ final class GroupCallService: ObservableObject {
             GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
             try await room.connect(url: url, token: token)
             guard gen == joinGeneration else { await abandonJoin(); return }
+            // Audit M-059, 2026-10-07: a late ring answer or a stale Join bar found nobody in the
+            // room. Ask the server whether the call is still on before this tap becomes a new call;
+            // nothing is published yet. A read that fails refuses too: re-ringing the whole group by
+            // mistake is the worse outcome.
+            if requireLive, room.remoteParticipants.isEmpty {
+                let snap = try? await Firestore.firestore().collection("groupCalls").document(cid)
+                    .getDocument(source: .server)
+                guard gen == joinGeneration else { await abandonJoin(); return }
+                guard snap?.data()?["active"] as? Bool == true else {
+                    await failJoin(Notice(title: snap == nil ? "Call failed" : "Call ended", message: nil))
+                    return
+                }
+            }
             // In the room = in the call; mic and camera follow (see startLocalMedia).
             activeCid = cid; activeRoom = .group(cid: cid); connecting = false
-            startLocalMedia(mic: true, video: video)
+            // Audit M-083: a ring answered on the system call screen and muted there before the
+            // room was up starts muted.
+            startLocalMedia(mic: !startMuted, video: video)
             didJoinRoom()
             myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
@@ -896,7 +935,7 @@ final class GroupCallService: ObservableObject {
         closeLobbyForAnotherJoin()
         presentsRoomScreen = true
         // 2026-09-24 decision D25: never alongside a 1:1. The handover ends the 1:1 before this runs.
-        guard CallService.shared.state == .idle else { notice = Self.busyNotice; return nil }
+        guard !Self.oneToOneLive else { notice = Self.busyNotice; return nil }   // audit M-111
         guard let mine = myMember() else { notice = Notice(title: "Call failed", message: nil); return nil }
         var seen: Set<String> = [mine.uid]
         let others = people.filter { seen.insert($0.uid).inserted }
@@ -955,7 +994,7 @@ final class GroupCallService: ObservableObject {
         if incomingInvite?.roomId == roomId { incomingInvite = nil }
         declinedInvites.insert(roomId)   // never ring again for a room I answered
         presentsRoomScreen = true
-        guard CallService.shared.state == .idle else { notice = Self.busyNotice; return }
+        guard !Self.oneToOneLive else { notice = Self.busyNotice; return }   // audit M-111
         connecting = true; isVideo = video
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         let snap = try? await db.collection("groupCalls").document(roomId).getDocument()
@@ -1011,7 +1050,7 @@ final class GroupCallService: ObservableObject {
         // From the lobby the call screen waits until I am in (`connect`). Every other way in (a
         // link row's long-press menu) shows it at once, as before.
         if !lobbyJoin { closeLobbyForAnotherJoin(); presentsRoomScreen = true }
-        guard CallService.shared.state == .idle else { refuseJoin(Self.busyNotice); return }
+        guard !Self.oneToOneLive else { refuseJoin(Self.busyNotice); return }   // audit M-111
         guard let k = CallLinkKey(text: key) else { refuseJoin(Self.linkGone); return }
         let roomId = k.roomId
         connecting = true; isVideo = video
@@ -1431,6 +1470,13 @@ final class GroupCallService: ObservableObject {
         myRequestListener?.remove(); myRequestListener = nil
         linkDocListener?.remove(); linkDocListener = nil
         waitingLink = nil
+        // Audit M-016, 2026-10-07: a 1:1 call got through while I waited at the door. Being let in
+        // now would publish my mic into the link room with the private call still running, so the
+        // join is refused as busy instead.
+        if Self.oneToOneLive {
+            Task { await self.failJoin(Self.busyNotice) }
+            return
+        }
         // owner audit 2026-10-06 #4: taken now, so End tapped while this connects (waitingLink is
         // already gone, so the knock cleanup in disconnect() is skipped) still stops the join.
         let gen = joinGeneration
