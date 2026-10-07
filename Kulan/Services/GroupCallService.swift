@@ -1367,7 +1367,8 @@ final class GroupCallService: ObservableObject {
                gen == self.joinGeneration {   // not a join already left or failed
                 if let enc = d["encName"] as? String, !enc.isEmpty,
                    let name = k.decryptName(enc), !name.isEmpty { self.callTitle = name }
-                self.isLinkCreator = (d["creatorUid"] as? String) == myUid
+                // Audit M-069: only ever adds what the join answer may already have said.
+                if (d["creatorUid"] as? String) == myUid { self.isLinkCreator = true }
             }
         }
         let joined = await connect(payload: ["roomId": roomId, "link": true],
@@ -1432,15 +1433,29 @@ final class GroupCallService: ObservableObject {
     /// straight to the room. Only asked for where the join needs no approval, because the server
     /// reads a token request on an approval link as a knock at the door (the lobby decides that from
     /// the link's document). Good for 90 of the token's 120 seconds; `connect` takes it once.
-    private var prefetchedLinkToken: (roomId: String, data: [String: Any], at: Date)?
+    /// Audit M-062, 2026-10-07: a prefetched token skips every server check made after it was
+    /// minted (revoked, blocked, approval switched on, full). So it is now kept for one account only
+    /// (`uid`), used within `prefetchedTokenLife` seconds instead of 90, dropped by the lobby when a
+    /// peek says the link is gone or needs approval (`dropPrefetchedLinkToken`), and taken once:
+    /// `connect` clears the registration first, so a request still out cannot store a used token.
+    private var prefetchedLinkToken: (roomId: String, uid: String, data: [String: Any], at: Date)?
+    private static let prefetchedTokenLife: TimeInterval = 20
     /// The request still out, so a Join tapped before it lands waits for it instead of asking the
     /// server a second time (owner, 2026-10-07: Join still spun when tapped straight away).
-    private var prefetchingLinkToken: (roomId: String, task: Task<[String: Any]?, Never>)?
+    private var prefetchingLinkToken: (roomId: String, uid: String, id: UUID, task: Task<[String: Any]?, Never>)?
+    /// Audit M-062, 2026-10-07: the lobby saw the link go away, get revoked or start asking for
+    /// approval. A token fetched before that must not let anyone past it.
+    func dropPrefetchedLinkToken() {
+        prefetchedLinkToken = nil
+        prefetchingLinkToken = nil   // a request still out no longer stores its answer
+    }
     func prefetchLinkToken(key: String) {
         guard let k = CallLinkKey(text: key) else { return }
         let roomId = k.roomId
-        if let p = prefetchedLinkToken, p.roomId == roomId, Date().timeIntervalSince(p.at) < 60 { return }
-        if let p = prefetchingLinkToken, p.roomId == roomId { return }
+        let uid = myUid
+        if let p = prefetchedLinkToken, p.roomId == roomId, p.uid == uid,
+           Date().timeIntervalSince(p.at) < Self.prefetchedTokenLife { return }
+        if let p = prefetchingLinkToken, p.roomId == roomId, p.uid == uid { return }
         let callable = functions.httpsCallable("groupCallToken")
         let task = Task<[String: Any]?, Never> {
             guard let res = try? await callable.call(["roomId": roomId, "link": true]),
@@ -1448,12 +1463,16 @@ final class GroupCallService: ObservableObject {
                   d["token"] is String, d["pending"] as? Bool != true else { return nil }
             return d
         }
-        prefetchingLinkToken = (roomId, task)
+        let id = UUID()
+        prefetchingLinkToken = (roomId, uid, id, task)
         Task { @MainActor in
             let d = await task.value
-            if prefetchingLinkToken?.roomId == roomId { prefetchingLinkToken = nil }
+            // Only while still registered: taken by `connect`, dropped by the lobby or replaced by
+            // a newer request, the answer is thrown away.
+            guard prefetchingLinkToken?.id == id else { return }
+            prefetchingLinkToken = nil
             if let d {
-                prefetchedLinkToken = (roomId, d, Date())
+                prefetchedLinkToken = (roomId, uid, d, Date())
                 // Warm the media server while the pre-join screen is up: DNS, TLS and the nearest
                 // region are settled before Join, so `connect` starts from a warm socket.
                 if let token = d["token"] as? String, room.connectionState == .disconnected {
@@ -1531,16 +1550,28 @@ final class GroupCallService: ObservableObject {
         var isLinkRoom = false
         if case .link(_, _) = r { isLinkRoom = true }
         do {
-            let d: [String: Any]?
-            if case .link(let roomId, _) = r, let p = prefetchedLinkToken, p.roomId == roomId,
-               Date().timeIntervalSince(p.at) < 90 {
-                prefetchedLinkToken = nil
-                d = p.data   // fetched while the pre-join screen was up; see prefetchLinkToken
-            } else if case .link(let roomId, _) = r, let p = prefetchingLinkToken, p.roomId == roomId,
-                      let ready = await p.task.value {
-                prefetchedLinkToken = nil
-                d = ready   // the ahead-of-time request was still out: its answer, not a second trip
-            } else {
+            var d: [String: Any]?
+            var haveAnswer = false
+            if case .link(let roomId, _) = r {
+                let uid = myUid
+                if let p = prefetchedLinkToken, p.roomId == roomId, p.uid == uid,
+                   Date().timeIntervalSince(p.at) < Self.prefetchedTokenLife {
+                    prefetchedLinkToken = nil
+                    d = p.data   // fetched while the pre-join screen was up; see prefetchLinkToken
+                    haveAnswer = true
+                } else if let p = prefetchingLinkToken, p.roomId == roomId, p.uid == uid {
+                    // Audit M-062: taken out of the registry BEFORE the wait, so the prefetch's own
+                    // landing cannot store this token again for a later join.
+                    prefetchingLinkToken = nil
+                    prefetchedLinkToken = nil
+                    if let ready = await p.task.value {
+                        d = ready   // the ahead-of-time request was still out: its answer, not a second trip
+                        haveAnswer = true
+                    }
+                }
+                prefetchedLinkToken = nil   // never kept past a join, used or not
+            }
+            if !haveAnswer {
                 let res = try await functions.httpsCallable("groupCallToken").call(payload)
                 d = res.data as? [String: Any]
             }
@@ -1574,6 +1605,10 @@ final class GroupCallService: ObservableObject {
             activeRoom = r; connecting = false
             waitingForApproval = false
             myRole = CallRole(attribute: d?["role"] as? String)
+            // Audit M-069, 2026-10-07: "am I the link's creator" came only from a best-effort doc
+            // read, so a creator whose read failed saw no request cards. The server's join answer
+            // says it for certain: on a link, `owner` is the creator (functions/index.js roleFor).
+            if isLinkRoom, myRole == .owner { isLinkCreator = true }
             // Joined from the lobby: now the lobby goes and the call screen comes. The lobby's own
             // camera preview is still letting go of the camera, so the call's camera waits a beat.
             let fromLobby = lobbyJoin
@@ -1680,6 +1715,7 @@ final class GroupCallService: ObservableObject {
         requestsListener?.remove(); requestsListener = nil
         myRequestListener?.remove(); myRequestListener = nil
         linkDocListener?.remove(); linkDocListener = nil
+        waitTask?.cancel(); waitTask = nil   // audit M-024 / M-070
         waitingLink = nil
         waitingForApproval = false
         activeRoom = nil
@@ -1730,12 +1766,15 @@ final class GroupCallService: ObservableObject {
     private func beginWaiting(roomId: String, key: String, video: Bool) {
         waitingForApproval = true
         waitingLink = (roomId: roomId, key: key, video: video)
+        sawMyRequest = false
         myRequestListener?.remove()
         myRequestListener = db.collection("callLinks").document(roomId)
             .collection("requests").document(myUid)
             .addSnapshotListener { [weak self] snap, _ in
                 let status = snap?.data()?["status"] as? String
-                Task { @MainActor [weak self] in self?.requestStatusChanged(status) }
+                // Audit M-024: gone on the server (the link was deleted), not just not cached yet.
+                let gone = snap.map { !$0.exists && !$0.metadata.isFromCache } ?? false
+                Task { @MainActor [weak self] in self?.requestStatusChanged(status, gone: gone) }
             }
         // owner audit 2026-10-06 #44: the server only answers requests one by one, so a joiner
         // already waiting when the admin switched approval off stayed parked until someone answered
@@ -1743,21 +1782,66 @@ final class GroupCallService: ObservableObject {
         linkDocListener?.remove()
         linkDocListener = db.collection("callLinks").document(roomId)
             .addSnapshotListener { [weak self] snap, _ in
-                guard let r = snap?.data()?["restrictions"] as? String, r != "adminApproval" else { return }
+                guard let snap else { return }
+                let d = snap.data()
+                // Audit M-024, 2026-10-07: the link deleted or revoked (also what "Make a new link"
+                // does to the old one) while I wait: nobody will ever answer this knock.
+                if !snap.metadata.isFromCache, d == nil || d?["revoked"] as? Bool == true {
+                    Task { @MainActor [weak self] in self?.linkWentAway() }
+                    return
+                }
+                guard let r = d?["restrictions"] as? String, r != "adminApproval" else { return }
                 Task { @MainActor [weak self] in self?.approvalTurnedOff() }
             }
+        // Audit M-070 / M-024, 2026-10-07: the knock is renewed every minute (the token call
+        // rewrites the request's `at`, so the creator's list keeps a person really waiting and drops
+        // one who left without a clean exit), and after two minutes with no answer the wait ends:
+        // a host who left, or never looked, used to keep the joiner at the door for ever.
+        waitTask?.cancel()
+        let gen = joinGeneration
+        waitTask = Task { @MainActor [weak self] in
+            for minute in 1...2 {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard let self, !Task.isCancelled, gen == self.joinGeneration, !self.hangingUp, !self.leaving,
+                      self.waitingForApproval, self.waitingLink?.roomId == roomId else { return }
+                if minute == 1 {
+                    // The answer is not used: an approval or "approval off" arrives on the listeners.
+                    self.functions.httpsCallable("groupCallToken")
+                        .call(["roomId": roomId, "link": true]) { _, _ in }
+                } else {
+                    let uid = self.myUid
+                    self.db.collection("callLinks").document(roomId).collection("requests")
+                        .document(uid).delete { _ in }
+                    await self.failJoin(Notice(title: "The host didn't let you in", message: nil))
+                }
+            }
+        }
     }
+    /// Audit M-024 / M-070: the knock's minute timer, cancelled with the wait.
+    private var waitTask: Task<Void, Never>?
+    /// Audit M-024: my request has been seen on the server, so its disappearing means deleted.
+    private var sawMyRequest = false
 
-    private func requestStatusChanged(_ status: String?) {
+    private func requestStatusChanged(_ status: String?, gone: Bool = false) {
         guard !hangingUp, !leaving, waitingForApproval, let w = waitingLink else { return }
+        if status != nil { sawMyRequest = true }
         switch status {
         case "approved":
             admit(w)
         case "denied":
             Task { await self.failJoin(Notice(title: "Request denied", message: nil)) }
+        case nil where gone && sawMyRequest:
+            linkWentAway()   // audit M-024: my request was deleted with the link
         default:
             break
         }
+    }
+
+    /// Audit M-024, 2026-10-07: the link this knock was for is gone. The wait ends with the words a
+    /// joiner of a gone link already sees.
+    private func linkWentAway() {
+        guard !hangingUp, !leaving, waitingForApproval, waitingLink != nil else { return }
+        Task { await self.failJoin(Self.linkGone) }
     }
 
     /// owner audit 2026-10-06 #44: approval was switched off while I waited. The token function
@@ -1774,6 +1858,7 @@ final class GroupCallService: ObservableObject {
     private func admit(_ w: (roomId: String, key: String, video: Bool)) {
         myRequestListener?.remove(); myRequestListener = nil
         linkDocListener?.remove(); linkDocListener = nil
+        waitTask?.cancel(); waitTask = nil   // audit M-024 / M-070: let in, the wait is over
         waitingLink = nil
         // Audit M-016, 2026-10-07: a 1:1 call got through while I waited at the door. Being let in
         // now would publish my mic into the link room with the private call still running, so the
