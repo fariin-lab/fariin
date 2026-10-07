@@ -99,6 +99,8 @@ final class DemoGroupCallEngine: ObservableObject {
     static let ringWindow: TimeInterval = 30
 
     init() {
+        // The admin account testing its own demo is the owner from the start (see viewerIsOwnerAccount).
+        if ChatService.iAmOwnerAccount { iAmOwner = true }
         record("Demo ready. Pick a preset in Scenarios.", .event)
     }
 
@@ -249,10 +251,14 @@ final class DemoGroupCallEngine: ObservableObject {
         rebuild()
     }
 
+    /// The tester IS the admin account (@realwarya or @v): then the admin is "me", and no second
+    /// realwarya is simulated beside me (owner, 2026-10-07: "the call has two of me").
+    private var viewerIsOwnerAccount: Bool { ChatService.iAmOwnerAccount }
+
     private func makePerson(owner: Bool) -> DemoPerson {
         let n = nextPersonNumber
         nextPersonNumber += 1
-        if owner {
+        if owner && !viewerIsOwnerAccount {
             return DemoPerson(id: "PA_owner_\(n)", uid: Self.ownerUid, name: Self.ownerHandle,
                               photoUrl: ownerPhotoUrl, role: iAmOwner ? .moderator : .owner,
                               micOn: true, cameraOn: true, link: .connecting, handRaised: false,
@@ -631,6 +637,8 @@ final class DemoGroupCallEngine: ObservableObject {
     }
 
     func setIAmOwner(_ on: Bool) {
+        // Signed in as the admin account: I am the owner, there is no other realwarya to hand it to.
+        if viewerIsOwnerAccount && !on { record("You are \(Self.ownerHandle): you stay the owner", .warning); return }
         guard on != iAmOwner else { return }
         iAmOwner = on
         for i in people.indices where people[i].uid == Self.ownerUid {
