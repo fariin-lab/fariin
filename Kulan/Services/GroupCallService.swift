@@ -725,6 +725,11 @@ final class GroupCallService: ObservableObject {
     /// published matches.
     private var micChain: Task<Void, Never>?
     private var cameraChain: Task<Void, Never>?
+    /// Round 2 (V2 N2), 2026-10-07: which chain is the registered one. A leave that stops waiting
+    /// after 1 s lets go of a chain still running (`releaseMediaChains`); that chain then neither
+    /// goes on nor clears the registration of a chain started for the next call.
+    private var micChainID = 0
+    private var cameraChainID = 0
     /// The lobby hand-over's `cameraReady`, run when the join's camera chain settles.
     private var pendingCameraReady: (() -> Void)?
     /// Audit M-081: the camera was switched off because the app went to the background. `cameraOn`
@@ -738,12 +743,14 @@ final class GroupCallService: ObservableObject {
         // Counted for the whole chain, the join's first publish too: a mute event while it runs is
         // mine, not an owner's (`localMicMuteChanged`).
         micChangesInFlight += 1
+        micChainID &+= 1
+        let id = micChainID
         micChain = Task { @MainActor [weak self] in
             guard let self else { return }
             var tries = 0
             // Audit M-085: never past the call it was started for. `leaving` is set first thing by
-            // `disconnect()`, which waits for this chain before it closes the room.
-            while gen == self.joinGeneration, self.isActive, !self.leaving, tries < 4 {
+            // `disconnect()`, which waits (at most 1 s) for this chain after it closes the room.
+            while gen == self.joinGeneration, self.micChainID == id, self.isActive, !self.leaving, tries < 4 {
                 let want = self.micOn
                 if self.room.localParticipant.isMicrophoneEnabled() == want { break }
                 tries += 1
@@ -760,7 +767,7 @@ final class GroupCallService: ObservableObject {
                     break
                 }
             }
-            self.micChain = nil
+            if self.micChainID == id { self.micChain = nil }
             self.micChangesInFlight -= 1
         }
     }
@@ -768,10 +775,12 @@ final class GroupCallService: ObservableObject {
     private func syncCamera() {
         guard cameraChain == nil, isActive, !leaving else { return }
         let gen = joinGeneration
+        cameraChainID &+= 1
+        let id = cameraChainID
         cameraChain = Task { @MainActor [weak self] in
             guard let self else { return }
             var tries = 0
-            while gen == self.joinGeneration, self.isActive, !self.leaving, tries < 4 {
+            while gen == self.joinGeneration, self.cameraChainID == id, self.isActive, !self.leaving, tries < 4 {
                 let want = self.cameraWanted
                 if self.room.localParticipant.isCameraEnabled() == want { break }
                 tries += 1
@@ -797,6 +806,7 @@ final class GroupCallService: ObservableObject {
                     break
                 }
             }
+            guard self.cameraChainID == id else { return }   // let go by a leave; not this call's
             self.cameraChain = nil
             let ready = self.pendingCameraReady
             self.pendingCameraReady = nil
@@ -1196,14 +1206,29 @@ final class GroupCallService: ObservableObject {
         disconnectRun = nil
     }
 
+    /// Round 2 (V2 N2), 2026-10-07: waits for the running mic and camera chains, but never longer
+    /// than `seconds`. A chain still running after that stops by itself: its call is no longer active.
+    private func waitForMediaChains(upTo seconds: Double) async {
+        let chains = [micChain, cameraChain].compactMap { $0 }
+        guard !chains.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { for chain in chains { await chain.value } }
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    /// Round 2 (V2 N2): a chain that outlived the 1 s wait is let go, so the next call's first
+    /// publish starts its own chain instead of finding this one registered.
+    private func releaseMediaChains() {
+        if micChain != nil { micChain = nil; micChainID &+= 1 }
+        if cameraChain != nil { cameraChain = nil; cameraChainID &+= 1 }
+    }
+
     private func runDisconnect() async {
         leaving = true
         defer { leaving = false; hangingUp = false }
-        // Audit M-085, 2026-10-07: a mic or camera change still in flight (the join's first publish,
-        // a tap) finishes before the room closes, and `leaving` stops it from going again; so
-        // nothing is left capturing and nothing is published into the next call.
-        await micChain?.value
-        await cameraChain?.value
         let cid = activeCid
         let adhoc = isAdhoc, link = isLink
         // Leaving while still waiting to be let in: the knock is withdrawn (below, after the local
@@ -1229,6 +1254,13 @@ final class GroupCallService: ObservableObject {
         let answered = someoneJoined   // audit M-088
         let recordId = groupRecordId
         await room.disconnect()
+        // Audit M-085, 2026-10-07: a mic or camera change still in flight (the join's first publish,
+        // a tap) is let finish, and `leaving` stops it from going again, so nothing is published
+        // into the next call. Round 2 (verifier V2 N2): the room closes FIRST and the wait is capped
+        // at 1 s; waiting before the close kept a weak-network join (or an open camera prompt) on
+        // screen and "busy" for seconds, the M-060 symptom again.
+        await waitForMediaChains(upTo: 1)
+        releaseMediaChains()
         // Audit M-060, 2026-10-07: the local state goes first. It used to wait for the end writes
         // below, so on a slow network the phone stayed "busy" and the dead call screen kept working
         // buttons for seconds.
