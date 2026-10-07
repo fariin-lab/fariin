@@ -322,7 +322,10 @@ struct CallLobbyView: View {
         // The join token ahead of the tap (owner, 2026-10-07: Join spun for seconds). Only where the
         // join needs no approval: the server reads a token request on an approval link as a knock.
         let approval = (d["restrictions"] as? String) == "adminApproval"
-        if creator || !approval { service.prefetchLinkToken(key: lobby.key) }
+        // Not when the server's own check already landed and said gone or approval (verifier V4:
+        // the first check can beat this read, and its "drop the pass" would then come too early).
+        let serverSaysNo = peek.map { $0.gone || ($0.approval && !$0.iAmCreator) } ?? false
+        if (creator || !approval), !serverSaysNo { service.prefetchLinkToken(key: lobby.key) }
     }
 
     /// Asks the server about the link now and every 5s while this screen is up; `.task` cancels

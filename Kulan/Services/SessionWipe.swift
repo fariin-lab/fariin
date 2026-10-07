@@ -62,6 +62,9 @@ enum SessionWipe {
         // knock still waiting at a link's door. The callers now run `endCallsBeforeSignOut()`
         // first, while the writes are still allowed; this stays as the net for any other path.
         endGroupCall()
+        // The call screen's cached names and photos passed this account's privacy check
+        // (audit M-079 follow-up, verifier V4): the next account must not see them.
+        GroupCallStage.clearPeerProfiles()
         // Nor does a voice note (owner, 2026-09-29: "I play a voice message, log out, and it keeps
         // playing"). The engine outlives every screen on purpose; it must not outlive the account.
         VoiceNotePlayer.shared.dismiss()

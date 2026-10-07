@@ -75,7 +75,9 @@ struct GroupFloatingCallWindow: View {
     /// Audit M-146, 2026-10-07: a tap while the call is already over or being left (the card can
     /// outlive it for a moment) did the restore into a dead call. Ignored then.
     private func cardTapped() {
-        guard service.isActive, !service.leaving else { return }
+        // `connecting` too (verifier V4): F8 shows this card for a call minimized while still
+        // connecting (M-087), and a tap there must bring that call back, not do nothing.
+        guard service.isActive || service.connecting, !service.leaving else { return }
         CallPipMorph.restore { service.minimized = false }
     }
 

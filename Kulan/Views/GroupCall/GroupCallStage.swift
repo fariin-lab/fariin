@@ -305,6 +305,9 @@ final class GroupCallStage: ObservableObject {
     // every restore from the card); asked at most once per uid per stage.
     private static var peerProfiles: [String: (name: String, photo: String?)] = [:]
     private var peerLookups: Set<String> = []
+    /// Sign-out (verifier V4): the photos here passed the OLD account's privacy check, so the
+    /// next account on this phone must not see them. Called by `SessionWipe.wipeAccountData`.
+    static func clearPeerProfiles() { peerProfiles = [:] }
 
     /// What the profile store has for this uid, nil until its one read has answered. The photo
     /// goes through the same privacy answer the chat search uses (`ProfilePhotoIndex.header`).
