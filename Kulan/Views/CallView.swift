@@ -251,6 +251,19 @@ struct CallView: View {
                             .allowsHitTesting(false)       // decoration: let the show/hide tap through
                         Spacer()
                     }
+                    // Audit M-011, 2026-10-07: the camera was refused, so the camera button cannot do
+                    // anything and the other side sees no video. Say where to fix it, just above the
+                    // controls, in the status line's style. `cameraDenied` is set by CallService.
+                    if call.cameraDenied {
+                        Text("Allow camera access in Settings")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .frame(maxWidth: .infinity)
+                            .padding(.bottom, 10)
+                            .opacity(controlsVisible ? 1 : 0)
+                            .accessibilityHidden(!controlsVisible)
+                            .allowsHitTesting(false)
+                    }
                     controlBar
                         .frame(maxWidth: .infinity)        // centered control pill
                         .padding(.bottom, winInsets.bottom + 22)
