@@ -360,6 +360,12 @@ struct ThreadView: View {
     @State private var unreadOnOpen = 0
     @State private var firstUnreadId: String?
     @State private var didAnchorUnread = false
+    /// This chat was opened ON a message (the floating voice bar): captured in `init`, see there.
+    @State private var openedOnFocusMessage = false
+    /// The saved-row paging (`.task` below the focus-message one) has run: found the row, hit its
+    /// page cap, or hit its deadline. With `savedRowNeedsPaging` it holds the list's first land;
+    /// never reset, so it can hold once per open and can never hold a chat that already landed.
+    @State private var savedRowPagingDone = false
     // owner audit 2026-10-06 chat #10: quote / pin / "go to message" jumps page history in a Task;
     // the down arrow bumps this so a jump still loading when the reader asked for the bottom never
     // lands afterwards. Same "newer request wins" rule `searchJumpSeq` already gave search.
@@ -446,6 +452,10 @@ struct ThreadView: View {
         // jumped to the bottom. Starting hidden + settling under the veil (revealAtOpenAnchor, run from
         // onAppear for the cache path / onChange for the cold path) means it's never seen mid-scroll.
         _revealed = State(initialValue: false)
+        // ⛔ READ HERE, NOT LIVE: the `.task` that pages to the focus message consumes the router's
+        // id on its first line, so a later read cannot tell "no focus" from "focus, already taken".
+        // `State(initialValue:)` keeps this first init's answer through every init SwiftUI runs after.
+        _openedOnFocusMessage = State(initialValue: AppRouter.shared.pendingMessageId != nil)
     }
 
     private var threadScroll: some View {
@@ -1790,6 +1800,18 @@ struct ThreadView: View {
             // than scrolling somewhere arbitrary.
             guard repo.items.contains(where: { $0.id == target }) else { return }
             flashAndScroll(target)
+        }
+        // ⛔ PAGE THE SAVED READING POSITION BACK IN BEFORE THE FIRST REVEAL. The bug is described at
+        // `savedRowNeedsPaging`. While this runs the list's first land is held (`holdFirstLand`), so
+        // the chat is revealed once, already on the saved row at its saved offset, with nothing seen
+        // moving. Bounded both ways: the walk's 12-page cap and a deadline, so a slow line opens at
+        // the newest, as before, rather than keeping the chat blank. `defer` drops the hold on EVERY
+        // exit, cancellation included: a hold with no release would be a chat that never appears.
+        .task(id: cid) {
+            defer { savedRowPagingDone = true }
+            guard !savedRowPagingDone, savedRowNeedsPaging,
+                  let saved = ChatScrollStore.shared.position(for: cid) else { return }
+            await repo.ensureLoaded(rowId: saved.rowId, deadline: Date().addingTimeInterval(3))
         }
         .toolbar(searchActive ? .hidden : .automatic, for: .navigationBar)
     }
@@ -3978,6 +4000,9 @@ struct ThreadView: View {
                 if unreadOnOpen > 0 { return nil }
                 return ChatScrollStore.shared.position(for: cid)?.offsetFromTop
             }(),
+            // ⛔ THE SAVED ROW IS NOT LOADED YET: hold the first land while the `.task` pages it in,
+            // so the saved tier above can win when the land finally happens. See `savedRowNeedsPaging`.
+            holdFirstLand: savedRowNeedsPaging && !savedRowPagingDone,
             // Written from the list's own settle points, the only place that knows which row is at
             // the top of the viewport and by how much it is clipped.
             onReadingPosition: { position in
@@ -6364,6 +6389,27 @@ struct ThreadView: View {
 
     /// The first unread row: the divider sits above it and the first open lands on it.
     /// owner audit 2026-10-06 chat #3: ONE computation for both, so they can never disagree again.
+    /// ⛔ THE SAVED ROW IS OLDER THAN THE WARM WINDOW — his report, build 832: scroll up through
+    /// older messages, leave, come back, and the chat opens somewhere else every time.
+    ///
+    /// The repository is freed when the last screen leaves it (`ThreadRepository.close`), so a
+    /// reopen starts a fresh one seeded from `ThreadMessageCache`, which keeps the newest 200, plus
+    /// the live page of 60. A reader who paged back past that left a row that is not in
+    /// `repo.items` on return, and the saved tier of `initialScrollId` rightly refuses a row it
+    /// cannot see, so the open fell through to the newest (or to an unread row).
+    ///
+    /// True when that is the case and nothing outranks the saved tier: the list's first land is then
+    /// held (`holdFirstLand`) while the `.task` next to the focus-message one pages the row back in,
+    /// and the chat reveals once, already on the saved row at its saved offset. Same tiers as
+    /// `initialScrollId`, same unread rule as `initialScrollOffset`, so a focus or unread landing is
+    /// never held. A row the paging could not reach leaves this true, which is why the hold is
+    /// `&& !savedRowPagingDone` at the call site: the land then goes to the newest, as before.
+    private var savedRowNeedsPaging: Bool {
+        guard !preview, !openedOnFocusMessage, unreadOnOpen == 0, firstUnreadId == nil,
+              let saved = ChatScrollStore.shared.position(for: cid) else { return false }
+        return !repo.items.contains(where: { $0.rowId == saved.rowId })
+    }
+
     private func unreadBoundary() -> Message? {
         guard unreadOnOpen > 0 else { return nil }
         // ⛔ THE ROWS THE LIST ACTUALLY RENDERS, not `repo.messages`.

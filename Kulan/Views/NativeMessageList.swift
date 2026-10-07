@@ -118,6 +118,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// How far below the viewport's top the restored row should sit, in points. Applied only to the
     /// `initialScrollId` landing, and only when that id came from a saved reading position.
     var initialScrollOffset: CGFloat? = nil
+    /// ⛔ HOLD THE FIRST LAND. True while `ThreadView` is paging a saved reading position back into
+    /// the window (its row was older than the warm cache): landing now would go to the newest, and
+    /// the restore would then be a visible jump. The list is at alpha 0 until it lands, so the hold
+    /// costs nothing to look at. The owner drops it on every path, deadline included.
+    var holdFirstLand: Bool = false
     /// ⛔ WHERE THE READER IS, FOR REOPENING THE CHAT — the reference app's `lastVisibleInteraction`
     /// plus its on-screen position. Reported from the list's own settle points, because this
     /// controller is the only thing that knows which row is at the top of the viewport and by how
@@ -291,6 +296,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
         vc.setSelectionState(selecting: selecting, wasSelecting: wasSelecting)
         vc.initialScrollId = initialScrollId
+        vc.setHoldFirstLand(holdFirstLand)   // after the id and offset it will land with, before the apply
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
@@ -484,6 +490,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var initialScrollId: String?              // first-unread rowId â†’ the FIRST open lands here
     var initialScrollOffset: CGFloat?         // and where in the viewport it should sit, if restored
     var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
+    /// See the SwiftUI side's `holdFirstLand`. Read by `performFirstLandIfReady` only, so it means
+    /// nothing once the first land has happened.
+    private var holdFirstLand = false
+    func setHoldFirstLand(_ hold: Bool) {
+        guard hold != holdFirstLand else { return }
+        holdFirstLand = hold
+        // A release has to ask for the land itself: the apply that would have landed may already be
+        // behind us. Next turn, not now, so the apply in this same update (if there is one) has put
+        // its snapshot in first; the row being landed on may be in that very apply. Idempotent by
+        // `didFirstLand`, so an apply completion getting there first costs nothing.
+        if !hold, !didFirstLand {
+            DispatchQueue.main.async { [weak self] in self?.performFirstLandIfReady() }
+        }
+    }
     var lastRepaintedModelsVersion = -1       // -1 so the first update always repaints
 
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
@@ -3177,7 +3197,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // sits at `maxContentOffsetY`, not at the origin — an inverted-list leftover corrected here.) There
     // is one landing and it is exact.
     private func performFirstLandIfReady() {
-        guard !didFirstLand,
+        // `!holdFirstLand`: the saved row is still being paged in; `setHoldFirstLand(false)` asks again.
+        guard !didFirstLand, !holdFirstLand,
               collectionView.bounds.width > 0, collectionView.bounds.height > 0,
               !currentIds.isEmpty else { return }
         // The landing offset depends on contentSize and both insets, so the insets must be current and
@@ -4865,7 +4886,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // every layout pass, guarded by seven flags, because a layout pass could move where "the bottom"
         // was. It cannot any more, so there is nothing to re-assert and no flags to get wrong.
         if !didFirstLand {
-            if !currentIds.isEmpty { performFirstLandIfReady() } else { scheduleEmptyReveal() }
+            // Not the empty-state reveal while the first land is held either: rows arriving into an
+            // already-visible list would sit at the top until the hold lifts, and then jump.
+            if !currentIds.isEmpty { performFirstLandIfReady() } else if !holdFirstLand { scheduleEmptyReveal() }
         }
     }
 

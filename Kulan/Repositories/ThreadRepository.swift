@@ -3,6 +3,7 @@ import Observation
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
+import UIKit
 
 // Locally-hidden message ids ("delete for me"): the message doc stays in Firestore for the other
 // person, but we never show it here. Persisted in UserDefaults, cached in memory for cheap reads.
@@ -106,6 +107,8 @@ final class ThreadRepository {
     private var outboxObserver: NSObjectProtocol?
     private var outboxAddObserver: NSObjectProtocol?
     private var blockObserver: NSObjectProtocol?
+    /// 2026-10-07: back to the front → burn what fell due while the app was asleep, at once.
+    private var foregroundObserver: NSObjectProtocol?
     private var convListener: ListenerRegistration?
     private var userListener: ListenerRegistration?
     /// Separate from `userListener` because presence lives in its own subcollection now, so the
@@ -574,6 +577,15 @@ final class ThreadRepository {
             outboxObserver = NotificationCenter.default.addObserver(
                 forName: PendingOutbox.didFail, object: nil, queue: .main) { [weak self] n in
                     if let id = n.object as? String { self?.markFailed(clientId: id) }
+                }
+        }
+        // A disappearing message that ran out while the app was in the background (owner,
+        // 2026-10-07): timers do not fire there, and the 15s sweep would show it for up to 15s
+        // more after the return. The sweep runs the moment the app comes back instead.
+        if foregroundObserver == nil {
+            foregroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.sweepExpired()
                 }
         }
         // And a forward can ARRIVE while its chat is open — forwarding back into the chat you are
@@ -1493,6 +1505,34 @@ final class ThreadRepository {
         }
     }
 
+    /// The same walk, keyed by `Message.rowId` (`clientId ?? id`), which is what a saved reading
+    /// position names: a row this reader sent is stored under its client id, so matching on `id`
+    /// alone would page past it and never know.
+    ///
+    /// Two things `ensureLoaded` does not need, because its callers run in a chat that is already
+    /// open and settled:
+    /// - A fresh repository seeded from `ThreadMessageCache` has rows but NO paging cursor until the
+    ///   first live snapshot lands, and `loadOlder` answers at once with nothing in that state. The
+    ///   wait is paid here, in small sleeps, rather than spending the whole page budget on empty
+    ///   answers in a few microseconds.
+    /// - A `deadline`, because the caller is holding the chat's first reveal on this. A page already
+    ///   in flight still lands; no new one starts past it.
+    @MainActor
+    func ensureLoaded(rowId: String, maxPages: Int = 12, deadline: Date) async {
+        jumpPagingDepth += 1
+        defer { jumpPagingDepth -= 1 }
+        var pages = 0
+        while !items.contains(where: { $0.rowId == rowId }) && canLoadOlder && pages < maxPages {
+            guard !Task.isCancelled, Date() < deadline else { break }
+            guard oldestDoc != nil || windowTrimmed else {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                continue
+            }
+            await withCheckedContinuation { cont in loadOlder { cont.resume() } }
+            pages += 1
+        }
+    }
+
     // MARK: - One repository per open chat
 
     /// ⛔ SWIFTUI RUNS `ThreadView.init` MANY TIMES; ONLY THE FIRST REPOSITORY IS EVER KEPT — owner,
@@ -1537,6 +1577,8 @@ final class ThreadRepository {
         outboxObserver = nil
         if let outboxAddObserver { NotificationCenter.default.removeObserver(outboxAddObserver) }
         outboxAddObserver = nil
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+        foregroundObserver = nil
         if let blockObserver { NotificationCenter.default.removeObserver(blockObserver) }
         blockObserver = nil
         if let recoveredObserver { NotificationCenter.default.removeObserver(recoveredObserver) }
