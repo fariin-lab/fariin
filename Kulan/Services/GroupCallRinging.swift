@@ -117,6 +117,11 @@ final class GroupCallRinging {
         let video = d["video"] as? Bool ?? false
         var r = Ring(roomKind: kind, roomId: roomId, callTitle: title ?? callerName, video: video, uuid: UUID())
         r.sentAt = sentAt   // round 2, V5 N3
+        // Round 2 (F7): the ring push carries the call's `startedAt` (ms; 0 when unknown), so the
+        // ring knows which call it is before the room snapshot arrives.
+        if let at = (d["startedAt"] as? NSNumber)?.doubleValue, at > 0 {
+            r.startedAtMs = at < 100_000_000_000 ? at * 1000 : at
+        }
         ring = r
         phase = .ringing
         // The caller's name; for a group chat's call, the group's title.
@@ -133,8 +138,9 @@ final class GroupCallRinging {
         let roomId = d["roomId"] as? String ?? ""
         guard !roomId.isEmpty, !roomId.contains("/") else { return }
         // Round 2: F7 sends `startedAt` in ms; a value small enough to be seconds is scaled.
-        let cancelStartedAt = (d["startedAt"] as? NSNumber).map { n -> Double in
+        let cancelStartedAt = (d["startedAt"] as? NSNumber).flatMap { n -> Double? in
             let v = n.doubleValue
+            guard v > 0 else { return nil }   // 0 = unknown on the server
             return v < 100_000_000_000 ? v * 1000 : v
         }
         let cancelSentAt = (d["sentAt"] as? NSNumber).map { $0.doubleValue / 1000 }
