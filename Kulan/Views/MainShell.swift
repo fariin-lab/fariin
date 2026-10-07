@@ -932,12 +932,13 @@ struct CallsView: View {
                             EmptyStateView(title: "No Calls Yet", icon: "phone",
                                            text: "Your call history will appear here.")
                                 .callsPlaceholderRow()
-                        } else if shownRuns.isEmpty && !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        } else if mergedRows.isEmpty && !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
                             // 2026-09-24 audit: a search with no match drew a blank list. Same view the
-                            // other searches in the app use.
+                            // other searches in the app use. `mergedRows`, not the calls alone: a search
+                            // that matches only a link has its result on screen (check, 2026-10-07).
                             ContentUnavailableView.search(text: searchText)
                                 .callsPlaceholderRow()
-                        } else if shownRuns.isEmpty {
+                        } else if mergedRows.isEmpty {
                             // 2026-09-24 audit: Missed with no missed calls drew a blank list too.
                             EmptyStateView(title: "No Missed Calls", icon: "phone",
                                            text: "Missed calls will appear here.")

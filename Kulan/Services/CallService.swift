@@ -1979,6 +1979,9 @@ final class CallService: NSObject {
     }
     private func stopRingback() {
         ringbackWatchdog?.invalidate(); ringbackWatchdog = nil
+        // A fallback armed by the ringing signal must die with the stop too, or an accept that lands
+        // inside its 1.2s window is followed by a ring nothing is left to stop.
+        ringbackFallback?.invalidate(); ringbackFallback = nil
         let wasPlaying = ringbackPlayer != nil
         ringbackPlayer?.stop(); ringbackPlayer = nil
         // HAND THE SESSION BACK TO THE CALL (owner audit 2026-10-06 #8). startRingback swapped the
@@ -2044,9 +2047,12 @@ final class CallService: NSObject {
     }
 
     /// The one gate every ringback start goes through: an outgoing call whose other phone has
-    /// reported ringing, with no player already up.
+    /// reported ringing and has NOT accepted yet, with no player already up. `!calleeAccepted`
+    /// because the accept can land first (over the data channel, or in the same snapshot as
+    /// `ringingAt`) while `state` is still `.outgoing`: the old code had a playing tone for
+    /// `stopRingback` to stop at that point; this one would have started it for the first time.
     private func startRingbackIfDue() {
-        guard state == .outgoing, calleeRinging, ringbackPlayer == nil else { return }
+        guard state == .outgoing, calleeRinging, !calleeAccepted, ringbackPlayer == nil else { return }
         startRingback()
     }
 
