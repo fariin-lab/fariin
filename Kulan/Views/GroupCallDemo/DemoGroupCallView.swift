@@ -41,21 +41,8 @@ struct DemoGroupCallView: View {
         .sheet(isPresented: $showScenarios) {
             DemoScenarioSheet().environmentObject(engine)
         }
-        .alert("Remove from the call?", isPresented: removalShown, presenting: engine.removalRequest) { request in
-            Button(request.block ? "Remove and Block" : "Remove", role: .destructive) {
-                engine.remove(request.tile.id, block: request.block)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { request in
-            Text(request.block
-                 ? "\(request.tile.name) will be removed and can't join this call again."
-                 : "\(request.tile.name) will be removed from the call.")
-        }
-    }
-
-    private var removalShown: Binding<Bool> {
-        Binding(get: { engine.removalRequest != nil },
-                set: { if !$0 { engine.removalRequest = nil } })
+        // An alert cannot show from under a sheet, so while one is up the sheet carries it instead.
+        .modifier(DemoRemovalAlert(engine: engine, enabled: !showPeople && !showScenarios))
     }
 
     private func close() {
@@ -204,6 +191,31 @@ struct DemoGroupCallView: View {
             Image(systemName: icon).font(.title3).foregroundStyle(.white)
                 .frame(width: 54, height: 54)
                 .liquidGlass(Circle(), interactive: true, tint: tint)
+        }
+    }
+}
+
+// MARK: - Remove confirm (the real screen asks before anyone is removed)
+
+struct DemoRemovalAlert: ViewModifier {
+    @ObservedObject var engine: DemoGroupCallEngine
+    let enabled: Bool
+
+    private var shown: Binding<Bool> {
+        Binding(get: { enabled && engine.removalRequest != nil },
+                set: { if !$0 { engine.removalRequest = nil } })
+    }
+
+    func body(content: Content) -> some View {
+        content.alert("Remove from the call?", isPresented: shown, presenting: engine.removalRequest) { request in
+            Button(request.block ? "Remove and Block" : "Remove", role: .destructive) {
+                engine.remove(request.tile.id, block: request.block)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { request in
+            Text(request.block
+                 ? "\(request.tile.name) will be removed and can't join this call again."
+                 : "\(request.tile.name) will be removed from the call.")
         }
     }
 }

@@ -65,6 +65,7 @@ struct DemoPeopleSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .modifier(DemoRemovalAlert(engine: engine, enabled: true))
     }
 
     private var sortedInCall: [DemoPerson] {
@@ -240,6 +241,8 @@ struct DemoScenarioSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        // With the panel at half height the tiles behind still take long presses.
+        .modifier(DemoRemovalAlert(engine: engine, enabled: true))
     }
 
     private var statusLine: String {
