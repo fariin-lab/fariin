@@ -524,14 +524,23 @@ private struct CallLinkDeleteAlerts: ViewModifier {
                 Button("Delete", role: .destructive) { onDelete(l) }
                 Button("Cancel", role: .cancel) {}
             } message: { l in
-                Text(l.admin ? "People who have it will no longer be able to join."
-                             : "It will be removed from your list.")
+                // audit M-023, 2026-10-07: deleting the link of the call I am in also ends that
+                // call for everyone (the server closes its room first), so the confirm says so.
+                Text(!l.admin ? "It will be removed from your list."
+                     : inCallOnLink(l) ? "People who have it will no longer be able to join, and the call on this link will end for everyone."
+                     : "People who have it will no longer be able to join.")
             }
             .alert("Couldn't delete call link", isPresented: $failed) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Check your connection and try again.")
             }
+    }
+
+    /// audit M-023: the live group call is this link's call.
+    private func inCallOnLink(_ l: SavedCallLink) -> Bool {
+        let group = GroupCallService.shared
+        return group.isActive && group.isLink && group.currentLink?.roomId == l.roomId
     }
 }
 
