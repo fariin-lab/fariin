@@ -74,7 +74,9 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 833: THE FULL GROUP CALL SYSTEM + YOUR EIGHT REPORTS FROM 832. NEEDS TWO PHONES TO TEST.
+            THIS BUILD: YOUR REPORTS FROM 833. (1) Reopening a chat lands on the same spot with no jump. (2) Tapping a call link in a chat opens the join screen straight away, no "Open link?" and no browser. (3) Add people looks like the rest of the app. (4) Call Link sheet: X on the left, no Done, no border. (5) Group call minimized with your camera on: the small card shows your camera. (6) Tapping the small card grows the call back out of it. (7) Join on a call link is faster: the server is woken while the join screen is up.
+
+            EARLIER (build 833): THE FULL GROUP CALL SYSTEM + YOUR EIGHT REPORTS FROM 832.
 
             YOUR REPORTS: (1) Calling... is quiet now; the ringing tone starts only when the other phone is actually ringing, and the speaker button just moves it to the loudspeaker. (2) The small call card keeps the person's colour instead of going black. (3) Call link pre-join screen: Leave and Join stay the same size with the camera off, and the screen uses the sizes from your screenshot. (4) All Media follows a dark/light switch straight away. (5) Calls tab: links and calls are one list in time order, so your calls are no longer hidden under the links. (6) Disappearing messages go on time in chats you do not have open too, from the chat list, and their banners go with them (needs the server update). (7) Leaving a chat after scrolling up and coming back lands exactly where you were. (8) The chat clears expired messages the moment the app comes back to the front.
 
