@@ -68,5 +68,16 @@
 	     build mints a fresh profile and picks the new capability up on its own. -->
 	<key>com.apple.developer.declared-age-range</key>
 	<true/>
+	<!-- SCREEN SHARING, 2026-10-07. The container the Broadcast Upload extension (BroadcastUpload/)
+	     writes screen frames into. LiveKit only uses the extension when this group resolves in the
+	     app; without it, it quietly falls back to capturing the app's own window.
+
+	     SAME RULE AS THE KEYS ABOVE: the group must exist in the developer portal and be ticked on
+	     the App ID com.kulan.messenger.native (and on com.kulan.messenger.native.broadcast) before
+	     any build carries this key, or the profile lacks it and signing fails. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.kulan.messenger.native</string>
+	</array>
 </dict>
 </plist>

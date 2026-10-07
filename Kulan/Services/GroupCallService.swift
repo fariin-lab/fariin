@@ -109,9 +109,21 @@ final class GroupCallService: ObservableObject {
     // the top layer matches its 800kbps preset instead of being a starved 720p, and so published
     // width stays at the SDK's >= 960 cutoff for a three-layer ladder. That ladder is the point:
     // a weak leg drops to 180p instead of the call stalling out.
+    //
+    // Screen sharing (2026-10-07) goes through the Broadcast Upload extension (BroadcastUpload/),
+    // so the whole phone screen is shared, not just this app. It is 1080p at 15 fps: text has to
+    // stay readable, and a screen changes far less than a face, so frames are the cheap thing to
+    // give up. 2.5 Mbps is the SDK's own 1080p/15 screen preset; the default "auto" degradation
+    // keeps the resolution and drops frames on a weak link, which is what a shared screen wants.
+    // Capture options for the extension must be room defaults; the SDK ignores per-call ones.
     let room = Room(roomOptions: RoomOptions(
         defaultCameraCaptureOptions: CameraCaptureOptions(dimensions: .h540_169),
+        defaultScreenShareCaptureOptions: ScreenShareCaptureOptions(dimensions: .h1080_169, fps: 15,
+                                                                    appAudio: false,
+                                                                    useBroadcastExtension: true),
         defaultVideoPublishOptions: VideoPublishOptions(encoding: VideoParameters.presetH540_169.encoding,
+                                                        screenShareEncoding: VideoEncoding(maxBitrate: 2_500_000,
+                                                                                           maxFps: 15),
                                                         simulcast: true),
         adaptiveStream: true,
         dynacast: true
@@ -601,6 +613,60 @@ final class GroupCallService: ObservableObject {
             }
             flippingCamera = false
         }
+    }
+
+    // MARK: - Screen sharing
+
+    /// True while MY screen share track is published. Set only by the publish and unpublish events
+    /// (`localScreenShareChanged`), never by the button: with the extension the first
+    /// `setScreenShare(true)` only opens the system's broadcast sheet and returns nothing, and the
+    /// track goes up later, when the person taps Start there (or never, if they cancel). Stopping
+    /// from the red status pill or Control Center unpublishes the track too, so this follows that.
+    @Published private(set) var screenSharing = false
+    /// Set once this call has asked for a share, so leaving knows to tell the extension to stop.
+    /// A plain "is anything broadcasting" check could stop a share that belongs to a 1:1 call.
+    private var shareAsked = false
+    private var shareBusy = false
+
+    /// Share Screen / Stop Sharing in the call's "..." menu. Never on a voice call link (the
+    /// server's token cannot publish a screen there either).
+    func toggleScreenShare() {
+        guard isActive, !cameraLocked, !shareBusy else { return }
+        let enable = !screenSharing
+        let gen = joinGeneration
+        if enable { shareAsked = true }
+        shareBusy = true
+        Task { @MainActor in
+            defer { shareBusy = false }
+            do {
+                // Enabling: the SDK shows the system broadcast sheet itself
+                // (BroadcastManager.requestActivation) and publishes once the extension starts.
+                try await room.localParticipant.setScreenShare(enabled: enable)
+            } catch {
+                if gen == joinGeneration {
+                    showToast(enable ? "Couldn't share your screen" : "Couldn't stop sharing")
+                }
+            }
+            // Unpublishing does not end the system broadcast; the extension is told separately.
+            if !enable { BroadcastManager.shared.requestStop() }
+        }
+    }
+
+    fileprivate func localScreenShareChanged(_ published: Bool) {
+        // A late event from a room already left must not show a share in the next call.
+        guard isActive || !published else { return }
+        screenSharing = published
+        // A share started from Control Center or the red pill was never asked for here; it still
+        // belongs to this call, so leaving the call must stop the extension too.
+        if published { shareAsked = true }
+    }
+
+    /// Every way out of a room ends my share: the track goes with the room, and the extension is
+    /// asked to finish so the red recording pill does not outlive the call.
+    private func stopScreenShare() {
+        if screenSharing || shareAsked { BroadcastManager.shared.requestStop() }
+        screenSharing = false
+        shareAsked = false
     }
 
     // MARK: - Ringing, as the caller hears and sees it
@@ -1249,6 +1315,7 @@ final class GroupCallService: ObservableObject {
     }
 
     private func resetRoomState() {
+        stopScreenShare()   // every leave path comes through here
         startMuted = false
         lobbyJoin = false
         lobbyCameraFree = false
@@ -1566,6 +1633,18 @@ private final class RoomDropObserver: NSObject, RoomDelegate, @unchecked Sendabl
               didUpdateIsMuted isMuted: Bool) {
         guard participant is LocalParticipant, trackPublication.source == .microphone, isMuted else { return }
         Task { @MainActor in GroupCallService.shared.localMicMuteChanged() }
+    }
+
+    /// Screen sharing, 2026-10-07: my screen share track going up or coming down is the only truth
+    /// for "I am sharing" (the system sheet, the red pill and Control Center all end here).
+    func room(_ room: Room, participant: LocalParticipant, didPublishTrack publication: LocalTrackPublication) {
+        guard publication.source == .screenShareVideo else { return }
+        Task { @MainActor in GroupCallService.shared.localScreenShareChanged(true) }
+    }
+
+    func room(_ room: Room, participant: LocalParticipant, didUnpublishTrack publication: LocalTrackPublication) {
+        guard publication.source == .screenShareVideo else { return }
+        Task { @MainActor in GroupCallService.shared.localScreenShareChanged(false) }
     }
 
     /// Roles live in the server-signed LiveKit attributes. The delegate gets only the changed keys,

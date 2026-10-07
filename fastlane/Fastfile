@@ -5,6 +5,12 @@ BUNDLE_ID = "com.kulan.messenger.native"
 # 2026-09-25 delivered ticks: the embedded notification extension (project.yml `NotificationService`).
 NSE_ID = "com.kulan.messenger.native.NotificationService"
 NSE_PROFILE_NAME = "Kulan Notification Service AppStore"
+# 2026-10-07 screen sharing: the Broadcast Upload extension (project.yml `BroadcastUpload`).
+# ⛔ ITS APP ID AND THE APP'S MUST BOTH CARRY THE APP GROUP group.com.kulan.messenger.native,
+# ticked by hand in the developer portal. The API key cannot attach a group to an App ID, so
+# without that step the profiles below come back without the group and signing fails.
+BC_ID = "com.kulan.messenger.native.broadcast"
+BC_PROFILE_NAME = "Kulan Broadcast AppStore"
 
 platform :ios do
   desc "Build a signed Release and upload to TestFlight"
@@ -62,6 +68,33 @@ platform :ios do
       profile_name: NSE_PROFILE_NAME
     )
 
+    # Screen sharing extension: same pattern as the notification extension above.
+    unless Spaceship::ConnectAPI::BundleId.find(BC_ID)
+      UI.message("Creating App ID #{BC_ID}")
+      Spaceship::ConnectAPI::BundleId.create(
+        name: "Fariin Broadcast",
+        platform: Spaceship::ConnectAPI::BundleIdPlatform::IOS,
+        identifier: BC_ID
+      )
+    end
+
+    get_provisioning_profile(
+      api_key: api_key,
+      app_identifier: BC_ID,
+      provisioning_name: BC_PROFILE_NAME,
+      force: true
+    )
+
+    update_code_signing_settings(
+      path: "Kulan.xcodeproj",
+      use_automatic_signing: false,
+      team_id: ENV["ASC_TEAM_ID"],
+      targets: ["BroadcastUpload"],
+      code_sign_identity: "Apple Distribution",
+      bundle_identifier: BC_ID,
+      profile_name: BC_PROFILE_NAME
+    )
+
     build_app(
       project: "Kulan.xcodeproj",
       scheme: "Kulan",
@@ -86,7 +119,7 @@ platform :ios do
       #     still send export down a slower path.
       export_options: {
         signingStyle: "manual",
-        provisioningProfiles: { BUNDLE_ID => PROFILE_NAME, NSE_ID => NSE_PROFILE_NAME },
+        provisioningProfiles: { BUNDLE_ID => PROFILE_NAME, NSE_ID => NSE_PROFILE_NAME, BC_ID => BC_PROFILE_NAME },
         uploadSymbols: false,
         compileBitcode: false
       }

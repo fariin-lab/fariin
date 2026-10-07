@@ -6,7 +6,8 @@ import SwiftUI
 ///
 /// - a row of quick emojis: a tap sends that reaction to everyone and closes the panel;
 /// - "Raise Hand" / "Lower Hand";
-/// - "Flip Camera", only while my camera is on.
+/// - "Flip Camera", only while my camera is on;
+/// - "Share Screen" / "Stop Sharing", once in the room and never on a voice call link.
 ///
 /// `GroupCallView` places it, draws the tap-outside catcher under it and keeps the chrome up while
 /// it is open. Every choice closes the panel (`onClose`).
@@ -62,6 +63,16 @@ struct GroupCallMoreMenu: View {
             if service.cameraOn {
                 divider
                 row("Flip Camera", icon: "arrow.triangle.2.circlepath.camera") { service.flipCamera() }
+            }
+            // Screen sharing, 2026-10-07. Starting opens the system's broadcast sheet (the SDK
+            // presents it); the person taps Start there. Not on a voice call link, and only once
+            // the room is up.
+            if service.isActive, !service.cameraLocked {
+                divider
+                row(service.screenSharing ? "Stop Sharing" : "Share Screen",
+                    icon: service.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle") {
+                    service.toggleScreenShare()
+                }
             }
         }
         .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous))
