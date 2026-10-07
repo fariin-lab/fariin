@@ -819,6 +819,9 @@ struct CallContainer<Content: View>: View {
     private var call: CallService { CallService.shared }
     @ObservedObject private var group = GroupCallService.shared
     @State private var showGroupRestore = false   // bar tap re-presents the group call UI
+    /// Audit M-087, 2026-10-07: a multi-person call that is up OR still joining. The card, its tap
+    /// and the restore cover all follow this, so a call minimized mid-join can be brought back.
+    private var groupLive: Bool { group.isActive || group.connecting }
 
     private var isActive: Bool {
         switch call.state {
@@ -860,7 +863,10 @@ struct CallContainer<Content: View>: View {
         // full-width "Return to call" bar was the old UI). Tapping it clears `minimized`, and the
         // onChange below re-presents the call screen from HERE, so it works from any screen.
         .overlay {
-            if group.isActive && group.minimized { GroupFloatingCallWindow() }
+            // Audit M-087, 2026-10-07: also while the join is still in flight. Minimized during
+            // "Connecting…" there was no card at all (`isActive` waits for the room), so a call
+            // that was joining, mic about to open, had nothing on screen pointing back to it.
+            if groupLive && group.minimized { GroupFloatingCallWindow() }
         }
         .overlay {
             if showsFloatingCall {
@@ -944,7 +950,7 @@ struct CallContainer<Content: View>: View {
         // itself only closes the cover, and `minimized` was already false — so the group call lost
         // its return bar too. Restoring the flag on dismiss puts the bar back either way.
         .fullScreenCover(isPresented: $showGroupRestore, onDismiss: {
-            if group.isActive { group.minimized = true }
+            if groupLive { group.minimized = true }
         }) {
             // The probe picks up a pending restore from the card (`CallPipMorph.restore`), so the
             // group call grows out of its card like a 1:1 call instead of cutting in (owner,
@@ -958,7 +964,7 @@ struct CallContainer<Content: View>: View {
         // and by then the call is no longer active.
         .onChange(of: group.minimized) { _, minimized in
             // Same hard cut as the 1:1 cover (the reference app uses one call window for both).
-            if !minimized, group.isActive, !showGroupRestore {
+            if !minimized, groupLive, !showGroupRestore {
                 presentGroupRestore()
             }
         }
@@ -1030,7 +1036,7 @@ struct CallContainer<Content: View>: View {
                 guard Self.topIsMoving() else { break }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
-            guard !group.minimized, group.isActive, !showGroupRestore else { return }
+            guard !group.minimized, groupLive, !showGroupRestore else { return }
             InstantCover.run { showGroupRestore = true }
             groupRestoreAsk &+= 1
             let ask = groupRestoreAsk
@@ -1038,7 +1044,7 @@ struct CallContainer<Content: View>: View {
             guard ask == groupRestoreAsk, showGroupRestore, !groupRestoreShown,
                   UIApplication.shared.applicationState == .active else { return }
             showGroupRestore = false
-            if group.isActive { group.minimized = true }
+            if groupLive { group.minimized = true }
         }
     }
 
