@@ -49,13 +49,9 @@ struct GroupCallTileView: View {
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        .overlay(
-            // Spec §8: the speaker must be obvious. Thin border, no glow, no scale (owner rule).
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .strokeBorder(Color.green, lineWidth: GroupCallMetrics.speakingBorder)
-                .opacity(isActiveSpeaker ? 1 : 0)
-                .animation(GroupCallMotion.fade, value: isActiveSpeaker)
-        )
+        // Spec §8: the speaker must be obvious, no scale. Owner, 2026-10-07: a soft glow now
+        // instead of the hard border (`SpeakerGlow`).
+        .modifier(SpeakerGlow(corner: corner, on: isActiveSpeaker))
         .contentShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .onTapGesture { tapped() }
         // One VoiceOver element per tile (spec §16): who, their state, and what a tap does.

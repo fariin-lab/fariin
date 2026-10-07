@@ -52,21 +52,45 @@ struct GroupCallView: View {
                              onShowChrome: showChrome,
                              onFlipCamera: { service.flipCamera() })
                 .transition(.opacity)
+            if f.remote == nil {
+                // Alone in a call I started: who is being rung, over the alone view. On a clock,
+                // because the ring window ends by time alone.
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    ringingLayer(at: ctx.date, myVideo: f.local.hasVideo)
+                }
+            }
+        }
+    }
+
+    /// The ringing screen (owner, 2026-10-07, plan #4), nothing once nobody is being rung.
+    @ViewBuilder
+    private func ringingLayer(at now: Date, myVideo: Bool) -> some View {
+        let rung = service.ringingMembers(at: now)
+        if !rung.isEmpty {
+            GroupCallRingingView(people: rung.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
+                                 overVideo: myVideo)
+                .transition(.opacity)
         }
     }
 
     private var chromeStack: some View {
         VStack(spacing: 16) {
             headerBar
-            // Edge to edge: the stage keeps its own 6pt inset (the reference app's grid).
-            middle
+            // Edge to edge: the stage keeps its own 6pt inset (the reference app's grid). Drawn
+            // UNDER the header (zIndex): the stage now runs up behind it (`middle`).
+            middle.zIndex(-1)
             bottomBar
         }
         .padding(.vertical, 10)
     }
 
+    /// How far the stage reaches up past its slot to the top of the screen: the safe top, the
+    /// stack's 10pt padding, the header and the 16pt gap under it.
+    private var stageLift: CGFloat { winInsets.top + 10 + headerHeight + 16 }
+
     private var headerBar: some View {
         header.padding(.horizontal, 14)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             .opacity(chromeVisible ? 1 : 0)
             .allowsHitTesting(chromeVisible)
             .accessibilityHidden(!chromeVisible)
@@ -338,17 +362,40 @@ struct GroupCallView: View {
     /// area over the 1:1 look. The notes under the header and the reactions sit on this one view in
     /// every layout, so a person joining is still announced across the switch (the banner keeps who
     /// it has seen).
+    /// Owner, 2026-10-07 (plan #1, "feeling like flat design"): the stage is no longer boxed between
+    /// two black bands. It reaches up behind the header to the top of the screen, under a soft dark
+    /// fade that keeps the header readable, the way the two-person screen already fills it. Its
+    /// bottom stays on the controls' top edge: the strip, the self pip and the tile names must not
+    /// sit under the button bar, which is unchanged (owner: keep it exactly as it is).
     private var middle: some View {
-        ZStack {
-            if front == nil {
-                stageArea.transition(.opacity)
-            } else {
-                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
+        Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+            .background(alignment: .bottom) {
+                ZStack {
+                    if front == nil {
+                        stageArea
+                            .overlay(alignment: .top) { stageScrim }
+                            // The pager's scroll view must not pad itself for the status bar it
+                            // now lies under.
+                            .ignoresSafeArea(.container, edges: .top)
+                            .padding(.top, -stageLift)
+                            .transition(.opacity)
+                    }
+                }
             }
-        }
-        .overlay(alignment: .top) { notes }
-        .overlay(alignment: .bottomLeading) { reactions }
+            .overlay(alignment: .top) { notes }
+            .overlay(alignment: .bottomLeading) { reactions }
+    }
+
+    /// The fade behind the header, the two-person screen's own (GroupCallDuoView `topScrim`). It
+    /// goes with the header when the controls hide.
+    private var stageScrim: some View {
+        LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.25), .clear],
+                       startPoint: .top, endPoint: .bottom)
+            .frame(height: stageLift + 40)
+            .opacity(chromeVisible ? 1 : 0)
+            .animation(GroupCallMotion.fade, value: chromeVisible)
+            .allowsHitTesting(false)
     }
 
     /// Stacked under the header: who joined or left and the connection notes, the short notes that
@@ -407,6 +454,7 @@ struct GroupCallView: View {
     }
     @State private var duoSwapped = false
     @State private var winInsets = EdgeInsets()
+    @State private var headerHeight: CGFloat = 44
 
     private var remoteCount: Int { stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 } }
     private var isAlone: Bool { service.joinState == .joined && remoteCount == 0 }
@@ -528,8 +576,11 @@ struct GroupCallView: View {
     /// Alone: "Ringing Alice…" while the people I called are still inside the ring window, then
     /// "No one else is here". On a clock, because the ring window ends by time alone.
     private var aloneLine: some View {
+        // The names now sit under the big photo in the middle (`GroupCallRingingView`), so the
+        // header says just "Ringing…" while anyone is rung (2026-10-07).
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            Text(GroupCallWords.alone(ringing: service.ringingNames(at: ctx.date)))
+            let rung = service.ringingNames(at: ctx.date)
+            Text(rung.isEmpty ? GroupCallWords.alone(ringing: []) : "Ringing…")
         }
     }
 
@@ -564,6 +615,7 @@ struct GroupCallView: View {
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
                 subtitleView.font(.caption).foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)   // owner, 2026-10-07: the ringing line wrapped onto two
             }
             Spacer()
             Button { showParticipants = true } label: {

@@ -110,10 +110,10 @@ struct CallGridLayout: Equatable {
 enum GroupCallMetrics {
     static let inset: CGFloat = 6
     static let spacing: CGFloat = 6
-    // owner, 2026-10-06: 10 on every group tile (grid, focus, strip, self pip), the reference app's
-    // one corner. It was 12 on the grid and 8 on the strip and pip. The two-person tile keeps the
-    // 1:1 screen's own 18 (GroupCallDuoView).
-    static let tileCorner: CGFloat = 10
+    // owner, 2026-10-06: one corner on every group tile (grid, focus, strip, self pip). It was 10;
+    // owner, 2026-10-07 ("feeling like flat design", plan #3 softer tiles): 14. The two-person
+    // tile keeps the 1:1 screen's own 18 (GroupCallDuoView).
+    static let tileCorner: CGFloat = 14
     static let stripTile: CGFloat = 72          // square strip tiles
     static let stripSpacing: CGFloat = 4        // the reference app's (was 6)
     static let stripLeading: CGFloat = 16       // the strip's first tile from the screen edge (was 6)
@@ -122,7 +122,7 @@ enum GroupCallMetrics {
     /// reference app's wait), 8s for a camera that is on but sends no picture.
     static let joinGrace: TimeInterval = 5
     static let videoGrace: TimeInterval = 8
-    static let speakingBorder: CGFloat = 3
+    static let speakingBorder: CGFloat = 2      // was 3, under a glow now (`SpeakerGlow`)
     static let speakerHold: TimeInterval = 1.5  // spec 8: no flicker between speakers
     /// Phone caps (spec 9): columns x rows the grid may use before people go to the strip.
     static func maxColumns(width: CGFloat) -> Int { width > 1080 ? 4 : (width > 768 ? 3 : 2) }
@@ -213,3 +213,24 @@ enum GroupCallMotion {
 
 // GroupCallGridView / GroupCallFocusView / GroupCallStripView / GroupCallSelfView /
 // GroupCallStatusBanner: see their files; each takes a `GroupCallStage` as @ObservedObject.
+
+/// The speaker's mark on a tile: a thin green edge with a soft green glow around it. Owner,
+/// 2026-10-07 (plan #3, "feeling like flat design"): it was a hard 3pt border with no glow. Still
+/// no scale and no layout change, so nothing moves when the speaker changes. Used by the real tile
+/// and the demo's, so both draw the same mark.
+struct SpeakerGlow: ViewModifier {
+    let corner: CGFloat
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay(
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .strokeBorder(Color.green.opacity(0.95), lineWidth: GroupCallMetrics.speakingBorder)
+                .shadow(color: .green.opacity(0.75), radius: 6)
+                .shadow(color: .green.opacity(0.35), radius: 14)
+                .opacity(on ? 1 : 0)
+                .animation(GroupCallMotion.fade, value: on)
+                .allowsHitTesting(false)
+        )
+    }
+}

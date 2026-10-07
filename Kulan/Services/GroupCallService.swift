@@ -606,13 +606,17 @@ final class GroupCallService: ObservableObject {
     /// Caller side (owner 2026-10-06): who a multi-person call is still ringing, for "Ringing Alice…".
     /// Invited, never joined, has not said no, and inside the ring minute. Empty for any other call.
     func ringingNames(at now: Date) -> [String] {
+        ringingMembers(at: now).map(\.name)
+    }
+
+    /// The same people as `ringingNames`, with their photos (the ringing screen, 2026-10-07).
+    func ringingMembers(at now: Date) -> [CallMember] {
         guard isAdhoc, isActive, let start = roomStartedAt,
               now.timeIntervalSince(start) < Self.ringWindow else { return [] }
         let me = myUid
         return members
             .filter { $0.uid != me && !joinedUids.contains($0.uid)
                 && !declinedUids.contains($0.uid) && !busyUids.contains($0.uid) }
-            .map(\.name)
     }
 
     /// The room a join is running for, from the tap until it is joined or dropped. With `activeCid`

@@ -114,12 +114,7 @@ struct DemoVideoTile: View {
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .strokeBorder(Color.green, lineWidth: GroupCallMetrics.speakingBorder)
-                .opacity(isActiveSpeaker ? 1 : 0)
-                .animation(GroupCallMotion.fade, value: isActiveSpeaker)
-        )
+        .modifier(SpeakerGlow(corner: corner, on: isActiveSpeaker))
         .contentShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
         .onTapGesture { onTap() }
         .accessibilityElement(children: .ignore)
@@ -179,20 +174,24 @@ struct DemoFakeCamera: View {
             let hueA = (seed + drift).truncatingRemainder(dividingBy: 1) + (seed + drift < 0 ? 1 : 0)
             let hueB = (hueA + 0.12).truncatingRemainder(dividingBy: 1)
             ZStack {
-                LinearGradient(colors: [Color(hue: hueA, saturation: 0.55, brightness: 0.55),
-                                        Color(hue: hueB, saturation: 0.65, brightness: 0.25)],
-                               startPoint: UnitPoint(x: 0.2 + sin(t / 4) * 0.2, y: 0),
-                               endPoint: UnitPoint(x: 0.8, y: 1))
-                AvatarView(name: name, photoUrl: photoUrl, size: avatar)
-                    .scaleEffect(1 + sin(t * 1.3) * 0.015)
-                    .offset(x: sin(t * 0.7) * 3, y: cos(t * 0.9) * 2)
+                ZStack {
+                    LinearGradient(colors: [Color(hue: hueA, saturation: 0.55, brightness: 0.55),
+                                            Color(hue: hueB, saturation: 0.65, brightness: 0.25)],
+                                   startPoint: UnitPoint(x: 0.2 + sin(t / 4) * 0.2, y: 0),
+                                   endPoint: UnitPoint(x: 0.8, y: 1))
+                    AvatarView(name: name, photoUrl: photoUrl, size: avatar)
+                        .scaleEffect(1 + sin(t * 1.3) * 0.015)
+                        .offset(x: sin(t * 0.7) * 3, y: cos(t * 0.9) * 2)
+                }
+                // Only the "picture" mirrors, as a selfie camera does. The mark stays readable
+                // (owner, 2026-10-07 screenshot: it read "OMED" on my own tile).
+                .scaleEffect(x: mirrored ? -1 : 1, y: 1)
                 Text("DEMO")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white.opacity(0.55))
                     .padding(6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
-            .scaleEffect(x: mirrored ? -1 : 1, y: 1)
         }
     }
 }
@@ -446,6 +445,64 @@ struct DemoFocusView: View {
                 .padding(.top, 10)
                 .padding(.leading, 10)
         }
+    }
+}
+
+// MARK: - Alone and two people (twin of GroupCallDuoView)
+
+/// Owner, 2026-10-07 (plan #5, the demo must match the real screen): alone or with one other
+/// person, the real call draws the 1:1 look edge to edge under the header and the controls
+/// (GroupCallDuoView), not a tile in a box. Same rules here: the other person large (me when
+/// alone); camera off = their photo at 180 on the colour of their photo; any camera on = the
+/// second person in a 135 x 240 corner tile clear of the controls, a tap swaps the two.
+struct DemoFrontView: View {
+    @EnvironmentObject private var engine: DemoGroupCallEngine
+    let local: CallTile
+    let remote: CallTile?
+    let insets: EdgeInsets
+    @State private var swapped = false
+
+    private var big: CallTile {
+        guard let remote, !swapped else { return local }
+        return remote
+    }
+    private var small: CallTile? {
+        guard let remote else { return nil }
+        return swapped ? remote : local
+    }
+    private var anyVideo: Bool { local.hasVideo || (remote?.hasVideo ?? false) }
+
+    var body: some View {
+        ZStack {
+            (anyVideo ? Color.black : GroupCallRingingView.ground(big.photoUrl))
+            if big.hasVideo {
+                DemoFakeCamera(name: big.name, photoUrl: big.photoUrl,
+                               mirrored: big.isLocal && engine.frontCamera, avatar: 120)
+                LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: insets.top + 140)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+            } else {
+                AvatarView(name: big.name, photoUrl: big.photoUrl, size: 180)
+                    .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
+            }
+            if anyVideo, let small {
+                DemoTileView(tile: small, style: .pip, isActiveSpeaker: false, isPinned: false,
+                             onTap: { swapped.toggle() })
+                    .frame(width: 135, height: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .shadow(color: .black.opacity(0.45), radius: 14, y: 5)
+                    .padding(.bottom, insets.bottom + 104)
+                    .padding(.trailing, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .transition(.opacity)
+            }
+        }
+        .id(big.id)
+        .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.25), value: swapped)
+        .onChange(of: remote == nil) { _, alone in if alone { swapped = false } }
     }
 }
 

@@ -20,14 +20,17 @@ struct DemoGroupCallView: View {
             if !minimized {
                 ZStack {
                     Color.black.ignoresSafeArea()
-                    VStack(spacing: 0) {
+                    frontLayer
+                    // The real screen's chrome stack (GroupCallView `chromeStack`): 16 between
+                    // header, stage and controls; the stage runs up behind the header.
+                    VStack(spacing: 16) {
                         header.padding(.horizontal, 14)
-                        DemoStageView(selfExpanded: $selfExpanded)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .overlay(alignment: .top) { toastView }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+                        middle.zIndex(-1)
                         controls.padding(.horizontal, 14)
                     }
                     .padding(.vertical, 10)
+                    .background(insetsReader)
 
                     if engine.state == .idle {
                         DemoStartCard(onClose: close).transition(.opacity)
@@ -45,6 +48,8 @@ struct DemoGroupCallView: View {
         // The call ending while minimized comes back up, so its ended card is seen.
         .onChange(of: engine.state.isLive) { _, live in if !live && minimized { setMinimized(false) } }
         .animation(GroupCallMotion.fade, value: engine.state)
+        .animation(.easeInOut(duration: 0.3), value: engine.remoteCount)   // 2 <-> 3 people, as the real screen
+        .animation(GroupCallMotion.fade, value: engine.ringing.isEmpty)
         .environmentObject(engine)
         .preferredColorScheme(.dark)
         .task { await engine.loadOwnerProfile() }
@@ -64,6 +69,68 @@ struct DemoGroupCallView: View {
         dismiss()
     }
 
+    // MARK: - Layout (the real GroupCallView's, owner 2026-10-07 plan #5)
+
+    @State private var headerHeight: CGFloat = 44
+    @State private var winInsets = EdgeInsets()
+
+    private var insetsReader: some View {
+        GeometryReader { geo in
+            Color.clear
+                .onAppear { winInsets = geo.safeAreaInsets }
+                .onChange(of: geo.safeAreaInsets) { _, v in winInsets = v }
+        }
+    }
+
+    /// The real screen's `front`: in the call, me alone or with exactly one other person.
+    private var front: (local: CallTile, remote: CallTile?)? {
+        guard [DemoCallState.ringing, .connected, .reconnecting].contains(engine.state),
+              let local = engine.tiles.first(where: { $0.isLocal }) else { return nil }
+        let remotes = engine.tiles.filter { !$0.isLocal }
+        guard remotes.count <= 1 else { return nil }
+        return (local, remotes.first)
+    }
+
+    /// Alone / two people: the 1:1 look edge to edge, and the ringing screen over it while alone.
+    @ViewBuilder
+    private var frontLayer: some View {
+        if let f = front {
+            DemoFrontView(local: f.local, remote: f.remote, insets: winInsets)
+                .transition(.opacity)
+            if f.remote == nil, !engine.ringing.isEmpty {
+                GroupCallRingingView(people: engine.ringing.map { .init(name: $0.name, photoUrl: $0.photoUrl) },
+                                     overVideo: f.local.hasVideo)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private var stageLift: CGFloat { winInsets.top + 10 + headerHeight + 16 }
+
+    /// The real `middle`: the stage (three or more, or before the call is in) reaches up behind
+    /// the header under a soft fade, its bottom on the controls' top edge.
+    private var middle: some View {
+        Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+            .background(alignment: .bottom) {
+                ZStack {
+                    if front == nil {
+                        DemoStageView(selfExpanded: $selfExpanded)
+                            .overlay(alignment: .top) {
+                                LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.25), .clear],
+                                               startPoint: .top, endPoint: .bottom)
+                                    .frame(height: stageLift + 40)
+                                    .allowsHitTesting(false)
+                            }
+                            .ignoresSafeArea(.container, edges: .top)
+                            .padding(.top, -stageLift)
+                            .transition(.opacity)
+                    }
+                }
+            }
+            .overlay(alignment: .top) { toastView }
+    }
+
     private func setMinimized(_ on: Bool) {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { minimized = on }
     }
@@ -80,7 +147,7 @@ struct DemoGroupCallView: View {
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)
-                subtitle.font(.caption).foregroundStyle(.white.opacity(0.7))
+                subtitle.font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
             Spacer()
             Button { showScenarios = true } label: {
@@ -120,7 +187,8 @@ struct DemoGroupCallView: View {
         case .idle, .ended: Text(" ")
         case .ringing, .connected:
             if engine.remoteCount == 0 {
-                Text(GroupCallWords.alone(ringing: engine.ringing.map(\.name)))
+                // The real header's rule since 2026-10-07: names under the big photo, "Ringing…" here.
+                Text(engine.ringing.isEmpty ? GroupCallWords.alone(ringing: []) : "Ringing…")
             } else if engine.remoteCount == 1, let since = engine.connectedAt {
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     Text(CallDuration.clock(Int(max(0, engine.now.timeIntervalSince(since)))))
