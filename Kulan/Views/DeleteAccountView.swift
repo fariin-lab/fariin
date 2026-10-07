@@ -294,6 +294,7 @@ struct DeleteAccountView: View {
             // Same order Settings uses: stop this phone's pushes while we still have auth, then sign out.
             await Push.unregister()
             await DeviceRegistry.shared.removeThisDevice()   // and drop our row in Settings › Devices
+            await SessionWipe.endCallsBeforeSignOut()   // audit M-015, 2026-10-07: while writes are allowed
             try? Auth.auth().signOut()
             // WIPE THE DEVICE COPY TOO (audit). The comment above justified skipping this to protect
             // the encryption key — but SessionWipe never touches the Keychain key (wipeIdentity only
@@ -316,6 +317,8 @@ struct DeleteAccountView: View {
             // even in the rare case the delete below fails. Fire-and-forget — email must never
             // block or fail the deletion itself.
             await AuthService.shared.reportAccountDeletion()
+            // audit M-015, 2026-10-07: a call ends before the account (and the right to write) goes.
+            await SessionWipe.endCallsBeforeSignOut()
             try await profile.deleteAccount()
             SessionWipe.wipeAccountData()   // server data is gone; clear the device copy too
             dismiss()

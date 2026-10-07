@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import FirebaseFirestore
 
 /// Every piece of account-scoped state that lives on this DEVICE, wiped in one place.
 /// Called on sign-out and account deletion — the singletons otherwise outlive the
@@ -9,6 +10,45 @@ import UserNotifications
 /// of the old documents.
 @MainActor
 enum SessionWipe {
+    /// audit M-015, 2026-10-07: every sign-out path ran `Auth.signOut()` BEFORE the wipe ended the
+    /// call, so the 1:1 "ended" write, the chat record and the live-row cleanup were all refused by
+    /// the rules (no auth any more) and the other phone sat on a dead line. The callers now call this
+    /// first, while we are still signed in: it ends the 1:1, the group/link call and any group ring,
+    /// then waits a short, bounded time for those writes to reach the server. Nothing to end = no wait.
+    static func endCallsBeforeSignOut() async {
+        let oneToOne = CallService.shared.state != .idle && CallService.shared.state != .ended
+        let group = GroupCallService.shared
+        let inGroup = group.isActive || group.connecting || group.waitingForApproval
+        if oneToOne { CallService.shared.hangUp() }
+        endGroupCall()
+        guard oneToOne || inGroup else { return }
+        // `hangUp` hands the record to a Task that reads the row before writing it, and the group
+        // leave runs in its own Task, so give those a moment to queue (and the group one to finish,
+        // so the wipe's own net does not run `end()` a second time), then wait for the pending
+        // writes. Capped at about 3 s in all so a dead network cannot hold the sign-out.
+        let deadline = Date().addingTimeInterval(3)
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        while inGroup, group.isActive || group.connecting || group.waitingForApproval, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let left = UInt64(max(0.2, deadline.timeIntervalSinceNow) * 1_000_000_000)
+        await withTaskGroup(of: Void.self) { tasks in
+            tasks.addTask { try? await Firestore.firestore().waitForPendingWrites() }
+            tasks.addTask { try? await Task.sleep(nanoseconds: left) }
+            await tasks.next()
+            tasks.cancelAll()
+        }
+    }
+
+    /// audit M-015, 2026-10-07: the group side of the teardown, shared by both paths above.
+    private static func endGroupCall() {
+        let group = GroupCallService.shared
+        if group.isActive || group.connecting || group.waitingForApproval { group.end() }
+        // A group ring still up on CallKit for this account. This ends it quietly (no decline is
+        // sent, the room is just remembered as finished), which is what a sign-out should do.
+        GroupCallRinging.shared.oneToOneTookOver()
+    }
+
     /// `keepingMediaFor`: a plain Sign Out passes the account's uid, and its received photos,
     /// videos and voice notes stay on the phone for when it signs back in — see `claimKeptMedia`.
     /// Everything else (deletion, a revoked device) passes nil and the media goes now.
@@ -16,6 +56,12 @@ enum SessionWipe {
         // A live call does not survive its account (2026-09-24 audit): signing out mid-call left
         // the audio, the call record and CallKit running under nobody.
         if CallService.shared.state != .idle { CallService.shared.hangUp() }
+        // audit M-015, 2026-10-07: the group/link call too. Only the 1:1 was ended here, so a
+        // group call kept its room connected with the mic (and camera) live under nobody, and the
+        // next account on this phone was refused every call as "busy". `end()` also withdraws a
+        // knock still waiting at a link's door. The callers now run `endCallsBeforeSignOut()`
+        // first, while the writes are still allowed; this stays as the net for any other path.
+        endGroupCall()
         // Nor does a voice note (owner, 2026-09-29: "I play a voice message, log out, and it keeps
         // playing"). The engine outlives every screen on purpose; it must not outlive the account.
         VoiceNotePlayer.shared.dismiss()

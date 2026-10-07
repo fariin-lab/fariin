@@ -169,6 +169,7 @@ struct RootView: View {
                                         await DeviceRegistry.shared.removeThisDevice()
                                         // A sign-out, not the deletion: keep the media for their return.
                                         let leaving = AuthService.shared.uid
+                                        await SessionWipe.endCallsBeforeSignOut()   // audit M-015, 2026-10-07
                                         await AuthService.shared.abandonSession()   // the signOut
                                         SessionWipe.wipeAccountData(keepingMediaFor: leaving)
                                         await route()

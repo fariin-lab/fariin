@@ -724,6 +724,9 @@ struct AccountSettingsView: View {
                     // Captured before signOut clears it: whose received media stays on this phone
                     // for their return (it is the only copy — see `SessionWipe.claimKeptMedia`).
                     let leaving = Auth.auth().currentUser?.uid
+                    // audit M-015, 2026-10-07: any call ends HERE, while the end write and the chat
+                    // record are still allowed. After signOut the rules refused them.
+                    await SessionWipe.endCallsBeforeSignOut()
                     try? Auth.auth().signOut()
                     SessionWipe.wipeAccountData(keepingMediaFor: leaving)   // this account's on-device state must not leak into the next sign-up
                     dismiss(); onSignOut()
