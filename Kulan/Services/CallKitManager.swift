@@ -110,7 +110,9 @@ final class CallKitManager: NSObject {
         // Audit M-045, 2026-10-07: armed BEFORE the report, since CallKit's automatic unmute follows
         // it. Only for a caller who is muted, and only for a few seconds, so a real unmute tapped
         // on the lock screen later is never the one swallowed.
-        if CallService.shared.isMuted {
+        // V3 N6, round 2: the CALLER only (`isCaller`, readable since F1's round 2). This also runs
+        // on the callee's side, where it swallowed a real unmute tapped within the first 3 s.
+        if CallService.shared.isCaller, CallService.shared.isMuted {
             stateLock.lock(); connectUnmuteUntil = Date().addingTimeInterval(3); stateLock.unlock()
         }
         provider.reportOutgoingCall(with: u, connectedAt: nil)
@@ -252,11 +254,23 @@ final class CallKitManager: NSObject {
     /// CallService's own ring watcher then reads the ended doc and finishes its side as before
     /// (its `reportEnded` finds nothing left to end). True if a ring was stopped.
     @discardableResult
-    func endCancelledRing(callId: String) -> Bool {
+    ///
+    /// Round 2, 2026-10-07: `endReason` is the server's reason from the cancel push (F6: "busy",
+    /// "declined", "hangup" or "timeout"). V3 N2: a ring settled on my OTHER phone (busy there, or
+    /// declined there) is not a missed call, so iOS is told answered / declined elsewhere for
+    /// Recents; a caller who gave up or rang out stays unanswered.
+    func endCancelledRing(callId: String, endReason: String? = nil) -> Bool {
         guard activeUUID != nil, activeCallId == callId else { return false }
         let service = CallService.shared
-        guard service.callId == callId, service.state == .incoming else { return false }
-        reportEnded(.unanswered)   // what CallService itself tells iOS for a cancelled ring
+        // V3 N5, round 2: not a call this phone already accepted. On the slow answer path the
+        // state can still read `.incoming` for a moment after the tap; ending the system call
+        // then would pull it out from under the answer.
+        guard service.callId == callId, service.state == .incoming, !service.wasAccepted else { return false }
+        switch endReason {
+        case "declined": reportEnded(.declinedElsewhere)
+        case "busy":     reportEnded(.answeredElsewhere)
+        default:         reportEnded(.unanswered)   // what CallService itself tells iOS for a cancelled ring
+        }
         return true
     }
 
@@ -358,7 +372,8 @@ final class CallKitManager: NSObject {
     /// Why a call ended without a user action here. iOS uses the reason for Recents: a ring answered
     /// on my other phone must not log as missed, and a ring nobody picked up is "unanswered", not
     /// "remote ended" (owner audit 2026-10-06 #20; the reference app reports each reason).
-    enum EndKind { case remote, unanswered, answeredElsewhere, failed }
+    /// `declinedElsewhere`: round 2 (V3 N2), a ring declined on my other phone, from a cancel push.
+    enum EndKind { case remote, unanswered, answeredElsewhere, declinedElsewhere, failed }
 
     /// Remote hung up / call failed — clear the system UI without a user action.
     func reportEnded(_ kind: EndKind = .remote) {
@@ -367,6 +382,7 @@ final class CallKitManager: NSObject {
         case .remote:            reason = .remoteEnded
         case .unanswered:        reason = .unanswered
         case .answeredElsewhere: reason = .answeredElsewhere
+        case .declinedElsewhere: reason = .declinedElsewhere
         case .failed:            reason = .failed
         }
         if let uuid = activeUUID { provider.reportCall(with: uuid, endedAt: nil, reason: reason) }

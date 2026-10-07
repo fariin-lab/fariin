@@ -34,6 +34,9 @@ final class GroupCallRinging {
         /// once read. Sent with a decline or busy answer so the server can ignore one that arrives
         /// late for an older call in the same group.
         var startedAtMs: Double?
+        /// Round 2 (V5 N3): when the server sent this ring's push (seconds, server clock), for
+        /// telling a late cancel of an EARLIER call in the same group from this ring's own.
+        var sentAt: TimeInterval?
     }
     /// ringing: CallKit is ringing. joining: answered through CallKit, the room is coming up.
     /// inCall: the room is up; the CallKit call stays for the whole call.
@@ -112,7 +115,8 @@ final class GroupCallRinging {
         let callerName = (d["callerName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Call"
         let title = (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let video = d["video"] as? Bool ?? false
-        let r = Ring(roomKind: kind, roomId: roomId, callTitle: title ?? callerName, video: video, uuid: UUID())
+        var r = Ring(roomKind: kind, roomId: roomId, callTitle: title ?? callerName, video: video, uuid: UUID())
+        r.sentAt = sentAt   // round 2, V5 N3
         ring = r
         phase = .ringing
         // The caller's name; for a group chat's call, the group's title.
@@ -128,12 +132,31 @@ final class GroupCallRinging {
     func handleCancelPush(_ d: [AnyHashable: Any]) {
         let roomId = d["roomId"] as? String ?? ""
         guard !roomId.isEmpty, !roomId.contains("/") else { return }
+        // Round 2: F7 sends `startedAt` in ms; a value small enough to be seconds is scaled.
+        let cancelStartedAt = (d["startedAt"] as? NSNumber).map { n -> Double in
+            let v = n.doubleValue
+            return v < 100_000_000_000 ? v * 1000 : v
+        }
+        let cancelSentAt = (d["sentAt"] as? NSNumber).map { $0.doubleValue / 1000 }
         if let r = ring, r.roomId == roomId {
+            // V5 N3, round 2: a group chat's room id is the chat itself, so call 1's cancel,
+            // delivered late, used to stop call 2's ring. The cancel carries the ended call's
+            // `startedAt` (ms, F7); a different call's start leaves this ring alone. With no
+            // `startedAt` read yet on either side, a cancel the server sent BEFORE this ring's push
+            // is the earlier call's. With neither, it ends the ring as before.
+            if let c = cancelStartedAt, let mine = r.startedAtMs {
+                if abs(c - mine) > 1000 { return }   // not this call (the two reads may round apart)
+            } else if let c = cancelSentAt, let mine = r.sentAt, c < mine {
+                return
+            }
             if phase == .ringing { finishRing(.remoteEnded) }   // answered here: the call runs on
             return
         }
         guard GroupCallService.shared.activeCid != roomId else { return }
-        remember(roomId)
+        // V5 N3, round 2: remembered at the time the server SENT the cancel, not now, so the ring
+        // push of a NEWER call in the same group, sent after this cancel but delivered before it
+        // is handled, still rings (`wasFinished` compares the push's `sentAt` with this time).
+        remember(roomId, at: cancelSentAt)
     }
 
     /// iOS refused to show the ring (Focus, its own block list): there is no CallKit call.
@@ -473,9 +496,10 @@ final class GroupCallRinging {
         return all.filter { now - $0.value < Self.memoryAge }
     }
 
-    private func remember(_ roomId: String) {
+    /// `at`: round 2, when the ring finished if not now (a cancel push's server send time).
+    private func remember(_ roomId: String, at: TimeInterval? = nil) {
         var all = finishedRings()
-        all[roomId] = Date().timeIntervalSince1970
+        all[roomId] = at ?? Date().timeIntervalSince1970
         UserDefaults.standard.set(all, forKey: Self.memoryKey)
     }
 

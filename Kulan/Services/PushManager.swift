@@ -130,7 +130,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         if d["kind"] as? String == "callcancel" || Self.isCancelPush(d) {
             Self.noteCancelled(callId)
             CallKitManager.shared.reportAndDiscard(completion: completion)
-            CallKitManager.shared.endCancelledRing(callId: callId)
+            // Round 2 (V3 N2): the server's reason, so a ring settled on my other phone is not
+            // reported to iOS as missed.
+            CallKitManager.shared.endCancelledRing(callId: callId, endReason: d["endReason"] as? String)
             // CallService's own side of the cancel, at once (F1's hook): a suspended app's ring
             // watcher may not be running to notice the caller gave up.
             Task { @MainActor in CallService.shared.remoteCancelled(callId: callId) }
