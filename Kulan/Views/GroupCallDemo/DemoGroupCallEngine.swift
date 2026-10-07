@@ -43,6 +43,9 @@ final class DemoGroupCallEngine: ObservableObject {
     @Published private(set) var log: [DemoLogEntry] = []
     @Published private(set) var toast: String?
     @Published private(set) var departed: [DemoPerson] = []
+    /// A Remove / Remove and Block waiting for the screen's confirm (the stage's `removeCandidate`).
+    /// Cleared by `rebuild()` if that person leaves before the answer.
+    @Published var removalRequest: DemoRemoval?
 
     // Me.
     @Published private(set) var micOn = true
@@ -199,6 +202,7 @@ final class DemoGroupCallEngine: ObservableObject {
         record("Ended: \(reason.title). \(reason.message)", .state)
         pending.removeAll()
         pinnedId = nil
+        removalRequest = nil
         tracker = GroupCallSpeakerTracker()
         activeSpeakerId = nil
         speakingIds = []
@@ -446,7 +450,9 @@ final class DemoGroupCallEngine: ObservableObject {
         let t = now
         var built: [CallTile] = []
         if state != .idle {
-            for p in people where p.link != .ringing {
+            // Before my own connect finishes the room shows nobody else (the real stage only has
+            // the local tile until the room is up).
+            for p in people where p.link != .ringing && state != .connecting {
                 built.append(CallTile(
                     id: p.id, uid: p.uid, name: p.name, photoUrl: p.photoUrl, isLocal: false,
                     hasVideo: p.cameraOn && p.link != .lost && !p.videoBroken,
@@ -476,6 +482,10 @@ final class DemoGroupCallEngine: ObservableObject {
         if let pin = pinnedId, !present.contains(pin) {
             record("Pinned person is gone: pin cleared", .event)
             pinnedId = nil
+        }
+        if let request = removalRequest, !present.contains(request.tile.id) {
+            record("Remove question dropped: \(request.tile.name) left first", .event)
+            removalRequest = nil
         }
 
         let speaking = Set(built.filter { $0.isSpeaking && !$0.isLocal }.map(\.id))
@@ -678,6 +688,14 @@ final class DemoGroupCallEngine: ObservableObject {
         record("\(people[i].name) is now \(people[i].role == .moderator ? "an admin" : "a participant")", .event)
         showToast(people[i].role == .moderator ? "\(people[i].name) is now an admin" : "\(people[i].name) is no longer an admin")
         rebuild()
+    }
+
+    /// Long press / people list "Remove…": asks the screen to confirm first, like the real one.
+    func requestRemove(_ id: String, block: Bool) {
+        guard canModerate(id), let tile = tiles.first(where: { $0.id == id }) else {
+            record("REFUSED remove: no permission", .warning); return
+        }
+        removalRequest = DemoRemoval(tile: tile, block: block)
     }
 
     func endForEveryone() {
@@ -894,6 +912,8 @@ final class DemoGroupCallEngine: ObservableObject {
         placedIds = []
         pending = []
         pinnedId = nil
+        removalRequest = nil
+        blockedUids = []
         activeSpeakerId = nil
         speakingIds = []
         handRaised = false
