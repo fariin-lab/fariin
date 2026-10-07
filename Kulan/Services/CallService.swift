@@ -531,7 +531,7 @@ final class CallService: NSObject {
     /// Readable so the call screen can draw a verified mark beside the name. Still only writable in
     /// here: who is on the other end of a call is decided by the signalling, never by a view.
     private(set) var otherUid: String = ""
-    private var isCaller = false
+    private(set) var isCaller = false   // readable (audit round 2, V3 N6): CallKitManager arms its unmute window for the caller only
 
     // Reconnection / lifecycle timers.
     private var noAnswerWork: DispatchWorkItem?      // outgoing: nobody answered -> Missed
@@ -2956,6 +2956,7 @@ final class CallService: NSObject {
         dialAttempt &+= 1
         let attempt = dialAttempt
         dialStartedAt = Date()   // audit M-155
+        dialCreateStarted = false   // audit round 2 (V1 on M-112): never inherited from an earlier dial
         state = .outgoing
         // iOS's own call UI and the recents list get the nickname too — the lock screen saying one
         // name while the app says another is worse than either being wrong on its own.
@@ -3055,7 +3056,13 @@ final class CallService: NSObject {
                     // dial ends as "Call failed" in seconds and can never ring anyone later. Same
                     // single write, same rules, one round trip like the ack this used to wait for.
                     let createData = data   // a constant for the transaction block (#27 made `data` a var)
-                    self.dialCreateStarted = true   // audit M-112: from here the other phone may see it
+                    // Audit M-112: from here the other phone may see it. Set on main and only for the
+                    // dial that is still current (round 2, V1): this completion runs on the WebRTC
+                    // thread, and a stand-down that finished just before it left the flag true for
+                    // the next dial.
+                    DispatchQueue.main.async {
+                        if self.dialAttempt == attempt, self.state == .outgoing { self.dialCreateStarted = true }
+                    }
                     self.db.runTransaction({ txn, _ -> Any? in
                         txn.setData(createData, forDocument: ref)
                         return nil
@@ -3405,11 +3412,16 @@ final class CallService: NSObject {
     /// The ad-hoc room I am in, when the person calling is one of its members (audit M-091,
     /// 2026-10-07). Such a caller is somebody who dropped out of this very call and is trying to
     /// get back to me; "busy" left them outside with no sign on my screen. Main thread only.
+    /// ONLY SOMEONE WHO WAS IN THE ROOM (audit round 2, V1 on M-091, 2026-10-07). `members` is
+    /// everyone invited, so an invitee who declined or never answered and then rang me 1:1 was put
+    /// live into the group call, mic on, without being asked. `joinedUids` is everyone who ever
+    /// connected to this room; anyone else is answered busy as before.
     private func adhocRoomIncluding(_ caller: String) -> (roomId: String, name: String)? {
         guard Thread.isMainThread, !caller.isEmpty else { return nil }
         return MainActor.assumeIsolated { () -> (roomId: String, name: String)? in
             let group = GroupCallService.shared
             guard case .adhoc(let roomId)? = group.activeRoom, roomId.hasPrefix("adhoc_"),
+                  group.joinedUids.contains(caller),
                   let member = group.members.first(where: { $0.uid == caller }) else { return nil }
             return (roomId, Self.displayName(for: caller, fallback: member.name))
         }
@@ -4648,13 +4660,25 @@ final class CallService: NSObject {
     /// a suspended app may not have running. Only a ring nobody here accepted; anything else is
     /// left to the doc listeners. A cancel for a call this phone is not ringing is remembered, so a
     /// late ring push for it never rings (M-036).
-    func remoteCancelled(callId: String) {
+    ///
+    /// `reason` is the cancel push's `endReason` (audit round 2, V3 N2, 2026-10-07): "busy" or
+    /// "declined" means the ring was settled on another of MY devices (it was busy, or I declined
+    /// there). That ends quietly, with no "Missed call" row and no tone, the same way the ring
+    /// watcher's `endRingQuietlyIfSettledElsewhere` does. "hangup", "timeout", empty or unknown (an
+    /// older server) stay a missed call.
+    func remoteCancelled(callId: String, reason: String? = nil) {
         guard !callId.isEmpty else { return }
         guard self.callId == callId, state == .incoming, !wasAccepted else {
             if self.callId != callId { rememberFinished(callId) }
             return
         }
         ringingWatcher?.remove(); ringingWatcher = nil
+        if reason == "busy" || reason == "declined" {
+            recordWritten = true
+            endedElsewhere = true
+            finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+            return
+        }
         remoteEnded(reason: .missed)
     }
 
