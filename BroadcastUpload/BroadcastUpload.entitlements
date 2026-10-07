@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The shared container the screen frames travel through (socket rtc_SSFD). The app carries
+	     the same group in Kulan/Kulan.entitlements; the two must match or nothing connects.
+	     The App ID com.kulan.messenger.native.broadcast must have this group ticked in the
+	     developer portal, or its profile comes back without it and signing fails. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.kulan.messenger.native</string>
+	</array>
+</dict>
+</plist>
