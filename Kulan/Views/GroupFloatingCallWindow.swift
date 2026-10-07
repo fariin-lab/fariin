@@ -148,8 +148,8 @@ struct GroupFloatingCallWindow: View {
 
     /// Who fills the card. The reference app's rule (owner, 2026-10-07, "make it like" it, for 2, 3
     /// or 10 people alike): ONE person, the last one who SPOKE, camera on or not. Its card never
-    /// splits into faces and carries no count; a speaker with the camera off is their photo over a
-    /// blurred copy of it, the call screen's own camera-off tile.
+    /// splits into faces and carries no count; a speaker with the camera off is their photo on
+    /// their profile colour, the call screen's own camera-off tile.
     /// - someone speaking: the person on the card keeps it while they are among the speakers (two
     ///   people talking at once do not make it cut back and forth), else the loudest takes it;
     /// - a quiet moment: the one shown last stays;
@@ -197,8 +197,8 @@ struct GroupFloatingCallWindow: View {
         .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
     }
 
-    /// The one person: their camera filling the card, or with it off their photo centred on a blurred
-    /// copy of it (`TileBackdrop`, the call screen's camera-off tile, so minimizing keeps the look).
+    /// The one person: their camera filling the card, or with it off their photo centred on their
+    /// profile colour (`TileBackdrop`, the call screen's camera-off tile, so minimizing keeps the look).
     /// Avatar = card width - 36, the reference app's size for a card this narrow.
     private func personCard(_ shown: Pick) -> some View {
         ZStack {
@@ -213,7 +213,7 @@ struct GroupFloatingCallWindow: View {
                 AvatarView(name: displayName(shown.id, member: m), photoUrl: m?.photoUrl, size: w - 36)
             }
         }
-        .id(shown.id)   // a new speaker is a new view, never the old one's last frame or blur
+        .id(shown.id)   // a new speaker is a new view, never the old one's last frame or colour
         .frame(width: w, height: h)
         .transition(.opacity)
     }

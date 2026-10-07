@@ -100,10 +100,16 @@ struct GroupCallRingingView: View {
     /// The colour a voice call takes from the person's photo (GroupCallDuoView's `ground`), from the
     /// caches already filled by their avatar; black when there is no photo.
     static func ground(_ url: String?) -> Color {
-        guard let url, !url.isEmpty else { return .black }
+        cachedColour(url) ?? .black
+    }
+
+    /// A person's profile colour from what is already in memory (the palette's cache, then the
+    /// avatar's picture). nil = not known yet, or no photo. Cheap enough for a view's body or init.
+    static func cachedColour(_ url: String?) -> Color? {
+        guard let url, !url.isEmpty else { return nil }
         if let p = ProfilePalette.warm(url: url) { return Color(p.page) }
         if let shown = ProfilePhotoLoader.shared.cachedAvatar(url),
            let p = ProfilePalette.now(shown, url: url) { return Color(p.page) }
-        return .black
+        return nil
     }
 }

@@ -511,7 +511,7 @@ struct DemoFrontView: View {
 /// The demo call minimized (owner, 2026-10-07: see how a 2, 3 or 10 person call looks minimized).
 /// The real card's size, corner, border, shadow and pick rule, copied rather than shared so the
 /// real window stays untouched by the demo: ONE person, the last who spoke, their (fake) camera or
-/// their photo on a blurred copy of it. Tap goes back, drag moves it and it snaps to a side.
+/// their photo on their profile colour. Tap goes back, drag moves it and it snaps to a side.
 struct DemoMiniCard: View {
     @EnvironmentObject private var engine: DemoGroupCallEngine
     let onRestore: () -> Void
