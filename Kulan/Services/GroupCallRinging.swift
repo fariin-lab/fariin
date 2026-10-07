@@ -30,6 +30,10 @@ final class GroupCallRinging {
         let callTitle: String    // the group's title, for `start(cid:title:video:)`
         let video: Bool
         let uuid: UUID           // the CallKit call
+        /// Audit M-125, 2026-10-07: the call's `startedAt` (ms), from the server's copy of its doc
+        /// once read. Sent with a decline or busy answer so the server can ignore one that arrives
+        /// late for an older call in the same group.
+        var startedAtMs: Double?
     }
     /// ringing: CallKit is ringing. joining: answered through CallKit, the room is coming up.
     /// inCall: the room is up; the CallKit call stays for the whole call.
@@ -80,9 +84,28 @@ final class GroupCallRinging {
             return
         }
         // In another call, or another ring is up: this one does not ring, and the caller is told.
-        if ring != nil || CallService.shared.state != .idle
+        // Audit M-111, 2026-10-07: a 1:1 call counts only while it is really live. The 1-2 s
+        // `.ended` tail (and idle) is not a call, and a group ring landing in it was answered busy.
+        let oneToOneLive = [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
+        if ring != nil || oneToOneLive
             || service.isActive || service.connecting || service.waitingForApproval {
             CallKitManager.shared.reportAndDiscard(completion: completion)
+            // Audit M-094, 2026-10-07: two people who started a multi-person call to each other at
+            // the same moment both answered the other "busy" and nobody connected. The service's
+            // own rule (`crossedCall`, shared with the in-app invite path so both phones decide
+            // alike: lower room id wins) says whether this is such a crossing. The winner waits
+            // quietly; the loser gives its room up and the service joins the other one. Neither
+            // answers busy, and this push never rings (the CallKit report above is already ended).
+            if kind == "adhoc", ring == nil, !oneToOneLive {
+                switch service.crossedCall(roomId: roomId, callerUid: callerUid) {
+                case .iWin: return
+                case .iLose:
+                    remember(roomId)   // the service joins it; a repeated push must not ring
+                    service.yieldToCrossedCall(roomId: roomId)
+                    return
+                case .none: break
+                }
+            }
             reportBusy(roomKind: kind, roomId: roomId)
             return
         }
@@ -96,6 +119,21 @@ final class GroupCallRinging {
         CallKitManager.shared.reportGroupRing(uuid: r.uuid, name: kind == "group" ? (title ?? callerName) : callerName,
                                               video: video, completion: completion)
         watchRoom(r, until: sentAt.map { $0 + Self.ringWindow })
+    }
+
+    /// Audit M-004, 2026-10-07: the server's `groupringcancel` push (functions-groups, F7): the
+    /// call stopped ringing me (it ended, or I answered or declined on another device). PushManager
+    /// has already reported to CallKit. A ring for that room still up here stops; with none up the
+    /// room is remembered, so a ring push delivered after its cancel never rings.
+    func handleCancelPush(_ d: [AnyHashable: Any]) {
+        let roomId = d["roomId"] as? String ?? ""
+        guard !roomId.isEmpty, !roomId.contains("/") else { return }
+        if let r = ring, r.roomId == roomId {
+            if phase == .ringing { finishRing(.remoteEnded) }   // answered here: the call runs on
+            return
+        }
+        guard GroupCallService.shared.activeCid != roomId else { return }
+        remember(roomId)
     }
 
     /// iOS refused to show the ring (Focus, its own block list): there is no CallKit call.
@@ -123,11 +161,13 @@ final class GroupCallRinging {
                 let joined = snap?.get("joined") as? [String] ?? []
                 let declined = snap?.get("declined") as? [String] ?? []
                 let startedBy = snap?.get("startedBy") as? String ?? ""
+                let startedAtMs = (snap?.get("startedAt") as? Timestamp).map { $0.dateValue().timeIntervalSince1970 * 1000 }
                 Task { @MainActor [weak self] in
                     guard let self, let r = self.ring, r.uuid == uuid, self.phase == .ringing else { return }
                     // Refused by the rules: off the list, or signed out. The room check failed.
                     if failed { self.finishRing(.failed); return }
                     if cached { return }
+                    if let startedAtMs { self.ring?.startedAtMs = startedAtMs }   // audit M-125
                     if !exists || !active {
                         self.finishRing(.remoteEnded)
                     } else if r.roomKind == "adhoc" && !members.contains(me) {
@@ -218,7 +258,7 @@ final class GroupCallRinging {
         if phase == .ringing {
             stopWatchingRoom()
             ring = nil
-            settleDecline(roomKind: r.roomKind, roomId: r.roomId)
+            settleDecline(roomKind: r.roomKind, roomId: r.roomId, startedAtMs: r.startedAtMs)
         } else {
             ring = nil
             phase = .ringing
@@ -246,7 +286,8 @@ final class GroupCallRinging {
             ring = nil
             CallKitManager.shared.endGroupCall(uuid: r.uuid, reason: .declinedElsewhere)
         }
-        settleDecline(roomKind: "adhoc", roomId: invite.roomId)
+        settleDecline(roomKind: "adhoc", roomId: invite.roomId,
+                      startedAtMs: invite.startedAt.timeIntervalSince1970 * 1000)
     }
 
     /// Join on the in-app invitation. The CallKit ring for the same room stops, and the call runs
@@ -270,12 +311,12 @@ final class GroupCallRinging {
     /// True for a room declined on this phone: the in-app invitation must not come up for it.
     func isDeclined(_ roomId: String) -> Bool { declinedHere.contains(roomId) }
 
-    private func settleDecline(roomKind: String, roomId: String) {
+    private func settleDecline(roomKind: String, roomId: String, startedAtMs: Double?) {
         declinedHere.insert(roomId)
         remember(roomId)
         let service = GroupCallService.shared
         if service.incomingInvite?.roomId == roomId { service.declineInvite() }
-        sendAnswer("declined", roomKind: roomKind, roomId: roomId, tries: 3)
+        sendAnswer("declined", roomKind: roomKind, roomId: roomId, startedAtMs: startedAtMs, tries: 3)
     }
 
     // MARK: - Called by GroupCallService
@@ -292,6 +333,47 @@ final class GroupCallRinging {
         guard phase == .joining else { return }
         phase = .inCall
         CallKitManager.shared.updateGroupVideo(GroupCallService.shared.cameraOn, uuid: r.uuid)
+        // Audit M-083, 2026-10-07: a Mute tapped on the system screen while joining. When the
+        // join honoured it (`consumeMuteOnJoin`) the two already agree; when it did not, the system
+        // screen is put back to what the mic really is instead of saying muted over an open mic.
+        if let m = muteOnJoin, m.uuid == r.uuid {
+            muteOnJoin = nil
+            CallKitManager.shared.setGroupMuted(!GroupCallService.shared.micOn)
+        }
+    }
+
+    // MARK: - Audit M-083 and M-153 (2026-10-07)
+
+    /// A Mute (or unmute) from the CallKit screen that arrived before the answered call's room was
+    /// up. Kept for that CallKit call only.
+    private var muteOnJoin: (uuid: UUID, muted: Bool)?
+
+    /// CallKitManager: the system screen's mute changed while the CallKit-answered join runs.
+    func callKitMuteBeforeJoin(uuid: UUID, muted: Bool) {
+        guard let r = ring, r.uuid == uuid, phase != .inCall else { return }
+        muteOnJoin = (uuid, muted)
+    }
+
+    /// For the ring join in GroupCallService (`start` / `joinAdhoc`, F3): true when the mic must
+    /// start muted because Mute was tapped on the system screen while joining. Read once, as the
+    /// local media starts.
+    func consumeMuteOnJoin(roomId: String) -> Bool {
+        guard let r = ring, r.roomId == roomId, phase == .joining,
+              let m = muteOnJoin, m.uuid == r.uuid else { return false }
+        muteOnJoin = nil
+        return m.muted
+    }
+
+    /// CallKitManager, before switching the audio over for a CallKit answer: the same room is
+    /// already joining or up inside the app. The ring ends as answered elsewhere, and true tells
+    /// CallKitManager to leave the audio alone.
+    func answerFindsRoomJoining(uuid: UUID) -> Bool {
+        guard let r = ring, r.uuid == uuid, phase == .ringing else { return false }
+        let service = GroupCallService.shared
+        // `ringIsMine` with no caller: the room I am in or joining (or declined here).
+        guard service.ringIsMine(roomId: r.roomId, callerUid: "") else { return false }
+        finishRing(.answeredElsewhere, settleInvite: false)
+        return true
     }
 
     /// My group call is over (hung up, dropped, removed). Ends the CallKit call kept for it and
@@ -306,12 +388,14 @@ final class GroupCallRinging {
 
     /// Rung while already in a call: tells the caller this person is busy. Once per room for
     /// longer than any ring or invitation lasts (the service may ask many times for one room).
-    func reportBusy(roomKind: String, roomId: String) {
+    /// `startedAt`: the call's start, when the caller knows it (audit M-125, 2026-10-07).
+    func reportBusy(roomKind: String, roomId: String, startedAt: Date? = nil) {
         let now = Date()
         if let last = busySent[roomId], now.timeIntervalSince(last) < 180 { return }
         busySent = busySent.filter { now.timeIntervalSince($0.value) < 180 }
         busySent[roomId] = now
-        sendAnswer("busy", roomKind: roomKind, roomId: roomId, tries: 1)
+        sendAnswer("busy", roomKind: roomKind, roomId: roomId,
+                   startedAtMs: startedAt.map { $0.timeIntervalSince1970 * 1000 }, tries: 1)
     }
 
     private func endCallKitCall(_ reason: CXCallEndedReason) {
@@ -337,8 +421,20 @@ final class GroupCallRinging {
         service.$micOn.dropFirst().removeDuplicates().sink { on in
             Task { @MainActor in CallKitManager.shared.setGroupMuted(!on) }
         }.store(in: &watch)
+        // Audit M-082, 2026-10-07: CallKitManager keeps its own copy for `didActivate`, set here
+        // at once (not after a hop), starting from the value the call is answered with.
+        CallKitManager.shared.noteGroupSpeaker(service.speakerOn)
         service.$speakerOn.dropFirst().removeDuplicates().sink { on in
+            CallKitManager.shared.noteGroupSpeaker(on)
             Task { @MainActor in CallKitManager.shared.applyGroupSpeaker(on) }
+        }.store(in: &watch)
+        // Audit M-140, 2026-10-07: the camera too, so the system call entry says video or voice
+        // as the call is now, not as it was at the moment of joining.
+        service.$cameraOn.dropFirst().removeDuplicates().sink { on in
+            Task { @MainActor in
+                guard let r = GroupCallRinging.shared.ring else { return }
+                CallKitManager.shared.updateGroupVideo(on, uuid: r.uuid)
+            }
         }.store(in: &watch)
     }
 
@@ -346,13 +442,18 @@ final class GroupCallRinging {
 
     /// `groupRingAnswer` (functions-groups, me-central1). A decline made offline is tried again a
     /// few times; whatever happens, this phone has already stopped ringing.
-    private func sendAnswer(_ answer: String, roomKind: String, roomId: String, tries: Int) {
+    /// Audit M-125, 2026-10-07: `startedAtMs`, the call's `startedAt` in milliseconds, goes with
+    /// the answer when known; the server ignores an answer meant for an older call of the same
+    /// room (a late or retried decline used to land on the next call). Older servers ignore it.
+    private func sendAnswer(_ answer: String, roomKind: String, roomId: String, startedAtMs: Double? = nil, tries: Int) {
         guard Auth.auth().currentUser != nil else { return }
+        var payload: [String: Any] = ["roomKind": roomKind, "roomId": roomId, "answer": answer]
+        if let startedAtMs { payload["startedAt"] = startedAtMs.rounded() }   // a plain JSON number
         Task { @MainActor in
             for attempt in 0..<max(1, tries) {
                 do {
                     _ = try await Functions.functions(region: "me-central1").httpsCallable("groupRingAnswer")
-                        .call(["roomKind": roomKind, "roomId": roomId, "answer": answer])
+                        .call(payload)
                     return
                 } catch {
                     if attempt + 1 >= tries { return }
