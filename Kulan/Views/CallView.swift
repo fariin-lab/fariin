@@ -45,6 +45,11 @@ struct CallView: View {
     // shrinks your preview continuously into the corner, revealing the other person underneath —
     // FaceTime's connect transition. Live video the whole way; no snapshot, no branch swap.
     @State private var tileEntering = false
+    /// Audit M-056, 2026-10-07: this screen showed MY ringing self-preview full screen, which is the
+    /// only thing the accept hand-off exists to shrink away. Set while a video call rings out, spent
+    /// by the hand-off. Without it the hand-off also ran when the OTHER camera came on mid-call (the
+    /// tile newly appears then too), and blew my avatar or my black tile up over their new video.
+    @State private var ringingPreviewShown = false
 
     // MARK: - Auto-hiding controls (the standard video-call behaviour)
 
@@ -268,7 +273,11 @@ struct CallView: View {
             .task(id: call.otherPhotoUrl ?? "") { await loadPeerPalette() }
             // Connecting, and a voice call turning into a video call, both restart the clock: show the
             // controls for the moment something changes, then get out of the way again.
-            .onChange(of: call.state) { _, _ in showControls() }
+            .onChange(of: call.state) { _, state in
+                showControls()
+                if state == .outgoing, call.cameraOn { ringingPreviewShown = true }   // M-056
+            }
+            .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
             .onChange(of: call.isVideo) { _, _ in showControls() }
             // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
             // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
@@ -623,6 +632,9 @@ struct CallView: View {
         // the tile NEWLY appearing while the call is video and the local feed is not user-expanded.
         .onChange(of: visible) { was, shows in
             guard shows, !was, call.isVideo, !isLocalExpanded else { return }
+            // M-056: only the first connect of a call that was showing my live camera full screen.
+            guard ringingPreviewShown, call.cameraOn, call.localVideoTrack != nil else { return }
+            ringingPreviewShown = false
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { tileEntering = true }
