@@ -320,15 +320,6 @@ final class GroupCallService: ObservableObject {
         [.outgoing, .incoming, .active, .reconnecting].contains(CallService.shared.state)
     }
 
-    /// Audit M-083, 2026-10-07: Mute pressed on the system call screen for a group ring that is
-    /// still joining (`CallKitManager`'s set-muted action, while `isActive` is false). The ring join
-    /// then publishes with the mic off. Ignored once the call is up: `toggleMic` handles that.
-    /// Cleared with the room, like the lobby's choice.
-    func setStartMuted(_ muted: Bool) {
-        guard !isActive else { return }
-        startMuted = muted
-    }
-
     /// `requireLive` (audit M-059, 2026-10-07): true for every way in that means "join the call that
     /// is ringing or showing" (a ring answered from CallKit, a chat's Join bar). If the room turns
     /// out to be empty, the call's doc is read from the server and an inactive call is refused with
@@ -386,8 +377,10 @@ final class GroupCallService: ObservableObject {
             // In the room = in the call; mic and camera follow (see startLocalMedia).
             activeCid = cid; activeRoom = .group(cid: cid); connecting = false
             // Audit M-083: a ring answered on the system call screen and muted there before the
-            // room was up starts muted.
-            startLocalMedia(mic: !startMuted, video: video)
+            // room was up starts muted (kept by GroupCallRinging, read once here), as does a Mute
+            // tapped in the app while joining (`startMuted`). The mic chain applies any later tap.
+            startLocalMedia(mic: !startMuted && !GroupCallRinging.shared.consumeMuteOnJoin(roomId: cid),
+                            video: video)
             didJoinRoom()
             myRole = CallRole(attribute: d["role"] as? String)
             // 2026-09-24 fix-all #97: an empty room means this tap STARTED the call rather than
@@ -1653,7 +1646,10 @@ final class GroupCallService: ObservableObject {
                 self.roomInLobbyCover = true
             }
             if fromLobby { lobbySwapPending = true }
-            startLocalMedia(mic: !startMuted, video: video, cameraReady: swapToRoom)
+            // Audit M-083: an ad-hoc ring answered and muted on the system call screen while joining
+            // starts muted too (false for anything that was not a CallKit ring).
+            let ringMuted = GroupCallRinging.shared.consumeMuteOnJoin(roomId: activeCid ?? "")
+            startLocalMedia(mic: !startMuted && !ringMuted, video: video, cameraReady: swapToRoom)
             if fromLobby {
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
