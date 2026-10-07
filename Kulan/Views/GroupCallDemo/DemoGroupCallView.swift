@@ -11,25 +11,39 @@ struct DemoGroupCallView: View {
     @State private var showPeople = false
     @State private var showScenarios = false
     @State private var selfExpanded = false
+    /// The down button on a live call shrinks the demo into `DemoMiniCard` over a see-through cover,
+    /// so the app shows behind it (owner, 2026-10-07: see a minimized group call). It used to close.
+    @State private var minimized = false
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 0) {
-                header.padding(.horizontal, 14)
-                DemoStageView(selfExpanded: $selfExpanded)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .top) { toastView }
-                controls.padding(.horizontal, 14)
-            }
-            .padding(.vertical, 10)
+            if !minimized {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    VStack(spacing: 0) {
+                        header.padding(.horizontal, 14)
+                        DemoStageView(selfExpanded: $selfExpanded)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay(alignment: .top) { toastView }
+                        controls.padding(.horizontal, 14)
+                    }
+                    .padding(.vertical, 10)
 
-            if engine.state == .idle {
-                DemoStartCard(onClose: close).transition(.opacity)
-            } else if engine.state == .ended {
-                DemoEndedCard(onClose: close).transition(.opacity)
+                    if engine.state == .idle {
+                        DemoStartCard(onClose: close).transition(.opacity)
+                    } else if engine.state == .ended {
+                        DemoEndedCard(onClose: close).transition(.opacity)
+                    }
+                }
+                .transition(.scale(scale: 0.3, anchor: .topTrailing).combined(with: .opacity))
+            } else {
+                DemoMiniCard(onRestore: { setMinimized(false) })
+                    .transition(.scale(scale: 0.3, anchor: .topTrailing).combined(with: .opacity))
             }
         }
+        .presentationBackground(minimized ? Color.clear : Color.black)
+        // The call ending while minimized comes back up, so its ended card is seen.
+        .onChange(of: engine.state.isLive) { _, live in if !live && minimized { setMinimized(false) } }
         .animation(GroupCallMotion.fade, value: engine.state)
         .environmentObject(engine)
         .preferredColorScheme(.dark)
@@ -50,15 +64,19 @@ struct DemoGroupCallView: View {
         dismiss()
     }
 
+    private func setMinimized(_ on: Bool) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { minimized = on }
+    }
+
     // MARK: - Header (the real header's shape, plus the Scenarios button)
 
     private var header: some View {
         HStack(spacing: 10) {
-            Button { close() } label: {
+            Button { engine.state.isLive ? setMinimized(true) : close() } label: {
                 Image(systemName: "chevron.down").font(.title3).foregroundStyle(.white)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true)
             }
-            .accessibilityLabel("Close demo")
+            .accessibilityLabel(engine.state.isLive ? "Minimize" : "Close demo")
             Spacer()
             VStack(spacing: 2) {
                 Text(title).font(.headline).foregroundStyle(.white).lineLimit(1)

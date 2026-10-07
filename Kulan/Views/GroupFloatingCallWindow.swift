@@ -11,7 +11,8 @@ import LiveKit
 // own card state, and a second copy of it for this card would be two implementations of one thing.
 //
 // Owner, 2026-10-06 (group call build plan, the screen package), both as the reference app's card:
-// - the card shows whoever is SPEAKING (it showed the alphabetically first camera);
+// - the card shows whoever is SPEAKING (it showed the alphabetically first camera); 2026-10-07 it
+//   became one person always, camera or not, see `picked`;
 // - it moves up when the keyboard would cover it and goes back when the keyboard leaves.
 struct GroupFloatingCallWindow: View {
     @ObservedObject private var service = GroupCallService.shared
@@ -142,35 +143,33 @@ struct GroupFloatingCallWindow: View {
 
     private static func key(_ p: Participant) -> String { p.identity?.stringValue ?? "" }
 
-    /// Whose camera fills the card, in the reference app's order: the first person speaking who has
-    /// a live camera; else the one shown last, if their camera is still live (a quiet moment, or a
-    /// speaker with no camera, does not change the picture); else the first live camera. nil = no
-    /// camera is on, the card draws faces.
-    /// One addition so two people talking at once do not make the card cut back and forth: the
-    /// person on the card keeps it for as long as they are among the speakers.
-    private var picked: (id: String, track: VideoTrack)? {
-        var live: [(id: String, track: VideoTrack)] = []
-        for p in remotes {
-            if let track = p.firstCameraVideoTrack { live.append((id: Self.key(p), track: track)) }
-        }
-        // MY OWN CAMERA when nobody else has one on (owner, 2026-10-07: a link call minimized with
-        // the camera on showed "No one else is here" on a black card, the video gone). The call
-        // screen fills with my camera when I am alone; the card it shrinks into must too.
-        guard let first = live.first else {
+    /// One person on the card, and their camera if it is on (nil track = draw their face).
+    private struct Pick { let id: String; let track: VideoTrack? }
+
+    /// Who fills the card. The reference app's rule (owner, 2026-10-07, "make it like" it, for 2, 3
+    /// or 10 people alike): ONE person, the last one who SPOKE, camera on or not. Its card never
+    /// splits into faces and carries no count; a speaker with the camera off is their photo over a
+    /// blurred copy of it, the call screen's own camera-off tile.
+    /// - someone speaking: the person on the card keeps it while they are among the speakers (two
+    ///   people talking at once do not make it cut back and forth), else the loudest takes it;
+    /// - a quiet moment: the one shown last stays;
+    /// - nobody has spoken yet: the first live camera, else the first person.
+    /// Nobody else here: my own camera if it is on (owner, 2026-10-07: a link call minimized with the
+    /// camera on showed a black card), else nil and the card shows the call's waiting words.
+    private var picked: Pick? {
+        let others = remotes
+        guard let firstOther = others.first else {
             let me = room.localParticipant
-            if service.cameraOn, let mine = me.firstCameraVideoTrack { return (id: Self.key(me), track: mine) }
+            if service.cameraOn, let mine = me.firstCameraVideoTrack { return Pick(id: Self.key(me), track: mine) }
             return nil
         }
-        var speaking: [String] = []   // loudest first, as the room lists them
-        for speaker in room.activeSpeakers where speaker is RemoteParticipant {
-            speaking.append(Self.key(speaker))
-        }
-        let shown = shownId.flatMap { id in live.first(where: { $0.id == id }) }
-        if let shown, speaking.contains(shown.id) { return shown }
-        for id in speaking {
-            if let hit = live.first(where: { $0.id == id }) { return hit }
-        }
-        return shown ?? first
+        func pick(_ p: RemoteParticipant) -> Pick { Pick(id: Self.key(p), track: p.firstCameraVideoTrack) }
+        let speaking = room.activeSpeakers.compactMap { $0 as? RemoteParticipant }   // loudest first
+        let shown = shownId.flatMap { id in others.first { Self.key($0) == id } }
+        if let shown, speaking.contains(where: { Self.key($0) == Self.key(shown) }) { return pick(shown) }
+        if let loudest = speaking.first { return pick(loudest) }
+        if let shown { return pick(shown) }
+        return pick(others.first { $0.firstCameraVideoTrack != nil } ?? firstOther)
     }
     private var pickedId: String? { picked?.id }
 
@@ -186,28 +185,45 @@ struct GroupFloatingCallWindow: View {
     private var card: some View {
         Group {
             if let shown = picked {
-                videoCard(shown.track, id: shown.id)
-            } else if stageLabel(at: Date()) != nil {
-                waitingCard
+                personCard(shown)
             } else {
-                facesCard
+                waitingCard
             }
         }
+        .animation(GroupCallMotion.fade, value: pickedId)   // a new speaker cross-fades in
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.22), lineWidth: 1))
         .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
     }
 
-    private func videoCard(_ track: VideoTrack, id: String) -> some View {
-        ZStack(alignment: .bottom) {
-            Color.black
-            SwiftUIVideoView(track, layoutMode: .fill)
-                .id(id)   // a new speaker is a new view, never the old one's last frame
-                .frame(width: w, height: h)
-                .clipped()
-            countPill.padding(.bottom, 8)
+    /// The one person: their camera filling the card, or with it off their photo centred on a blurred
+    /// copy of it (`TileBackdrop`, the call screen's camera-off tile, so minimizing keeps the look).
+    /// Avatar = card width - 36, the reference app's size for a card this narrow.
+    private func personCard(_ shown: Pick) -> some View {
+        ZStack {
+            if let track = shown.track {
+                Color.black
+                SwiftUIVideoView(track, layoutMode: .fill)
+                    .frame(width: w, height: h)
+                    .clipped()
+            } else {
+                let m = service.members.first { $0.uid == shown.id }
+                TileBackdrop(photoUrl: m?.photoUrl)
+                AvatarView(name: displayName(shown.id, member: m), photoUrl: m?.photoUrl, size: w - 36)
+            }
         }
+        .id(shown.id)   // a new speaker is a new view, never the old one's last frame or blur
+        .frame(width: w, height: h)
+        .transition(.opacity)
+    }
+
+    /// The name the call screen gives this person (`GroupCallStage`): the room's, then the member's.
+    private func displayName(_ id: String, member: CallMember?) -> String {
+        let p = room.remoteParticipants.values.first { Self.key($0) == id }
+        if let n = p?.name, !n.isEmpty { return n }
+        if let n = member?.name, !n.isEmpty { return n }
+        return "Member"
     }
 
     /// Nobody else connected yet, or the call is not simply running: a face and the header's line.
@@ -227,33 +243,6 @@ struct GroupFloatingCallWindow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.white.opacity(0.06))
         .background(Color.black)
-    }
-
-    /// Up to two of the others, one panel each, the shape of the connected 1:1 card.
-    private var facesCard: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(remotes.prefix(2).enumerated()), id: \.offset) { i, p in
-                if i > 0 { Rectangle().fill(.white.opacity(0.14)).frame(height: 0.5) }
-                ZStack {
-                    Color.white.opacity(0.06)
-                    face(uid: p.identity?.stringValue, fallbackName: p.name ?? "Member",
-                         size: i == 0 ? 46 : 40, speaking: p.isSpeaking)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .background(Color.black)
-        .overlay(alignment: .bottom) {
-            if remotes.count > 2 { countPill.padding(.bottom, 8) }
-        }
-    }
-
-    private var countPill: some View {
-        Text("\(remotes.count + 1) in call")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(.black.opacity(0.55), in: Capsule())
     }
 
     /// Someone other than me to put on a card that has nobody connected yet: the first invited

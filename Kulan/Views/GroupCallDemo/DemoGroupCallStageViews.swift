@@ -448,3 +448,111 @@ struct DemoFocusView: View {
         }
     }
 }
+
+// MARK: - Minimized card (twin of GroupFloatingCallWindow's card)
+
+/// The demo call minimized (owner, 2026-10-07: see how a 2, 3 or 10 person call looks minimized).
+/// The real card's size, corner, border, shadow and pick rule, copied rather than shared so the
+/// real window stays untouched by the demo: ONE person, the last who spoke, their (fake) camera or
+/// their photo on a blurred copy of it. Tap goes back, drag moves it and it snaps to a side.
+struct DemoMiniCard: View {
+    @EnvironmentObject private var engine: DemoGroupCallEngine
+    let onRestore: () -> Void
+
+    private let w: CGFloat = 112
+    private let h: CGFloat = 199
+    @State private var shownId: String?
+    @State private var base: CGSize = .zero
+    @State private var dragLive: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geo in
+            card
+                .offset(dragLive)
+                .gesture(drag(in: geo.size))
+                .onTapGesture(perform: onRestore)
+                .padding(.top, 8 + base.height)
+                .padding(.trailing, 12 - base.width)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+        .onAppear { shownId = picked?.id }
+        .onChange(of: picked?.id) { _, id in if let id { shownId = id } }
+        .accessibilityLabel("Back to the call")
+    }
+
+    /// `GroupFloatingCallWindow.picked`, on the demo's tiles.
+    private var picked: CallTile? {
+        let others = engine.tiles.filter { !$0.isLocal }
+        guard let first = others.first else {
+            if engine.cameraOn, let me = engine.tiles.first(where: { $0.isLocal }) { return me }
+            return nil
+        }
+        let speaking = others.filter { engine.speakingIds.contains($0.id) }
+        let shown = shownId.flatMap { id in others.first { $0.id == id } }
+        if let shown, engine.speakingIds.contains(shown.id) { return shown }
+        if let id = engine.activeSpeakerId, let hit = speaking.first(where: { $0.id == id }) { return hit }
+        if let loudest = speaking.first { return loudest }
+        if let shown { return shown }
+        return others.first { $0.hasVideo } ?? first
+    }
+
+    private var card: some View {
+        Group {
+            if let t = picked {
+                ZStack {
+                    if t.hasVideo {
+                        DemoFakeCamera(name: t.name, photoUrl: t.photoUrl, mirrored: false, avatar: 44)
+                    } else {
+                        TileBackdrop(photoUrl: t.photoUrl)
+                        AvatarView(name: t.name, photoUrl: t.photoUrl, size: w - 36)
+                    }
+                }
+                .id(t.id)
+                .transition(.opacity)
+            } else {
+                VStack(spacing: 10) {
+                    let ringing = engine.ringing
+                    AvatarView(name: ringing.first?.name ?? "Group Call Demo",
+                               photoUrl: ringing.first?.photoUrl, size: 54)
+                    Text(GroupCallWords.alone(ringing: ringing.map(\.name)))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineLimit(2).minimumScaleFactor(0.75)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.white.opacity(0.06))
+                .background(Color.black)
+            }
+        }
+        .animation(GroupCallMotion.fade, value: picked?.id)
+        .frame(width: w, height: h)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.22), lineWidth: 1))
+        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+    }
+
+    private func drag(in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { v in
+                let (maxLeft, maxDown) = limits(size)
+                let x = min(0, max(maxLeft, base.width + v.translation.width))
+                let y = min(maxDown, max(0, base.height + v.translation.height))
+                dragLive = CGSize(width: x - base.width, height: y - base.height)
+            }
+            .onEnded { v in
+                let (maxLeft, maxDown) = limits(size)
+                let thrownX = base.width + v.predictedEndTranslation.width
+                let y = min(maxDown, max(0, base.height + v.predictedEndTranslation.height))
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                    base = CGSize(width: thrownX < maxLeft / 2 ? maxLeft : 0, height: y)
+                    dragLive = .zero
+                }
+            }
+    }
+
+    private func limits(_ size: CGSize) -> (CGFloat, CGFloat) {
+        (-(size.width - w - 24), max(0, size.height - h - 8 - 76))
+    }
+}
