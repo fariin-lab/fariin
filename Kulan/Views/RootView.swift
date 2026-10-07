@@ -33,6 +33,17 @@ struct RootView: View {
     @ObservedObject private var devices = DeviceRegistry.shared
     @State private var showRevokedNotice = false
     @State private var userLinkAlert: String?   // 2026-09-24 fix-all #167
+    /// audit M-098, 2026-10-07: true while the lock or the switcher blank is drawn in its own window
+    /// above the call screens (see `PrivacyShield`); the in-tree copies below are then skipped.
+    @State private var shieldInWindow = false
+
+    /// What must cover the app right now: the App Lock screen, the app-switcher blank, or nothing.
+    /// The same conditions the two overlays always used.
+    private var shieldMode: PrivacyShield.Mode {
+        if locked { return .lock }
+        if (screenSecurity || lockEnabled) && scenePhase != .active { return .blank }
+        return .none
+    }
 
     var body: some View {
         ZStack {
@@ -221,13 +232,21 @@ struct RootView: View {
             //
             // The separate toggle still stands on its own, for hiding the preview WITHOUT wanting
             // Face ID every time you come back.
-            if (screenSecurity || lockEnabled) && scenePhase != .active && !locked {
-                Theme.bg(scheme == .dark).ignoresSafeArea()
-                    .overlay(Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.secondary))
+            //
+            // audit M-098, 2026-10-07: these two were siblings in this view tree, and the 1:1 and
+            // group call screens are full-screen covers UIKit presents ABOVE the tree. With a call
+            // screen up, the switcher showed the call (names, video) and the call screen stayed
+            // usable on top of the App Lock screen. They are now drawn in a window above every
+            // presentation (`PrivacyShield`, driven by `shieldMode`); the copies here are only the
+            // fallback for a moment with no window scene to put that window in.
+            if !shieldInWindow {
+                if shieldMode == .blank { PrivacyShield.blankView(dark: scheme == .dark) }
+                // App Lock overlay.
+                if locked { LockScreen { authenticate() } }
             }
-            // App Lock overlay.
-            if locked { LockScreen { authenticate() } }
         }
+        .onChange(of: shieldMode) { _, mode in applyShield(mode) }
+        .onChange(of: scheme) { _, _ in if shieldInWindow { applyShield(shieldMode) } }
         .task { await route() }
         // PREVIEW ONLY (Debug builds — Appetize): a fresh preview account is empty, so seed a demo
         // story once we reach the main app, so the Story feature (and the viewers swipe) is testable
@@ -243,7 +262,10 @@ struct RootView: View {
         .onChange(of: AppRouter.shared.pendingUserHandle) { _, handle in
             if handle != nil, phase == .main { openPendingUserLink() }
         }
-        .onAppear { if lockEnabled { locked = true; authenticate() } }
+        .onAppear {
+            if lockEnabled { locked = true; authenticate() }
+            applyShield(shieldMode)   // audit M-098: a launch straight into the background (a call push)
+        }
         // Remote sign-out: our own device record was deleted from another phone. Same teardown
         // as tapping Sign Out here, then back to the front door with a word about why.
         .onChange(of: devices.revoked) { _, revoked in
@@ -299,6 +321,20 @@ struct RootView: View {
                 backgroundedAt = nil
                 if locked, cameFromBackground { authenticate() }
             }
+        }
+    }
+
+    /// audit M-098, 2026-10-07: puts the lock or the blank in the shield window, or takes it down.
+    private func applyShield(_ mode: PrivacyShield.Mode) {
+        let dark = scheme == .dark
+        switch mode {
+        case .none:
+            PrivacyShield.shared.hide()
+            shieldInWindow = false
+        case .blank:
+            shieldInWindow = PrivacyShield.shared.show(PrivacyShield.blankView(dark: dark), dark: dark)
+        case .lock:
+            shieldInWindow = PrivacyShield.shared.show(LockScreen { authenticate() }, dark: dark)
         }
     }
 
@@ -602,6 +638,63 @@ struct LockScreen: View {
                 }
             }
         }
+    }
+}
+
+/// audit M-098, 2026-10-07: the App Lock screen and the app-switcher blank, drawn in a window of
+/// their own one level above everything the app has on screen. The call screens are full-screen
+/// covers presented above the root view, so anything drawn INSIDE the root view (where these used
+/// to be) sat under them. A window above the app's own window sits above every presentation in it.
+/// Never made key, so the composer keeps its first responder; the lock is still tappable.
+@MainActor
+final class PrivacyShield {
+    static let shared = PrivacyShield()
+    private init() {}
+
+    enum Mode: Equatable { case none, blank, lock }
+
+    private var window: UIWindow?
+
+    /// The switcher blank: the app background with a lock glyph (what RootView always drew).
+    static func blankView(dark: Bool) -> some View {
+        Theme.bg(dark).ignoresSafeArea()
+            .overlay(Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.secondary))
+    }
+
+    /// Shows `content` above every window. False when there is no window scene to put it in, and
+    /// the caller then draws it in its own tree as before.
+    @discardableResult
+    func show<V: View>(_ content: V, dark: Bool) -> Bool {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.windows.contains { $0.isKeyWindow } })
+                ?? scenes.first(where: { !$0.windows.isEmpty }) else { return false }
+        let own = window ?? CMNonKeyWindow(windowScene: scene)   // can never become key
+        if own.windowScene !== scene { own.windowScene = scene }
+        // Measured, not a constant (the same way CMContextMenu places its window above the keys):
+        // one above the highest window on screen, never below the alert level.
+        var top = UIWindow.Level.alert.rawValue
+        for w in scene.windows where w !== own && !w.isHidden { top = max(top, w.windowLevel.rawValue) }
+        own.windowLevel = UIWindow.Level(rawValue: top + 1)
+        own.frame = scene.coordinateSpace.bounds
+        own.backgroundColor = .clear
+        // The user's Appearance choice is applied to the app's own window, not to the system, so
+        // a new window has to be told it.
+        own.overrideUserInterfaceStyle = dark ? .dark : .light
+        let host = UIHostingController(rootView: AnyView(content.environment(\.colorScheme, dark ? .dark : .light)))
+        host.view.backgroundColor = .clear
+        host.view.accessibilityViewIsModal = true   // VoiceOver stays on the lock, not the call under it
+        own.rootViewController = host
+        own.isHidden = false   // not makeKeyAndVisible: see the type's note
+        own.layoutIfNeeded()   // drawn now, before the switcher takes its snapshot
+        window = own
+        return true
+    }
+
+    func hide() {
+        guard let own = window else { return }
+        window = nil
+        own.isHidden = true
+        own.rootViewController = nil
     }
 }
 
