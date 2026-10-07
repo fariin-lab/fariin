@@ -186,14 +186,27 @@ struct KulanApp: App {
             value = url.pathComponents.last(where: { $0 != "/" }) ?? ""
 
         case "https":
-            // Only our own domain, and only the two paths the site actually claims. Anything
+            // Only our own domains, and only the paths the site actually claims. Anything
             // else reaching this method is not ours to act on.
             let host = (url.host ?? "").lowercased()
-            guard host == "fariin.com" || host == "www.fariin.com" else { return nil }
             let parts = url.pathComponents.filter { $0 != "/" }
-            // A CALL LINK carries its key in the fragment, not the path: /call/#key=bcdf-ghkm-…
-            // The fragment never reaches the web server, which is why the key lives there. Only a
-            // key that parses is accepted; anything else is not ours to act on.
+            // A CALL LINK, the path form (owner, 2026-10-07): https://call.fariin.com/video/<id>
+            // or /voice/<id>, the key as exactly 22 base62 characters (`CallLinkKey.compact`).
+            // Its own host carries nothing else. The main hosts take the same two paths because
+            // one site-association file serves every domain of the site, so iOS hands
+            // fariin.com/video/… to us as well. Downstream sees the key in its text form, as ever.
+            if host == CallLinkKey.linkHost {
+                guard parts.count == 2, parts[0] == "voice" || parts[0] == "video",
+                      let key = CallLinkKey(compact: parts[1]) else { return nil }
+                return .call(key: key.text)
+            }
+            guard host == "fariin.com" || host == "www.fariin.com" else { return nil }
+            if parts.count == 2, parts[0] == "voice" || parts[0] == "video" {
+                guard let key = CallLinkKey(compact: parts[1]) else { return nil }
+                return .call(key: key.text)
+            }
+            // The OLD call link carries its key in the fragment, not the path: /call/#key=bcdf-ghkm-…
+            // Still read, for ever: it sits in old chats. Only a key that parses is accepted.
             if parts == ["call"] {
                 let pairs = (url.fragment ?? "").split(separator: "&")
                 guard let raw = pairs.first(where: { $0.hasPrefix("key=") })?.dropFirst(4),
@@ -217,10 +230,20 @@ struct KulanApp: App {
         guard !value.contains("/"), value != ".", value != "..",
               !(value.hasPrefix("__") && value.hasSuffix("__")),
               value.count <= 128 else { return nil }
+        let custom = url.scheme?.lowercased() == "kulan"
         switch kind {
         case "u": return .user(value)
         case "g": return .group(value)
         case "s": return .story(value)
+        // The web landing page's "Open in Kulan" button, for a phone that had the app but did not
+        // get the universal link: kulan://video/<22-char id>, kulan://voice/<id>, and
+        // kulan://call/<bcdf-ghkm-…> for the old form. Custom scheme only; the https shapes were
+        // answered above.
+        // (A `where` binds to ONE pattern, so each has its own.)
+        case "voice" where custom, "video" where custom:
+            return CallLinkKey(compact: value).map { .call(key: $0.text) }
+        case "call" where custom:
+            return CallLinkKey(text: value).map { .call(key: $0.text) }
         default:  return nil
         }
     }

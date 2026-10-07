@@ -30,6 +30,12 @@ actor LinkPreviewService {
     private var missAt: [String: Date] = [:]           // key → when a fetch last came back empty
 
     func draft(for url: URL) async -> LinkDraft? {
+        // ⛔ OUR OWN CALL LINKS ARE NEVER FETCHED (2026-10-07). The bubble builds their card itself
+        // (MessageRowModelBuilder.callLinkPreview), and the path form carries the link's KEY in the
+        // address, so fetching it would hand the key to the web server from the sender's phone on
+        // every send. The old form's /call/ page did not exist, so a call link never had a fetched
+        // preview; same answer, now on purpose.
+        if Self.isCallLink(url) { return nil }
         let key = url.absoluteString
         if let cached = cache[key] { return cached }
         if let t = missAt[key], Date().timeIntervalSince(t) < 60 { return nil }
@@ -53,6 +59,18 @@ actor LinkPreviewService {
         // "no network" and "page has no preview" both come back as nil.
         if result == nil { missAt[key] = Date() } else { cache[key] = result }
         return result
+    }
+
+    /// One of OUR call links, either spelling: anything on call.fariin.com, or /call, /voice,
+    /// /video on the main host. A host-and-path test only: the real router (`KulanApp.route`) is
+    /// main-actor and this is not, and a false positive here costs a preview for an address nobody
+    /// could open anyway.
+    static func isCallLink(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        if host == CallLinkKey.linkHost { return true }
+        guard host == "fariin.com" || host == "www.fariin.com",
+              let first = url.pathComponents.first(where: { $0 != "/" }) else { return false }
+        return first == "call" || first == "voice" || first == "video"
     }
 
     /// The handle in one of OUR profile links, or nil for every other url on the internet.

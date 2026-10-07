@@ -547,19 +547,28 @@ enum MessageRowModelBuilder {
     /// is encrypted in its server document, and fetching it would make this builder async.
     private static func callLinkPreview(_ text: String) -> BubbleBody.LinkPreview? {
         // Cheap gate first: this runs for every text message the list builds.
-        guard text.range(of: "fariin.com/call", options: .caseInsensitive) != nil else { return nil }
+        guard mentionsCallLink(text) else { return nil }
         let edges = CharacterSet(charactersIn: ".,;:!?()[]{}<>\"'")
         for token in text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }) {
             var s = String(token).trimmingCharacters(in: edges)
-            guard s.range(of: "fariin.com/call", options: .caseInsensitive) != nil else { continue }
+            guard mentionsCallLink(s) else { continue }
             if !s.lowercased().hasPrefix("https://") { s = "https://" + s }
             guard let url = URL(string: s), case .call(let key)? = KulanApp.route(from: url) else { continue }
             return BubbleBody.LinkPreview(
                 shape: .call(key: key), url: url.absoluteString,
-                title: "Kulan Call", desc: "Use this link to join a Kulan call", host: "fariin.com",
+                title: "Kulan Call", desc: "Use this link to join a Kulan call",
+                host: url.host ?? "fariin.com",
                 imageUrl: nil, imageEnc: nil)
         }
         return nil
+    }
+
+    /// Both spellings of a call link: the path form on its own host (call.fariin.com/video/…,
+    /// /voice/…) and the old fragment form (fariin.com/call/#key=…). A substring test only; the
+    /// router above decides whether it is really a key.
+    private static func mentionsCallLink(_ s: String) -> Bool {
+        s.range(of: "call.fariin.com/", options: .caseInsensitive) != nil
+            || s.range(of: "fariin.com/call", options: .caseInsensitive) != nil
     }
 
     private static func linkPreviewBody(_ p: Message.LinkPreviewData) -> BubbleBody.LinkPreview {

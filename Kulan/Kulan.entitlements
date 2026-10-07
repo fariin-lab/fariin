@@ -24,6 +24,14 @@
 	<array>
 		<string>applinks:fariin.com</string>
 		<string>applinks:www.fariin.com</string>
+		<!-- CALL LINKS, 2026-10-07: https://call.fariin.com/video/<id> and /voice/<id>. A third
+		     origin to iOS, so it is named here too. Same two conditions as the hosts above: the
+		     capability is already on the App ID, and the host must serve the same
+		     apple-app-site-association (one Pages project, one file, every custom domain), which
+		     claims /voice/* and /video/*. Until the owner adds call.fariin.com as a custom domain
+		     of the fariin-web Pages project, iOS finds no file there and these links open as web
+		     pages. -->
+		<string>applinks:call.fariin.com</string>
 		<!-- PASSKEYS, 2026-09-16. `webcredentials` is what lets iOS create and offer a passkey
 		     for this app, and it is a SEPARATE service from `applinks` on the same domain: the
 		     Associated Domains capability covers both, so no new capability is needed in the

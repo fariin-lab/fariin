@@ -33,7 +33,9 @@ struct CallLinkDetailsView: View {
                 CallLinkHero(key: current.key, title: current.title, video: isVideo ?? true) {
                     GroupCallService.shared.openLobby(key: current.key)   // pre-join screen (2026-10-06)
                 }
-                CallLinkShareRows(saved: current, compact: true)
+                // The address says /video/ or /voice/; until the doc has been read it is shown as
+                // video, which is what every link made before the setting is.
+                CallLinkShareRows(saved: current, video: isVideo ?? true, compact: true)
                 if current.admin {
                     CallLinkGroup {
                         Button { editingName = true } label: {

@@ -43,6 +43,11 @@ struct GroupCallParticipantsSheet: View {
     /// After "Make a new link" this is the new one, so Share and Copy hand out the link that works.
     private var link: ActiveCallLink? { service.currentLink }
 
+    /// The link to hand out from a running call, spelled for its type. The server's join answer
+    /// said whether this link is voice-only (`cameraLocked`), which is the link's own setting;
+    /// `service.isVideo` is only whether I came in with the camera on, so it cannot name the link.
+    private var linkURL: URL? { link?.url(video: !service.cameraLocked) }
+
     /// The link's owner, as the server's join answer named me (or the link doc's `creatorUid`, which
     /// only the server writes, for a server that does not send a role yet). Hiding these is a
     /// convenience; the link functions check the creator themselves.
@@ -121,14 +126,14 @@ struct GroupCallParticipantsSheet: View {
             Section {
                 // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
                 // sends each person the link (a link call has no member list to add to).
-                if service.isAdhoc || (!service.linkRevoked && link?.linkKey?.url != nil) {
+                if service.isAdhoc || (!service.linkRevoked && linkURL != nil) {
                     Button { showAdd = true } label: {
                         Label("Add people", systemImage: "person.badge.plus")
                     }
                 }
                 // Everyone may copy or share the link (the access table); a revoked one
                 // is not handed out.
-                if !service.linkRevoked, let url = link?.linkKey?.url {
+                if !service.linkRevoked, let url = linkURL {
                     Button { copy(url) } label: {
                         Label(copied ? "Copied" : "Copy link", systemImage: "doc.on.doc")
                     }
@@ -314,7 +319,7 @@ struct GroupCallParticipantsSheet: View {
                 AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid))) { people in
                     Task { await service.invite(people) }
                 }
-            } else if let url = link?.linkKey?.url {
+            } else if let url = linkURL {
                 AddPeopleSheet(alreadyIn: Set(stage.tiles.map(\.uid)), actionTitle: "Send link") { people in
                     sendLink(url, to: people)
                 }

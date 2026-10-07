@@ -6,12 +6,21 @@ import FirebaseFirestore
 import FirebaseFunctions
 
 // CALL LINKS, the reference app's model. A link is a 16-byte root key that only ever lives in the
-// link itself (after the `#`, so it never reaches a web server) and in the creator's own saved
-// list. Everything the server sees is derived from it one way:
+// link itself and in the creator's own saved list. Everything the server sees is derived from it
+// one way:
 //   · roomId   = hex(HKDF-SHA256(rootKey, info "kulan-calllink-roomid-v1"))  → callLinks/{roomId}
 //   · name key = HKDF-SHA256(rootKey, info "kulan-calllink-name-v1")         → encName (AES.GCM)
 // So the server can tell a link exists and who made it, but cannot read its name or rebuild the
 // link from what it stores.
+//
+// TWO SPELLINGS OF THE SAME KEY (owner, 2026-10-07):
+//   · https://call.fariin.com/video/<id>  and  /voice/<id>  : what the app hands out now. <id> is
+//     the key as 22 base62 characters (`compact`). The path names the call type, so a shared link
+//     says what it is before anyone opens it. This form DOES reach the web server when somebody
+//     without the app opens it: that is the owner's trade, a readable short link over a key that
+//     never left the phone. Nothing about the server contract changes with it.
+//   · https://fariin.com/call/#key=bcdf-ghkm-…  : the old form, 32 consonants in 8 groups
+//     (`text`). Read for ever: it sits in old chats. Never produced any more.
 
 /// The root key of one call link, and everything derived from it.
 struct CallLinkKey: Hashable {
@@ -82,10 +91,59 @@ struct CallLinkKey: Hashable {
         }
     }
 
-    /// The fragment never leaves the phone that opens it, which is the point. Same host as
-    /// `KulanApp.linkHost`, spelled out because that constant is main-actor and this is not.
-    var url: URL {
-        URL(string: "https://fariin.com/call/#key=\(text)")!
+    // THE PATH FORM. The 16 bytes read as one unsigned 128-bit number, most significant byte
+    // first, written in base 62 with this alphabet (ASCII order: digits, then A-Z, then a-z), ALWAYS
+    // 22 digits, "0"-padded on the left. 62^21 < 2^128 < 62^22, so 22 is the fixed width and a
+    // value of 2^128 or more is not a key. Case matters. A web page or a server decodes it the
+    // same way: value = value * 62 + digit, left to right, then the 16 big-endian bytes.
+    private static let base62 = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+    static let compactLength = 22
+
+    /// The 22-character path id of this key.
+    var compact: String {
+        // Long division of the big-endian bytes by 62, lowest digit first. Each pass leaves the
+        // quotient in `num`; after 22 passes it is zero, which is what fixes the width.
+        var num = [UInt8](bytes)
+        var digits = [Character](repeating: "0", count: Self.compactLength)
+        for pos in stride(from: Self.compactLength - 1, through: 0, by: -1) {
+            var rem = 0
+            for i in num.indices {
+                let cur = rem << 8 | Int(num[i])      // < 62 * 256, so the quotient fits a byte
+                num[i] = UInt8(cur / 62)
+                rem = cur % 62
+            }
+            digits[pos] = Self.base62[rem]
+        }
+        return String(digits)
+    }
+
+    /// Reads the path id back. Exactly 22 characters of the alphabet, nothing forgiven: this is
+    /// what arrives from a tapped link, and a near-miss is not a key.
+    init?(compact: String) {
+        guard compact.count == Self.compactLength else { return nil }
+        var num = [UInt8](repeating: 0, count: 16)
+        for ch in compact {
+            guard let d = Self.base62.firstIndex(of: ch) else { return nil }
+            var carry = d
+            for i in stride(from: 15, through: 0, by: -1) {
+                let cur = Int(num[i]) * 62 + carry
+                num[i] = UInt8(cur & 0xff)
+                carry = cur >> 8
+            }
+            guard carry == 0 else { return nil }       // 2^128 or more: not a key
+        }
+        self.init(raw: Data(num))
+    }
+
+    /// The host of a shared link. `KulanApp.linkHost` is the main site; call links have their own
+    /// host so the address reads as what it is, and so iOS can be told about it separately.
+    static let linkHost = "call.fariin.com"
+
+    /// The link people are sent: https://call.fariin.com/video/<id>, or /voice/<id> for a voice
+    /// link. Every place that hands a link out knows which it is (the draft's Call Type, the saved
+    /// link's doc, the running call's answer from the server), so the type is not defaulted here.
+    func url(video: Bool) -> URL {
+        URL(string: "https://\(Self.linkHost)/\(video ? "video" : "voice")/\(compact)")!
     }
 
     /// Base64 of AES.GCM's combined box (nonce + ciphertext + tag). "" for an empty name, which is
@@ -132,7 +190,9 @@ protocol CallLinkRef {
 
 extension CallLinkRef {
     var linkKey: CallLinkKey? { CallLinkKey(text: key) }
-    var url: URL? { linkKey?.url }
+    /// The link to hand out; nil only for a key that does not parse. The caller says which call
+    /// type the link is, see `CallLinkKey.url(video:)`.
+    func url(video: Bool) -> URL? { linkKey?.url(video: video) }
 }
 
 /// One link in my Calls list (users/{me}/callLinks/{roomId}).

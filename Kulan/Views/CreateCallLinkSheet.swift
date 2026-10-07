@@ -285,7 +285,7 @@ struct CallLinkHero: View {
     @Environment(\.colorScheme) private var scheme
 
     private var shortLink: String {
-        (CallLinkKey(text: key)?.url.absoluteString ?? "").replacingOccurrences(of: "https://", with: "")
+        (CallLinkKey(text: key)?.url(video: video).absoluteString ?? "").replacingOccurrences(of: "https://", with: "")
     }
 
     var body: some View {
@@ -331,7 +331,7 @@ struct CallLinkCard: View {
                 Text(title)
                     .font(.headline)
                     .lineLimit(1)
-                Text(CallLinkKey(text: key)?.url.absoluteString ?? "")
+                Text(CallLinkKey(text: key)?.url(video: true).absoluteString ?? "")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -420,15 +420,19 @@ struct CallLinkApprovalRow: View {
 struct CallLinkShareRows: View {
     let link: any CallLinkRef
     let beforeShare: () async -> Void
+    /// The link's Call Type: it decides whether the address says /video/ or /voice/.
+    let video: Bool
 
     /// Three round buttons in a row instead of three rows (the create sheet, owner 2026-10-04).
     var compact = false
 
     init(draft: CallLinkDraft, compact: Bool = false, beforeShare: @escaping () async -> Void) {
         self.link = draft; self.beforeShare = beforeShare; self.compact = compact
+        self.video = draft.video
     }
-    init(saved: SavedCallLink, compact: Bool = false) {
+    init(saved: SavedCallLink, video: Bool, compact: Bool = false) {
         self.link = saved; self.beforeShare = {}; self.compact = compact
+        self.video = video
     }
 
     @State private var sendInApp = false
@@ -436,7 +440,8 @@ struct CallLinkShareRows: View {
     @State private var toast = ""
     @State private var toastShown = false
 
-    private var urlText: String { link.url?.absoluteString ?? "" }
+    private var url: URL? { link.url(video: video) }
+    private var urlText: String { url?.absoluteString ?? "" }
 
     private func sendInKulan() { Task { @MainActor in await beforeShare(); sendInApp = true } }
     private func copyLink() {
@@ -499,7 +504,7 @@ struct CallLinkShareRows: View {
             SendContactSheet(contactText: urlText, onSent: { flash($0) })
         }
         .sheet(isPresented: $systemShare) {
-            SystemShareSheet(items: link.url.map { [$0 as Any] } ?? [])
+            SystemShareSheet(items: url.map { [$0 as Any] } ?? [])
                 .presentationDetents([.medium, .large])
         }
         // Over the rows themselves: anything hung below them is clipped by the sheet's scroll view.
