@@ -241,13 +241,16 @@ struct SettingsView: View {
                             Label("Group Call Demo", systemImage: "person.3.fill")
                         }
                         .tint(.orange)
-                        .fullScreenCover(isPresented: $showGroupCallDemo) { DemoGroupCallView() }
                     } footer: {
                         Text("Testers only. Adds seven local chats to your list and two people to the story row, for taking screenshots. They are made on this device, never uploaded, and nobody else can see them. Your own chats and your own story are not touched.")
                     }
                 }
             }
             .voiceNoteBarSlot(showing: !showPhoto)   // under the header (owner, 2026-09-29); never over the photo
+            // The Group Call Demo cover lives on the LIST, not on its row (owner, 2026-10-07: opening
+            // the demo's Scenarios or People sheet closed the whole call). A cover attached to a List
+            // row is torn down when the row is rebuilt, and presenting a sheet over it redraws the row.
+            .fullScreenCover(isPresented: $showGroupCallDemo) { DemoGroupCallView() }
             // The bar titles what you are looking at: the page while it is the page, the picture
             // while the picture is open over it.
             .navigationTitle(showPhoto ? "Profile photo" : "Settings")
