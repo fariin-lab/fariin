@@ -126,6 +126,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// the restore would then be a visible jump. The list is at alpha 0 until it lands, so the hold
     /// costs nothing to look at. The owner drops it on every path, deadline included.
     var holdFirstLand: Bool = false
+    /// True once the chat's first SERVER window has been applied (`ThreadRepository.serverWindowSettled`).
+    /// The landing hold lasts until then (capped), not a fixed second; see `armLandingHold`. Defaults
+    /// true so a list with no live repository keeps the plain 1.2s hold.
+    var liveWindowSettled: Bool = true
     /// ⛔ WHERE THE READER IS, FOR REOPENING THE CHAT — the reference app's `lastVisibleInteraction`
     /// plus its on-screen position. Reported from the list's own settle points, because this
     /// controller is the only thing that knows which row is at the top of the viewport and by how
@@ -301,6 +305,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.initialScrollId = initialScrollId
         vc.initialScrollTopInset = initialScrollTopInset
         vc.setHoldFirstLand(holdFirstLand)   // after the id and offset it will land with, before the apply
+        vc.setLiveWindowSettled(liveWindowSettled)   // before the apply that carries the server window
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
@@ -501,6 +506,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func setHoldFirstLand(_ hold: Bool) {
         guard hold != holdFirstLand else { return }
         holdFirstLand = hold
+        if hold { firstLandWasHeld = true }
         // A release has to ask for the land itself: the apply that would have landed may already be
         // behind us. Next turn, not now, so the apply in this same update (if there is one) has put
         // its snapshot in first; the row being landed on may be in that very apply. Idempotent by
@@ -514,6 +520,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 if self.currentIds.isEmpty { self.scheduleEmptyReveal() } else { self.performFirstLandIfReady() }
             }
         }
+    }
+    /// The first land waited for a saved row to be paged in (diagnostics only, see `reopenLog`).
+    private var firstLandWasHeld = false
+
+    /// See the SwiftUI side's `liveWindowSettled` and `armLandingHold`. When the server's window
+    /// arrives inside the hold, the hold is cut back to the plain 1.2s after the land, but never to
+    /// less than 0.4s from now: that window is applied in this same update, and its apply completion
+    /// is one of the movers the hold has to catch.
+    private var liveWindowSettled = true
+    func setLiveWindowSettled(_ settled: Bool) {
+        guard settled != liveWindowSettled else { return }
+        liveWindowSettled = settled
+        guard settled, didFirstLand, Date() < landingHoldUntil else { return }
+        landingHoldUntil = max(landedAt.addingTimeInterval(1.2), Date().addingTimeInterval(0.4))
+        reopenLog("server window settled inside the hold; hold ends in \(Int(landingHoldUntil.timeIntervalSinceNow * 1000))ms")
+    }
+
+    /// ⚠️ TEMPORARY DIAGNOSTICS for the first-open-only reopen jump (owner, 2026-10-07: "only the
+    /// first time I open the chat after opening the app"). Silent except for five seconds after a
+    /// first land, so a device log of one reopen names which mover moved the reader, by how much and
+    /// when. REMOVE once the cause is confirmed on a phone.
+    private var landedAt = Date.distantPast
+    private static var opensThisRun: [String: Int] = [:]
+    private func reopenLog(_ what: @autoclosure () -> String) {
+        let t = Date().timeIntervalSince(landedAt)
+        guard t >= 0, t <= 5 else { return }
+        NSLog("[REOPEN] +%4.0fms %@", t * 1000, what())
     }
     var lastRepaintedModelsVersion = -1       // -1 so the first update always repaints
 
@@ -1486,6 +1519,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             layout.generation += 1
             layout.invalidateLayout()
             if let landed = continuityDelta(anchors, before: before, after: after), abs(landed.delta) > 0.5 {
+                reopenLog("MOVER settleEstimatedHeights anchor delta \(String(format: "%.1f", landed.delta)) held=\(Date() < landingHoldUntil)")
                 collectionView.layoutIfNeeded()
                 let y = clampOffset(collectionView.contentOffset.y + landed.delta)
                 if abs(collectionView.contentOffset.y - y) > 0.5 {
@@ -1824,6 +1858,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         var anchorName = "NONE"
         if let l = landed, let a = l.anchor { anchorName = String(a.id.suffix(6)) }
+        reopenLog("MOVER adoptHeight id=\(id.suffix(5)) \(String(format: "%.1f", cached)) -> \(String(format: "%.1f", h)) anchor=\(anchorName) delta=\(String(format: "%.1f", delta))")
         if delta != 0 { verifyAnchor(landed?.anchor) }
     }
 
@@ -3060,6 +3095,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale
             self.reassertLandingIfHeld()   // the first live snapshot landing on a just-restored reader
+            self.reopenLog("apply done rows=\(self.currentIds.count) adjustment=\(adjustment) anchorsResolved=\(anchorsResolved) held=\(Date() < self.landingHoldUntil) y=\(String(format: "%.1f", self.collectionView.contentOffset.y))")
             self.lastStableOffset = self.collectionView.contentOffset.y
             if let target = scrollTarget {
                 // The land itself passed the gate, but the completion can run later than it: if the
@@ -3265,6 +3301,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the live `initialScrollId` moves on for an unread landing, and the saved offset can be
         // re-saved mid-settle. What landed is what must be put back.
         landedTarget = (initialScrollId, initialScrollOffset)
+        landedAt = Date()
         armLandingHold()
         // ⛔ REVEAL IN THIS TURN, NOT THE NEXT ONE — his report, 2026-08-27: "it draws in front of
         // me, everything shows up after I open", worse from a notification. The measuring was never
@@ -3289,6 +3326,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // every pass and moves on with each arrival, so the re-pin must not follow it.
         awaitingInitialRepin = initialScrollId != nil
         landedUnreadId = initialScrollOffset == nil ? initialScrollId : nil
+        let openNumber = (Self.opensThisRun[cid] ?? 0) + 1
+        Self.opensThisRun[cid] = openNumber
+        reopenLog("LAND open#\(openNumber) of this chat this run, rows=\(rowCount) seededHeights=\(seeded) estimated=\(estimatedIds.count) pagedHold=\(firstLandWasHeld) liveSettled=\(liveWindowSettled) id=\(initId) offset=\(initTop) savedTop=\(initialScrollTopInset.map { String(format: "%.1f", $0) } ?? "nil") top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) bottom=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) y=\(String(format: "%.1f", collectionView.contentOffset.y)) appeared=\(isViewCompletelyAppeared)")
         revealWhenLandingIsFinal()
         // owner audit 2026-10-06 chat #91: a jump that arrived before the land goes now, through the
         // same gate and retry every parked jump uses. It outranks the landing, so no re-pin after it.
@@ -3339,6 +3379,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let top = collectionView.adjustedContentInset.top
         guard abs(top - landed) > 0.5 else { return }
         awaitingInitialRepin = false
+        reopenLog("REPIN top inset \(String(format: "%.1f", landed)) -> \(String(format: "%.1f", top))")
         landedTopInset = top
         // owner audit 2026-10-06 chat #50: an unread landing re-pins the row it LANDED on, not the
         // live id, which may have moved on with a message that arrived since (`landedTarget`).
@@ -3360,16 +3401,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// What the first land placed: the row id and its offset below the top (nil offset = the
     /// first-unread or newest placement). `reapplyLanding` lands on this, never on the live tiers.
     private var landedTarget: (id: String?, offset: CGFloat?)?
-    private func armLandingHold() { landingHoldUntil = Date().addingTimeInterval(1.2) }
+    /// ⛔ 1.2s ONCE THE SERVER HAS ANSWERED, UP TO 3s WHILE IT HAS NOT — owner, 2026-10-07: the jump
+    /// happens "only the first time I open the chat after opening the app; after that it is fine".
+    /// A fixed 1.2s covers a warm reopen, where the live window comes from a warm database within a
+    /// few hundred ms. The first open of a run (or the first after the app was in the background) seeds
+    /// from the disk file or a cache cut to 60 rows and waits on a cold database and a reconnecting
+    /// listener, so the window and the settles it triggers can land AFTER a fixed hold has lapsed and
+    /// move the reader with nothing putting them back. The `[REOPEN]` log lines confirm or refute this
+    /// on the next device run. `setLiveWindowSettled` cuts this back to 1.2s
+    /// the moment the server window arrives, so a warm open is held exactly as long as before.
+    private func armLandingHold() {
+        landingHoldUntil = Date().addingTimeInterval(liveWindowSettled ? 1.2 : 3.0)
+        reopenLog("hold armed for \(liveWindowSettled ? 1200 : 3000)ms (liveSettled=\(liveWindowSettled))")
+    }
     private func endLandingHold() { landingHoldUntil = .distantPast }
     /// Inside the hold and with nobody moving the list: land again, on the same row. False otherwise,
     /// so the caller does its ordinary work.
     @discardableResult
-    private func reassertLandingIfHeld() -> Bool {
+    private func reassertLandingIfHeld(caller: String = #function) -> Bool {
         guard didFirstLand, Date() < landingHoldUntil, !isDisappearing,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return false }
+        let before = collectionView.contentOffset.y
         reapplyLanding()
+        let after = collectionView.contentOffset.y
+        if abs(after - before) > 0.5 {
+            reopenLog("hold re-landed from \(caller): y \(String(format: "%.1f", before)) -> \(String(format: "%.1f", after))")
+        }
         return true
     }
     /// The same `perform(.initialPosition)` the first land used, on the row and offset it landed with.
@@ -4212,6 +4270,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if didChangeInsets {
                 let keep = collectionView.contentOffset
                 RxTrace.log("updateInsets top \(oldInsets.top)->\(newInsets.top) bottom \(oldInsets.bottom)->\(newInsets.bottom) y=\(keep.y)")
+                reopenLog("insets top \(oldInsets.top)->\(newInsets.top) bottom \(oldInsets.bottom)->\(newInsets.bottom) y=\(keep.y) held=\(Date() < landingHoldUntil) appeared=\(isViewCompletelyAppeared)")
                 collectionView.contentInset = newInsets
                 if collectionView.contentOffset != keep { collectionView.setContentOffset(keep, animated: false) }
             }
@@ -4365,6 +4424,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let clearanceChange = bottom - previous
             if abs(clearanceChange) > 0.5 {
                 let want = clampOffset(oldYOffset + clearanceChange)
+                reopenLog("MOVER composer clearance \(String(format: "%.1f", clearanceChange)) moves y \(String(format: "%.1f", collectionView.contentOffset.y)) -> \(String(format: "%.1f", want)) (hold over)")
                 if abs(collectionView.contentOffset.y - want) > 0.5 {
                     collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
                 }
