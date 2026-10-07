@@ -52,6 +52,12 @@ final class GroupCallSocial: ObservableObject {
     /// When a "<Name> muted you" note last arrived from the server. `GroupCallService` reads it to
     /// skip its own nameless "You were muted" for the same mute.
     private(set) var lastMutedByAt: Date?
+    /// Audit M-026, 2026-10-07: the room is in the SDK's QUICK reconnect. That mode never leaves
+    /// `.connected` (it is only reported through the start/complete reconnect events), so a network
+    /// loss showed no "Reconnecting…" for about 45 seconds, just a frozen call. The call stage and
+    /// the floating card read this beside `connectionState`. One source, kept here because this
+    /// object already watches the room for the whole call, whether or not the call screen is up.
+    @Published private(set) var quickReconnecting = false
 
     /// The picker row: thumbs up, red heart, tears of joy, surprised, clapping, party. Written as
     /// escapes so no editor or encoding on the way to the build machine can damage them.
@@ -134,6 +140,7 @@ final class GroupCallSocial: ObservableObject {
         if !raisedHands.isEmpty { raisedHands = [] }
         if myHandUp { myHandUp = false }
         if !reactions.isEmpty { reactions = [] }
+        if quickReconnecting { quickReconnecting = false }
     }
 
     // MARK: What the views call
@@ -150,8 +157,15 @@ final class GroupCallSocial: ObservableObject {
         // The same limit the others hold me to: past it they would drop it anyway, and showing it
         // only on my own screen would be a lie.
         guard Self.allow(&reactionStamps, myUid, limit: 3, per: 1) else { return }
-        show(Reaction(id: UUID(), uid: myUid, name: myName.isEmpty ? "You" : myName, emoji: emoji, at: Date()))
-        Task { _ = await self.publish(["t": "react", "e": emoji], to: nil) }
+        // Audit M-141, 2026-10-07: shown only once it has really gone out. It was drawn first and
+        // sent after, so a reaction sent while reconnecting showed as sent and reached nobody.
+        let session = self.session
+        let reaction = Reaction(id: UUID(), uid: myUid, name: myName.isEmpty ? "You" : myName,
+                                emoji: emoji, at: Date())
+        Task {
+            guard await self.publish(["t": "react", "e": emoji], to: nil), self.session == session else { return }
+            self.show(reaction)
+        }
     }
 
     func isHandRaised(_ uid: String) -> Bool {
@@ -233,6 +247,13 @@ final class GroupCallSocial: ObservableObject {
 
     private func show(_ reaction: Reaction) {
         var list = reactions
+        // Audit M-142, 2026-10-07: one row per sender. A new reaction replaces that person's last
+        // one instead of adding a row, so one participant can no longer keep the whole column full
+        // and push everyone else's reactions out.
+        for old in list where old.uid == reaction.uid {
+            reactionRemovals.removeValue(forKey: old.id)?.cancel()
+        }
+        list.removeAll { $0.uid == reaction.uid }
         list.append(reaction)
         if list.count > Self.maxReactions {
             let overflow = list.count - Self.maxReactions
@@ -365,6 +386,29 @@ final class GroupCallSocial: ObservableObject {
         clearCallState()
     }
 
+    /// Audit M-026, 2026-10-07: the SDK started a reconnect. A quick one stays `.connected`, so
+    /// this flag is the only sign of it (a full one also turns the room's state to `.reconnecting`).
+    fileprivate func reconnectStarted(session: Int) {
+        guard session == self.session, !quickReconnecting else { return }
+        quickReconnecting = true
+    }
+
+    /// Audit M-026 and M-086, 2026-10-07: the room is back after a blip (the quick reconnect's
+    /// complete event, or a full reconnect back to `.connected`; both can arrive, and running this
+    /// twice changes nothing). Packets sent during the blip are gone and others never heard my
+    /// hand change, so my hand is sent again; a hand whose owner left while I was away (their
+    /// "left" event never reached me) is taken down. Someone still here keeps theirs, and anyone
+    /// who joins after this greets me with their own as before.
+    fileprivate func reconnectCompleted(session: Int) {
+        guard session == self.session else { return }
+        if quickReconnecting { quickReconnecting = false }
+        guard let room, room.connectionState == .connected else { return }
+        let present = Set(room.remoteParticipants.values.compactMap { $0.identity?.stringValue })
+        let stale = raisedHands.filter { $0.uid != myUid && !present.contains($0.uid) }.map(\.uid)
+        for uid in stale { participantLeft(uid: uid, session: session) }
+        if myHandUp { queueHand(to: nil) }
+    }
+
     // MARK: Helpers
 
     /// Reliable, on our topic. False when it could not be sent (not connected yet, room gone).
@@ -408,11 +452,28 @@ final class GroupCallSocial: ObservableObject {
     /// on screen, and really an emoji. Without the last two checks a changed app could flash eight
     /// letters of its choosing on every phone in the call.
     private static func isEmoji(_ text: String) -> Bool {
-        let scalars = text.unicodeScalars
-        guard text.count == 1, scalars.count <= 8 else { return false }
-        // A lone digit, "#" or "*" counts as an emoji in the Unicode tables. It is not one here.
-        if scalars.count == 1, let only = scalars.first, only.isASCII { return false }
-        return scalars.contains { $0.properties.isEmoji }
+        let scalars = Array(text.unicodeScalars)
+        guard text.count == 1, scalars.count <= 8, let first = scalars.first else { return false }
+        // Audit M-145, 2026-10-07: every scalar must belong to an emoji, not just one of them. "Any
+        // scalar is an emoji" let through one emoji plus combining marks, or a digit plus a variation
+        // selector. Allowed: emoji scalars (skin tones and regional flags are emoji scalars), the
+        // zero-width joiner, the two variation selectors and the tag characters (subdivision flags).
+        // A digit, "#" or "*" only as a keycap (the base, an optional FE0F, then U+20E3).
+        if first.isASCII {
+            guard "0123456789#*".unicodeScalars.contains(first), scalars.count >= 2,
+                  scalars.last?.value == 0x20E3 else { return false }
+            return scalars.dropFirst().allSatisfy { $0.value == 0xFE0F || $0.value == 0x20E3 }
+        }
+        guard first.properties.isEmoji else { return false }
+        for s in scalars {
+            switch s.value {
+            case 0x200D, 0xFE0E, 0xFE0F, 0xE0020...0xE007F:
+                continue
+            default:
+                guard s.properties.isEmoji, !s.isASCII else { return false }
+            }
+        }
+        return true
     }
 
     /// A sliding window per sender. True = inside the limit (and counted).
@@ -490,11 +551,41 @@ private final class SocialRoomObserver: NSObject, RoomDelegate, @unchecked Senda
 
     func room(_ room: Room, didUpdateConnectionState connectionState: ConnectionState,
               from oldConnectionState: ConnectionState) {
-        guard connectionState == .disconnected else { return }
         let session = self.session
+        // Audit M-086, 2026-10-07: back from a full reconnect.
+        if connectionState == .connected, oldConnectionState == .reconnecting {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    GroupCallSocial.shared.reconnectCompleted(session: session)
+                }
+            }
+            return
+        }
+        guard connectionState == .disconnected else { return }
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 GroupCallSocial.shared.roomDisconnected(session: session)
+            }
+        }
+    }
+
+    /// Audit M-026, 2026-10-07: the quick reconnect is reported only through these two (it never
+    /// changes the connection state). The complete event also comes when a reconnect gives up;
+    /// `reconnectCompleted` then finds the room not connected and only clears the flag.
+    func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
+        let session = self.session
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                GroupCallSocial.shared.reconnectStarted(session: session)
+            }
+        }
+    }
+
+    func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
+        let session = self.session
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                GroupCallSocial.shared.reconnectCompleted(session: session)
             }
         }
     }

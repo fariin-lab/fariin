@@ -58,6 +58,8 @@ struct GroupCallStatusBanner: View {
     }
 
     private var item: Item? {
+        // Audit M-026, 2026-10-07: a quick reconnect is a reconnect too (the header says so now).
+        if stage.quickReconnecting { return nil }
         switch stage.connectionState {
         case .reconnecting:
             // The header's subtitle already says "Reconnecting…" (owner's header); a second line
@@ -104,6 +106,12 @@ struct GroupCallStatusBanner: View {
                 // The people the room hands me on (re)connect were already there: they are the new
                 // baseline, not a "5 people joined" notice on my own join.
                 if old != .connected { known = remotePeople() }
+            }
+        }
+        // Audit M-026, 2026-10-07: the quick reconnect is spoken too (its state stays .connected).
+        .onChange(of: stage.quickReconnecting) { _, on in
+            if on, stage.connectionState != .reconnecting {
+                AccessibilityNotification.Announcement("Reconnecting").post()
             }
         }
         // The whole tile, not only its id: a name or a photo that arrives a moment after the person
