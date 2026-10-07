@@ -678,6 +678,30 @@ struct CallsView: View {
     /// A link's id in the shared List selection. Prefixed so it can never collide with a call id.
     private func linkTag(_ l: SavedCallLink) -> String { "link:" + l.roomId }
 
+    /// ONE LIST IN TIME ORDER, links and calls together, newest first (owner, 2026-10-07: "when I
+    /// call someone that call is not appearing in the call list"). The links used to sit as a block
+    /// above the whole history, so a dozen links made that evening pushed every call off the screen.
+    /// The reference app lists a call link among the calls at the time it was made; so does this.
+    private enum CallsRow: Identifiable {
+        case link(SavedCallLink)
+        case run(CallRun)
+        var id: String {
+            switch self {
+            case .link(let l): return "link:" + l.roomId   // = linkTag, the List's selection id
+            case .run(let r): return r.id
+            }
+        }
+        var date: Date {
+            switch self {
+            case .link(let l): return l.createdAt
+            case .run(let r): return r.latest.date
+            }
+        }
+    }
+    private var mergedRows: [CallsRow] {
+        (shownLinks.map(CallsRow.link) + shownRuns.map(CallsRow.run)).sorted { $0.date > $1.date }
+    }
+
     /// A link row as the list holds it: pickable in Select mode, with its long-press menu. Its own
     /// function so the list's body stays small enough for the type checker.
     private func selectableLinkRow(_ link: SavedCallLink) -> some View {
@@ -692,6 +716,99 @@ struct CallsView: View {
             }
             .tag(linkTag(link))
             .contextMenu { linkMenu(link) }
+    }
+
+    /// A call row as the list holds it: the history row with its pick overlay, swipe and long-press
+    /// menu. Its own function so the list's body stays small enough for the type checker, and so a
+    /// link row and a call row can share one `ForEach` (see `mergedRows`).
+    private func runRow(_ run: CallRun) -> some View {
+        let call = run.latest
+        return historyRow(run)
+            // In edit mode the row's own buttons stayed live, so tapping the name or
+            // avatar pushed a profile and the round button dialled — instead of
+            // selecting the row. The chat list got this exact fix; this list didn't.
+            //
+            // allowsHitTesting, not disabled: disabled ALSO dims, and a greyed-out
+            // call list reads as switched off rather than ready to be picked from.
+            // Same fix, same reason, as the chat list one row type over.
+            .allowsHitTesting(!selecting)
+            .overlay {
+                if selecting {
+                    Color.clear.contentShape(Rectangle()).onTapGesture {
+                        toggleTick(run.id, in: $selection)
+                    }
+                }
+            }
+            .tag(run.id)
+            // ⚠️ THE HAIRLINE IS GONE, AND ITS ARGUMENT IS RECORDED because it was
+            // a good one at the time: all three references drew a rule here —
+            // Apple's Recents (77pt rows ruled from 76) and the reference app's
+            // own source — and it was inset 58 so it began where this row's text
+            // does. That was measured, not guessed. It is simply not what he
+            // wants any more, and his own chat list has drawn no rules for weeks.
+            //
+            // ⛔ NO RULES ON THIS LIST EITHER — owner, 2026-09-02: "on the call
+            // page remove lines". The chat list lost its separators on his word
+            // weeks ago and this one kept the pair it was given, so the two lists in
+            // one app disagreed about whether rows are divided. They do not divide
+            // rows anywhere now.
+            //
+            // ⚠️ THE LEADING GUIDE GOES WITH THEM. A 58pt inset on a rule that is
+            // never drawn is a number waiting to be wrong the day somebody turns
+            // them back on with a different avatar size.
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { deleteRun(run) } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .tint(.red)   // force red — the app's white tint was washing it out
+            }
+            // Long-press menu — every action is real.
+            // (Tick reposition lives in ChatRow; see chat list.)
+            // ⚠️ EVERY GLYPH CARRIES ITS OWN INK — `MenuIcon(ink:)`, never a bare
+            // `systemImage:`. A `.contextMenu` becomes a UIKit `UIMenu`, which tints
+            // its images with the presenting view's `tintColor`, and the app's
+            // `.tint(.primary)` is a SwiftUI value that never reaches it: white
+            // lettering, system-blue glyphs. See `MenuIcon.ink`.
+            .contextMenu {
+                if let info = call.adhoc {
+                    // A multi-person call has no one chat to open; voice and video start
+                    // a new call with the same people.
+                    Button { info.callAgain(video: false) } label: {
+                        Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) }
+                    }
+                    .disabled(!callsEnabled || GroupCallService.shared.isActive)
+                    Button { info.callAgain(video: true) } label: {
+                        Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) }
+                    }
+                    .disabled(!callsEnabled || GroupCallService.shared.isActive)
+                } else {
+                    Button {
+                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
+                    } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
+                    .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
+                    Button {
+                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
+                    } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
+                    .disabled(!callsEnabled)
+                    Button {
+                        AppRouter.shared.pendingChatName = call.name
+                        AppRouter.shared.pendingChatPhoto = call.photoUrl
+                        AppRouter.shared.pendingChatId = call.cid
+                    } label: {
+                        Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat", ink: .label) }
+                    }
+                }
+                Button {
+                    withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
+                } label: { Label { Text("Select") } icon: { MenuIcon(system: "checkmark.circle", ink: .label) } }
+                Divider()
+                // Red, to match its own title — the one item whose ink is not the label's.
+                Button(role: .destructive) { deleteRun(run) } label: {
+                    Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
+                }
+            }
     }
 
     /// Long-press menu on a link row: the same four items, in the same order, as a call row.
@@ -802,9 +919,15 @@ struct CallsView: View {
                         // steps aside while rows are being picked; the links stay, and can be picked
                         // and deleted with the calls (owner, 2026-10-05).
                         if !selecting { createLinkRow }
-                        ForEach(shownLinks) { link in selectableLinkRow(link) }
-                        // The empty states live INSIDE the list now, so the create row above them is
-                        // always there, even before the first call.
+                        // Links and calls in ONE time-ordered list; see `mergedRows` for why.
+                        ForEach(mergedRows) { row in
+                            switch row {
+                            case .link(let link): selectableLinkRow(link)
+                            case .run(let run): runRow(run)
+                            }
+                        }
+                        // The empty states live INSIDE the list, under whatever links there are, so
+                        // the create row above them is always there, even before the first call.
                         if !repo.hasLoaded || repo.calls.isEmpty {
                             EmptyStateView(title: "No Calls Yet", icon: "phone",
                                            text: "Your call history will appear here.")
@@ -819,95 +942,6 @@ struct CallsView: View {
                             EmptyStateView(title: "No Missed Calls", icon: "phone",
                                            text: "Missed calls will appear here.")
                                 .callsPlaceholderRow()
-                        }
-                        ForEach(shownRuns) { run in
-                            let call = run.latest
-                            historyRow(run)
-                            // In edit mode the row's own buttons stayed live, so tapping the name or
-                            // avatar pushed a profile and the round button dialled — instead of
-                            // selecting the row. The chat list got this exact fix; this list didn't.
-                            //
-                            // allowsHitTesting, not disabled: disabled ALSO dims, and a greyed-out
-                            // call list reads as switched off rather than ready to be picked from.
-                            // Same fix, same reason, as the chat list one row type over.
-                            .allowsHitTesting(!selecting)
-                            .overlay {
-                                if selecting {
-                                    Color.clear.contentShape(Rectangle()).onTapGesture {
-                                        toggleTick(run.id, in: $selection)
-                                    }
-                                }
-                            }
-                            .tag(run.id)
-                            // ⚠️ THE HAIRLINE IS GONE, AND ITS ARGUMENT IS RECORDED because it was
-                            // a good one at the time: all three references drew a rule here —
-                            // Apple's Recents (77pt rows ruled from 76) and the reference app's
-                            // own source — and it was inset 58 so it began where this row's text
-                            // does. That was measured, not guessed. It is simply not what he
-                            // wants any more, and his own chat list has drawn no rules for weeks.
-                            //
-                            // ⛔ NO RULES ON THIS LIST EITHER — owner, 2026-09-02: "on the call
-                            // page remove lines". The chat list lost its separators on his word
-                            // weeks ago and this one kept the pair it was given, so the two lists in
-                            // one app disagreed about whether rows are divided. They do not divide
-                            // rows anywhere now.
-                            //
-                            // ⚠️ THE LEADING GUIDE GOES WITH THEM. A 58pt inset on a rule that is
-                            // never drawn is a number waiting to be wrong the day somebody turns
-                            // them back on with a different avatar size.
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) { deleteRun(run) } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                .tint(.red)   // force red — the app's white tint was washing it out
-                            }
-                            // Long-press menu — every action is real.
-                            // (Tick reposition lives in ChatRow; see chat list.)
-                            // ⚠️ EVERY GLYPH CARRIES ITS OWN INK — `MenuIcon(ink:)`, never a bare
-                            // `systemImage:`. A `.contextMenu` becomes a UIKit `UIMenu`, which tints
-                            // its images with the presenting view's `tintColor`, and the app's
-                            // `.tint(.primary)` is a SwiftUI value that never reaches it: white
-                            // lettering, system-blue glyphs. See `MenuIcon.ink`.
-                            .contextMenu {
-                                if let info = call.adhoc {
-                                    // A multi-person call has no one chat to open; voice and video start
-                                    // a new call with the same people.
-                                    Button { info.callAgain(video: false) } label: {
-                                        Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) }
-                                    }
-                                    .disabled(!callsEnabled || GroupCallService.shared.isActive)
-                                    Button { info.callAgain(video: true) } label: {
-                                        Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) }
-                                    }
-                                    .disabled(!callsEnabled || GroupCallService.shared.isActive)
-                                } else {
-                                    Button {
-                                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
-                                    } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
-                                    .disabled(!callsEnabled)   // 2026-09-24 audit: already on a call
-                                    Button {
-                                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
-                                    } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
-                                    .disabled(!callsEnabled)
-                                    Button {
-                                        AppRouter.shared.pendingChatName = call.name
-                                        AppRouter.shared.pendingChatPhoto = call.photoUrl
-                                        AppRouter.shared.pendingChatId = call.cid
-                                    } label: {
-                                        Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat", ink: .label) }
-                                    }
-                                }
-                                Button {
-                                    withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
-                                } label: { Label { Text("Select") } icon: { MenuIcon(system: "checkmark.circle", ink: .label) } }
-                                Divider()
-                                // Red, to match its own title — the one item whose ink is not the label's.
-                                Button(role: .destructive) { deleteRun(run) } label: {
-                                    Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
-                                }
-                            }
                         }
                     }
                     .listStyle(.plain)
