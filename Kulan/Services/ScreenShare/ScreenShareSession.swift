@@ -33,6 +33,11 @@ final class ScreenShareSession {
     private let lock = NSLock()
     private var receiver: KSBroadcastReceiver?   // under `lock`
     private var cancelled = false                // under `lock`, mirrors `finished` for the task
+    // M-105, the frame-rate gate, shared by the receive loop and the delayed flush.
+    private let gateLock = NSLock()
+    private var lastAccepted: CFTimeInterval = 0 // under `gateLock`
+    private var pendingImage: KSBroadcastReceiver.EncodedImage?   // under `gateLock`
+    private let deliverLock = NSLock()           // one decode / onFrame at a time
     // Main only.
     private var finished = false
     private var startedFired = false
@@ -80,20 +85,60 @@ final class ScreenShareSession {
             if alreadyCancelled { receiver.close(); return }
 
             let decoder = KSBroadcastImageDecoder()
-            var lastAccepted: CFTimeInterval = 0
             while let image = try await receiver.nextImage() {
                 if Task.isCancelled { break }
+                // Audit M-105, 2026-10-07: a frame inside the 60ms gate used to be thrown away. When it
+                // was the LAST change before the screen went still, nothing newer ever came (ReplayKit
+                // sends nothing for a static screen) and the far side kept the older picture for good,
+                // the capturer's once-a-second repeat re-sending that stale frame. The newest gated
+                // frame is now kept and sent when the gate opens, still without decoding the skipped ones.
                 let now = CACurrentMediaTime()
-                guard now - lastAccepted >= Self.minFrameInterval else { continue }
+                gateLock.lock()
+                let wait = Self.minFrameInterval - (now - lastAccepted)
+                if wait > 0 {
+                    let scheduleFlush = pendingImage == nil
+                    pendingImage = image
+                    gateLock.unlock()
+                    if scheduleFlush { flushPending(after: wait, decoder: decoder) }
+                    continue
+                }
                 lastAccepted = now
-                guard let buffer = try? decoder.decode(image.jpeg) else { continue }
-                onFrame(buffer, image.rotation)
-                DispatchQueue.main.async { [weak self] in self?.frameArrived() }
+                pendingImage = nil
+                gateLock.unlock()
+                deliver(image, decoder: decoder)
             }
         } catch {
             // Cancelled by stop(), or the socket failed. Either way the share is over.
         }
         DispatchQueue.main.async { [weak self] in self?.finish() }
+    }
+
+    /// M-105: decode and hand on one frame. Serialised, so the loop and a delayed flush never decode
+    /// at once (one decoder) and frames reach `onFrame` in order. Nothing goes out after `stop()`.
+    private func deliver(_ image: KSBroadcastReceiver.EncodedImage, decoder: KSBroadcastImageDecoder) {
+        deliverLock.lock()
+        defer { deliverLock.unlock() }
+        lock.lock()
+        let stopped = cancelled
+        lock.unlock()
+        guard !stopped, let buffer = try? decoder.decode(image.jpeg) else { return }
+        onFrame(buffer, image.rotation)
+        DispatchQueue.main.async { [weak self] in self?.frameArrived() }
+    }
+
+    /// M-105: once the gate opens, send the newest frame that arrived while it was shut, unless the
+    /// loop has already sent a newer one (it clears `pendingImage` when it does).
+    private func flushPending(after wait: CFTimeInterval, decoder: KSBroadcastImageDecoder) {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, wait) * 1_000_000_000))
+            guard let self else { return }
+            self.gateLock.lock()
+            let image = self.pendingImage
+            self.pendingImage = nil
+            if image != nil { self.lastAccepted = CACurrentMediaTime() }
+            self.gateLock.unlock()
+            if let image { self.deliver(image, decoder: decoder) }
+        }
     }
 
     private func frameArrived() {
