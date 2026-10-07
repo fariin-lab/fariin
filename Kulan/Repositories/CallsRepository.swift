@@ -106,6 +106,10 @@ final class CallsRepository {
     var loading = false
     var hasLoaded = false   // false until the first load finishes -> drives the skeleton
     private var lastLoadedAt: Date?
+    /// audit M-090, 2026-10-07: a forced load that arrived while another was running used to be
+    /// dropped, so the post-call refresh could publish the row as it was BEFORE the call's final
+    /// write. Now it is remembered here and the load runs once more when the current one ends.
+    private var reloadRequested = false
 
     /// Bumped by reset(). A load that was already in flight when the account changed must NOT
     /// publish its results afterwards — it would repaint the previous account's call log for the
@@ -118,6 +122,7 @@ final class CallsRepository {
         calls = []
         hasLoaded = false
         loading = false
+        reloadRequested = false
         lastLoadedAt = nil
         HiddenCalls.clear()   // the Calls tab's own hidden set is account-scoped too
     }
@@ -128,7 +133,10 @@ final class CallsRepository {
         if !force, hasLoaded, let last = lastLoadedAt, Date().timeIntervalSince(last) < 30 { return }
         // Atomically claim the load so two concurrent calls can't both fan out N queries.
         let proceed = await MainActor.run { () -> Bool in
-            if loading { return false }
+            if loading {
+                if force { reloadRequested = true }   // audit M-090: run again after, never drop it
+                return false
+            }
             loading = true
             return true
         }
@@ -146,9 +154,21 @@ final class CallsRepository {
         Task { try? await Task.sleep(nanoseconds: 8_000_000_000)
             await MainActor.run { if !self.hasLoaded { self.hasLoaded = true; self.loading = false } } }
 
-        let convSnap = try? await database.collection("conversations")
-            .whereField("users", arrayContains: me).getDocuments()
-        let convs = (convSnap?.documents ?? []).map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
+        // audit M-090, 2026-10-07: a thrown query is NOT an empty history. `try?` made the two the
+        // same, so a weak network published "No calls", zeroed the badge, and the 30 s TTL then
+        // protected the empty list. On a failure the list on screen stays as it was.
+        guard let convSnap = try? await database.collection("conversations")
+            .whereField("users", arrayContains: me).getDocuments() else {
+            let again = await MainActor.run { () -> Bool in
+                guard self.generation == myGeneration else { return false }
+                self.loading = false; self.hasLoaded = true
+                defer { self.reloadRequested = false }
+                return self.reloadRequested
+            }
+            if again { await load(force: true) }
+            return
+        }
+        let convs = convSnap.documents.map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
             // A silently blocked contact's activity is hidden everywhere else — frozen previews, no
             // unread badges, no reordering — but their timed-out call still wrote a shared record,
             // so the Calls tab showed "Missed call" and badged it red (audit).
@@ -161,30 +181,24 @@ final class CallsRepository {
         // Fetch every chat's call records CONCURRENTLY (was sequential = N round-trips in
         // series). Each task builds its own CallEntry list off-main; results merged after.
         var all: [CallEntry] = []
-        await withTaskGroup(of: [CallEntry].self) { group in
+        // audit M-090: the chats whose query failed keep the rows already on screen (below).
+        var failedCids: Set<String> = []
+        await withTaskGroup(of: (String, [CallEntry]?).self) { group in
             for c in convs {
                 group.addTask {
                     let other = c.otherUid(me), name = c.name(for: me), photo = c.photoUrl(for: me)
                     guard let snap = try? await database.collection("conversations").document(c.id)
                         .collection("messages").whereField("type", isEqualTo: "call").getDocuments()
-                    else { return [] }
-                    return snap.documents.map { d in
-                        let data = d.data()
-                        let ts = data["createdAt"] as? Timestamp
-                        return CallEntry(
-                            id: d.documentID, cid: c.id,
-                            name: name, photoUrl: photo, otherUid: other,
-                            callerUid: data["callerUid"] as? String ?? "",
-                            outcome: data["callOutcome"] as? String ?? "answered",
-                            video: data["callVideo"] as? Bool ?? false,
-                            durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
-                            date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
-                    }
+                    else { return (c.id, nil) }
+                    return (c.id, Self.entries(snap.documents, cid: c.id, name: name, photo: photo, other: other))
                 }
             }
-            for await chunk in group { all.append(contentsOf: chunk) }
+            for await (cid, chunk) in group {
+                if let chunk { all.append(contentsOf: chunk) } else { failedCids.insert(cid) }
+            }
         }
-        let adhocInfos = ((try? await adhocSnap)?.documents ?? [])
+        let adhocResult = try? await adhocSnap
+        let adhocInfos = (adhocResult?.documents ?? [])
             .compactMap { AdhocCallInfo(id: $0.documentID, data: $0.data(with: .estimate)) }
         // The title comes from GroupCallService, which lives on the main actor.
         let adhocEntries = await MainActor.run {
@@ -193,12 +207,65 @@ final class CallsRepository {
             }
         }
         all.append(contentsOf: adhocEntries)
-        all.removeAll { HiddenCalls.isHidden($0.id) }   // locally deleted entries stay gone
-        all.sort { $0.date > $1.date }
-        await MainActor.run {
+        let loaded = all, failed = failedCids, adhocFailed = adhocResult == nil
+        let again = await MainActor.run { () -> Bool in
             // The account changed while this was in flight → drop the results on the floor.
+            guard self.generation == myGeneration else { return false }
+            var merged = loaded
+            // audit M-090: what could not be read this time stays as it was, instead of vanishing.
+            if !failed.isEmpty { merged += self.calls.filter { $0.adhoc == nil && failed.contains($0.cid) } }
+            if adhocFailed { merged += self.calls.filter { $0.adhoc != nil } }
+            merged.removeAll { HiddenCalls.isHidden($0.id) }   // locally deleted entries stay gone
+            merged.sort { $0.date > $1.date }
+            self.calls = merged; self.loading = false; self.hasLoaded = true
+            // A partial read is not a fresh list: leave the TTL open so the next visit tries again.
+            if failed.isEmpty, !adhocFailed { self.lastLoadedAt = Date() }
+            defer { self.reloadRequested = false }
+            return self.reloadRequested
+        }
+        if again { await load(force: true) }
+    }
+
+    /// One chat's call rows as history entries (shared by the full load and the post-call refresh).
+    private static func entries(_ docs: [QueryDocumentSnapshot], cid: String,
+                                name: String, photo: String?, other: String) -> [CallEntry] {
+        docs.map { d in
+            let data = d.data()
+            let ts = data["createdAt"] as? Timestamp
+            return CallEntry(
+                id: d.documentID, cid: cid,
+                name: name, photoUrl: photo, otherUid: other,
+                callerUid: data["callerUid"] as? String ?? "",
+                outcome: data["callOutcome"] as? String ?? "answered",
+                video: data["callVideo"] as? Bool ?? false,
+                durationSec: (data["callDuration"] as? NSNumber)?.intValue ?? 0,
+                date: ts?.dateValue() ?? Date(timeIntervalSince1970: 0))
+        }
+    }
+
+    /// audit M-150, 2026-10-07: the end of a 1:1 call. Every call end ran a FULL load, one query per
+    /// chat downloading every call row ever made, when only this one chat's rows can have changed.
+    /// Now just that chat is re-read and swapped in. Falls back to the full load when the list has
+    /// no row for this chat yet (its name and photo come from there), or a load is already running
+    /// (the forced load then queues a re-run, see `reloadRequested`).
+    func refreshAfterCall(cid: String) async {
+        let known: CallEntry? = await MainActor.run {
+            (hasLoaded && !loading) ? calls.first(where: { $0.cid == cid && $0.adhoc == nil }) : nil
+        }
+        guard let known else { await load(force: true); return }
+        let myGeneration = await MainActor.run { generation }
+        guard let snap = try? await db.collection("conversations").document(cid)
+            .collection("messages").whereField("type", isEqualTo: "call").getDocuments() else { return }
+        let fresh = Self.entries(snap.documents, cid: cid, name: known.name,
+                                 photo: known.photoUrl, other: known.otherUid)
+            .filter { !HiddenCalls.isHidden($0.id) }
+        await MainActor.run {
             guard self.generation == myGeneration else { return }
-            self.calls = all; self.loading = false; self.hasLoaded = true; self.lastLoadedAt = Date()
+            // A full load started meanwhile will publish this chat too, after it ends.
+            guard !self.loading else { self.reloadRequested = true; return }
+            var merged = self.calls.filter { !($0.cid == cid && $0.adhoc == nil) } + fresh
+            merged.sort { $0.date > $1.date }
+            self.calls = merged
         }
     }
 
