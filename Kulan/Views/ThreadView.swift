@@ -1916,7 +1916,11 @@ struct ThreadView: View {
             if groupCallActive {
                 GroupCallJoinBar(video: groupCallVideo) {
                     InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
-                    Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo) }
+                    // audit M-059, 2026-10-07: Join only joins. A stale bar (the call ended a moment
+                    // ago) used to start a brand-new call that rang the whole group again; with
+                    // `requireLive` an ended call is refused with "Call ended" instead. Only the
+                    // Call button creates.
+                    Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo, requireLive: true) }
                 }
             }
         }
