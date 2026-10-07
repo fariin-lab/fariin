@@ -89,15 +89,37 @@ struct MediaGalleryView: View {
             NavBarNoHairline()
             NavBarStyle(style: style)
         }
+        // Re-ask the phone when the page appears and every time the app comes back to the front,
+        // which is the moment after any appearance switch made in Control Centre or in Settings.
+        .onAppear { phoneStyle = Self.phoneStyleNow() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            phoneStyle = Self.phoneStyleNow()
+        }
+    }
+
+    /// What the phone is set to, held as state so the page redraws when it changes (owner,
+    /// 2026-10-07: after a dark/light switch the title sat black on a black page and the bar kept
+    /// its light track). A plain computed read could not follow the switch: nothing in this subtree
+    /// changes when the phone's style does, because the profile pins the scheme, so the body was
+    /// never asked again. Refreshed by `barHelpers`.
+    @State private var phoneStyle: UIUserInterfaceStyle = MediaGalleryView.phoneStyleNow()
+
+    /// The key window's trait, from whichever scene is up. The old read asked only a
+    /// `.foregroundActive` scene, and during a Control Centre switch the app is `.foregroundInactive`,
+    /// so it found nothing and answered "light" on a dark phone. Any connected scene answers now.
+    private static func phoneStyleNow() -> UIUserInterfaceStyle {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive }
+            ?? scenes.first { $0.activationState == .foregroundInactive }
+            ?? scenes.first
+        if let style = scene?.keyWindow?.traitCollection.userInterfaceStyle, style != .unspecified { return style }
+        if let style = scene?.windows.first?.traitCollection.userInterfaceStyle, style != .unspecified { return style }
+        return scene?.traitCollection.userInterfaceStyle ?? .light
     }
 
     private var pageScheme: ColorScheme {
         if let fixed = AppAppearance(rawValue: appearanceRaw)?.colorScheme { return fixed }
-        let style = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }?
-            .keyWindow?.traitCollection.userInterfaceStyle
-        return style == .dark ? .dark : .light
+        return phoneStyle == .dark ? .dark : .light
     }
     @Environment(\.dismiss) private var dismiss
     // Same zoom hero as the profile photo / chat bubbles: the viewer grows out of the tapped
