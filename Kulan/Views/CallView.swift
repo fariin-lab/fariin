@@ -822,7 +822,14 @@ struct CallContainer<Content: View>: View {
 
     private var isActive: Bool {
         switch call.state {
-        case .outgoing, .active, .reconnecting, .ended: return true
+        case .outgoing, .active, .reconnecting: return true
+        // Audit M-012, 2026-10-07: `.ended` counts only for a call this phone was already SHOWING,
+        // on the cover or on the card. Keyed on state alone, a callee who never answered (the caller
+        // cancelled, or it rang out) had the black call cover hard-cut over whatever they were doing
+        // for the 1s end label, with the caller's wording ("Couldn't reach them") and the keyboard
+        // dropped. A call that was on screen keeps its end label exactly as before. The service's end
+        // path is untouched; this only decides whether the root puts anything up for it.
+        case .ended: return coverUp || call.minimized
         default: return false
         }
     }
@@ -1244,6 +1251,9 @@ struct FloatingCallWindow: View {
                             }
                     )
                     .onTapGesture {
+                        // Audit M-146, 2026-10-07: the card stays up for the 1s end label, and a tap in
+                        // that second grew a dead call back to full screen. Over is over: ignored.
+                        guard call.state != .ended, call.state != .idle else { return }
                         // The reference app's 0.2s grow out of the card (`CallPipMorph`).
                         CallPipMorph.restore { call.minimized = false }
                     }
