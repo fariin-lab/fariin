@@ -217,6 +217,9 @@ struct CallLobbyView: View {
             .frame(maxWidth: .infinity, minHeight: 48)
             // Liquid Glass pills (owner, 2026-10-07): dark-tinted glass for Leave, green glass for Join.
             .liquidGlass(Capsule(), interactive: true, tint: Color.black.opacity(0.35))
+            // The whole pill takes the tap, not only the word (owner, 2026-10-07: Close answered only
+            // on its text). Glass is not a hit surface the way the old filled capsule was.
+            .contentShape(Capsule())
     }
 
     /// Green with the word, or with a spinner while the join runs: the reference app spins its
@@ -233,6 +236,7 @@ struct CallLobbyView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 48)
         .liquidGlass(Capsule(), interactive: true, tint: Color.green)
+        .contentShape(Capsule())
     }
 
     /// The link was revoked or never existed: say so, and the only way on is out. The reference
@@ -294,16 +298,34 @@ struct CallLobbyView: View {
     private func load() async {
         // A note left from an earlier visit is not this visit's news.
         if service.lobbyError != nil { service.lobbyError = nil }
-        // The camera first, so the picture is up while the name loads.
+        // ⛔ THE LINK'S OWN DOCUMENT FIRST (owner, 2026-10-07: a revoked link opened a normal lobby
+        // with Join, and only seconds later said it was gone, once the server's slower answer came).
+        // The document is one fast read, often from the cache, and it already says revoked, expired
+        // or missing. The creator keeps the server's say: a revoked link's call can still be running
+        // and the server lets its creator back in.
+        guard let k = CallLinkKey(text: lobby.key) else { return }
+        let doc = try? await Firestore.firestore().collection("callLinks").document(k.roomId).getDocument()
+        let d = doc?.data()
+        let creator = (d?["creatorUid"] as? String) == service.myUid
+        let expired = (d?["expiresAt"] as? Timestamp).map { $0.dateValue() < Date() } ?? false
+        let dead = (doc != nil && d == nil) || (d?["revoked"] as? Bool == true) || expired
+        if dead, !creator, peek == nil {
+            peek = GroupCallService.LobbyPeek(title: "", count: 0, names: [], approval: false, video: true,
+                                              gone: true, full: false, iAmCreator: false)
+            return   // no camera for a screen that only says Close
+        }
+        // The camera, so the picture is up while the rest loads.
         if await GroupCallService.cameraAllowed() { cameraReady = true } else { cameraDenied = true }
         // The server's answer (`watchLink`) carries the name and the voice mark too. This read
         // stays for when the server is not reached: the link's own document still says both.
-        guard let k = CallLinkKey(text: lobby.key),
-              let d = try? await Firestore.firestore().collection("callLinks").document(k.roomId)
-                .getDocument().data() else { return }
+        guard let d else { return }
         if (peek?.title ?? "").isEmpty,
            let enc = d["encName"] as? String, !enc.isEmpty, let n = k.decryptName(enc), !n.isEmpty { title = n }
         if (d["video"] as? Bool) == false { voiceOnly = true }
+        // The join token ahead of the tap (owner, 2026-10-07: Join spun for seconds). Only where the
+        // join needs no approval: the server reads a token request on an approval link as a knock.
+        let approval = (d["restrictions"] as? String) == "adminApproval"
+        if creator || !approval { service.prefetchLinkToken(key: lobby.key) }
     }
 
     /// Asks the server about the link now and every 5s while this screen is up; `.task` cancels

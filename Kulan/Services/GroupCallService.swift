@@ -975,6 +975,23 @@ final class GroupCallService: ObservableObject {
         let iAmCreator: Bool
     }
 
+    /// A join token fetched while the pre-join screen is up (owner, 2026-10-07: Join spun for
+    /// seconds): the mint's cold start and its round trip are paid before the tap, so Join goes
+    /// straight to the room. Only asked for where the join needs no approval, because the server
+    /// reads a token request on an approval link as a knock at the door (the lobby decides that from
+    /// the link's document). Good for 90 of the token's 120 seconds; `connect` takes it once.
+    private var prefetchedLinkToken: (roomId: String, data: [String: Any], at: Date)?
+    func prefetchLinkToken(key: String) {
+        guard let k = CallLinkKey(text: key) else { return }
+        let roomId = k.roomId
+        if let p = prefetchedLinkToken, p.roomId == roomId, Date().timeIntervalSince(p.at) < 60 { return }
+        functions.httpsCallable("groupCallToken").call(["roomId": roomId, "link": true]) { [weak self] res, _ in
+            guard let self, let d = res?.data as? [String: Any],
+                  d["token"] is String, d["pending"] as? Bool != true else { return }
+            Task { @MainActor in self.prefetchedLinkToken = (roomId, d, Date()) }
+        }
+    }
+
     /// Wakes the token function while the pre-join screen is up, so Join does not wait on its cold
     /// start (owner, 2026-10-07: "after I tap Join it loads a long time"). Fire and forget; the
     /// server answers `{warm:true}` before doing anything (functions/index.js groupCallToken).
@@ -1043,9 +1060,16 @@ final class GroupCallService: ObservableObject {
         var isLinkRoom = false
         if case .link(_, _) = r { isLinkRoom = true }
         do {
-            let res = try await functions.httpsCallable("groupCallToken").call(payload)
+            let d: [String: Any]?
+            if case .link(let roomId, _) = r, let p = prefetchedLinkToken, p.roomId == roomId,
+               Date().timeIntervalSince(p.at) < 90 {
+                prefetchedLinkToken = nil
+                d = p.data   // fetched while the pre-join screen was up; see prefetchLinkToken
+            } else {
+                let res = try await functions.httpsCallable("groupCallToken").call(payload)
+                d = res.data as? [String: Any]
+            }
             guard gen == joinGeneration else { await abandonJoin(); return false }
-            let d = res.data as? [String: Any]
             if d?["pending"] as? Bool == true, case .link(let roomId, let key) = r {
                 beginWaiting(roomId: roomId, key: key, video: video)   // first: pending, never a beat of "not joined"
                 connecting = false
