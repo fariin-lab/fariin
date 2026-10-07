@@ -74,7 +74,9 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: call link join screen. (1) A revoked, expired or deleted link shows "no longer valid" at once, not after a few seconds. (2) Join on a link starts faster: the join pass is fetched while the screen is up. (3) Close, Leave and Join take the tap anywhere on the pill.
+            THIS BUILD: (1) Join on a call link: the call opens in the same screen, no Calls list in between, and the camera is on from the start on a video link. (2) Reopening a chat holds the restored spot still for the first second (the small jump). (3) Minimize: no flash back to full screen, one face instead of two. (4) Call Link sheet fits without scrolling, no header band. (5) Call link card: rounder corners, round Join Call button. (6) A chat whose timed messages all disappeared keeps its "disappearing messages" line in the chat list.
+
+            EARLIER (build 836): call link join screen. (1) A revoked, expired or deleted link shows "no longer valid" at once, not after a few seconds. (2) Join on a link starts faster: the join pass is fetched while the screen is up. (3) Close, Leave and Join take the tap anywhere on the pill.
 
             EARLIER (build 835): a call link in a chat shows a card with a video icon, "Kulan Call" and a Join Call button; tap the card or the button to open the join screen. Long press, reactions and double-tap work on it like any message. New call list photos are bigger (the Glowers size).
 
