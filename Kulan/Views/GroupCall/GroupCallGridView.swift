@@ -17,6 +17,14 @@ import LiveKit
 struct GroupCallGridView: View {
     @ObservedObject var stage: GroupCallStage
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Audit M-101, 2026-10-07: what a tile touching the top of the screen must keep its marks below.
+    @Environment(\.groupCallTopClearance) private var topClearance
+
+    /// The extra top room for a tile whose top edge is at `minY` (from the stage's top, which is the
+    /// screen's top), capped so a short tile keeps its marks inside itself, above its muted badge.
+    private func clearance(minY: CGFloat, height: CGFloat) -> CGFloat {
+        min(max(0, topClearance - minY), max(0, height - 64))
+    }
 
     /// What the strip takes from the grid's height: its own height less the grid's bottom inset, which
     /// the strip's 6pt top inset overlaps, so grid and strip are 6pt apart like any two tiles.
@@ -59,7 +67,8 @@ struct GroupCallGridView: View {
                 style: .alone,
                 isActiveSpeaker: false,
                 isPinned: false,
-                onTap: {}
+                onTap: {},
+                topClearance: clearance(minY: 0, height: size.height)
             )
             .frame(width: size.width, height: size.height)
             .transition(.opacity)
@@ -89,7 +98,8 @@ struct GroupCallGridView: View {
                             isActiveSpeaker: stage.activeSpeakerId == id,
                             isPinned: stage.pinnedId == id,
                             onTap: { stage.togglePin(id) },
-                            menu: stage.tileMenu(for: tile)
+                            menu: stage.tileMenu(for: tile),
+                            topClearance: clearance(minY: frame.minY, height: frame.height)
                         )
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)

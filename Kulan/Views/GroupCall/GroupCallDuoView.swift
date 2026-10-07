@@ -44,13 +44,15 @@ struct GroupCallDuoView: View {
     @State private var cornerTop = false
 
     /// Alone, the big feed is mine whatever `swapped` says (there is nobody to swap with).
+    /// Audit M-100, 2026-10-07: and without the corner tile (both cameras off) too. A swap made
+    /// earlier left MY photo large under the other person's name, with no tile to swap back.
     private var big: CallTile {
         guard let remote else { return local }
-        return swapped ? local : remote
+        return (swapped && showsTile) ? local : remote
     }
     private var small: CallTile? {
         guard let remote else { return nil }
-        return swapped ? remote : local
+        return (swapped && showsTile) ? remote : local
     }
     /// The live feeds, nil while a camera is off OR its track has not arrived yet (a camera marked
     /// on with no picture must show the photo, not a black screen).
@@ -72,6 +74,7 @@ struct GroupCallDuoView: View {
                 topScrim
                 tapSurface
                 bigPhoto
+                remoteMarks
                 if showsTile, let small {
                     tile(small, geo).zIndex(2)
                         .transition(.opacity)
@@ -146,6 +149,39 @@ struct GroupCallDuoView: View {
         }
     }
 
+    /// Audit M-080, 2026-10-07: the other person's muted and poor-network marks, the tiles' own
+    /// badges (`GroupCallBadge`). Two people had no way to see either: this screen drew neither.
+    /// Top-leading, under the header while it shows and under the status bar while it is away;
+    /// on the corner tile instead while the other person is the small picture.
+    @ViewBuilder
+    private var remoteMarks: some View {
+        if let remote, big.id == remote.id, remote.isMuted || remote.networkPoor {
+            marks(remote)
+                .padding(.top, insets.top + (chromeVisible ? 72 : 10))
+                .padding(.leading, 14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .allowsHitTesting(false)
+                .animation(.easeInOut(duration: 0.2), value: chromeVisible)
+                .transition(.opacity)
+        }
+    }
+
+    private func marks(_ t: CallTile) -> some View {
+        HStack(spacing: 6) {
+            if t.isMuted { GroupCallBadge(symbol: "mic.slash.fill", size: 28, glyph: 16) }
+            if t.networkPoor { GroupCallBadge(symbol: "wifi.exclamationmark", size: 22, glyph: 11) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(markWords(t))
+    }
+
+    private func markWords(_ t: CallTile) -> String {
+        var parts: [String] = [t.name]
+        if t.isMuted { parts.append("muted") }
+        if t.networkPoor { parts.append("poor connection") }
+        return parts.joined(separator: ", ")
+    }
+
     // MARK: - Corner tile
 
     private func tile(_ small: CallTile, _ geo: GeometryProxy) -> some View {
@@ -198,6 +234,12 @@ struct GroupCallDuoView: View {
                 .accessibilityAction { tileTapped() }
             // The flip glyph belongs to a LIVE local camera only (the 1:1 rule).
             if small.isLocal, smallTrack != nil { flipGlyph }
+        }
+        // Audit M-080, 2026-10-07: the other person's marks ride on the tile while they are small.
+        .overlay(alignment: .bottomLeading) {
+            if !small.isLocal, small.isMuted || small.networkPoor {
+                marks(small).padding(6).allowsHitTesting(false)
+            }
         }
     }
 

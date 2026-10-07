@@ -16,6 +16,10 @@ struct GroupCallFocusView: View {
     /// The pager's speaker page: the large tile follows the active speaker and nobody is pinned.
     var isSpeakerPage: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Audit M-101, 2026-10-07: the large tile's top is the stage inset from the top of the screen,
+    /// under the status bar and the header; its label and top marks move down by the rest.
+    @Environment(\.groupCallTopClearance) private var topClearance
+    private var labelDrop: CGFloat { max(0, topClearance - GroupCallMetrics.inset) }
 
     private var focusTile: CallTile? {
         stage.tiles.first { $0.id == focusId }
@@ -67,11 +71,13 @@ struct GroupCallFocusView: View {
                 // On the speaker page nobody is pinned yet, so the same tap pins this person.
                 withAnimation(GroupCallMotion.stage(reduceMotion: reduceMotion)) { stage.togglePin(tile.id) }
             },
-            menu: stage.tileMenu(for: tile)
+            menu: stage.tileMenu(for: tile),
+            topClearance: labelDrop
         )
         .clipShape(RoundedRectangle(cornerRadius: GroupCallMetrics.tileCorner, style: .continuous))
         .overlay(alignment: .topLeading) {
             viewingLabel(tile)
+                .padding(.top, labelDrop)
                 .animation(GroupCallMotion.fade, value: tile.isHandRaised)
         }
         .padding(.horizontal, GroupCallMetrics.inset)
