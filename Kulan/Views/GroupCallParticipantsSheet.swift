@@ -154,13 +154,19 @@ struct GroupCallParticipantsSheet: View {
                     }
                     .accessibilityHint("No one new can join with this link. The call continues.")
                 }
-                // No "Make a new link" INSIDE the call (2026-10-06): a link's room is
-                // `link_<roomId>`, so a new link opens a different, empty room and its
-                // joiners would never reach this call. It lives on the link's own page
-                // outside calls; here the host can Revoke.
+                // ⛔ A NEW LINK INSIDE THE CALL, BACK (owner, 2026-10-07: "I revoked the link,
+                // now there is no way for anyone to get in again"). It was removed on 2026-10-06
+                // because a new link opened a different, empty room. The server now carries this
+                // call's room over to the new link (`liveRoom`), so its joiners land here, and
+                // Share / Copy above hand out the new link from then on.
+                Button { makeNewLink() } label: {
+                    Label("Make a new link", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(makingLink)
+                .accessibilityHint("The old link stops working. People join this call with the new one.")
             } footer: {
                 if service.linkRevoked {
-                    Text("This link no longer works. No one new can join with it; the call continues.")
+                    Text("This link no longer works. Make a new link to let people join this call again.")
                 }
             }
         }

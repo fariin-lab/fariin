@@ -418,6 +418,9 @@ final class GroupCallService: ObservableObject {
         let fresh = try await CallLinkService.shared.regenerate(link)
         replacedLink = fresh
         linkRevoked = false
+        // People knocking on the NEW link: its requests live under its own id. The server leads the
+        // new link into this same call (`liveRoom`, functions/index.js linkLiveRoom), 2026-10-07.
+        if isLinkCreator { listenRequests(fresh.roomId) }
     }
 
     /// Not private: `GroupCallSocial` says "<Name> muted you" through it. Four seconds, the
@@ -925,7 +928,7 @@ final class GroupCallService: ObservableObject {
 
     /// Creator of a link call: let someone in, or turn them away.
     func answerRequest(uid: String, approve: Bool) async {
-        guard case .link(let roomId, _)? = activeRoom, isLinkCreator,
+        guard case .link(_, _)? = activeRoom, let roomId = currentLink?.roomId, isLinkCreator,
               let who = pendingRequests.first(where: { $0.uid == uid }) else { return }
         pendingRequests.removeAll { $0.uid == uid }
         do {
@@ -940,7 +943,7 @@ final class GroupCallService: ObservableObject {
     /// Creator of a link call: let everyone waiting in, or turn them all away (the reference app's
     /// "Approve all" / "Deny all"). One server call; a failure puts them back in the list.
     func answerAllRequests(approve: Bool) async {
-        guard case .link(let roomId, _)? = activeRoom, isLinkCreator, !pendingRequests.isEmpty else { return }
+        guard case .link(_, _)? = activeRoom, let roomId = currentLink?.roomId, isLinkCreator, !pendingRequests.isEmpty else { return }
         let before = pendingRequests
         pendingRequests = []
         do {

@@ -85,6 +85,7 @@ struct CallLobbyView: View {
             }
         }
         .task { service.warmJoin(); await load() }   // wake the token mint before Join is tapped
+        .task { if palette == nil, let url = me.photo { palette = await ProfilePalette.resolve(url: url) } }
         .task { await watchLink() }
         .onChange(of: runsPreview) { _, on in on ? preview.start() : preview.stop() }
         .onChange(of: service.lobbyError) { _, text in
@@ -103,13 +104,27 @@ struct CallLobbyView: View {
         }
     }
 
+    /// The colour the call screen takes from a photo (`ProfilePalette`), from the caches the avatar
+    /// already filled; `palette` brings it in when it was not cached yet.
+    @State private var palette: ProfilePalette?
+    private var lobbyColor: Color {
+        if let palette { return Color(palette.page) }
+        guard let url = me.photo, !url.isEmpty else { return .black }
+        if let warm = ProfilePalette.warm(url: url) { return Color(warm.page) }
+        if let shown = ProfilePhotoLoader.shared.cachedAvatar(url),
+           let p = ProfilePalette.now(shown, url: url) { return Color(p.page) }
+        return .black
+    }
+
     /// My camera, or my photo when it is off.
     @ViewBuilder private var backdrop: some View {
         if showsCamera {
             LobbyPreviewLayer(session: preview.session)
                 .ignoresSafeArea()
         } else {
-            TileBackdrop(photoUrl: me.photo).ignoresSafeArea()
+            // My profile colour, flat, the way the 1:1 call screen paints a voice call (owner,
+            // 2026-10-07: "use the profile colour, not a blur"). Black with no photo to read it from.
+            lobbyColor.ignoresSafeArea()
             AvatarView(name: me.name, photoUrl: me.photo, size: 120)
         }
     }
