@@ -126,6 +126,9 @@ final class LinkPreviewBubbleView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ p: BubbleBody.LinkPreview, plan: LinkPreviewPlan, tint: UIColor, cid: String) {
+        // The call card is rounder than a web preview (owner, 2026-10-07: "make the Kulan Call
+        // corners rounded, Apple's rounded corners"): 16pt continuous, the glyph marks the kind.
+        backing.layer.cornerRadius = plan.glyph != nil ? 16 : 12
         if let rect = plan.glyph {
             glyphCircle.isHidden = false
             glyphCircle.frame = rect
@@ -141,6 +144,7 @@ final class LinkPreviewBubbleView: UIView {
         if let rect = plan.join, let labelRect = plan.joinLabel, let attr = plan.joinAttr {
             joinButton.isHidden = false; joinLabel.isHidden = false
             joinButton.frame = rect
+            joinButton.layer.cornerRadius = rect.height / 2   // a capsule, the way the system's own buttons round now (owner, 2026-10-07)
             // The contact card's button recipe: the bubble's own text colour, faint, so it reads on
             // the blue bubble, a chat colour and the incoming grey alike.
             joinButton.backgroundColor = tint.withAlphaComponent(0.12)
