@@ -74,7 +74,9 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: a call link in a chat shows a card with a video icon, "Kulan Call" and a Join Call button; tap the card or the button to open the join screen. Long press, reactions and double-tap work on it like any message. New call list photos are bigger (the Glowers size).
+            THIS BUILD: call link join screen. (1) A revoked, expired or deleted link shows "no longer valid" at once, not after a few seconds. (2) Join on a link starts faster: the join pass is fetched while the screen is up. (3) Close, Leave and Join take the tap anywhere on the pill.
+
+            EARLIER (build 835): a call link in a chat shows a card with a video icon, "Kulan Call" and a Join Call button; tap the card or the button to open the join screen. Long press, reactions and double-tap work on it like any message. New call list photos are bigger (the Glowers size).
 
             EARLIER (build 834): YOUR REPORTS FROM 833. (1) Reopening a chat lands on the same spot with no jump. (2) Tapping a call link in a chat opens the join screen straight away, no "Open link?" and no browser. (3) Add people looks like the rest of the app. (4) Call Link sheet: X on the left, no Done, no border. (5) Group call minimized with your camera on: the small card shows your camera. (6) Tapping the small card grows the call back out of it. (7) Join on a call link is faster: the server is woken while the join screen is up.
 
