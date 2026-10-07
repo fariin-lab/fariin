@@ -122,16 +122,14 @@ struct AddPeopleSheet: View {
                 }
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Name, number, @username")
+                        prompt: "Name or username")   // the app's own wording (NewGroupView); there are no numbers here
             .safeAreaInset(edge: .bottom) { addButton }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // A plain title. The count lives on the members section, the way NewGroupView says
+                // "Members · N", not as a fraction under the title (owner, 2026-10-07).
                 ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text("Add people").font(.system(size: 17, weight: .semibold))
-                        Text("\(total)/\(Self.maxInCall)").font(.system(size: 13)).foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
+                    Text("Add people").font(.system(size: 17, weight: .semibold))
                 }
                 if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .topBarTrailing) { CloseXButton { dismiss() } }
@@ -170,6 +168,8 @@ struct AddPeopleSheet: View {
                 }
                 .padding(.vertical, 4)
             }
+        } header: {
+            sectionTitle(total >= Self.maxInCall ? "Members · \(total) max" : "Members · \(total)")
         }
     }
 
@@ -196,10 +196,11 @@ struct AddPeopleSheet: View {
                     }
                 }
                 Spacer(minLength: 8)
+                // The app's own tick (NewGroupView): the accent is white-or-black here, never a
+                // brand green (owner, 2026-10-07: "this page looks like the other app").
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22, weight: .light))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(on ? Color.white : Color.secondary, on ? Color.green : Color.secondary)
+                    .foregroundStyle(on ? Color.primary : Color.secondary)
                     .opacity(inCall ? 0.5 : 1)
             }
             .frame(minHeight: 44)
@@ -217,7 +218,7 @@ struct AddPeopleSheet: View {
         let rowH: CGFloat = 16
         return VStack(spacing: 0) {
             ForEach(letters, id: \.self) { l in
-                Text(l).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.green)
+                Text(l).font(.system(size: 11, weight: .semibold)).foregroundStyle(.primary)   // as NewChatView's index
                     .frame(width: 20, height: rowH)
             }
         }
@@ -238,12 +239,15 @@ struct AddPeopleSheet: View {
             dismiss()
             onAdd(picked)
         } label: {
-            Label(actionTitle, systemImage: "plus")
+            // The app's accent is white-or-black (Theme.accent), so the button is the inverse of the
+            // page: white with black lettering in dark mode, black with white in light. No brand
+            // green and no plus glyph (owner, 2026-10-07: "make it like my app").
+            Text(actionTitle)
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color(uiColor: .systemBackground))
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(Capsule().fill(Color.green.opacity(ready ? 1 : 0.4)))
+                .background(Capsule().fill(Color.primary.opacity(ready ? 1 : 0.35)))
         }
         .buttonStyle(.plain)
         .disabled(!ready)
