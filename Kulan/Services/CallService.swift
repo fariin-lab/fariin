@@ -122,6 +122,7 @@ final class CallService: NSObject {
                 restartRequestsSent = 0; restartRequestsSeen = 0
                 stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
+                callAudioLive = false
                 everMinimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 micDenied = false
@@ -337,6 +338,9 @@ final class CallService: NSObject {
     /// anything. See ChatService.recordCallRinging.
     private var liveRingRowId: String?
     private var ringbackPlayer: AVAudioPlayer?
+    /// CallKit has activated this call's audio session (`audioSessionActivated`). The ringback is
+    /// only ever started into a live session; a "ringing" signal that lands before this waits for it.
+    private var callAudioLive = false
     private var tonePlayer: AVAudioPlayer?       // busy / ended one-shot tones
     private var localAudioTrack: RTCAudioTrack?
     // Video (1:1). Each side controls its OWN camera independently: no
@@ -2019,31 +2023,42 @@ final class CallService: NSObject {
         }
     }
 
-    // Called by CallKit the instant it activates the audio session. The ringback starts at startCall
-    // (deliberate: immediate, the reference app-verified) but the session may not be live yet then — on some
-    // devices the early player is SILENT until this fires, on others it is already audible. The old
-    // unconditional stop+start covered the silent case but gave the audible case a hear-it, cut,
-    // hear-it-again stutter on every call (user report). RESUME, don't restart: an already-playing
-    // player is left alone; a silent/stalled one is nudged with play() on the same instance (no
-    // restart-from-zero blip); only a wedged player that refuses play() is rebuilt.
+    // Called by CallKit the instant it activates the audio session. The session may not be live at
+    // startCall: on some devices a player started early is SILENT until this fires, on others it is
+    // already audible, and the old unconditional stop+start gave the audible case a hear-it, cut,
+    // hear-it-again stutter (user report). So nothing is started before this point (see
+    // beginOutgoingMedia): the one start happens here, into a live session, from the top.
+    //
+    // ⛔ AND ONLY ONCE THE OTHER PHONE IS ACTUALLY RINGING (owner, 2026-10-07: "when I turn on the
+    // speaker the ringing sound starts"). The ringback had been playing through the earpiece from
+    // the first second of "Calling…", inaudible at arm's length, and the loudspeaker merely made it
+    // heard. Checked against the reference app's call audio source on 2026-10-07: while DIALING it
+    // plays one short connecting cue and nothing more; its looped ringback starts on REMOTE RINGING.
+    // The 2026-07-22 note that said the reference rings from the start was wrong. "Calling…" is
+    // quiet now; the ring begins when `ringingAt` lands (`calleeRinging`), started by whichever of
+    // the two, that signal or this activation, arrives second.
     func audioSessionActivated() {
         ringbackFallback?.invalidate(); ringbackFallback = nil
-        guard state == .outgoing else { return }   // ringback plays for the whole wait, not only once they ring
-        // The session is live NOW. Nothing was started before this point (see beginOutgoingMedia), so
-        // this is the FIRST and ONLY start: audible, from the top, with nothing to cut.
-        guard ringbackPlayer == nil else { return }
+        callAudioLive = true
+        startRingbackIfDue()
+    }
+
+    /// The one gate every ringback start goes through: an outgoing call whose other phone has
+    /// reported ringing, with no player already up.
+    private func startRingbackIfDue() {
+        guard state == .outgoing, calleeRinging, ringbackPlayer == nil else { return }
         startRingback()
     }
 
     /// Belt for the case CallKit never activates the session (activation failure, or a device that
-    /// simply does not call back): after a short wait, start the ringback anyway rather than leave the
-    /// caller in silence. Cancelled the moment a real activation arrives.
+    /// simply does not call back): a short wait after the other phone reports ringing, then the
+    /// ringback starts anyway rather than leave the caller in silence. Cancelled the moment a real
+    /// activation arrives. Armed by the `ringingAt` signal, not by the dial (see audioSessionActivated).
     private var ringbackFallback: Timer?
     private func armRingbackFallback() {
         ringbackFallback?.invalidate()
         ringbackFallback = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { [weak self] _ in
-            guard let self, state == .outgoing, ringbackPlayer == nil else { return }
-            startRingback()
+            self?.startRingbackIfDue()
         }
     }
 
@@ -2458,15 +2473,15 @@ final class CallService: NSObject {
 
     // The media half of startCall, split out so the TURN wait can sit between the mic prompt and here.
     private func beginOutgoingMedia(to uid: String, attempt: Int) {
-            // RINGBACK IS STARTED BY THE AUDIO SESSION, NOT HERE (2026-07-29). Starting it at this
-            // point plays into a session CallKit has not activated yet: on some devices that is silent,
-            // on others briefly audible — and every scheme that then corrected it on activation was
-            // either a stutter (stop+start) or a permanent silence (leave-a-"playing"-but-mute-player
-            // alone; AVAudioPlayer reports isPlaying = true even when the session was dead, which is the
-            // bug the user heard: one blip, then nothing for the rest of the call). One start, on a live
-            // session, is the only version with no failure mode. `armRingbackFallback` covers the case
-            // where activation never comes, so the caller can never sit in true silence either.
-            self.armRingbackFallback()
+            // RINGBACK IS STARTED BY THE AUDIO SESSION, NOT HERE (2026-07-29), AND NOT BEFORE THE
+            // OTHER PHONE RINGS (2026-10-07). Starting it at this point plays into a session CallKit
+            // has not activated yet: on some devices that is silent, on others briefly audible, and
+            // every scheme that then corrected it on activation was either a stutter (stop+start) or
+            // a permanent silence (leave-a-"playing"-but-mute-player alone; AVAudioPlayer reports
+            // isPlaying = true even when the session was dead, which is the bug the user heard: one
+            // blip, then nothing for the rest of the call). One start, on a live session, once
+            // `ringingAt` has landed, is the only version with no failure mode. See
+            // audioSessionActivated for the gate, and the fallback that covers an activation that never comes.
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
             self.mark("dialled")   // the caller's origin: everything on this side is measured from here
             let ref = self.db.collection("calls").document()
@@ -3492,11 +3507,13 @@ final class CallService: NSObject {
                 return
             }
 
-            // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…". (The ringback
-            // tone is already playing since startCall — the LABEL is the honest reachability signal.)
+            // Caller: the callee's device is now ringing → "Calling…" becomes "Ringing…", and THIS is
+            // when the ringback starts (the reference app rings on remote ringing, not on the dial;
+            // owner, 2026-10-07). Into the live session if CallKit has handed it over; otherwise a
+            // short fallback starts it anyway. Whichever of the two signals lands second does the start.
             if self.isCaller, d["ringingAt"] != nil, !self.calleeRinging, self.state == .outgoing {
                 self.calleeRinging = true
-                self.startRingback()   // no-op if already playing (guard); safety for CallKit restarts
+                if self.callAudioLive { self.startRingbackIfDue() } else { self.armRingbackFallback() }
             }
             // Caller: they TAPPED ACCEPT — flip to "Connecting…" and stop the ring immediately,
             // seconds before the SDP answer can arrive. The no-answer timeout is replaced by a
