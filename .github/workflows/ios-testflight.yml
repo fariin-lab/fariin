@@ -74,7 +74,9 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: Done now saves the username @V for the admin account.
+            THIS BUILD: (1) Joining a video call link opens straight on video: the join screen stays, with your picture, until the call's camera is live; the camera and mic start together and the connection is warmed while the join screen is up. (2) People sheet in a call: the link is shown, Add / Copy / Share in one row, one Revoke link that makes a new link at once, a mic button on each person to mute them, and Mute all. (3) Reopening a chat the first time after the app was in the background holds the spot still until the chat has finished loading. (4) Group Call Demo: no second copy of you, and the Scenarios and People buttons no longer close the demo.
+
+            EARLIER (build 840): Done saves the username @V for the admin account.
 
             EARLIER (build 839): (1) Chat bubbles no longer lose their colour over a wallpaper (the slice was measured before the bubble moved into place). (2) Group Call Demo: Settings, then the Demo chats section, then Group Call Demo (account @realwarya only): a simulated group call with a scenario panel and an event log, separate from real calls. (3) The admin account can take the username @V.
 
