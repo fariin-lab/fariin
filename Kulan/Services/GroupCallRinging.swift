@@ -239,7 +239,9 @@ final class GroupCallRinging {
                 // A group chat's call has no screen of its own outside the chat; the root layer
                 // shows it, as it does for multi-person calls.
                 service.presentsRoomScreen = true
-                await service.start(cid: r.roomId, title: r.callTitle, video: video)
+                // Audit M-059, 2026-10-07: answering a ring joins only a call that is still on; an
+                // ended one fails the join instead of restarting it and ringing the group again.
+                await service.start(cid: r.roomId, title: r.callTitle, video: video, requireLive: true)
             }
             guard self.ring?.uuid == r.uuid else { return }   // ended meanwhile
             if service.activeCid == r.roomId {

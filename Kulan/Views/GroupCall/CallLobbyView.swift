@@ -342,6 +342,9 @@ struct CallLobbyView: View {
 
     private func apply(_ seen: GroupCallService.LobbyPeek) {
         peek = seen
+        // Audit M-062, 2026-10-07: a pass fetched ahead of the tap must not outlive what the server
+        // now says. A link that is gone, or now asks for approval, drops it, so Join asks again.
+        if seen.gone || (seen.approval && !seen.iAmCreator) { service.dropPrefetchedLinkToken() }
         if !seen.title.isEmpty { title = seen.title }
         if !seen.video { voiceOnly = true }
     }
