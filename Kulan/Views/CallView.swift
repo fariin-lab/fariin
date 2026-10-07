@@ -1386,8 +1386,9 @@ struct FloatingCallWindow: View {
     // the shape the reference uses. Still ringing: ONE face, theirs, with the stage under it, which
     // is also what the reference does before somebody answers.
     // A voice call has no picture of its own, so the card says WHO you are on with instead of a
-    // phone glyph. Black panels, not coloured ones: this app's palette is black/white (Theme.accent
-    // is literally white-or-black) and a blue/peach card would belong to another app.
+    // phone glyph. On the person's own colour, the same one the full call screen paints: the card
+    // is that screen shrunk, and it went black on the way down (owner, 2026-10-07). Black only when
+    // there is no photo to take a colour from, which is the screen's rule too.
     @ViewBuilder private var voiceWindow: some View {
         if let stage = stageLabel {
             VStack(spacing: 10) {
@@ -1401,7 +1402,7 @@ struct FloatingCallWindow: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.white.opacity(0.06))
-            .background(Color.black)
+            .background(voiceCardColor)
         } else {
             VStack(spacing: 0) {
                 voicePanel(name: call.otherName, photoUrl: call.otherPhotoUrl,
@@ -1410,8 +1411,19 @@ struct FloatingCallWindow: View {
                 voicePanel(name: call.myName, photoUrl: call.myPhotoUrl,
                            avatar: 38, level: call.localLevel)
             }
-            .background(Color.black)
+            .background(voiceCardColor)
         }
+    }
+
+    /// The colour the full screen is showing for this person (`CallView.shownPalette`), read from the
+    /// same caches that screen has already filled by the time anyone can minimize it: the palette's
+    /// own, then the avatar loader's picture. Memory lookups only, safe in a body.
+    private var voiceCardColor: Color {
+        guard let url = call.otherPhotoUrl, !url.isEmpty else { return .black }
+        if let warm = ProfilePalette.warm(url: url) { return Color(warm.page) }
+        if let shown = ProfilePhotoLoader.shared.cachedAvatar(url),
+           let p = ProfilePalette.now(shown, url: url) { return Color(p.page) }
+        return .black
     }
 
     /// One person's half of the connected voice card.
