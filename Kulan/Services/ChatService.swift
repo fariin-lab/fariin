@@ -58,7 +58,17 @@ enum ChatService {
     }
 
     static func isValidHandle(_ h: String) -> Bool {
-        h.count >= Limits.usernameMinChars && h.count <= Limits.usernameMaxChars && h.allSatisfy { handleAllowed.contains($0) }
+        if h.lowercased() == ownerShortHandle { return true }   // @v, the admin's own name (server-enforced)
+        return h.count >= Limits.usernameMinChars && h.count <= Limits.usernameMaxChars && h.allSatisfy { handleAllowed.contains($0) }
+    }
+    /// The admin account's one-letter username (owner, 2026-10-07). Only the account that holds or
+    /// held @realwarya may claim it: the SERVER decides (`claimUsername`, OWNER_NAMES). Here it is
+    /// only let through the length checks so it can be looked up, linked and typed.
+    static let ownerShortHandle = "v"
+    /// Me: the admin account, under either of its names.
+    static var iAmOwnerAccount: Bool {
+        let h = (ProfileStore.shared.me?.handle ?? "").lowercased()
+        return h == "realwarya" || h == ownerShortHandle
     }
 
     /// Create (or touch) a 1:1 conversation. Only writes photo keys we actually have,

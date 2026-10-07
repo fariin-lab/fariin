@@ -76,7 +76,7 @@ enum DemoMode {
         return DemoStoryMedia.isAvailable
         #else
         guard DemoStoryMedia.isAvailable else { return false }
-        return (ProfileStore.shared.me?.handle ?? "").lowercased() == ownerHandle
+        return ChatService.iAmOwnerAccount   // either of the admin's names, @realwarya or @v
         #endif
     }
     /// The owner's handle, lowercased; the same one GlowDemo checks.

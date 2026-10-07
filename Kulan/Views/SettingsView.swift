@@ -2068,6 +2068,8 @@ struct UsernameEditView: View {
     @State private var claiming = false
 
     private var clean: String { ChatService.sanitizeHandle(draft) }
+    /// The admin account typing its one-letter name, @v (owner, 2026-10-07; the server decides).
+    private var ownerShortName: Bool { clean == ChatService.ownerShortHandle && ChatService.iAmOwnerAccount }
     private var unchanged: Bool { clean.lowercased() == handle.lowercased() }
 
     /// Letters still available. Never negative: `sanitizeHandle` truncates at the maximum.
@@ -2153,7 +2155,7 @@ struct UsernameEditView: View {
                     // longer looking at — and name and bio edits could not be saved at all until a
                     // username was retyped. There is no "remove username" outcome, so block it here
                     // where the field is still on screen (audit).
-                    .disabled(claiming || clean.count < Limits.usernameMinChars || status == .taken)
+                    .disabled(claiming || (clean.count < Limits.usernameMinChars && !ownerShortName) || status == .taken)
             }
         }
         // ⚠️ THE FOCUS WAITS FOR THE PRESENTATION TO LAND. Asking for it in `onAppear` means asking
@@ -2248,7 +2250,9 @@ struct UsernameEditView: View {
             withAnimation { status = .problem(problem) }
             return
         }
-        guard value.count >= Limits.usernameMinChars else { withAnimation { status = .quiet }; return }
+        guard value.count >= Limits.usernameMinChars || (value == ChatService.ownerShortHandle && ChatService.iAmOwnerAccount) else {
+            withAnimation { status = .quiet }; return
+        }
         guard value != lastAsked else { return }
 
         withAnimation { status = .checking }
