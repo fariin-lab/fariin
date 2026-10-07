@@ -98,8 +98,14 @@ final class CallService: NSObject {
                 // Back from .reconnecting: re-send "can they hear me". A mute write made while the
                 // link was down can be lost, and the other side's muted icon would stay wrong until
                 // the next toggle (owner audit 2026-10-06 #36). One write per recovery.
-                if oldValue == .reconnecting { broadcastMuteState() }
+                // Audit M-051, 2026-10-07: and on the FIRST entry from the ring when already muted or
+                // held. A mute tapped during "Calling..." could be written before the doc existed, or
+                // lost, and nothing sent it again, so the other side never saw it for the whole call.
+                if oldValue == .reconnecting
+                    || (oldValue != .active && (isMuted || isHeld)) { broadcastMuteState() }
                 if oldValue == .reconnecting, screenSharing { broadcastScreenState() }   // same reason
+                // Audit M-121, 2026-10-07: the camera signal too (a share's write above carries it).
+                if oldValue == .reconnecting, !screenSharing { broadcastCameraState() }
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 startHeartbeat()             // prove we're alive; detect a force-quit on the other side
@@ -135,6 +141,7 @@ final class CallService: NSObject {
                 everMinimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 micDenied = false
+                cameraDenied = false   // audit M-011
                 // ⚠️ RESET WITH EVERYTHING ELSE. A timeline left standing would measure the second
                 // call of a session from the first call's origin, which is worse than no measurement
                 // at all: the numbers still look like numbers.
@@ -1029,9 +1036,31 @@ final class CallService: NSObject {
         // waiting for .active would miss a backgrounding during the ring.
         observeLifecycleIfNeeded()
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-            guard granted, let self else { return }
+            guard let self else { return }
+            guard granted else {
+                DispatchQueue.main.async { self.cameraAccessDenied() }
+                return
+            }
             self.startCaptureIfWanted(front: nil)
         }
+    }
+
+    /// Audit M-011, 2026-10-07: camera access is off. Shown by the call screen as a one-line note
+    /// (`Allow camera access in Settings`); reset at .idle.
+    private(set) var cameraDenied = false
+
+    /// Audit M-011, 2026-10-07: the denied branch used to return silently, so the button stayed ON,
+    /// `cams` said true (seeded from the call type) and the other side got a black tile. Undo the
+    /// intent the same way a camera-off tap does, and say why. Main only.
+    private func cameraAccessDenied() {
+        guard inLiveCall, cameraOn, !screenSharing else { return }
+        cameraDenied = true
+        cameraOn = false
+        localVideoTrack?.isEnabled = false
+        if isLocalExpanded { isLocalExpanded = false }
+        CallKitManager.shared.updateHasVideo(false)
+        broadcastCameraState()
+        updateInCallScreenBehavior()
     }
 
     /// The ONE answer to "should the camera be capturing right now", checked by every path that can
@@ -1218,7 +1247,12 @@ final class CallService: NSObject {
     // track-enable + capture start/stop — NO renegotiation. Broadcast my state so the other side
     // shows/hides my video. No prompt: I only ever share MY OWN camera, which is my choice.
     private func setMyCamera(on: Bool) {
-        guard state == .active || state == .reconnecting else { return }
+        // Audit M-052, 2026-10-07: turning the camera OFF also works while a video call rings out.
+        // Off is always safe to honour (it only stops sending); on waits for the call, as before.
+        // The doc seeds `cams` from `cameraOn` when it is created, and broadcastCameraState covers
+        // a doc that already exists.
+        guard state == .active || state == .reconnecting || (state == .outgoing && !on) else { return }
+        if on { cameraDenied = false }   // audit M-011: a new try; a refusal sets it again
         // The share owns the track while it runs (the camera button is disabled then). Toggling here
         // would disable the track under the share, or announce cams=false over a live screen.
         guard !screenSharing else { return }
@@ -1301,13 +1335,25 @@ final class CallService: NSObject {
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
-    private func broadcastCameraState() {
+    private func broadcastCameraState(attempt: Int = 0) {
         guard let id = callId else { return }
         // What we are ACTUALLY sending, not what the user asked for. A camera held down by a capture
         // interruption or a weak link is producing nothing, and announcing it as on is what leaves the
         // other side staring at a frozen face instead of falling back to the avatar. The interruption
         // path already said that was the intent in its own comment; it was still sending `cameraOn`.
-        db.collection("calls").document(id).updateData(["cams.\(me)": camsSignal])
+        //
+        // Audit M-121, 2026-10-07: NOT FIRE-AND-FORGET any more, same rule as the mute signal. A lost
+        // write left the other side showing my camera wrong for the rest of the call. Retried a few
+        // times while it is the same live call and the value is still the one we meant; recovery
+        // from .reconnecting re-sends it too (see `state`).
+        let value = camsSignal
+        db.collection("calls").document(id).updateData(["cams.\(me)": value]) { [weak self] err in
+            guard let self, err != nil, attempt < 3 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.callId == id, self.inLiveCall, self.camsSignal == value else { return }
+                self.broadcastCameraState(attempt: attempt + 1)
+            }
+        }
     }
 
     /// The `cams.<me>` value: what my video is ACTUALLY carrying. True for the length of a screen
