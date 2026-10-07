@@ -61,6 +61,17 @@ struct MainShell: View {
     private var missedBadge: Int {
         callsRepo.calls.filter { $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt }.count
     }
+    /// audit M-089, 2026-10-07: the badge only refreshed on my own calls (the history has no
+    /// listener), so a call missed while the app slept never badged until a relaunch.
+    @Environment(\.scenePhase) private var scenePhase
+    /// audit M-089, 2026-10-07: "seen" is the newest row actually LOADED, not the clock. Opening the
+    /// tab set the watermark to now before the reload had fetched anything, so a missed call that
+    /// arrived meanwhile (its row is dated when it rang, earlier than now) was born already seen and
+    /// never badged. Only moves forward.
+    private func markCallsSeen() {
+        guard let newest = callsRepo.calls.first?.date.timeIntervalSince1970, newest > callsSeenAt else { return }
+        callsSeenAt = newest
+    }
 
     // CONVERSATIONS WAITING, NOT MESSAGES WAITING — how the standard messengers badge it. One person
     // sending five messages moves this by ONE, not five: the badge answers "how many chats do I need to
@@ -151,7 +162,7 @@ struct MainShell: View {
         // shell remembered where you came from. Search lives on its own page now and each page
         // knows what it searches, so there is nothing left to remember.
         .onChange(of: tab) { _, new in
-            if new == 1 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
+            if new == 1 { markCallsSeen() }   // viewing Calls clears the badge (audit M-089: rows loaded so far)
             // ⛔ RE-ENTERING STORIES IS THE REFRESH — owner, 2026-09-11: "when the user leaves the
             // stories context and comes back, for example by switching to another tab and then
             // returning, refresh the story state and apply the new position". Dropping the hold
@@ -165,7 +176,12 @@ struct MainShell: View {
         }
         // New records landing while the user is already ON the Calls tab count as seen too.
         .onChange(of: callsRepo.calls) { _, _ in
-            if tab == 1 { callsSeenAt = Date().timeIntervalSince1970 }
+            if tab == 1 { markCallsSeen() }   // audit M-089: up to the newest row now loaded
+        }
+        // audit M-089, 2026-10-07: back from the background, look for calls missed meanwhile so the
+        // badge shows them. The repository's 30 s TTL keeps a quick app switch from re-reading.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await CallsRepository.shared.load() } }
         }
         // Load call history at startup so the badge is right before the tab is ever opened
         // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).
