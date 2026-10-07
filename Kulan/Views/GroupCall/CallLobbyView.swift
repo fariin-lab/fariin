@@ -91,12 +91,9 @@ struct CallLobbyView: View {
         .onChange(of: service.lobbyError) { _, text in
             if let text { flash(text, seconds: 4) }
         }
-        // The publisher, not onChange: it is heard while the service is still setting the state,
-        // ahead of the next draw, so the preview's stop is queued before the call's camera starts.
-        // It hands over the NEW value; `service.joinState` itself still reads the old one here.
-        .onReceive(service.$joinState) { state in
-            if state == .joined, !released { releaseCamera() }
-        }
+        // The preview is NOT stopped when the join lands any more (owner, 2026-10-07): it keeps its
+        // picture on screen while the call's own camera starts, and stops when this screen leaves
+        // the cover for the call screen (`onDisappear`). See GroupCallService.connect.
         .onDisappear {
             releaseCamera()
             noteTask?.cancel()

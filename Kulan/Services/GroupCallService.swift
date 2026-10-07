@@ -520,11 +520,16 @@ final class GroupCallService: ObservableObject {
     /// first camera-access prompt) held the whole screen on "Connecting…". Now the call is up the
     /// moment the room is, and the mic and camera start after it; the buttons show the wish at once
     /// and go back, with a short note, if a start fails.
-    private func startLocalMedia(mic: Bool, video: Bool, waitForLobbyCamera: Bool = false) {
+    /// `cameraReady` runs once on the main actor when the call's own camera is publishing, or as soon
+    /// as it is known that it will not (voice, no permission, a failure, a join left meanwhile). The
+    /// lobby hand-over waits on it, so a video call is never shown as a voice screen first.
+    private func startLocalMedia(mic: Bool, video: Bool, cameraReady: (() -> Void)? = nil) {
         joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
         micOn = mic
         cameraOn = video
         let gen = joinGeneration
+        // The mic and the camera start side by side: the camera no longer waits behind the mic's
+        // publish, which is most of what "Join is slow" was on a video link (owner, 2026-10-07).
         Task { @MainActor in
             do { try await room.localParticipant.setMicrophone(enabled: mic) }
             catch {
@@ -532,18 +537,18 @@ final class GroupCallService: ObservableObject {
                 micOn = false
                 showToast("Couldn't turn the microphone on")
             }
+        }
+        Task { @MainActor in
+            defer { cameraReady?() }
             guard video else { return }
             guard await Self.cameraAllowed() else {
                 if gen == joinGeneration { cameraOn = false; showToast("Allow camera access in Settings") }
                 return
             }
-            // From the lobby: its preview is letting go of the camera. Wait for its word, up to the
-            // old fixed 400ms, so the camera starts the moment it is free and the call screen is
-            // not a voice screen for longer than it has to be (owner, 2026-10-07).
-            if waitForLobbyCamera {
-                for _ in 0..<8 where !lobbyCameraFree { try? await Task.sleep(nanoseconds: 50_000_000) }
-            }
             guard gen == joinGeneration, cameraOn else { return }   // turned off meanwhile
+            // At once, with the lobby's preview still running: the newer capture session takes the
+            // camera and the lobby's picture holds its last frame until the swap, so there is no
+            // moment without a picture and no wait for the preview to stop first.
             do { try await room.localParticipant.setCamera(enabled: true) }
             catch {
                 guard gen == joinGeneration else { return }
@@ -1026,7 +1031,14 @@ final class GroupCallService: ObservableObject {
         Task { @MainActor in
             let d = await task.value
             if prefetchingLinkToken?.roomId == roomId { prefetchingLinkToken = nil }
-            if let d { prefetchedLinkToken = (roomId, d, Date()) }
+            if let d {
+                prefetchedLinkToken = (roomId, d, Date())
+                // Warm the media server while the pre-join screen is up: DNS, TLS and the nearest
+                // region are settled before Join, so `connect` starts from a warm socket.
+                if let token = d["token"] as? String, room.connectionState == .disconnected {
+                    try? await room.prepareConnection(url: url, token: token)
+                }
+            }
         }
     }
 
@@ -1144,13 +1156,26 @@ final class GroupCallService: ObservableObject {
             // Joined from the lobby: now the lobby goes and the call screen comes. The lobby's own
             // camera preview is still letting go of the camera, so the call's camera waits a beat.
             let fromLobby = lobbyJoin
-            if fromLobby {
-                // The call screen takes the lobby's place inside the same cover: no dismissal, no
-                // second presentation, nothing underneath showing in between.
-                lobbyJoin = false
-                roomInLobbyCover = true
+            if fromLobby { lobbyJoin = false }
+            // ⛔ THE LOBBY STAYS UNTIL THE CAMERA IS UP (owner, 2026-10-07: "after Join it shows the
+            // voice call screen, then the video one"). The call screen used to replace the lobby the
+            // moment the room connected, before my camera was publishing, so a video link opened on
+            // the voice layout. Now the call screen takes the lobby's place inside the same cover only
+            // when the camera is live (or will not be). A backstop swaps after 2 s whatever happens.
+            let swapGen = joinGeneration
+            var swapped = false
+            let swapToRoom: () -> Void = { [weak self] in
+                guard let self, fromLobby, !swapped, swapGen == self.joinGeneration else { return }
+                swapped = true
+                self.roomInLobbyCover = true
             }
-            startLocalMedia(mic: !startMuted, video: video, waitForLobbyCamera: fromLobby)
+            startLocalMedia(mic: !startMuted, video: video, cameraReady: swapToRoom)
+            if fromLobby {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    swapToRoom()
+                }
+            }
             didJoinRoom()
             return true
         } catch {
