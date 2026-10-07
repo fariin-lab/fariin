@@ -844,6 +844,12 @@ struct CallContainer<Content: View>: View {
     /// no-animation transaction so the cut is instant both ways.
     private var wantsCover: Bool { isActive && !call.minimized }
     @State private var coverUp = false
+    /// Audit M-032, 2026-10-07: the call screen really reached the window (its own appear), and the
+    /// number of the latest request for it, so a late check only judges the request it belongs to.
+    @State private var coverShown = false
+    @State private var coverAsk = 0
+    @State private var groupRestoreShown = false   // the same pair for the group restore cover
+    @State private var groupRestoreAsk = 0
     /// Shared by the cover's zoom and the card. See `CallZoomNamespaceKey`.
     @Namespace private var callZoom
 
@@ -923,6 +929,8 @@ struct CallContainer<Content: View>: View {
             CallView()
                 .background(CallPipMorphProbe())
                 .presentationBackground(.black)
+                .onAppear { coverShown = true }      // M-032: see `askForCover`
+                .onDisappear { coverShown = false }
         }
         .onAppear { if wantsCover { presentCover(animated: false) } }
         .onChange(of: wantsCover) { _, want in
@@ -942,6 +950,8 @@ struct CallContainer<Content: View>: View {
             // group call grows out of its card like a 1:1 call instead of cutting in (owner,
             // 2026-10-07: "the opening animation is too fast").
             GroupCallView().background(CallPipMorphProbe())
+                .onAppear { groupRestoreShown = true }      // M-032, as the 1:1 cover
+                .onDisappear { groupRestoreShown = false }
         }
         // 2026-09-24 decision D26: clearing `minimized` from anywhere else (the Calls tab row) brings
         // the group call forward the same way the bar's tap does. Only `disconnect()` also clears it,
@@ -949,7 +959,7 @@ struct CallContainer<Content: View>: View {
         .onChange(of: group.minimized) { _, minimized in
             // Same hard cut as the 1:1 cover (the reference app uses one call window for both).
             if !minimized, group.isActive, !showGroupRestore {
-                InstantCover.run { showGroupRestore = true }
+                presentGroupRestore()
             }
         }
         // A multi-person (ad-hoc or link) call's FIRST screen is put up by `IncomingGroupCallLayer`
@@ -962,8 +972,74 @@ struct CallContainer<Content: View>: View {
     private func presentCover(animated: Bool) {
         guard !coverUp else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        if animated { coverUp = true; return }
-        InstantCover.run { coverUp = true }
+        // Audit M-032, 2026-10-07: a cover asked for while something else is still on its way in or
+        // out (a sheet closing on the same tap, a notification tap mid-transition) is dropped by
+        // UIKit. `coverUp` was already true, so nothing retried, and `minimized` was false, so there
+        // was no card either: a live call with nothing on screen. Wait for the top to settle first
+        // (the same check `IncomingGroupCallLayer` makes, capped at 0.8s); with nothing in motion this
+        // goes straight on, so the usual hard cut is unchanged.
+        if Self.topIsMoving() {
+            Task { @MainActor in
+                for _ in 0..<16 {
+                    guard Self.topIsMoving() else { break }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                guard wantsCover, !coverUp else { return }
+                askForCover(animated: animated)
+            }
+            return
+        }
+        askForCover(animated: animated)
+    }
+
+    private func askForCover(animated: Bool) {
+        if animated { coverUp = true } else { InstantCover.run { coverUp = true } }
+        // M-032, the net: UIKit can still refuse (a sheet that is up and staying). If the call screen
+        // has not appeared half a second later, give the call back its card instead of nothing. The
+        // card is what a minimize leaves, and tapping it asks again.
+        coverAsk &+= 1
+        let ask = coverAsk
+        // Judged only in the foreground: a cover asked for while the app is in the background (their
+        // camera came on, `CallService` clears `minimized` so the return lands on the call) may be
+        // put up only when the app comes back, and must not be turned into a card before that.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard ask == coverAsk, coverUp, !coverShown,
+                  UIApplication.shared.applicationState == .active else { return }
+            coverUp = false
+            switch call.state {
+            case .outgoing, .active, .reconnecting: call.minimized = true
+            default: break
+            }
+        }
+    }
+
+    /// A presentation or dismissal is in flight at the top of the stack (M-032).
+    @MainActor private static func topIsMoving() -> Bool {
+        guard let top = WebLink.topViewController() else { return false }
+        return top.isBeingDismissed || top.isBeingPresented
+            || top.presentingViewController?.isBeingDismissed == true
+            || top.transitionCoordinator != nil
+    }
+
+    /// M-032 on the group side: the same wait for a settled top, the same hard cut, and the same net.
+    /// A refused restore used to leave the group call with `minimized` false (so no card) and no
+    /// screen; it now falls back to the card.
+    private func presentGroupRestore() {
+        Task { @MainActor in
+            for _ in 0..<16 {
+                guard Self.topIsMoving() else { break }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard !group.minimized, group.isActive, !showGroupRestore else { return }
+            InstantCover.run { showGroupRestore = true }
+            groupRestoreAsk &+= 1
+            let ask = groupRestoreAsk
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard ask == groupRestoreAsk, showGroupRestore, !groupRestoreShown,
+                  UIApplication.shared.applicationState == .active else { return }
+            showGroupRestore = false
+            if group.isActive { group.minimized = true }
+        }
     }
 
     /// Out, the same way: the zoom into the card when minimizing, a hard cut when the call is over.
