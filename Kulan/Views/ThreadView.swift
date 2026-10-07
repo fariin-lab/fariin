@@ -8294,14 +8294,6 @@ enum ViewedOnce {
     }
 }
 
-// Selection wrapper: in select mode a circular checkmark slides in on the LEADING edge
-// (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
-// selected row gets a soft highlight. Off select mode, the row is untouched.
-/// THE ONE LOOK FOR EVERY CENTRED IN-CHAT NOTICE — the day separator ("Today"), the "X pinned …"
-/// notice and system rows. They had drifted apart: the day pill was primary text on frosted material
-/// while the others were secondary grey on a flat received-bubble tint, so two pills a few lines
-/// apart read as two different things (user screenshot, "make it the same, no difference"). One
-/// modifier now owns the look, which is also what stops it drifting again.
 /// The green "Group call in progress · Join" bar over a group chat.
 /// audit M-016, 2026-10-07: it showed whenever I was not IN a call, so while a join was still
 /// connecting, or while I waited at a link's door for approval, a tap started a second join on the
@@ -8329,6 +8321,14 @@ private struct GroupCallJoinBar: View {
     }
 }
 
+// Selection wrapper: in select mode a circular checkmark slides in on the LEADING edge
+// (aligned to the row), the bubble's own gestures are disabled, the whole row toggles on tap, and a
+// selected row gets a soft highlight. Off select mode, the row is untouched.
+/// THE ONE LOOK FOR EVERY CENTRED IN-CHAT NOTICE — the day separator ("Today"), the "X pinned …"
+/// notice and system rows. They had drifted apart: the day pill was primary text on frosted material
+/// while the others were secondary grey on a flat received-bubble tint, so two pills a few lines
+/// apart read as two different things (user screenshot, "make it the same, no difference"). One
+/// modifier now owns the look, which is also what stops it drifting again.
 struct ChatNoticePill: ViewModifier {
     /// ⛔ THE SAME SURFACE AN INCOMING BUBBLE WEARS — owner, 2026-08-24: the Today badge, the pin
     /// notice and the disappearing-message badge "must be like bubble color… the bubble now adapts
