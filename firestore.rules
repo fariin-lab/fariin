@@ -871,6 +871,21 @@ service cloud.firestore {
       allow list, write: if false;
     }
 
+    // 2026-10-07 username contract section 8. Server-only collections, written by the username
+    // functions with the admin SDK: the audit trail, the per-account limits (check/claim/lookup
+    // counters, names on hold), and the lookalike-protection index for verified and reserved names.
+    // No client may read or write any of them; the admin page reads the audit through
+    // adminUsernameInfo. Default deny would refuse them anyway; stated so nobody opens one by accident.
+    match /usernameAudit/{id} {
+      allow read, write: if false;
+    }
+    match /usernameLimits/{uid} {
+      allow read, write: if false;
+    }
+    match /verifiedSkeletons/{skeleton} {
+      allow read, write: if false;
+    }
+
     // Abuse reports (App Store Guideline 1.2 — users must be able to flag content
     // and report abusive users). Any signed-in user can FILE a report; the reporter
     // field must be themselves. No client can read, edit, or delete reports — the
