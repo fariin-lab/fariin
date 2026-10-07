@@ -38,6 +38,10 @@ struct CallLobbyView: View {
     /// Join was tapped and the service has not come back yet. Covers the beat before its
     /// `joinState` moves, so a second tap finds the button already taken.
     @State private var starting = false
+    /// Audit round 2 (verifier V2 N3), 2026-10-07: when this screen last asked for the join pass
+    /// ahead of the tap. The pass now lasts 20 s, so a lobby left open longer had none and Join
+    /// spun again; the healthy peek every 5 s renews it at about 15 s.
+    @State private var passFetchedAt: Date?
     /// A short line over the buttons ("This call is full", "Request denied"). Clears itself.
     @State private var note: String?
     @State private var noteTask: Task<Void, Never>?
@@ -325,7 +329,23 @@ struct CallLobbyView: View {
         // Not when the server's own check already landed and said gone or approval (verifier V4:
         // the first check can beat this read, and its "drop the pass" would then come too early).
         let serverSaysNo = peek.map { $0.gone || ($0.approval && !$0.iAmCreator) } ?? false
-        if (creator || !approval), !serverSaysNo { service.prefetchLinkToken(key: lobby.key) }
+        if (creator || !approval), !serverSaysNo {
+            service.prefetchLinkToken(key: lobby.key)
+            passFetchedAt = Date()
+        }
+    }
+
+    /// Verifier V2 N3: renews the join pass while the link is healthy and nothing is joining.
+    /// Under 15 s nothing happens; past it the old pass is let go and a fresh one asked for, so
+    /// the pass in hand is never older than its 20 s life when Join is tapped.
+    private func renewPass(_ seen: GroupCallService.LobbyPeek) {
+        guard !seen.gone, !seen.full, !seen.approval || seen.iAmCreator,
+              !starting, service.joinState == .notJoined else { return }
+        let now = Date()
+        if let at = passFetchedAt, now.timeIntervalSince(at) < 15 { return }
+        if passFetchedAt != nil { service.dropPrefetchedLinkToken() }
+        service.prefetchLinkToken(key: lobby.key)
+        passFetchedAt = now
     }
 
     /// Asks the server about the link now and every 5s while this screen is up; `.task` cancels
@@ -347,7 +367,12 @@ struct CallLobbyView: View {
         peek = seen
         // Audit M-062, 2026-10-07: a pass fetched ahead of the tap must not outlive what the server
         // now says. A link that is gone, or now asks for approval, drops it, so Join asks again.
-        if seen.gone || (seen.approval && !seen.iAmCreator) { service.dropPrefetchedLinkToken() }
+        if seen.gone || (seen.approval && !seen.iAmCreator) {
+            service.dropPrefetchedLinkToken()
+            passFetchedAt = nil
+        } else {
+            renewPass(seen)
+        }
         if !seen.title.isEmpty { title = seen.title }
         if !seen.video { voiceOnly = true }
     }
