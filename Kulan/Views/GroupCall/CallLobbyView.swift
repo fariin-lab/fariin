@@ -125,7 +125,7 @@ struct CallLobbyView: View {
             // My profile colour, flat, the way the 1:1 call screen paints a voice call (owner,
             // 2026-10-07: "use the profile colour, not a blur"). Black with no photo to read it from.
             lobbyColor.ignoresSafeArea()
-            AvatarView(name: me.name, photoUrl: me.photo, size: 120)
+            AvatarView(name: me.name, photoUrl: me.photo, size: 180)   // the in-call size (GroupCallDuoView, CallView), so joining does not resize it
         }
     }
 
@@ -215,7 +215,8 @@ struct CallLobbyView: View {
             .font(.headline)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 48)
-            .background(Color.black.opacity(0.4), in: Capsule())
+            // Liquid Glass pills (owner, 2026-10-07): dark-tinted glass for Leave, green glass for Join.
+            .liquidGlass(Capsule(), interactive: true, tint: Color.black.opacity(0.35))
     }
 
     /// Green with the word, or with a spinner while the join runs: the reference app spins its
@@ -231,7 +232,7 @@ struct CallLobbyView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 48)
-        .background(Color.green, in: Capsule())
+        .liquidGlass(Capsule(), interactive: true, tint: Color.green)
     }
 
     /// The link was revoked or never existed: say so, and the only way on is out. The reference
