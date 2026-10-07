@@ -4034,6 +4034,9 @@ struct ThreadView: View {
             // ⛔ THE SAVED ROW IS NOT LOADED YET: hold the first land while the `.task` pages it in,
             // so the saved tier above can win when the land finally happens. See `savedRowNeedsPaging`.
             holdFirstLand: savedRowNeedsPaging && !savedRowPagingDone,
+            // The landing hold lasts until the server's window is in (capped in the list), because a
+            // cold open's window lands after a fixed second would have run out (owner, 2026-10-07).
+            liveWindowSettled: repo.serverWindowSettled,
             // Written from the list's own settle points, the only place that knows which row is at
             // the top of the viewport and by how much it is clipped.
             onReadingPosition: { position in

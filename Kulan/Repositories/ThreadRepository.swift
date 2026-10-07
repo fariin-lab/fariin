@@ -168,6 +168,10 @@ final class ThreadRepository {
     // Owner audit 2026-10-06 chat #17: the first SERVER window has been seen (it alone may end
     // history), and `oldestDoc` still comes from a cache window (the server's replaces it).
     @ObservationIgnored private var sawServerWindow = false
+    /// The same moment, observed: the list holds a just-landed reader until the server's window has
+    /// been applied (`NativeMessageList.liveWindowSettled`). On a cold open it comes well after the
+    /// warm reopen's few hundred milliseconds.
+    private(set) var serverWindowSettled = false
     @ObservationIgnored private var oldestDocFromCacheWindow = false
     private(set) var didInitialLoad = false
 
@@ -292,11 +296,15 @@ final class ThreadRepository {
         // the load lands. A miss now does the same; the reveal veil already holds the list hidden
         // until it has something to show, and the live listener still reconciles after.
         if let cached = ThreadMessageCache.shared.memoryMessages(for: cid), !cached.isEmpty {
+            // ⚠️ TEMPORARY, with the list's [REOPEN] lines: 60 rows here means the cache was cut on backgrounding.
+            NSLog("[REOPEN] repo seed from MEMORY rows=%ld", cached.count)
             seed(cached)
         } else {
+            NSLog("[REOPEN] repo seed MISS, reading the disk file")
             ThreadMessageCache.shared.loadAsync(cid) { [weak self] cold in
                 // The live snapshot got here first: it is the truth, the file is only a head start.
                 guard let self, let cold, !self.didInitialLoad, self.messages.isEmpty else { return }
+                NSLog("[REOPEN] repo seed from DISK rows=%ld", cold.count)
                 self.seed(cold)
             }
         }
@@ -1061,6 +1069,8 @@ final class ThreadRepository {
         if !didInitialLoad { didInitialLoad = true }
         if !fromCache && !sawServerWindow {
             sawServerWindow = true
+            serverWindowSettled = true   // published with the rebuild below, in the same update
+            NSLog("[REOPEN] repo first SERVER window docs=%ld", docs.count)
             if docs.count < pageSize { canLoadOlder = false }   // short first SERVER page => no history
         }
         trimWindowIfNeeded()
