@@ -206,6 +206,9 @@ final class GroupCallService: ObservableObject {
     /// The mic as the lobby left it. Read by `connect` (also after an approval wait), cleared with
     /// the room.
     private var startMuted = false
+    /// Round 2 (V2 N8), 2026-10-07: the camera switched off during "Connecting…". The join used to
+    /// turn it on anyway (`startLocalMedia` set `cameraOn = video`). Cleared with the room.
+    private var startCameraOff = false
     /// When this phone got into the room. The two-person look's header clock, like a 1:1 call's;
     /// here and not on the screen, which is rebuilt every time the call is restored from its card.
     @Published private(set) var joinedAt: Date?
@@ -397,6 +400,7 @@ final class GroupCallService: ObservableObject {
         // its closing tail).
         guard !Self.oneToOneLive else { notice = Self.busyNotice; return }
         connecting = true; isVideo = video; callTitle = title
+        cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         joiningRoomId = cid
         let gen = joinGeneration   // owner audit 2026-10-06 #4
         do {
@@ -406,6 +410,9 @@ final class GroupCallService: ObservableObject {
             guard let d = res.data as? [String: Any], let token = d["token"] as? String else {
                 connecting = false
                 joiningRoomId = nil
+                // Round 2 (V2 N4), 2026-10-07: a Mute or camera-off tapped while connecting is not
+                // carried into the next call (`failJoin` does the same).
+                startMuted = false; startCameraOff = false; micOn = true; cameraOn = false
                 // owner audit 2026-10-06 #44: a speaker toggle made while connecting does not
                 // carry into the next call.
                 speakerOn = true; AudioManager.shared.isSpeakerOutputPreferred = true
@@ -708,14 +715,15 @@ final class GroupCallService: ObservableObject {
     func toggleCamera() {
         guard !cameraLocked else { return }   // a voice call link: no camera for anybody
         guard !leaving else { return }        // audit M-060
+        guard isActive || connecting || waitingForApproval else { return }   // no call, nothing to switch
         cameraOn.toggle()
         // Owner, 2026-10-06: "when I open camera, group call is not working". The camera was
         // started without asking for access, and any failure was swallowed, so the button said
         // on while no picture went out. `syncCamera` asks first (as the 1:1 call does), and on a
         // failure puts the button back and says why. Audit M-002: one change at a time, latest wish
         // wins, so two quick taps can no longer leave the camera out while the button says off.
-        // Still joining: the join's own start sets the camera, as before.
-        if isActive { syncCamera() }
+        // Still joining: the wish is kept for the join's own start (round 2, V2 N8).
+        if isActive { syncCamera() } else { startCameraOff = !cameraOn }
     }
 
     // MARK: - Mic and camera, one change at a time (audit M-002, M-084, M-085, 2026-10-07)
@@ -725,6 +733,11 @@ final class GroupCallService: ObservableObject {
     /// published matches.
     private var micChain: Task<Void, Never>?
     private var cameraChain: Task<Void, Never>?
+    /// Round 2 (V2 N2), 2026-10-07: which chain is the registered one. A leave that stops waiting
+    /// after 1 s lets go of a chain still running (`releaseMediaChains`); that chain then neither
+    /// goes on nor clears the registration of a chain started for the next call.
+    private var micChainID = 0
+    private var cameraChainID = 0
     /// The lobby hand-over's `cameraReady`, run when the join's camera chain settles.
     private var pendingCameraReady: (() -> Void)?
     /// Audit M-081: the camera was switched off because the app went to the background. `cameraOn`
@@ -738,12 +751,14 @@ final class GroupCallService: ObservableObject {
         // Counted for the whole chain, the join's first publish too: a mute event while it runs is
         // mine, not an owner's (`localMicMuteChanged`).
         micChangesInFlight += 1
+        micChainID &+= 1
+        let id = micChainID
         micChain = Task { @MainActor [weak self] in
             guard let self else { return }
             var tries = 0
             // Audit M-085: never past the call it was started for. `leaving` is set first thing by
-            // `disconnect()`, which waits for this chain before it closes the room.
-            while gen == self.joinGeneration, self.isActive, !self.leaving, tries < 4 {
+            // `disconnect()`, which waits (at most 1 s) for this chain after it closes the room.
+            while gen == self.joinGeneration, self.micChainID == id, self.isActive, !self.leaving, tries < 4 {
                 let want = self.micOn
                 if self.room.localParticipant.isMicrophoneEnabled() == want { break }
                 tries += 1
@@ -760,7 +775,7 @@ final class GroupCallService: ObservableObject {
                     break
                 }
             }
-            self.micChain = nil
+            if self.micChainID == id { self.micChain = nil }
             self.micChangesInFlight -= 1
         }
     }
@@ -768,10 +783,12 @@ final class GroupCallService: ObservableObject {
     private func syncCamera() {
         guard cameraChain == nil, isActive, !leaving else { return }
         let gen = joinGeneration
+        cameraChainID &+= 1
+        let id = cameraChainID
         cameraChain = Task { @MainActor [weak self] in
             guard let self else { return }
             var tries = 0
-            while gen == self.joinGeneration, self.isActive, !self.leaving, tries < 4 {
+            while gen == self.joinGeneration, self.cameraChainID == id, self.isActive, !self.leaving, tries < 4 {
                 let want = self.cameraWanted
                 if self.room.localParticipant.isCameraEnabled() == want { break }
                 tries += 1
@@ -797,6 +814,7 @@ final class GroupCallService: ObservableObject {
                     break
                 }
             }
+            guard self.cameraChainID == id else { return }   // let go by a leave; not this call's
             self.cameraChain = nil
             let ready = self.pendingCameraReady
             self.pendingCameraReady = nil
@@ -843,7 +861,7 @@ final class GroupCallService: ObservableObject {
     private func startLocalMedia(mic: Bool, video: Bool, cameraReady: (() -> Void)? = nil) {
         joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
         micOn = mic
-        cameraOn = video
+        cameraOn = video && !startCameraOff   // round 2 (V2 N8): a camera-off tap while joining holds
         // The mic and the camera start side by side: the camera no longer waits behind the mic's
         // publish, which is most of what "Join is slow" was on a video link (owner, 2026-10-07).
         // Audit M-002, 2026-10-07: through the same one-at-a-time chains as the buttons, so a Mute
@@ -1196,14 +1214,29 @@ final class GroupCallService: ObservableObject {
         disconnectRun = nil
     }
 
+    /// Round 2 (V2 N2), 2026-10-07: waits for the running mic and camera chains, but never longer
+    /// than `seconds`. A chain still running after that stops by itself: its call is no longer active.
+    private func waitForMediaChains(upTo seconds: Double) async {
+        let chains = [micChain, cameraChain].compactMap { $0 }
+        guard !chains.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { for chain in chains { await chain.value } }
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    /// Round 2 (V2 N2): a chain that outlived the 1 s wait is let go, so the next call's first
+    /// publish starts its own chain instead of finding this one registered.
+    private func releaseMediaChains() {
+        if micChain != nil { micChain = nil; micChainID &+= 1 }
+        if cameraChain != nil { cameraChain = nil; cameraChainID &+= 1 }
+    }
+
     private func runDisconnect() async {
         leaving = true
         defer { leaving = false; hangingUp = false }
-        // Audit M-085, 2026-10-07: a mic or camera change still in flight (the join's first publish,
-        // a tap) finishes before the room closes, and `leaving` stops it from going again; so
-        // nothing is left capturing and nothing is published into the next call.
-        await micChain?.value
-        await cameraChain?.value
         let cid = activeCid
         let adhoc = isAdhoc, link = isLink
         // Leaving while still waiting to be let in: the knock is withdrawn (below, after the local
@@ -1229,6 +1262,13 @@ final class GroupCallService: ObservableObject {
         let answered = someoneJoined   // audit M-088
         let recordId = groupRecordId
         await room.disconnect()
+        // Audit M-085, 2026-10-07: a mic or camera change still in flight (the join's first publish,
+        // a tap) is let finish, and `leaving` stops it from going again, so nothing is published
+        // into the next call. Round 2 (verifier V2 N2): the room closes FIRST and the wait is capped
+        // at 1 s; waiting before the close kept a weak-network join (or an open camera prompt) on
+        // screen and "busy" for seconds, the M-060 symptom again.
+        await waitForMediaChains(upTo: 1)
+        releaseMediaChains()
         // Audit M-060, 2026-10-07: the local state goes first. It used to wait for the end writes
         // below, so on a slow network the phone stayed "busy" and the dead call screen kept working
         // buttons for seconds.
@@ -1386,6 +1426,12 @@ final class GroupCallService: ObservableObject {
         let everyone = [mine] + others
         let roomId = "adhoc_" + UUID().uuidString.lowercased()
         connecting = true; isVideo = video
+        cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
+        // Round 2 (verifier V2 N1, M-094), 2026-10-07: known as "the room I am going into" from
+        // now, not only once `connect` runs. A crossing call from the same person seen while the
+        // start write below is out (up to 8 s) is then recognised instead of answered "busy".
+        // Every way out clears it through `resetRoomState`.
+        joiningRoomId = roomId
         members = everyone; joinedUids = []; roomStartedAt = Date()
         callTitle = Self.title(for: others.map(\.name))
         var names: [String: String] = [:]
@@ -1449,6 +1495,7 @@ final class GroupCallService: ObservableObject {
         presentsRoomScreen = true
         guard !Self.oneToOneLive else { notice = Self.busyNotice; return }   // audit M-111
         connecting = true; isVideo = video
+        cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         // Audit M-028, 2026-10-07: the room used to go into `declinedInvites` here, before any
         // check, and stayed there whatever happened, so a join that failed for a second could never
         // be rung or invited again. While joining, `joiningRoomId` makes its ring "mine"; the room
@@ -1460,13 +1507,13 @@ final class GroupCallService: ObservableObject {
         catch {
             guard gen == joinGeneration else { await abandonJoin(); return }
             // Audit M-028: a read that failed is not "the call ended".
-            connecting = false; joiningRoomId = nil
+            connecting = false; joiningRoomId = nil; cameraOn = false
             notice = Notice(title: "Couldn't join", message: nil)
             return
         }
         guard gen == joinGeneration else { await abandonJoin(); return }
         guard let d = snap.data(with: .estimate), d["active"] as? Bool == true else {
-            connecting = false; joiningRoomId = nil
+            connecting = false; joiningRoomId = nil; cameraOn = false
             notice = Notice(title: "Call ended", message: nil)
             return
         }
@@ -1541,6 +1588,7 @@ final class GroupCallService: ObservableObject {
         guard let k = CallLinkKey(text: key) else { refuseJoin(Self.linkGone); return }
         let roomId = k.roomId
         connecting = true; isVideo = video
+        cameraOn = video   // round 2 (V2 N8): the camera button shows the call's wish while joining
         micOn = mic   // audit M-002: a Mute tapped while joining toggles from the lobby's choice
         callTitle = "Kulan Call"
         isLinkCreator = false
@@ -1903,6 +1951,8 @@ final class GroupCallService: ObservableObject {
     private func resetRoomState() {
         stopScreenShare()   // every leave path comes through here
         startMuted = false
+        startCameraOff = false   // round 2 (V2 N8)
+        cameraOn = false         // round 2 (V2 N8): set to the wish when a join starts
         cameraPausedByBackground = false   // audit M-081
         pendingCameraReady = nil
         updateGroupScreenBehavior()        // audit M-096: the screen may lock again
