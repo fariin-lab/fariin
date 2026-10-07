@@ -102,7 +102,7 @@ struct CreateCallLinkSheet: View {
                 // ⛔ MINIMALIST — owner, 2026-10-04: "redesign this sheet, minimalist and clear".
                 // One thing per line, in the order a person uses them: what the call is, Join, the
                 // three ways to hand the link on as round buttons, then the two settings, plain.
-                VStack(spacing: 22) {
+                VStack(spacing: 16) {   // tighter (owner, 2026-10-07): the whole sheet must fit without a scroll
                     CallLinkHero(key: draft.key, title: draft.title, video: draft.video) { join() }
                     CallLinkShareRows(draft: draft, compact: true) {
                         await CallLinkService.shared.persist(draft)
@@ -133,8 +133,8 @@ struct CreateCallLinkSheet: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -153,7 +153,9 @@ struct CreateCallLinkSheet: View {
         // + the home-indicator band (owner, 2026-10-06: the Call Type row was cut off at the bottom):
         // a fixed-height detent does not add it by itself (same rule as WallpaperPickerSheet). The
         // +2 keeps a rounding half-point from turning into a scroll.
-        .presentationDetents([.height(headerHeight + contentHeight + 2 + WallpaperPickerSheet.bottomInset)])
+        // +12, not +2 (owner, 2026-10-07: the Call Type row sat half under the home band and the
+        // sheet needed a scroll): a margin for the point or two the measurements can be short by.
+        .presentationDetents([.height(headerHeight + contentHeight + 12 + WallpaperPickerSheet.bottomInset)])
         // Owner, 2026-10-06: Call Name came in from the side; it comes up from the bottom now.
         .sheet(isPresented: $editingName) {
             CallLinkNameSheet(initial: draft.name) { name in
@@ -287,7 +289,7 @@ struct CallLinkHero: View {
     }
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 16) {
             VStack(spacing: 8) {
                 CallLinkAvatar(key: key, size: 64, video: video)
                     .animation(.easeInOut(duration: 0.2), value: video)

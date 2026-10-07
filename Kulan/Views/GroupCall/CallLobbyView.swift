@@ -382,7 +382,9 @@ struct CallLobbyView: View {
     /// capture sessions: ours lets go, and `released` keeps it from ever starting again.
     private func releaseCamera() {
         released = true
-        preview.stop()
+        // The call's own camera waits for this word (GroupCallService.startLocalMedia), so it
+        // starts the moment the preview has let the camera go rather than after a fixed wait.
+        preview.stop { GroupCallService.shared.noteLobbyCameraReleased() }
     }
 
     private func leave() {
@@ -447,9 +449,14 @@ final class LobbyCameraPreview: ObservableObject {
         }
     }
 
-    func stop() {
+    /// `done` runs on the main queue once the session has stopped (or was never running), which
+    /// is when the camera is free for the call.
+    func stop(then done: (() -> Void)? = nil) {
         let session = self.session
-        queue.async { if session.isRunning { session.stopRunning() } }
+        queue.async {
+            if session.isRunning { session.stopRunning() }
+            if let done { DispatchQueue.main.async(execute: done) }
+        }
     }
 }
 

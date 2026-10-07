@@ -94,9 +94,29 @@ struct IncomingGroupCallLayer: View {
         .background {
             Color.clear
                 .fullScreenCover(item: $shownLobby, onDismiss: {
-                    if service.lobby != nil { service.lobby = nil }   // swiped away = Leave
-                }) { CallLobbyView(lobby: $0) }
+                    service.lobbyCoverClosed()   // swiped away = Leave; with the room inside = minimize
+                }) { LobbyCoverContent(lobby: $0) }
         }
+    }
+}
+
+/// One cover, two contents: the pre-join screen, then the call screen in its place once the join is
+/// through (`GroupCallService.roomInLobbyCover`). The lobby used to go down and the room come up as
+/// a second cover, and the screen underneath showed in between (owner, 2026-10-07: "after the
+/// loading it shows the Calls list, then enters the call"). The reference app's lobby IS its call
+/// screen in another state; with two screens, swapping them inside one cover is the nearest thing.
+private struct LobbyCoverContent: View {
+    let lobby: GroupCallService.Lobby
+    @ObservedObject private var service = GroupCallService.shared
+    var body: some View {
+        ZStack {
+            if service.roomInLobbyCover {
+                GroupCallView().transition(.opacity)
+            } else {
+                CallLobbyView(lobby: lobby).transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: service.roomInLobbyCover)
     }
 }
 

@@ -148,6 +148,25 @@ final class GroupCallService: ObservableObject {
     /// screen comes up only once the room is joined. A refusal lands here as a line of text.
     @Published var lobbyError: String?
     private var lobbyJoin = false
+    /// The call screen is shown INSIDE the pre-join screen's cover after a lobby join (owner,
+    /// 2026-10-07: the lobby went down, the room came up as a second cover, and the Calls list
+    /// showed in between). One cover, two contents: `IncomingGroupCallLayer` swaps the lobby for
+    /// the room while this is on; the cover closing then means minimize, as the room cover's does.
+    @Published private(set) var roomInLobbyCover = false
+    /// The lobby's preview has let go of the camera (`CallLobbyView.releaseCamera`), so the call's
+    /// own camera can start at once instead of after a fixed wait.
+    private var lobbyCameraFree = false
+    func noteLobbyCameraReleased() { lobbyCameraFree = true }
+    /// The pre-join screen's cover went away by itself: swiped down, or the call screen inside it
+    /// asked to close. With the room inside that is a minimize, exactly what the room cover's own
+    /// dismissal does; with the lobby still up it is leaving, as before (`lobby`'s didSet).
+    func lobbyCoverClosed() {
+        if roomInLobbyCover {
+            roomInLobbyCover = false
+            if isActive { minimized = true } else if waitingForApproval { end() }
+        }
+        if lobby != nil { lobby = nil }
+    }
     /// The mic as the lobby left it. Read by `connect` (also after an approval wait), cleared with
     /// the room.
     private var startMuted = false
@@ -501,7 +520,7 @@ final class GroupCallService: ObservableObject {
     /// first camera-access prompt) held the whole screen on "Connecting…". Now the call is up the
     /// moment the room is, and the mic and camera start after it; the buttons show the wish at once
     /// and go back, with a short note, if a start fails.
-    private func startLocalMedia(mic: Bool, video: Bool, cameraDelay: UInt64 = 0) {
+    private func startLocalMedia(mic: Bool, video: Bool, waitForLobbyCamera: Bool = false) {
         joinedAt = Date()   // the two-person header's clock (GroupCallView), kept across minimize
         micOn = mic
         cameraOn = video
@@ -518,7 +537,12 @@ final class GroupCallService: ObservableObject {
                 if gen == joinGeneration { cameraOn = false; showToast("Allow camera access in Settings") }
                 return
             }
-            if cameraDelay > 0 { try? await Task.sleep(nanoseconds: cameraDelay) }
+            // From the lobby: its preview is letting go of the camera. Wait for its word, up to the
+            // old fixed 400ms, so the camera starts the moment it is free and the call screen is
+            // not a voice screen for longer than it has to be (owner, 2026-10-07).
+            if waitForLobbyCamera {
+                for _ in 0..<8 where !lobbyCameraFree { try? await Task.sleep(nanoseconds: 50_000_000) }
+            }
             guard gen == joinGeneration, cameraOn else { return }   // turned off meanwhile
             do { try await room.localParticipant.setCamera(enabled: true) }
             catch {
@@ -534,8 +558,9 @@ final class GroupCallService: ObservableObject {
     private func didJoinRoom() {
         joiningRoomId = nil
         // Any call that is now up closes a lobby still open for some other link (an invitation
-        // answered while looking at one): there is one call at a time.
-        if lobby != nil { lobbyJoin = false; lobby = nil }
+        // answered while looking at one): there is one call at a time. Not the lobby whose cover
+        // now holds this very call (`roomInLobbyCover`).
+        if lobby != nil, !roomInLobbyCover { lobbyJoin = false; lobby = nil }
         usingFrontCamera = true
         GroupCallSocial.shared.attach(room: room, myUid: myUid, myName: ProfileStore.shared.me?.name ?? "")
         GroupCallRinging.shared.callJoined()
@@ -897,6 +922,7 @@ final class GroupCallService: ObservableObject {
         notice = nil
         lobbyError = nil
         lobbyJoin = fromLobby && lobby != nil
+        lobbyCameraFree = false   // the lobby says when its preview has let the camera go
         // From the lobby the call screen waits until I am in (`connect`). Every other way in (a
         // link row's long-press menu) shows it at once, as before.
         if !lobbyJoin { closeLobbyForAnotherJoin(); presentsRoomScreen = true }
@@ -981,14 +1007,26 @@ final class GroupCallService: ObservableObject {
     /// reads a token request on an approval link as a knock at the door (the lobby decides that from
     /// the link's document). Good for 90 of the token's 120 seconds; `connect` takes it once.
     private var prefetchedLinkToken: (roomId: String, data: [String: Any], at: Date)?
+    /// The request still out, so a Join tapped before it lands waits for it instead of asking the
+    /// server a second time (owner, 2026-10-07: Join still spun when tapped straight away).
+    private var prefetchingLinkToken: (roomId: String, task: Task<[String: Any]?, Never>)?
     func prefetchLinkToken(key: String) {
         guard let k = CallLinkKey(text: key) else { return }
         let roomId = k.roomId
         if let p = prefetchedLinkToken, p.roomId == roomId, Date().timeIntervalSince(p.at) < 60 { return }
-        functions.httpsCallable("groupCallToken").call(["roomId": roomId, "link": true]) { [weak self] res, _ in
-            guard let self, let d = res?.data as? [String: Any],
-                  d["token"] is String, d["pending"] as? Bool != true else { return }
-            Task { @MainActor in self.prefetchedLinkToken = (roomId, d, Date()) }
+        if let p = prefetchingLinkToken, p.roomId == roomId { return }
+        let callable = functions.httpsCallable("groupCallToken")
+        let task = Task<[String: Any]?, Never> {
+            guard let res = try? await callable.call(["roomId": roomId, "link": true]),
+                  let d = res.data as? [String: Any],
+                  d["token"] is String, d["pending"] as? Bool != true else { return nil }
+            return d
+        }
+        prefetchingLinkToken = (roomId, task)
+        Task { @MainActor in
+            let d = await task.value
+            if prefetchingLinkToken?.roomId == roomId { prefetchingLinkToken = nil }
+            if let d { prefetchedLinkToken = (roomId, d, Date()) }
         }
     }
 
@@ -1065,6 +1103,10 @@ final class GroupCallService: ObservableObject {
                Date().timeIntervalSince(p.at) < 90 {
                 prefetchedLinkToken = nil
                 d = p.data   // fetched while the pre-join screen was up; see prefetchLinkToken
+            } else if case .link(let roomId, _) = r, let p = prefetchingLinkToken, p.roomId == roomId,
+                      let ready = await p.task.value {
+                prefetchedLinkToken = nil
+                d = ready   // the ahead-of-time request was still out: its answer, not a second trip
             } else {
                 let res = try await functions.httpsCallable("groupCallToken").call(payload)
                 d = res.data as? [String: Any]
@@ -1103,11 +1145,12 @@ final class GroupCallService: ObservableObject {
             // camera preview is still letting go of the camera, so the call's camera waits a beat.
             let fromLobby = lobbyJoin
             if fromLobby {
+                // The call screen takes the lobby's place inside the same cover: no dismissal, no
+                // second presentation, nothing underneath showing in between.
                 lobbyJoin = false
-                lobby = nil
-                presentsRoomScreen = true
+                roomInLobbyCover = true
             }
-            startLocalMedia(mic: !startMuted, video: video, cameraDelay: fromLobby ? 400_000_000 : 0)
+            startLocalMedia(mic: !startMuted, video: video, waitForLobbyCamera: fromLobby)
             didJoinRoom()
             return true
         } catch {
@@ -1167,6 +1210,10 @@ final class GroupCallService: ObservableObject {
     private func resetRoomState() {
         startMuted = false
         lobbyJoin = false
+        lobbyCameraFree = false
+        // The call ran inside the lobby's cover: that cover closes with the call. A lobby still
+        // waiting (a failed join shows its error there) is left alone.
+        if roomInLobbyCover { roomInLobbyCover = false; if lobby != nil { lobby = nil } }
         joiningRoomId = nil
         joinedAt = nil
         stopRingback()
