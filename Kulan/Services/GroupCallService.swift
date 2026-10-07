@@ -999,8 +999,17 @@ final class GroupCallService: ObservableObject {
         case .duplicate:
             n = Notice(title: "You joined this call on another device", message: nil)
         case .other:
-            n = endingForAll ? nil : Notice(title: "Call unexpectedly ended",
-                                            message: "Check your connection and try joining again.")
+            // Audit M-028, 2026-10-07: a dropped multi-person call has no Join bar to try again
+            // from, so it no longer tells the user to; and the room is no longer remembered as
+            // answered, so a new ring or invitation for it can reach me.
+            if case .adhoc(let id)? = activeRoom {
+                declinedInvites.remove(id)
+                n = endingForAll ? nil : Notice(title: "Call unexpectedly ended",
+                                                message: "Check your connection.")
+            } else {
+                n = endingForAll ? nil : Notice(title: "Call unexpectedly ended",
+                                                message: "Check your connection and try joining again.")
+            }
         }
         Task {
             await disconnect()
@@ -1134,6 +1143,21 @@ final class GroupCallService: ObservableObject {
         }
     }
 
+    /// Audit M-018, 2026-10-07: a write that waits for the server's answer only `seconds` long.
+    /// true = written, false = refused, nil = no answer in time (still queued on the phone).
+    private static func setDataAcked(_ ref: DocumentReference, _ data: [String: Any],
+                                     within seconds: Double) async -> Bool? {
+        await withCheckedContinuation { (cont: CheckedContinuation<Bool?, Never>) in
+            let once = OnceFlag()
+            ref.setData(data) { error in
+                if once.claim() { cont.resume(returning: error == nil) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+                if once.claim() { cont.resume(returning: nil) }
+            }
+        }
+    }
+
     /// Audit M-099, 2026-10-07: end-of-call writes get the short background time iOS grants, given
     /// back when they finish or after 10 s, whichever comes first.
     private static func withBackgroundTime(_ name: String, _ work: @escaping @MainActor () async -> Void) {
@@ -1177,7 +1201,14 @@ final class GroupCallService: ObservableObject {
     /// because the token function checks membership against it, then joins. Returns the room id, or
     /// nil with `notice` set when it did not start.
     func startAdhoc(with people: [CallMember], video: Bool) async -> String? {
-        guard activeCid == nil, !connecting, !waitingForApproval else { return nil }
+        // Audit M-029, 2026-10-07: every way this returns nil now says why. "Add people" has already
+        // closed the 1:1 by the time it gets here, so a silent nil left both people with nothing.
+        // Already in (or waiting for) another call: no call screen is up for a notice, so an alert.
+        // A start of this same kind already running is the same tap twice, and stays quiet.
+        guard activeCid == nil, !connecting, !waitingForApproval else {
+            if !connecting { Self.presentOverTop(Self.busyNotice) }
+            return nil
+        }
         notice = nil
         closeLobbyForAnotherJoin()
         presentsRoomScreen = true
@@ -1186,7 +1217,7 @@ final class GroupCallService: ObservableObject {
         guard let mine = myMember() else { notice = Notice(title: "Call failed", message: nil); return nil }
         var seen: Set<String> = [mine.uid]
         let others = people.filter { seen.insert($0.uid).inserted }
-        guard !others.isEmpty else { presentsRoomScreen = false; return nil }
+        guard !others.isEmpty else { notice = Notice(title: "Call failed", message: nil); return nil }   // audit M-029
         let everyone = [mine] + others
         let roomId = "adhoc_" + UUID().uuidString.lowercased()
         connecting = true; isVideo = video
@@ -1211,10 +1242,22 @@ final class GroupCallService: ObservableObject {
             "startedAt": FieldValue.serverTimestamp(),
         ]
         let gen = joinGeneration   // owner audit 2026-10-06 #4
-        do {
-            try await db.collection("groupCalls").document(roomId).setData(doc)
-        } catch {
-            if gen != joinGeneration { await abandonJoin(); return nil }
+        let ref = db.collection("groupCalls").document(roomId)
+        // Audit M-018, 2026-10-07: the start write used to be awaited until the server confirmed
+        // it, which offline is never: `connecting` stayed true and every call was refused. Now it
+        // gets 8 s. The token function checks membership against this doc on the server, so the
+        // join cannot go ahead without it.
+        let wrote = await Self.setDataAcked(ref, doc, within: 8)
+        // A write that did not answer may still land later and ring everyone; the end goes in the
+        // queue right behind it. Not awaited: offline it would wait for ever too.
+        let stopRinging = { ref.updateData(["active": false, "endedAt": FieldValue.serverTimestamp()]) { _ in } }
+        guard gen == joinGeneration else {
+            if wrote != false { stopRinging() }
+            await abandonJoin()
+            return nil
+        }
+        guard wrote == true else {
+            if wrote == nil { stopRinging() }
             await failJoin(Notice(title: "Call failed", message: nil))
             return nil
         }
@@ -1223,10 +1266,9 @@ final class GroupCallService: ObservableObject {
         guard await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video, gen: gen) else {
             // owner audit 2026-10-06 #4: hung up before the room was up. The doc written above is
             // already ringing the others; stop it, or they answer into an empty call.
-            if gen != joinGeneration {
-                try? await db.collection("groupCalls").document(roomId)
-                    .updateData(["active": false, "endedAt": FieldValue.serverTimestamp()])
-            }
+            // Audit M-017, 2026-10-07: and the same when the token or the connect failed. Only a
+            // hang-up stopped the ringing before, so the others rang into an empty room.
+            stopRinging()
             return nil
         }
         await markJoined(roomId)
@@ -1239,21 +1281,34 @@ final class GroupCallService: ObservableObject {
         notice = nil
         closeLobbyForAnotherJoin()
         if incomingInvite?.roomId == roomId { incomingInvite = nil }
-        declinedInvites.insert(roomId)   // never ring again for a room I answered
         presentsRoomScreen = true
         guard !Self.oneToOneLive else { notice = Self.busyNotice; return }   // audit M-111
         connecting = true; isVideo = video
+        // Audit M-028, 2026-10-07: the room used to go into `declinedInvites` here, before any
+        // check, and stayed there whatever happened, so a join that failed for a second could never
+        // be rung or invited again. While joining, `joiningRoomId` makes its ring "mine"; the room
+        // is remembered as answered only once I am in.
+        joiningRoomId = roomId
         let gen = joinGeneration   // owner audit 2026-10-06 #4
-        let snap = try? await db.collection("groupCalls").document(roomId).getDocument()
+        let snap: DocumentSnapshot
+        do { snap = try await db.collection("groupCalls").document(roomId).getDocument() }
+        catch {
+            guard gen == joinGeneration else { await abandonJoin(); return }
+            // Audit M-028: a read that failed is not "the call ended".
+            connecting = false; joiningRoomId = nil
+            notice = Notice(title: "Couldn't join", message: nil)
+            return
+        }
         guard gen == joinGeneration else { await abandonJoin(); return }
-        guard let d = snap?.data(with: .estimate), d["active"] as? Bool == true else {
-            connecting = false
+        guard let d = snap.data(with: .estimate), d["active"] as? Bool == true else {
+            connecting = false; joiningRoomId = nil
             notice = Notice(title: "Call ended", message: nil)
             return
         }
         apply(roomData: d)
         listenRoom(roomId)
         if await connect(payload: ["roomId": roomId], room: .adhoc(id: roomId), video: video, gen: gen) {
+            declinedInvites.insert(roomId)   // never ring again for a room I answered
             await markJoined(roomId)
         }
     }
@@ -1902,6 +1957,18 @@ private final class BackgroundTimeHold {
         guard id != .invalid else { return }
         UIApplication.shared.endBackgroundTask(id)
         id = .invalid
+    }
+}
+
+/// Audit M-018, 2026-10-07: lets exactly one of two racing callbacks resume a continuation.
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var used = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if used { return false }
+        used = true
+        return true
     }
 }
 
