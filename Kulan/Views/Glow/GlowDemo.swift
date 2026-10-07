@@ -30,7 +30,7 @@ import UIKit
     static var isOn: Bool {
         guard DemoStoryMedia.isAvailable else { return false }
         let handle = (ProfileStore.shared.me?.handle ?? "").lowercased()
-        return handle == ownerHandle
+        return handle == ownerHandle || handle == ChatService.ownerShortHandle   // @realwarya or @v
     }
 
     // MARK: - The people

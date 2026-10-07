@@ -217,7 +217,7 @@ struct GlowInsightsView: View {
     /// Accounts whose Insights are never locked, at any Glower count (owner, 2026-09-30:
     /// "dont lock insights this user @realwarya"). ⚠️ Keyed by handle: if this account ever
     /// changes its username, update the name here.
-    static let alwaysOpen: Set<String> = ["realwarya"]
+    static let alwaysOpen: Set<String> = ["realwarya", "v"]   // both of the admin's names (2026-10-07)
 
     /// The one answer both the profile card and this page use.
     static func isUnlocked(glowers: Int, handle: String) -> Bool {
