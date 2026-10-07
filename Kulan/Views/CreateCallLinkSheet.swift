@@ -158,6 +158,9 @@ struct CreateCallLinkSheet: View {
             }
         }
         .presentationDragIndicator(.visible)
+        // A flat sheet, no rim (owner, 2026-10-07: "this sheet header has a border, remove it").
+        // Without its own background the iOS 26 sheet draws its glass edge around the top.
+        .presentationBackground(Color(.systemGroupedBackground))
         .alert("Couldn't change setting", isPresented: $approvalFailed) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -165,19 +168,18 @@ struct CreateCallLinkSheet: View {
         }
     }
 
-    /// Title in the middle, the blue check (Done) on the right. A plain header rather than a
-    /// navigation bar so the sheet can be exactly as tall as what it holds.
+    /// Title in the middle, the app's round glass X on the LEFT, the way Apple's own sheets close
+    /// (owner, 2026-10-07: "remove Done completely, X on the left like real Apple"). The X does what
+    /// Done did: saves the link, then closes. A plain header rather than a navigation bar so the
+    /// sheet can be exactly as tall as what it holds.
     private var header: some View {
         ZStack {
             Text("Call Link")
                 .font(.headline)
             HStack {
+                CloseXButton(diameter: 44) { done() }
+                    .accessibilityLabel("Close")
                 Spacer()
-                // Apple's own blue Liquid Glass button (owner, 2026-10-06), not plain text.
-                Button("Done") { done() }
-                    .font(.body.weight(.semibold))
-                    .buttonStyle(.glassProminent)
-                    .tint(.blue)
             }
         }
     }
