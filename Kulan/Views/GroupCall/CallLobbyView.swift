@@ -138,13 +138,17 @@ struct CallLobbyView: View {
         .animation(.easeInOut(duration: 0.2), value: statusLine)
     }
 
+    // The sizes below are measured from the owner's screenshot of the reference screen (2026-10-07):
+    // 56pt round buttons 10pt apart, 16pt down to the bar; the bar is a capsule 44pt in from each
+    // edge with 14pt of padding around two 48pt pills 8pt apart, Leave dark and Join green, and it
+    // sits 22pt above the home indicator.
     private var controls: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             if let note { noteLine(note) }
             mediaButtons
             actionBar
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, 22)
         .animation(.easeInOut(duration: 0.2), value: note)
     }
 
@@ -163,7 +167,7 @@ struct CallLobbyView: View {
     /// Camera and mic. Held still while a join runs: the call goes in the way they were left
     /// when Join was tapped, also after a wait at the door.
     private var mediaButtons: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 10) {
             round(icon: showsCamera ? "video.fill" : "video.slash.fill", on: showsCamera) {
                 toggleCamera()
             }
@@ -177,25 +181,26 @@ struct CallLobbyView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Button { leave() } label: { barLabel("Leave") }
             Button { join() } label: { joinLabel }
                 .disabled(locked)
                 .accessibilityLabel(joinSpoken)
         }
         .buttonStyle(.plain)
-        .padding(10)
+        .padding(14)
         .liquidGlass(Capsule(), interactive: false)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 44)
     }
 
-    /// The grey capsule: Leave, and Close on a dead link.
+    /// The dark pill: Leave, and Close on a dead link. Dark on the glass whatever is behind it, as
+    /// the reference draws it over a bright camera picture and over a dim photo alike.
     private func barLabel(_ text: String) -> some View {
         Text(text)
             .font(.headline)
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, minHeight: 54)
-            .background(Color.white.opacity(0.18), in: Capsule())
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(Color.black.opacity(0.4), in: Capsule())
     }
 
     /// Green with the word, or with a spinner while the join runs: the reference app spins its
@@ -210,7 +215,7 @@ struct CallLobbyView: View {
                     .foregroundStyle(.white)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 54)
+        .frame(maxWidth: .infinity, minHeight: 48)
         .background(Color.green, in: Capsule())
     }
 
@@ -234,10 +239,10 @@ struct CallLobbyView: View {
             Spacer()
             Button { leave() } label: { barLabel("Close") }
                 .buttonStyle(.plain)
-                .padding(10)
+                .padding(14)
                 .liquidGlass(Capsule(), interactive: false)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 44)
+                .padding(.bottom, 22)
         }
     }
 
@@ -247,7 +252,7 @@ struct CallLobbyView: View {
             Image(systemName: icon)
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(on ? .black : .white)
-                .frame(width: 62, height: 62)
+                .frame(width: 56, height: 56)
                 .background(on ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.black.opacity(0.45)), in: Circle())
         }
         .buttonStyle(.plain)

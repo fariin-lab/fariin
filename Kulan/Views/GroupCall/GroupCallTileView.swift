@@ -364,20 +364,26 @@ struct TileBackdrop: View {   // also the pre-join screen's camera-off backdrop
     }
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color(white: 0.22), Color(white: 0.12)],
-                           startPoint: .top, endPoint: .bottom)
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .interpolation(.medium)   // smooth upscale of the 64px copy
-                    .scaledToFill()
-                    .overlay(Color.black.opacity(0.35))   // keeps the white badges readable
-                    .transition(.opacity)
+        // The photo rides as an OVERLAY on the gradient, not as a sibling in a ZStack. A
+        // `scaledToFill` image is wider than the space it fills, and a ZStack takes its size from its
+        // widest child, so this backdrop reported a width past the screen's edge and everything laid
+        // out beside it followed: the pre-join screen's Leave and Join grew past both edges the moment
+        // the camera went off (owner, 2026-10-07). An overlay has no say in layout; the gradient alone
+        // sets the size, and the photo is clipped to it.
+        LinearGradient(colors: [Color(white: 0.22), Color(white: 0.12)],
+                       startPoint: .top, endPoint: .bottom)
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .interpolation(.medium)   // smooth upscale of the 64px copy
+                        .scaledToFill()
+                        .overlay(Color.black.opacity(0.35))   // keeps the white badges readable
+                        .transition(.opacity)
+                }
             }
-        }
-        .clipped()
-        .animation(GroupCallMotion.fade, value: image != nil)
+            .clipped()
+            .animation(GroupCallMotion.fade, value: image != nil)
         .task(id: photoUrl) {
             guard let s = photoUrl, !s.isEmpty else { image = nil; return }
             if let hit = TileBackdropBlur.cached(s) { image = hit; return }
