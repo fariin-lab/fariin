@@ -42,6 +42,8 @@ struct GroupCallParticipantsSheet: View {
     /// should offer Share link and Require approval, as the reference's call sheet does).
     /// After "Make a new link" this is the new one, so Share and Copy hand out the link that works.
     private var link: ActiveCallLink? { service.currentLink }
+    /// The link as it is handed out (shown, copied, shared, sent).
+    private var linkURL: URL? { link?.linkKey?.url }
 
     /// The link's owner, as the server's join answer named me (or the link doc's `creatorUid`, which
     /// only the server writes, for a server that does not send a role yet). Hiding these is a
@@ -116,75 +118,110 @@ struct GroupCallParticipantsSheet: View {
         }
     }
 
+    /// ⛔ THE LINK, SHOWN, AND THREE WAYS TO HAND IT ON (owner, 2026-10-07: "show me the link",
+    /// "easy, simple, minimalist"). The link itself in blue on two lines, the Call Link sheet's own
+    /// treatment, and Add / Copy / Share as one row of the Call Link sheet's round actions instead of
+    /// three list rows. An ad-hoc call has no link: Add people alone.
     @ViewBuilder private var shareSection: some View {
         if service.isAdhoc || link != nil {
             Section {
-                // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
-                // sends each person the link (a link call has no member list to add to).
-                if service.isAdhoc || (!service.linkRevoked && link?.linkKey?.url != nil) {
-                    Button { showAdd = true } label: {
-                        Label("Add people", systemImage: "person.badge.plus")
+                VStack(spacing: 14) {
+                    if !service.linkRevoked, let url = linkURL {
+                        Text(url.absoluteString.replacingOccurrences(of: "https://", with: ""))
+                            .font(.footnote)
+                            .foregroundStyle(Theme.defaultBubble(true))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .textSelection(.enabled)
+                            .animation(.easeInOut(duration: 0.2), value: url)
+                    }
+                    HStack(spacing: 10) {
+                        // Owner, 2026-10-06: Add people on a link call too. It opens my chats and
+                        // sends each person the link (a link call has no member list to add to).
+                        if service.isAdhoc || (!service.linkRevoked && linkURL != nil) {
+                            roundAction("person.badge.plus", "Add") { showAdd = true }
+                        }
+                        // Everyone may copy or share the link (the access table).
+                        if !service.linkRevoked, let url = linkURL {
+                            roundAction(copied ? "checkmark" : "doc.on.doc", copied ? "Copied" : "Copy") { copy(url) }
+                            ShareLink(item: url) { roundLabel("square.and.arrow.up", "Share") }
+                                .buttonStyle(.plain)
+                        }
                     }
                 }
-                // Everyone may copy or share the link (the access table); a revoked one
-                // is not handed out.
-                if !service.linkRevoked, let url = link?.linkKey?.url {
-                    Button { copy(url) } label: {
-                        Label(copied ? "Copied" : "Copy link", systemImage: "doc.on.doc")
-                    }
-                    .accessibilityLabel(copied ? "Link copied" : "Copy link")
-                    ShareLink(item: url) {
-                        Label("Share link", systemImage: "link")
-                    }
-                }
+                .padding(.vertical, 6)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             }
         }
     }
 
+    private func roundAction(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { roundLabel(icon, title) }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+    }
+
+    private func roundLabel(_ icon: String, _ title: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 18, weight: .medium))
+            Text(title).font(.footnote.weight(.medium))
+        }
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, minHeight: 64)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// ⛔ ONE BUTTON: REVOKE = A NEW LINK AT ONCE (owner, 2026-10-07: "when I click revoke, revoke
+    /// the old one and create a new one; remove the make-a-new-link button"). The server's
+    /// regenerate stops the old link and carries this call's room to the new one (`liveRoom`), so
+    /// joiners of the new link land here; the link above shows the new one as soon as it exists.
     @ViewBuilder private var hostSection: some View {
         if ownsLink, let link {
             Section {
-                if !service.linkRevoked {
-                    Toggle("Require approval to join",
-                           isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
-                        .disabled(approval == nil)
-                        .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
-                    Button(role: .destructive) { confirmRevoke = true } label: {
-                        Label("Revoke link", systemImage: "xmark.circle")
+                Toggle("Require approval to join",
+                       isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
+                    .disabled(approval == nil || service.linkRevoked)
+                    .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
+                Button(role: .destructive) { confirmRevoke = true } label: {
+                    HStack {
+                        Label("Revoke link", systemImage: "arrow.triangle.2.circlepath")
+                        if makingLink { Spacer(); ProgressView() }
                     }
-                    .accessibilityHint("No one new can join with this link. The call continues.")
-                }
-                // ⛔ A NEW LINK INSIDE THE CALL, BACK (owner, 2026-10-07: "I revoked the link,
-                // now there is no way for anyone to get in again"). It was removed on 2026-10-06
-                // because a new link opened a different, empty room. The server now carries this
-                // call's room over to the new link (`liveRoom`), so its joiners land here, and
-                // Share / Copy above hand out the new link from then on.
-                Button { makeNewLink() } label: {
-                    Label("Make a new link", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .disabled(makingLink)
-                .accessibilityHint("The old link stops working. People join this call with the new one.")
+                .accessibilityHint("The old link stops working and a new one is made for this call.")
             } footer: {
-                if service.linkRevoked {
-                    Text("This link no longer works. Make a new link to let people join this call again.")
-                }
+                Text("Revoking stops the old link and makes a new one for this call at once.")
             }
         }
     }
+
+    /// The people I may mute who are not muted yet.
+    private var mutable: [CallTile] { inCall.filter { canModerate($0) && !$0.isMuted } }
 
     @ViewBuilder private var inCallSection: some View {
         Section {
             ForEach(inCall) { inCallRow($0) }
         } header: {
             // The reference app's header: bold title, count in regular weight (spec §16:
-            // how many are in the call).
+            // how many are in the call). Mute all beside it for whoever may mute (owner, 2026-10-07:
+            // "an easy way to mute users").
             HStack(spacing: 0) {
                 Text("In call").fontWeight(.semibold)
                 Text(" · \(stage.inCallCount)")
+                Spacer()
+                if mutable.count > 1 {
+                    Button("Mute all") { for t in mutable { run(.mute, target: t.uid) } }
+                        .font(.subheadline.weight(.semibold))
+                        .textCase(nil)
+                }
             }
             .textCase(nil)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("In call, \(stage.inCallCount)")
+            .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isHeader)
         }
     }
@@ -259,9 +296,9 @@ struct GroupCallParticipantsSheet: View {
                 Button("OK", role: .cancel) {}
             } message: { Text("Check your connection and try again.") }
             .alert("Revoke this link?", isPresented: $confirmRevoke) {
-                Button("Revoke", role: .destructive) { revokeLink() }
+                Button("Revoke", role: .destructive) { makeNewLink() }
                 Button("Cancel", role: .cancel) {}
-            } message: { Text("No one new can join with this link. The call continues.") }
+            } message: { Text("The current link stops working and a new one is made for this call. The call continues.") }
             .alert(errorTitle, isPresented: errorShown) {
                 Button("OK", role: .cancel) {}
             }
@@ -464,14 +501,30 @@ struct GroupCallParticipantsSheet: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilityText(t))
         } else if canModerate(t) {
-            // Two controls in one row: borderless, so the row tap and the menu each keep their own.
+            // Three controls in one row: borderless, so the row tap, the mic and the menu each keep
+            // their own. The mic is the one-tap mute (owner, 2026-10-07); a muted person's mic is
+            // shown struck through and does nothing, since only they can turn it back on.
             HStack(spacing: 4) {
                 focusButton(t).buttonStyle(.borderless)
+                muteButton(t).buttonStyle(.borderless)
                 actionsMenu(t).buttonStyle(.borderless)
             }
         } else {
             focusButton(t)
         }
+    }
+
+    private func muteButton(_ t: CallTile) -> some View {
+        Button { run(.mute, target: t.uid) } label: {
+            Image(systemName: t.isMuted ? "mic.slash.fill" : "mic.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(t.isMuted ? Color.secondary : Color.primary)
+                .frame(width: 38, height: 38)
+                .background(Color(.tertiarySystemFill).opacity(t.isMuted ? 0 : 1), in: Circle())
+                .contentShape(Circle())
+        }
+        .disabled(t.isMuted)
+        .accessibilityLabel(t.isMuted ? "\(t.name) is muted" : "Mute \(t.name)")
     }
 
     private func focusButton(_ t: CallTile) -> some View {
