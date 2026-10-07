@@ -2193,8 +2193,22 @@ service cloud.firestore {
     //  - END: `active: false` and nothing else, by any member (the last one out clears it).
     // No delete: nothing in the app deletes it.
     match /groupCalls/{cid} {
+      // audit M-077 (2026-10-07): a GROUP chat only. A one-to-one chat's id passed too, so a stranger
+      // could start a "group call" on it and ring somebody past their Calls setting and the 1:1 ring
+      // limit. The app opens group calls only from a chat whose type is 'group' (Conversation.isGroup).
       function isGroupMember() {
-        return request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.users;
+        let conv = get(/databases/$(database)/documents/conversations/$(cid)).data;
+        return conv.get('type', '') == 'group' && request.auth.uid in conv.users;
+      }
+      // audit M-133 (2026-10-07): `startedAt` is the server's clock, never the writer's. The app writes
+      // serverTimestamp(), which is exactly request.time. A doc may also carry the start time it
+      // already has (the starter's merge {active:true} confirm keeps it), but never a made-up one.
+      // Missing stays allowed, as before, for any build that never wrote it.
+      function startStampNew() {
+        return !('startedAt' in request.resource.data) || request.resource.data.startedAt == request.time;
+      }
+      function startStampNewOrKept() {
+        return startStampNew() || request.resource.data.startedAt == resource.data.get('startedAt', null);
       }
       // owner 2026-10-06 call roles: `recordId` is the chat record the app's start write has carried
       // since 2026-09-24 (GroupCallService.join); the old key list refused that write outright.
@@ -2238,29 +2252,58 @@ service cloud.firestore {
       }
       allow read: if signedIn() && !isAdhoc() && isGroupMember();
       allow create: if signedIn() && !isAdhoc() && isGroupMember() && isStartWrite()
-        && !('removedUids' in request.resource.data);
+        && !('removedUids' in request.resource.data)
+        && startStampNew();
+      // audit M-034 (2026-10-07): somebody the owner removed from this call (still in `removedUids`)
+      // may not switch it off for everyone on the way out.
       allow update: if signedIn() && !isAdhoc() && isGroupMember() && groupRemovedKept() && (
-           (isStartWrite()
+           (isStartWrite() && startStampNewOrKept()
              && (resource.data.get('active', false) != true
                  || resource.data.get('startedBy', '') == request.auth.uid
                  || (resource.data.get('startedAt', null) is timestamp
                      && resource.data.startedAt < request.time - duration.value(4, 'h'))))
         || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active'])
-            && request.resource.data.active == false)
+            && request.resource.data.active == false
+            && !(request.auth.uid in resource.data.get('removedUids', [])))
       );
 
       // Keyed on the doc's own `members`, NOT on isAdhoc(): the Calls tab and the invite listener
       // QUERY this collection (members array-contains me), and a list query cannot be proven
       // against the document id. Group docs never carry `members` (their create allows only the
       // five start keys), so this can only ever open an ad-hoc call to someone on its list.
+      // audit M-066 (2026-10-07): `joined` ends a member's ring on every phone (GroupCallRinging), and
+      // any member could rewrite it to silence somebody else. Now it only grows, and only by the
+      // writer's own uid (GroupCallService.markJoined writes arrayUnion([me])). The server's removal
+      // of a person (callAdmin) does not pass through the rules.
+      function adhocJoinedGrowsByMe() {
+        return request.resource.data.get('joined', []) is list
+          && request.resource.data.get('joined', []).hasAll(resource.data.get('joined', []))
+          && request.resource.data.get('joined', []).toSet()
+               .difference(resource.data.get('joined', []).toSet()).hasOnly([request.auth.uid]);
+      }
+      // audit M-065 (2026-10-07): `invitedAt` is a per-person ring clock ({uid: time}), written by the
+      // adder in the same update that adds the person, so a late add rings for its own full window and
+      // the others' clocks stay where they were. Only entries for people THIS write adds may be set.
+      // Not tied to the current member list on later writes: an entry for somebody the server later
+      // took off the list must not make every following app write fail.
+      function adhocInvitedAtOk() {
+        let added = request.resource.data.members.toSet().difference(resource.data.members.toSet());
+        return request.resource.data.get('invitedAt', {}) is map
+          && request.resource.data.get('invitedAt', {}).diff(resource.data.get('invitedAt', {}))
+               .affectedKeys().difference(added).size() == 0;
+      }
       allow read: if signedIn() && request.auth.uid in resource.data.get('members', []);
       allow create: if signedIn() && isAdhoc()
         && request.resource.data.keys().hasOnly(['kind', 'active', 'startedBy', 'video', 'title', 'members',
-                                                 'names', 'photos', 'joined', 'startedAt', 'endedAt'])
+                                                 'names', 'photos', 'joined', 'startedAt', 'endedAt',
+                                                 'invitedAt'])
         && request.resource.data.kind == 'adhoc'
         && request.resource.data.startedBy == request.auth.uid
         && adhocMembersOk()
-        && adhocMapOk('names') && adhocMapOk('photos');
+        && adhocMapOk('names') && adhocMapOk('photos') && adhocMapOk('invitedAt')
+        && request.resource.data.get('joined', []) is list
+        && request.resource.data.get('joined', []).hasOnly([request.auth.uid])
+        && startStampNew();
       // Members only ever grow: nobody can take a person off an invite list they did not write.
       // owner 2026-10-06 call roles: `startedBy` (the call's owner) and `removedUids` (people the owner
       // removed, written by callAdmin) stay outside the keys a phone may touch. Nobody may put a removed
@@ -2272,12 +2315,14 @@ service cloud.firestore {
       allow update: if signedIn() && isAdhoc()
         && request.auth.uid in resource.data.members
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['active', 'members', 'names', 'photos', 'joined', 'endedAt', 'title'])
+             .hasOnly(['active', 'members', 'names', 'photos', 'joined', 'endedAt', 'title', 'invitedAt'])
         && adhocMembersOk()
         && request.resource.data.members.hasAll(resource.data.members)
         && !request.resource.data.members.hasAny(resource.data.get('removedUids', []))
         && (request.resource.data.active == false || resource.data.active == true)
-        && adhocMapGrowsOnly('names') && adhocMapGrowsOnly('photos');
+        && adhocMapGrowsOnly('names') && adhocMapGrowsOnly('photos')
+        && adhocJoinedGrowsByMe()
+        && adhocInvitedAtOk();
     }
 
     // 2026-10-04 calls: call links. Written by the Cloud Functions only (createCallLink and friends);
