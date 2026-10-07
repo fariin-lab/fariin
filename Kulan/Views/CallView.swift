@@ -646,8 +646,13 @@ struct CallView: View {
         .onChange(of: visible) { was, shows in
             guard shows, !was, call.isVideo, !isLocalExpanded else { return }
             // M-056: only the first connect of a call that was showing my live camera full screen.
-            guard ringingPreviewShown, call.cameraOn, call.localVideoTrack != nil else { return }
+            // Round 2 (verify V3 N4), 2026-10-07: the flag is SPENT at the first tile appearance
+            // whatever happens next. Checked together with `cameraOn`, a camera turned off while
+            // ringing out (allowed since M-052) left it set, and the flash came back later in the call
+            // the first time my camera came on with the tile newly showing.
+            guard ringingPreviewShown else { return }
             ringingPreviewShown = false
+            guard call.cameraOn, call.localVideoTrack != nil else { return }
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { tileEntering = true }
