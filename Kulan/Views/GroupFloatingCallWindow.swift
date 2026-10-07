@@ -48,7 +48,9 @@ struct GroupFloatingCallWindow: View {
                 .offset(dragLive)
                 .gesture(drag(in: geo.size))
                 // CallContainer re-presents GroupCallView when `minimized` clears.
-                .onTapGesture { service.minimized = false }
+                // Through the morph, the 1:1 card's way: the screen grows out of this card over
+                // 0.35s instead of cutting straight in (owner, 2026-10-07).
+                .onTapGesture { CallPipMorph.restore { service.minimized = false } }
                 .padding(.top, insets.top + 8 + base.height)
                 .padding(.trailing, 12 - base.width)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -151,7 +153,14 @@ struct GroupFloatingCallWindow: View {
         for p in remotes {
             if let track = p.firstCameraVideoTrack { live.append((id: Self.key(p), track: track)) }
         }
-        guard let first = live.first else { return nil }
+        // MY OWN CAMERA when nobody else has one on (owner, 2026-10-07: a link call minimized with
+        // the camera on showed "No one else is here" on a black card, the video gone). The call
+        // screen fills with my camera when I am alone; the card it shrinks into must too.
+        guard let first = live.first else {
+            let me = room.localParticipant
+            if service.cameraOn, let mine = me.firstCameraVideoTrack { return (id: Self.key(me), track: mine) }
+            return nil
+        }
         var speaking: [String] = []   // loudest first, as the room lists them
         for speaker in room.activeSpeakers where speaker is RemoteParticipant {
             speaking.append(Self.key(speaker))

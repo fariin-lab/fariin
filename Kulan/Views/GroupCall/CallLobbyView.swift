@@ -84,7 +84,7 @@ struct CallLobbyView: View {
                 }
             }
         }
-        .task { await load() }
+        .task { service.warmJoin(); await load() }   // wake the token mint before Join is tapped
         .task { await watchLink() }
         .onChange(of: runsPreview) { _, on in on ? preview.start() : preview.stop() }
         .onChange(of: service.lobbyError) { _, text in

@@ -908,7 +908,12 @@ struct CallContainer<Content: View>: View {
         // its return bar too. Restoring the flag on dismiss puts the bar back either way.
         .fullScreenCover(isPresented: $showGroupRestore, onDismiss: {
             if group.isActive { group.minimized = true }
-        }) { GroupCallView() }
+        }) {
+            // The probe picks up a pending restore from the card (`CallPipMorph.restore`), so the
+            // group call grows out of its card like a 1:1 call instead of cutting in (owner,
+            // 2026-10-07: "the opening animation is too fast").
+            GroupCallView().background(CallPipMorphProbe())
+        }
         // 2026-09-24 decision D26: clearing `minimized` from anywhere else (the Calls tab row) brings
         // the group call forward the same way the bar's tap does. Only `disconnect()` also clears it,
         // and by then the call is no longer active.

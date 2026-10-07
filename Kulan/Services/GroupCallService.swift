@@ -972,6 +972,13 @@ final class GroupCallService: ObservableObject {
         let iAmCreator: Bool
     }
 
+    /// Wakes the token function while the pre-join screen is up, so Join does not wait on its cold
+    /// start (owner, 2026-10-07: "after I tap Join it loads a long time"). Fire and forget; the
+    /// server answers `{warm:true}` before doing anything (functions/index.js groupCallToken).
+    func warmJoin() {
+        functions.httpsCallable("groupCallToken").call(["warm": true]) { _, _ in }
+    }
+
     /// nil = the server could not be asked (offline, or an older server): the lobby then shows the
     /// link without the extras and Join works as it always has.
     func peekLink(key: String) async -> LinkPeek? {
