@@ -854,7 +854,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// disagree. Theirs takes the same view — a reader within a screenful of the end short-circuits
     /// to the bottom of the load window rather than restoring a row.
     private func reportReadingPosition() {
-        guard didFirstLand, !isDisappearing else { return }
+        // Not while the chat is still landing (the hold): a position measured mid-settle would be
+        // saved over the one that was just restored, and the next reopen would land on the drift.
+        guard didFirstLand, !isDisappearing, Date() >= landingHoldUntil else { return }
         if isAtNewest || rowsHiddenBelow(atMost: Self.meaningfulScrollRows) < Self.meaningfulScrollRows {
             onReadingPosition(nil); return
         }
@@ -1492,6 +1494,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                     }
                 }
             }
+            reassertLandingIfHeld()   // a guessed row above a just-landed reader: the landing, not the anchor, is the truth
         }
         DispatchQueue.main.async { [weak self] in self?.settleEstimatedHeights() }
     }
@@ -3032,6 +3035,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // owner audit 2026-10-06 chat #50: the reader is being moved on purpose, so the one-shot
             // landing re-pin must not pull them back to where the chat opened.
             self.awaitingInitialRepin = false
+            self.endLandingHold()
             self.revealNow()
             self.collectionView.layoutIfNeeded()
             // ⚠️ TEMPORARY: one of three places can animate a reader to the newest message, and
@@ -3055,6 +3059,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0   // never let the fallback channel go stale
+            self.reassertLandingIfHeld()   // the first live snapshot landing on a just-restored reader
             self.lastStableOffset = self.collectionView.contentOffset.y
             if let target = scrollTarget {
                 // The land itself passed the gate, but the completion can run later than it: if the
@@ -3149,6 +3154,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // owner audit 2026-10-06 chat #50: a jump is the reader being moved on purpose, so the
         // one-shot landing re-pin must not pull them back to where the chat opened.
         awaitingInitialRepin = false
+        endLandingHold()
         revealNow()   // a jump outranks the landing; nothing is left for a deferred reveal to wait for
         // Sentinel: the scroll-to-latest button and an own send while scrolled up route here.
         if target == "BOTTOM" {
@@ -3255,6 +3261,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         didFirstLand = true
         perform(.initialPosition)
+        // The row and placement this land used, kept for every re-assert of it (`reapplyLanding`):
+        // the live `initialScrollId` moves on for an unread landing, and the saved offset can be
+        // re-saved mid-settle. What landed is what must be put back.
+        landedTarget = (initialScrollId, initialScrollOffset)
+        armLandingHold()
         // ⛔ REVEAL IN THIS TURN, NOT THE NEXT ONE — his report, 2026-08-27: "it draws in front of
         // me, everything shows up after I open", worse from a notification. The measuring was never
         // the problem and still is not; the wait after it was. This used to hand `reveal` to
@@ -3284,6 +3295,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let target = pendingScrollTarget {
             pendingScrollTarget = nil
             awaitingInitialRepin = false
+            endLandingHold()
             revealNow()   // no re-pin is coming; a deferred reveal must not wait for one
             parkScrollTarget(target)
         }
@@ -3328,20 +3340,49 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard abs(top - landed) > 0.5 else { return }
         awaitingInitialRepin = false
         landedTopInset = top
-        // owner audit 2026-10-06 chat #50: an unread landing re-pins the row it LANDED on (see
-        // `landedUnreadId`); the live id may have moved on with a message that arrived since.
-        if let unreadId = landedUnreadId {
-            let liveId = initialScrollId, liveOffset = initialScrollOffset
-            initialScrollId = unreadId
-            initialScrollOffset = nil   // the placement it landed with, whatever the live tiers say now
-            perform(.initialPosition)
-            initialScrollId = liveId
-            initialScrollOffset = liveOffset
-        } else {
-            perform(.initialPosition)
-        }
-        recordDistanceFromBottom()
+        // owner audit 2026-10-06 chat #50: an unread landing re-pins the row it LANDED on, not the
+        // live id, which may have moved on with a message that arrived since (`landedTarget`).
+        reapplyLanding()
+        armLandingHold()   // the bar arriving is the first settle, not the last; see the hold
         revealNow()   // the restored row is in its final place: this is the first frame worth showing
+    }
+
+    /// ⛔ THE LANDING HOLD — owner, 2026-10-07, fourth report of the reopen jump, after the bar's
+    /// re-pin and the deferred reveal had not cured it. After the first land the chat is still
+    /// settling for about a second: the composer's clearance arrives and the reader is moved by its
+    /// change (the keyboard rule in `updateInsets`), guessed rows take their real heights
+    /// (`settleEstimatedHeights`), the first live snapshot applies. Each of those is right for a
+    /// reader who has been in the chat a while, and each is wrong for a reader who has just been put
+    /// on a saved row: it pushes that row off its place by a few points, which is the small jump he
+    /// sees on every reopen and the reason the position was "not restored correctly". For 1.2s after
+    /// a land, and only until the first finger or jump, each of them puts the landed row back instead.
+    private var landingHoldUntil = Date.distantPast
+    /// What the first land placed: the row id and its offset below the top (nil offset = the
+    /// first-unread or newest placement). `reapplyLanding` lands on this, never on the live tiers.
+    private var landedTarget: (id: String?, offset: CGFloat?)?
+    private func armLandingHold() { landingHoldUntil = Date().addingTimeInterval(1.2) }
+    private func endLandingHold() { landingHoldUntil = .distantPast }
+    /// Inside the hold and with nobody moving the list: land again, on the same row. False otherwise,
+    /// so the caller does its ordinary work.
+    @discardableResult
+    private func reassertLandingIfHeld() -> Bool {
+        guard didFirstLand, Date() < landingHoldUntil, !isDisappearing,
+              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+              !sendAnimating, !programmaticScrollAnimating else { return false }
+        reapplyLanding()
+        return true
+    }
+    /// The same `perform(.initialPosition)` the first land used, on the row and offset it landed with.
+    private func reapplyLanding() {
+        let liveId = initialScrollId, liveOffset = initialScrollOffset
+        if let target = landedTarget {
+            initialScrollId = target.id
+            initialScrollOffset = target.offset
+        }
+        perform(.initialPosition)
+        initialScrollId = liveId
+        initialScrollOffset = liveOffset
+        recordDistanceFromBottom()
     }
     /// The row an unread (or focus) landing put the reader on, for its one re-pin. Nil for a restored
     /// landing, which re-pins against the live id and offset exactly as before.
@@ -4287,6 +4328,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
             lastAppliedClearance = bottom
             owedShiftAtOffset = nil   // chat #36: paid
+        } else if reassertLandingIfHeld() {
+            // Inside the landing hold: the row the chat opened on goes back to its place instead of
+            // following the composer's clearance (owner, 2026-10-07: the reopen jump). The lockstep
+            // rule below is for a reader who is in the chat, not one who is still arriving.
+            lastAppliedClearance = bottom
+            owedShiftAtOffset = nil
         } else if isViewCompletelyAppeared {
             // ⛔ THEIR `isViewCompletelyAppeared` GATE, on the lockstep branch only, exactly where
             // theirs sits. During a push, a pop, or the return from a pushed screen the geometry is
@@ -5601,7 +5648,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         RxTrace.log("scroll y=\(scrollView.contentOffset.y) insetTop=\(scrollView.contentInset.top) h=\(scrollView.contentSize.height)")
         // A finger on the list ends the one-shot re-pin: whatever the insets do from here, this
         // reader has chosen where they are. See `repinIfTopInsetArrived`.
-        if scrollView.isDragging || scrollView.isTracking { awaitingInitialRepin = false; revealNow() }
+        if scrollView.isDragging || scrollView.isTracking { awaitingInitialRepin = false; endLandingHold(); revealNow() }
         // THE WALLPAPER SLICES FOLLOW THE SCROLL, BEFORE ANY OF THE GUARDS BELOW. An incoming bubble
         // on a wallpaper shows the piece of blurred wallpaper that sits under it (see
         // `WallpaperBlur`), and a cell that scrolls is moved by this view's offset, not laid out — so
