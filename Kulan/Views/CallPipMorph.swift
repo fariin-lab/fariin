@@ -37,6 +37,21 @@ enum CallPipMorph {
     /// start a restore anyway (the card is invisible but still hit-testable), snapshotting the
     /// half-flown overlay as the card. Taps are ignored until the flight lands.
     private static var minimizeInFlight = false
+    /// Audit M-147, 2026-10-07: the overlay of the minimize flight now on screen, so a call forced
+    /// back to full screen mid-flight can take it down at once instead of the shrinking picture
+    /// drawing over the live call screen until it lands.
+    private static weak var flightBox: UIView?
+
+    /// Takes the minimize flight down now, if one is on screen. Called when the call screen is wanted
+    /// back while it flies (`CallContainer`), and by the flight itself when it finds nothing to fly to.
+    static func cancelMinimizeFlight() {
+        guard let box = flightBox else { return }
+        flightBox = nil
+        minimizeInFlight = false
+        CallService.shared.cardHiddenForMorph = false
+        box.layer.removeAllAnimations()
+        box.removeFromSuperview()
+    }
 
     private static var keyWindow: UIWindow? {
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
@@ -51,6 +66,10 @@ enum CallPipMorph {
     /// Minimize. `commit` flips the call to minimized (the cover leaves with no animation and the card
     /// is placed); the shrink is drawn over that.
     static func minimize(_ commit: () -> Void) {
+        // Audit M-147, 2026-10-07: a second tap while the first flight is still on screen (the cover
+        // can still take a touch in the beat before it goes) stacked a second full-screen box over
+        // the first. The first tap has already minimized; the second has nothing left to do.
+        guard !minimizeInFlight else { return }
         guard let win = keyWindow, let top = topPresented(win),
               let screen = top.view.snapshotView(afterScreenUpdates: false) else { commit(); return }
         let box = UIView(frame: win.bounds)
@@ -66,18 +85,27 @@ enum CallPipMorph {
         box.addSubview(screen)
         win.addSubview(box)
         minimizeInFlight = true
+        flightBox = box
         commit()
         // A beat for SwiftUI to take the cover down, lay the card out and report its frame. The
         // overlay covers the whole screen meanwhile, so nothing is seen to wait.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
             do {
+                // M-147: the call was forced back to full screen in that beat (their camera came
+                // on), or the flight was already cancelled. Nothing to fly into: take the box away.
+                guard flightBox === box else { box.removeFromSuperview(); return }
+                if !CallService.shared.minimized && !GroupCallService.shared.minimized {
+                    cancelMinimizeFlight()
+                    return
+                }
                 let target = CallService.shared.cardFrame
                 guard target.width > 1, win.bounds.contains(target.insetBy(dx: 4, dy: 4)) else {
                     // No card to fly to (a stashed tab, or not laid out): their fade alone.
                     InstantCover.release()
                     UIView.animate(withDuration: duration, animations: { box.alpha = 0 },
                                    completion: { _ in
-                                       minimizeInFlight = false
+                                       // M-147: only the flight still on record clears the flag.
+                                       if flightBox === box { minimizeInFlight = false; flightBox = nil }
                                        box.removeFromSuperview()
                                    })
                     return
@@ -114,8 +142,13 @@ enum CallPipMorph {
                     screen.frame = fillFrame(win.bounds.size, in: target.size)
                     card?.frame = CGRect(origin: .zero, size: target.size)
                 }, completion: { _ in
-                    minimizeInFlight = false
-                    CallService.shared.cardHiddenForMorph = false
+                    // M-147: a cancelled flight has already cleaned up, and must not clear the flag
+                    // of a newer one.
+                    if flightBox === box {
+                        minimizeInFlight = false
+                        flightBox = nil
+                        CallService.shared.cardHiddenForMorph = false
+                    }
                     box.removeFromSuperview()
                 })
             }

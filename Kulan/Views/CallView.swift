@@ -943,7 +943,9 @@ struct CallContainer<Content: View>: View {
             // In: animated only when coming back from the card (it has existed this call).
             // Out: animated only when minimizing; a call that has ended just goes.
             // Both ways a hard cut; the card flight is `CallPipMorph`'s (2026-10-06).
-            if want { presentCover(animated: false) } else { dismissCover(animated: false) }
+            // Audit M-147, 2026-10-07: wanted back while still shrinking into the card (their camera
+            // came on mid-flight) → the flight's overlay goes first, or it draws over the call screen.
+            if want { CallPipMorph.cancelMinimizeFlight(); presentCover(animated: false) } else { dismissCover(animated: false) }
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
         // GroupCallView's own swipe-down sets `minimized` back to true, but a swipe on the COVER
@@ -965,6 +967,7 @@ struct CallContainer<Content: View>: View {
         .onChange(of: group.minimized) { _, minimized in
             // Same hard cut as the 1:1 cover (the reference app uses one call window for both).
             if !minimized, groupLive, !showGroupRestore {
+                CallPipMorph.cancelMinimizeFlight()   // M-147, as the 1:1 cover
                 presentGroupRestore()
             }
         }
