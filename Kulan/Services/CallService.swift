@@ -5,6 +5,7 @@ import UIKit   // app-lifecycle notification (foreground backstop for the backgr
 import UserNotifications   // "sharing video" note when their camera comes on while we're backgrounded
 import CoreMedia
 import Network   // NWPathMonitor: notice a Wi-Fi <-> cellular switch before ICE does
+import Combine   // audit M-106: the late "broadcast started" guard after an abandoned share
 import WebRTC
 import FirebaseAuth
 import FirebaseFirestore
@@ -69,7 +70,9 @@ final class CallService: NSObject {
         didSet {
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
-            if state == .outgoing, cameraOn {
+            // Audit M-049, 2026-10-07: not with AirPods, a headset or a car connected. The override
+            // pulled a video call's audio out of the AirPods onto the loudspeaker.
+            if state == .outgoing, cameraOn, !externalOutputAround {
                 // Outgoing VIDEO call: ringback through the LOUDSPEAKER — you're looking at
                 // your preview at arm's length, not holding the phone to your ear.
                 isSpeaker = true; wantsSpeaker = true
@@ -85,7 +88,10 @@ final class CallService: NSObject {
                 // from .reconnecting, and applying the default each time put a video call the person
                 // had moved to the earpiece back on the loudspeaker after any network blip. The
                 // default is the call's starting point, not a rule that outranks their choice.
-                if !videoSpeakerDefaultApplied, cameraOn || startedAsVideo {
+                // Audit M-010 / M-049, 2026-10-07: never over the person's own pick (a speaker tap
+                // during "Calling..." used to be overruled here), and never with a device connected.
+                if !videoSpeakerDefaultApplied, cameraOn || startedAsVideo,
+                   !speakerChosenByUser, !externalOutputAround {
                     videoSpeakerDefaultApplied = true
                     isSpeaker = true; wantsSpeaker = true
                 }
@@ -93,8 +99,14 @@ final class CallService: NSObject {
                 // Back from .reconnecting: re-send "can they hear me". A mute write made while the
                 // link was down can be lost, and the other side's muted icon would stay wrong until
                 // the next toggle (owner audit 2026-10-06 #36). One write per recovery.
-                if oldValue == .reconnecting { broadcastMuteState() }
+                // Audit M-051, 2026-10-07: and on the FIRST entry from the ring when already muted or
+                // held. A mute tapped during "Calling..." could be written before the doc existed, or
+                // lost, and nothing sent it again, so the other side never saw it for the whole call.
+                if oldValue == .reconnecting
+                    || (oldValue != .active && (isMuted || isHeld)) { broadcastMuteState() }
                 if oldValue == .reconnecting, screenSharing { broadcastScreenState() }   // same reason
+                // Audit M-121, 2026-10-07: the camera signal too (a share's write above carries it).
+                if oldValue == .reconnecting, !screenSharing { broadcastCameraState() }
                 startRouteObservation()   // smart speaker button: track where audio actually goes
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 startHeartbeat()             // prove we're alive; detect a force-quit on the other side
@@ -117,16 +129,20 @@ final class CallService: NSObject {
                 connectedDate = nil; isMuted = false; isSpeaker = false
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 videoSpeakerDefaultApplied = false   // the next call gets its own default (#6)
+                speakerChosenByUser = false          // audit M-010: so does its own choice
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
                 stopPathMonitor()
                 restartRequestsSent = 0; restartRequestsSeen = 0
+                restartInFlightAt = nil; pcIceServersFetchedAt = nil   // audit M-117, M-009
+                transportFailed = false                                // audit M-042
                 stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 callAudioLive = false
                 everMinimized = false
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 micDenied = false
+                cameraDenied = false   // audit M-011
                 // ⚠️ RESET WITH EVERYTHING ELSE. A timeline left standing would measure the second
                 // call of a session from the first call's origin, which is worse than no measurement
                 // at all: the numbers still look like numbers.
@@ -500,6 +516,13 @@ final class CallService: NSObject {
     @ObservationIgnored private var screenCapturer: ScreenShareCapturer?
     /// Gives up on a picker that was opened but never started a broadcast, so we stop listening.
     @ObservationIgnored private var screenSharePendingTimeout: DispatchWorkItem?
+    /// Audit M-106, 2026-10-07: after a pending share is abandoned, answers a late "broadcast started"
+    /// with a stop request for 60s. See `armLateShareStop`.
+    @ObservationIgnored private var lateShareStop: AnyCancellable?
+    @ObservationIgnored private var lateShareStopExpiry: DispatchWorkItem?
+    /// Audit M-107, 2026-10-07: the share's own weak-link windows and whether its cap is lowered.
+    @ObservationIgnored private var shareLinkPolicy = WeakLinkPolicy(floorBitrate: 800_000, pauseAfter: 5, resumeAfter: 15)
+    @ObservationIgnored private var shareBitrateLowered = false
     private(set) var callId: String?
     /// Readable so the call screen can draw a verified mark beside the name. Still only writable in
     /// here: who is on the other end of a call is decided by the signalling, never by a view.
@@ -760,13 +783,60 @@ final class CallService: NSObject {
     /// STUN fallback rather than fail the call — a call that might not traverse beats no call at all — and
     /// the in-flight fetch is left running so the NEXT call is warm either way.
     private func awaitIceServers(timeout: Double = 2.0) async {
-        if fetchedIceServers != nil { return }
+        if fetchedIceServers != nil {
+            // Audit M-009, 2026-10-07: a list still inside its 90 minutes can be 89 minutes old, which
+            // leaves a call started on it about half an hour before the relay refuses its credentials.
+            // Past 30 minutes, ask for a fresh one and wait a short, bounded moment for it; on timeout
+            // the old list (still valid) is used and the fetch keeps running for the restart path
+            // (`applyNewerIceServers`).
+            guard let at = iceServersFetchedAt,
+                  Date().timeIntervalSince(at) > Self.iceServersRefreshAge else { return }
+            let refresh = Task { await self.refreshIceServers() }
+            let until = Date().addingTimeInterval(min(timeout, 1.0))
+            while iceServersFetchedAt == at, Date() < until {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            _ = refresh
+            return
+        }
         let fetch = Task { await self.refreshIceServers() }
         let deadline = Date().addingTimeInterval(timeout)
         while fetchedIceServers == nil, Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         _ = fetch   // deliberately NOT cancelled: let it finish and warm the next call
+    }
+
+    /// Audit M-009, 2026-10-07: past this age a list is refreshed at call start and on a drop.
+    private static let iceServersRefreshAge: TimeInterval = 30 * 60
+    /// When the list the LIVE connection was built with was fetched; nil = the STUN-only fallback.
+    /// The connection used to keep its creation-time servers for life, so a call that started on the
+    /// fallback (the TURN list landed a few seconds late) could never get a relay, and every ICE
+    /// restart on carrier NAT failed the same way. Compared with `iceServersFetchedAt` to tell when a
+    /// newer list is in hand.
+    private var pcIceServersFetchedAt: Date?
+
+    /// Audit M-009, 2026-10-07: hand the live connection a newer TURN list than the one it was built
+    /// with, if one is cached. Called right before an ICE restart (both sides), because only the
+    /// gathering a restart starts uses the new servers. Everything else in `config` is unchanged, so
+    /// libwebrtc accepts the change mid-call.
+    private func applyNewerIceServers(to connection: RTCPeerConnection) {
+        guard fetchedIceServers != nil, let at = iceServersFetchedAt, at != pcIceServersFetchedAt else { return }
+        if connection.setConfiguration(config) {
+            pcIceServersFetchedAt = at
+        } else {
+            print("call: M-009 setConfiguration refused the newer ICE servers")
+        }
+    }
+
+    /// Audit M-009, 2026-10-07: the media path dropped. With no list, or one past the refresh age,
+    /// start a fetch now so the restart (or its 8s retry) can use it.
+    private func refreshIceServersForReconnect() {
+        // No list at all (the fallback call whose fetch failed) reads as stale too. A fresh list that
+        // simply landed after the connection was built needs no fetch: the restart picks it up.
+        let stale = iceServersFetchedAt.map { Date().timeIntervalSince($0) > Self.iceServersRefreshAge } ?? true
+        guard stale else { return }
+        Task { await self.refreshIceServers() }
     }
 
     /// 2026-09-24 audit: true when this call must be relayed (the peer is not an established
@@ -791,6 +861,8 @@ final class CallService: NSObject {
 
     private func makePeerConnection() -> RTCPeerConnection? {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        // Audit M-009: remember which list this connection carries (nil = STUN fallback).
+        pcIceServersFetchedAt = fetchedIceServers == nil ? nil : iceServersFetchedAt
         let connection = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
         // Local mic track.
         let audioSource = Self.factory.audioSource(with: nil)
@@ -972,9 +1044,31 @@ final class CallService: NSObject {
         // waiting for .active would miss a backgrounding during the ring.
         observeLifecycleIfNeeded()
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-            guard granted, let self else { return }
+            guard let self else { return }
+            guard granted else {
+                DispatchQueue.main.async { self.cameraAccessDenied() }
+                return
+            }
             self.startCaptureIfWanted(front: nil)
         }
+    }
+
+    /// Audit M-011, 2026-10-07: camera access is off. Shown by the call screen as a one-line note
+    /// (`Allow camera access in Settings`); reset at .idle.
+    private(set) var cameraDenied = false
+
+    /// Audit M-011, 2026-10-07: the denied branch used to return silently, so the button stayed ON,
+    /// `cams` said true (seeded from the call type) and the other side got a black tile. Undo the
+    /// intent the same way a camera-off tap does, and say why. Main only.
+    private func cameraAccessDenied() {
+        guard inLiveCall, cameraOn, !screenSharing else { return }
+        cameraDenied = true
+        cameraOn = false
+        localVideoTrack?.isEnabled = false
+        if isLocalExpanded { isLocalExpanded = false }
+        CallKitManager.shared.updateHasVideo(false)
+        broadcastCameraState()
+        updateInCallScreenBehavior()
     }
 
     /// The ONE answer to "should the camera be capturing right now", checked by every path that can
@@ -1161,7 +1255,12 @@ final class CallService: NSObject {
     // track-enable + capture start/stop — NO renegotiation. Broadcast my state so the other side
     // shows/hides my video. No prompt: I only ever share MY OWN camera, which is my choice.
     private func setMyCamera(on: Bool) {
-        guard state == .active || state == .reconnecting else { return }
+        // Audit M-052, 2026-10-07: turning the camera OFF also works while a video call rings out.
+        // Off is always safe to honour (it only stops sending); on waits for the call, as before.
+        // The doc seeds `cams` from `cameraOn` when it is created, and broadcastCameraState covers
+        // a doc that already exists.
+        guard state == .active || state == .reconnecting || (state == .outgoing && !on) else { return }
+        if on { cameraDenied = false }   // audit M-011: a new try; a refusal sets it again
         // The share owns the track while it runs (the camera button is disabled then). Toggling here
         // would disable the track under the share, or announce cams=false over a live screen.
         guard !screenSharing else { return }
@@ -1203,6 +1302,13 @@ final class CallService: NSObject {
     ///    wearing AirPods, contradicting "external devices always win" three lines away in updateAudioRoute.
     ///  • their camera turning on flipped MY proximity sensor off (updateInCallScreenBehavior gates on
     ///    audioRoute == .earpiece) while leaving me on the earpiece — a live screen against the cheek.
+    ///
+    /// Audit M-010, 2026-10-07: THE ROUTE NO LONGER FOLLOWS EVERY CAMERA EVENT. It ran on every `cams`
+    /// change, and the other side's camera pauses for a weak link, a background or a hold all arrive
+    /// as `cams` false, so their network moved MY audio between loudspeaker and earpiece, over a
+    /// choice I had just made with the speaker button. Now the speaker default is applied once per
+    /// call, on the first time any video shows, and only if the person has not chosen a route
+    /// themselves; a camera turning off never moves the route. The mode switch stays as it was.
     private func applyVideoAudioPolicy() {
         let session = AVAudioSession.sharedInstance()
         let videoShowing = cameraOn || remoteCameraOn
@@ -1211,27 +1317,51 @@ final class CallService: NSObject {
         // .videoChat is tuned for the loudspeaker, .voiceChat for the earpiece. The wrong one is the
         // hear-your-own-voice bug.
         try? session.setMode(videoShowing ? .videoChat : .voiceChat)
-        // An external device ALWAYS wins. Never yank audio out of someone's AirPods.
-        guard audioRoute != .external else { return }
-        if videoShowing {
-            isSpeaker = true
-            wantsSpeaker = true            // survives CallKit re-activating and resetting the route
-            try? session.overrideOutputAudioPort(.speaker)
-        } else {
-            isSpeaker = false
-            wantsSpeaker = false           // without this, updateAudioRoute re-asserts loudspeaker forever
-            try? session.overrideOutputAudioPort(.none)
-        }
+        // Audit M-050, 2026-10-07: no video and the sound is in a device, so a speaker intent left over
+        // from the video part is stale. Kept, it put the call on the loudspeaker the moment the
+        // AirPods came out. Cleared BEFORE the device guard below, which used to skip this.
+        if !videoShowing, audioRoute == .external { wantsSpeaker = false }
+        guard videoShowing, !videoSpeakerDefaultApplied, !speakerChosenByUser else { return }
+        // An external device ALWAYS wins. Never yank audio out of someone's AirPods. Audit M-049: a
+        // device that is merely connected counts too; the default waits for a later video edge.
+        guard audioRoute != .external, !externalOutputAround else { return }
+        videoSpeakerDefaultApplied = true
+        isSpeaker = true
+        wantsSpeaker = true            // survives CallKit re-activating and resetting the route
+        try? session.overrideOutputAudioPort(.speaker)
+    }
+
+    /// Audit M-049, 2026-10-07: a headset, AirPods or car is the current output or is connected.
+    /// Read live from the session, because the `.outgoing` default runs before route observation
+    /// starts. Same port list as `updateAudioRoute`.
+    private var externalOutputAround: Bool {
+        let session = AVAudioSession.sharedInstance()
+        let ports: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
+                                               .headphones, .headsetMic, .carAudio]
+        return session.currentRoute.outputs.contains { ports.contains($0.portType) }
+            || (session.availableInputs ?? []).contains { ports.contains($0.portType) }
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
-    private func broadcastCameraState() {
+    private func broadcastCameraState(attempt: Int = 0) {
         guard let id = callId else { return }
         // What we are ACTUALLY sending, not what the user asked for. A camera held down by a capture
         // interruption or a weak link is producing nothing, and announcing it as on is what leaves the
         // other side staring at a frozen face instead of falling back to the avatar. The interruption
         // path already said that was the intent in its own comment; it was still sending `cameraOn`.
-        db.collection("calls").document(id).updateData(["cams.\(me)": camsSignal])
+        //
+        // Audit M-121, 2026-10-07: NOT FIRE-AND-FORGET any more, same rule as the mute signal. A lost
+        // write left the other side showing my camera wrong for the rest of the call. Retried a few
+        // times while it is the same live call and the value is still the one we meant; recovery
+        // from .reconnecting re-sends it too (see `state`).
+        let value = camsSignal
+        db.collection("calls").document(id).updateData(["cams.\(me)": value]) { [weak self] err in
+            guard let self, err != nil, attempt < 3 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.callId == id, self.inLiveCall, self.camsSignal == value else { return }
+                self.broadcastCameraState(attempt: attempt + 1)
+            }
+        }
     }
 
     /// The `cams.<me>` value: what my video is ACTUALLY carrying. True for the length of a screen
@@ -1261,6 +1391,7 @@ final class CallService: NSObject {
         guard !inGroupCall else { return }
         // A picker opened earlier that never started a broadcast: begin again from scratch.
         stopScreenShare(requestExtensionStop: false, signal: false)
+        disarmLateShareStop()   // audit M-106: this new picker's "started" must not be answered with a stop
         guard let source = videoSource else { return }
         let capturer = ScreenShareCapturer(delegate: source)
         let session = ScreenShareSession { frame, rotation in
@@ -1298,6 +1429,7 @@ final class CallService: NSObject {
             capturer.setLive(true)
         }
         localVideoTrack?.isEnabled = true   // a voice call's track is disabled until now
+        shareBitrateLowered = false; shareLinkPolicy.reset()   // audit M-107: each share starts at full rate
         applyScreenShareEncoding(true)
         broadcastScreenState()
         updateInCallScreenBehavior()
@@ -1311,13 +1443,19 @@ final class CallService: NSObject {
     func stopScreenShare(requestExtensionStop: Bool = true, signal: Bool = true) {
         screenSharePendingTimeout?.cancel(); screenSharePendingTimeout = nil
         let hadShare = screenShareSession != nil || screenSharing
+        let pendingOnly = screenShareSession != nil && !screenSharing
         screenShareSession?.stop(); screenShareSession = nil
         screenCapturer?.stop(); screenCapturer = nil
         if requestExtensionStop, hadShare {
             KSDarwinNotificationCenter.shared.postNotification(.broadcastRequestStop)
         }
+        // Audit M-106: a picker abandoned before its broadcast began can still start one afterwards
+        // (the sheet finished after the call ended, or after the 60s wait), and the stop posted just
+        // now went out before that extension was listening.
+        if requestExtensionStop, pendingOnly { armLateShareStop() }
         guard screenSharing else { return }
         screenSharing = false
+        shareBitrateLowered = false; shareLinkPolicy.reset()   // audit M-107
         applyScreenShareEncoding(false)
         // The camera comes back only if it was on before the share and nothing else holds it now
         // (hold, weak link, call ending). An interrupted camera is left to its own retry, which
@@ -1331,6 +1469,31 @@ final class CallService: NSObject {
         updateInCallScreenBehavior()
     }
 
+    /// Audit M-106, 2026-10-07: for 60s after a pending share was abandoned, a "broadcast started"
+    /// from the extension is answered with a stop request, so a broadcast nobody listens to does not
+    /// keep recording with the red indicator up. Not while a new 1:1 share is pending or running
+    /// (toggleScreenShare disarms it), and not during a group call, whose share uses the same
+    /// extension notifications.
+    private func armLateShareStop() {
+        lateShareStopExpiry?.cancel()
+        lateShareStop = KSDarwinNotificationCenter.shared.publisher(for: .broadcastStarted)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.lateShareStop != nil, self.screenShareSession == nil,
+                          !self.inGroupCall else { return }
+                    KSDarwinNotificationCenter.shared.postNotification(.broadcastRequestStop)
+                }
+            }
+        let expiry = DispatchWorkItem { [weak self] in self?.disarmLateShareStop() }
+        lateShareStopExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: expiry)
+    }
+
+    private func disarmLateShareStop() {
+        lateShareStopExpiry?.cancel(); lateShareStopExpiry = nil
+        lateShareStop?.cancel(); lateShareStop = nil
+    }
+
     /// Encoder settings for a screen, and back. A screen keeps its RESOLUTION when the link is weak
     /// (text stays readable, the frame rate drops instead), gets ~2 Mbps at up to 15 fps, and is never
     /// scaled down (not even by Use Less Data). Stopping returns the camera's own settings.
@@ -1342,7 +1505,9 @@ final class CallService: NSObject {
             params.degradationPreference = NSNumber(value: preference.rawValue)
             for enc in params.encodings {
                 if on {
-                    enc.maxBitrateBps = NSNumber(value: 2_000_000)
+                    // Audit M-107: about 600 kbps while the link is weak, so the share leaves the
+                    // voice room to get through (see applyShareLinkQuality).
+                    enc.maxBitrateBps = NSNumber(value: shareBitrateLowered ? 600_000 : 2_000_000)
                     enc.maxFramerate = NSNumber(value: 15)
                 }
                 if !on { enc.maxFramerate = nil }
@@ -1680,10 +1845,13 @@ final class CallService: NSObject {
         guard inLiveCall, let pc else { stopLinkMonitor(); return }
         // Only meaningful while we are trying to send video at all. A voice call has nothing to pause,
         // and leaving the windows running would carry a stale verdict into the next camera-on.
-        // Not during a screen share either: a share is never paused for the link. Its encoder keeps
-        // the resolution and drops frame rate instead (maintainResolution), and the windows start
-        // fresh when the camera comes back.
-        guard cameraOn, !screenSharing else { linkPolicy.reset(); return }
+        // A screen share is never paused for the link. Its encoder keeps the resolution and drops
+        // frame rate instead (maintainResolution), and the camera's windows start fresh when the
+        // camera comes back.
+        // Audit M-107, 2026-10-07: a share is still never PAUSED, but it is watched now. Up to 2 Mbps
+        // with no weak-link check could starve the voice; a sustained weak verdict lowers its cap
+        // instead (applyShareLinkQuality).
+        guard cameraOn || screenSharing else { linkPolicy.reset(); return }
         pc.statistics { [weak self] report in
             // The ACTIVE pair's estimate. This is what WebRTC's own congestion controller concluded, so
             // it already folds in loss and round-trip time; a separate packet-loss rule bolted on top
@@ -1697,8 +1865,10 @@ final class CallService: NSObject {
     }
 
     private func applyLinkQuality(_ bitrate: Double?) {
-        guard inLiveCall, cameraOn else { return }
-        guard !screenSharing else { linkPolicy.reset(); return }   // a stats reply that landed after the share began
+        guard inLiveCall else { return }
+        // A share has its own windows (audit M-107); the camera's start fresh when it comes back.
+        if screenSharing { linkPolicy.reset(); applyShareLinkQuality(bitrate); return }
+        guard cameraOn else { return }
         // HOLD OWNS THE PAUSE while it lasts (owner audit 2026-10-06 #1). Hold reuses the weak-link
         // pause flag, so a HEALTHY link read ten seconds into a phone call came back as .resume and
         // put the camera back on mid-call. Stay out of it, and start the windows fresh on unhold.
@@ -1706,6 +1876,17 @@ final class CallService: NSObject {
         switch linkPolicy.evaluate(bitrate: bitrate, paused: videoPausedForNetwork, now: Date()) {
         case .pause:  pauseVideoForWeakLink()
         case .resume: resumeVideoAfterWeakLink()
+        case .none:   break
+        }
+    }
+
+    /// Audit M-107, 2026-10-07: under about 800 kbps for 5s, the share's cap drops to about 600 kbps;
+    /// back to 2 Mbps after 15s above it. Lowered, not ended: the encoder already keeps the
+    /// resolution and drops frames, so text stays readable. Main only.
+    private func applyShareLinkQuality(_ bitrate: Double?) {
+        switch shareLinkPolicy.evaluate(bitrate: bitrate, paused: shareBitrateLowered, now: Date()) {
+        case .pause:  shareBitrateLowered = true;  applyScreenShareEncoding(true)
+        case .resume: shareBitrateLowered = false; applyScreenShareEncoding(true)
         case .none:   break
         }
     }
@@ -1916,11 +2097,22 @@ final class CallService: NSObject {
     private func stopHeartbeat() {
         heartbeatTimer?.invalidate(); heartbeatTimer = nil
         lastPeerBeatAt = nil; lastPeerBeatValue = 0
+        lastOwnBeatAckAt = nil
     }
+
+    /// Audit M-040, 2026-10-07: when the server last CONFIRMED one of my own beats. Proof that my
+    /// side can reach the signalling at all, which is what the liveness check below needs before it
+    /// may blame the other phone.
+    private var lastOwnBeatAckAt: Date?
 
     private func writeHeartbeat() {
         guard let id = callId, state == .active || state == .reconnecting else { return }
-        db.collection("calls").document(id).updateData(["hb.\(me)": Date().timeIntervalSince1970])
+        db.collection("calls").document(id).updateData(["hb.\(me)": Date().timeIntervalSince1970]) { [weak self] err in
+            // The completion only fires once the server has the write (offline it waits), so a nil
+            // error means we were online just now.
+            guard let self, err == nil, self.callId == id else { return }
+            self.lastOwnBeatAckAt = Date()
+        }
     }
 
     private func notePeerHeartbeat(_ d: [String: Any]) {
@@ -1933,6 +2125,13 @@ final class CallService: NSObject {
     private func checkPeerLiveness() {
         guard state == .reconnecting, let last = lastPeerBeatAt else { return }
         guard Date().timeIntervalSince(last) > 15 else { return }
+        // Audit M-040, 2026-10-07: their silence only counts while MY beats are getting through.
+        // When it was our own network that dropped, their beats cannot reach us either, and the
+        // check ended a call that was about to recover, 15-20s in, well inside the 30s reconnect cap.
+        // Now the server must have taken one of my beats more than 10s after their last one: I am
+        // demonstrably online and they still say nothing. 10, not 15: my queued beats are confirmed
+        // in a burst on reconnect, a moment before the snapshot carrying their newest beat.
+        guard let ack = lastOwnBeatAckAt, ack.timeIntervalSince(last) > 10 else { return }
         endReason = .failed
         hangUp()   // ~15s instead of frozen for 30s+
     }
@@ -1944,10 +2143,15 @@ final class CallService: NSObject {
     /// The video-call speaker default has been applied for THIS call (owner audit 2026-10-06 #6).
     /// Reset at .idle. See the `.active` branch of `state`.
     private var videoSpeakerDefaultApplied = false
+    /// Audit M-010, 2026-10-07: the person picked a route themselves this call (the speaker button,
+    /// or a deliberate pick in the system picker). From then on no camera event and no video
+    /// default moves the route. Reset at .idle.
+    private var speakerChosenByUser = false
 
     func toggleSpeaker() {
         isSpeaker.toggle()
         wantsSpeaker = isSpeaker
+        speakerChosenByUser = true   // audit M-010
         // Use AVAudioSession directly — CallKit owns the session in manual mode and
         // RTCAudioSession.lockForConfiguration() can deadlock when called while CallKit
         // is also configuring the session (e.g. right after answer/connect).
@@ -2016,6 +2220,10 @@ final class CallService: NSObject {
         mediaResetObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
                 guard let self, self.inLiveCall else { return }
+                // Audit M-120, 2026-10-07: a reset wipes the session's category and mode with
+                // everything else, and only the output port was put back, so the call came back on
+                // the default category. Set the call's own category first, as the interruption path does.
+                self.applyCallAudioCategory()
                 let rtc = RTCAudioSession.sharedInstance()
                 rtc.isAudioEnabled = false
                 rtc.isAudioEnabled = true
@@ -2056,6 +2264,7 @@ final class CallService: NSObject {
             let deliberatePick = hasExternalInput && previous != .earpiece && pickReason
             if deliberatePick {
                 wantsSpeaker = false
+                speakerChosenByUser = true   // audit M-010: their pick, not ours to undo
             } else {
                 try? session.overrideOutputAudioPort(.speaker)
                 // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
@@ -2367,7 +2576,10 @@ final class CallService: NSObject {
     // "Reconnecting…" and give up after a hard cap.
     private func enterReconnecting(restartAfter delay: Double) {
         guard state == .active || state == .reconnecting else { return }
-        if state == .active { state = .reconnecting }
+        if state == .active {
+            state = .reconnecting
+            refreshIceServersForReconnect()   // audit M-009: a relay for the restart, if we lack one
+        }
         // Hard cap: if we still haven't recovered, end as Failed.
         if reconnectGiveUpWork == nil {
             let g = DispatchWorkItem { [weak self] in
@@ -2426,6 +2638,9 @@ final class CallService: NSObject {
     /// Owner audit 2026-10-06 #15: the path dropped while the phone was still ringing (a pre-negotiated
     /// call). Set by the ICE delegate, cleared when the path comes back and at the end of every call.
     private var iceDroppedDuringRing = false
+    /// Audit M-042, 2026-10-07: the connection failed with ICE still up (a DTLS failure). Set by the
+    /// connection-state delegate, cleared at the end of every call.
+    private var transportFailed = false
 
     /// Called when the call goes `.active`: a path that died during the ring and never came back
     /// gets the ordinary reconnect (Reconnecting label, restart, 30s cap) instead of a call that
@@ -2481,10 +2696,21 @@ final class CallService: NSObject {
         lastPathKey = nil
     }
 
+    /// Audit M-117, 2026-10-07: when the caller's last restart offer went out; cleared when its
+    /// answer is applied and at the end of the call.
+    private var restartInFlightAt: Date?
+
     // Caller-only: renegotiate ICE (new credentials + candidates), media keeps flowing
     // on recovery. Cheaper than a full re-offer — DTLS/SRTP keys are preserved.
     private func restartIce() {
         guard isCaller, let pc = pc, let id = callId else { return }
+        // Audit M-117, 2026-10-07: the path monitor, the callee's request and our own ICE drop can all
+        // fire within a second, and each new offer invalidates the answer the last one is waiting
+        // for, so the restarts kept cancelling each other. One at a time: a restart whose answer has
+        // not landed and that is under 6s old covers the others. The 8s retry is outside the window.
+        if let t = restartInFlightAt, Date().timeIntervalSince(t) < 6 { return }
+        restartInFlightAt = Date()
+        applyNewerIceServers(to: pc)   // audit M-009: a relay that arrived after the call started
         negotiationVersion += 1
         let v = negotiationVersion
         let constraints = RTCMediaConstraints(mandatoryConstraints: ["IceRestart": "true"],
@@ -3777,6 +4003,9 @@ final class CallService: NSObject {
                let pc = self.pc,
                let sdp = self.signalSdp(sealed: ro["enc"], plain: ro["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
+                // Audit M-009, 2026-10-07: the callee gathers anew for this restart too, so it gets
+                // the newer relay list first, if one arrived after its connection was built.
+                self.applyNewerIceServers(to: pc)
                 pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { _ in
                     self.flushPendingCandidates()
                     let c = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
@@ -3804,6 +4033,7 @@ final class CallService: NSObject {
                v == self.negotiationVersion, v > self.appliedRemoteRestart, let pc = self.pc,
                let sdp = self.signalSdp(sealed: ra["enc"], plain: ra["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
+                self.restartInFlightAt = nil   // audit M-117: this restart is answered
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
             // The other side's camera on/off (per-side, no permission).
@@ -3817,7 +4047,11 @@ final class CallService: NSObject {
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
 
     private func addOrBuffer(_ candidate: RTCIceCandidate) {
-        guard let pc, pc.remoteDescription != nil else {
+        // Audit M-041, 2026-10-07: also buffer a candidate from an ICE RESTART that beat its restart
+        // description here. Its ufrag is the new one, the remote description still carries the old,
+        // and libwebrtc drops it, so the very routes the restart found never got tried.
+        guard let pc, let remote = pc.remoteDescription,
+              Self.matchesUfrag(candidate, of: remote) else {
             // Capped (the reference engine keeps at most 30 early messages): a remote description
             // that never arrives must not let this grow for the life of a stuck call. Oldest go first.
             if pendingRemoteCandidates.count >= 100 { pendingRemoteCandidates.removeFirst() }
@@ -3831,10 +4065,28 @@ final class CallService: NSObject {
         // Always on MAIN: called from SDP completions (WebRTC thread) while Firestore listeners (main)
         // append to pendingRemoteCandidates - the unsynchronized mix raced/lost candidates.
         guard Thread.isMainThread else { DispatchQueue.main.async { self.flushPendingCandidates() }; return }
-        guard let pc, pc.remoteDescription != nil, !pendingRemoteCandidates.isEmpty else { return }
-        let pending = pendingRemoteCandidates
-        pendingRemoteCandidates = []
+        guard let pc, let remote = pc.remoteDescription, !pendingRemoteCandidates.isEmpty else { return }
+        // Audit M-041: only the ones for the description now in place. The rest stay buffered: a
+        // later restart's (its description has not landed yet) or an older generation's (harmless,
+        // and the cap ages them out).
+        let pending = pendingRemoteCandidates.filter { Self.matchesUfrag($0, of: remote) }
+        pendingRemoteCandidates.removeAll { Self.matchesUfrag($0, of: remote) }
         for c in pending { pc.add(c) { err in if let err { print("call: flush addIceCandidate failed:", err) } } }
+    }
+
+    /// Audit M-041, 2026-10-07: does this candidate belong to the ICE generation of `description`?
+    /// Both are compared by ufrag: libwebrtc writes `ufrag <x>` into every candidate line and
+    /// `a=ice-ufrag:<x>` into the description, and a restart changes it. Nothing is added to the
+    /// wire. A candidate or description without one (another engine) counts as a match, which is
+    /// the old behaviour.
+    private static func matchesUfrag(_ candidate: RTCIceCandidate, of description: RTCSessionDescription) -> Bool {
+        let parts = candidate.sdp.split(separator: " ")
+        guard let i = parts.firstIndex(of: "ufrag"), i + 1 < parts.count else { return true }
+        let theirs = String(parts[i + 1])
+        guard let line = description.sdp.components(separatedBy: "\n")
+                .first(where: { $0.hasPrefix("a=ice-ufrag:") }) else { return true }
+        let current = line.dropFirst("a=ice-ufrag:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        return current.isEmpty || current == theirs
     }
 
     private func observeRemoteCandidates(_ col: CollectionReference) {
@@ -4202,6 +4454,9 @@ extension CallService: RTCPeerConnectionDelegate {
             guard peerConnection === self.pc else { return }
             switch newState {
             case .connected, .completed:
+                // Audit M-042: ICE up over a failed DTLS transport is not media. Stay down; the
+                // reconnect cap ends the call.
+                guard !self.transportFailed else { break }
                 self.iceDroppedDuringRing = false
                 // ⭐ THE MEDIA PATH BEING UP IS NO LONGER THE SAME EVENT AS THE CALL STARTING, and
                 // splitting those two is the whole of the pre-negotiation change.
@@ -4235,6 +4490,36 @@ extension CallService: RTCPeerConnectionDelegate {
             default:
                 break
             }
+        }
+    }
+    /// Audit M-042, 2026-10-07: the WHOLE connection's state, ICE plus DTLS. "Connected" was judged
+    /// by ICE alone, so a DTLS handshake that failed on a path ICE called good left a call that read
+    /// connected and carried nothing, with no reconnect and no give-up. `.failed` here now takes the
+    /// same road as ICE `.failed`: Reconnecting, a restart, and the 30s cap ends it if nothing heals.
+    /// The other states are left to the ICE handler above, which already owns them.
+    ///
+    /// Only a failure with ICE still up is handled here: an ICE failure also fails the whole
+    /// connection, and the ICE handler already takes that one. A failed DTLS transport does not come
+    /// back, and ICE reconnecting after a restart must not read as recovered on top of it, so
+    /// `transportFailed` holds `mediaReady` down for the rest of the call (see the ICE handler).
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        guard newState == .failed else { return }
+        // Read here, on the signalling thread the delegate runs on, before the hop.
+        let ice = peerConnection.iceConnectionState
+        guard ice == .connected || ice == .completed else { return }
+        DispatchQueue.main.async {
+            guard peerConnection === self.pc else { return }   // #45: not a closed call's leftover
+            print("call: M-042 connection failed with ICE up (DTLS)")
+            self.transportFailed = true
+            self.mediaReady = false
+            // Still ringing: the same "dropped during the ring" mark the ICE handler sets, so the
+            // answer goes to Reconnecting. Answered: Reconnecting now. Either way the 30s cap ends
+            // it as Failed.
+            if self.state == .incoming || self.state == .outgoing {
+                self.iceDroppedDuringRing = true
+                return
+            }
+            self.enterReconnecting(restartAfter: 0)
         }
     }
     // Unused delegate methods (required by protocol).
