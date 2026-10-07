@@ -21,11 +21,15 @@ enum ChatService {
         [a, b].sorted().joined(separator: "_")
     }
 
-    // MARK: - Username (handle) policy: lowercase a-z, 0-9, underscore; 3-30 chars.
-    static let handleAllowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_")
-    /// Strip anything not allowed as the user types (no spaces, dashes, emojis…).
+    // MARK: - Username (handle) policy: letters a-z in EITHER case, 0-9, underscore.
+    // Owner, 2026-10-07: "REALWARYA or Realwarya … big letters or small or both". The large
+    // messengers' rule: the name SHOWS as typed, but it is ONE name whatever the case, so
+    // "Realwarya" and "realwarya" can never belong to two people (uniqueness, lookups and links all
+    // go through the lowercase form: `usernames/{lower}`, `handleLower`, `findByHandle`).
+    static let handleAllowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+    /// Strip anything not allowed as the user types (no spaces, dashes, emojis…). Case is kept.
     static func sanitizeHandle(_ raw: String) -> String {
-        String(raw.lowercased().filter { handleAllowed.contains($0) }.prefix(Limits.usernameMaxChars))
+        String(raw.filter { handleAllowed.contains($0) }.prefix(Limits.usernameMaxChars))
     }
     /// What the SERVER will say no to, checked here so the app does not ask about a name that cannot
     /// work. Mirrors `invalidReason` in the backend deliberately — the server is the one that counts,

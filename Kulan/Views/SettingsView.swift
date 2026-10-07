@@ -2072,8 +2072,10 @@ struct UsernameEditView: View {
 
     private var clean: String { ChatService.sanitizeHandle(draft) }
     /// The admin account typing its one-letter name, @v (owner, 2026-10-07; the server decides).
-    private var ownerShortName: Bool { clean == ChatService.ownerShortHandle && ChatService.iAmOwnerAccount }
-    private var unchanged: Bool { clean.lowercased() == handle.lowercased() }
+    private var ownerShortName: Bool { clean.lowercased() == ChatService.ownerShortHandle && ChatService.iAmOwnerAccount }
+    /// Exactly the same, case included: "realwarya" to "Realwarya" is a change you can save now
+    /// (2026-10-07, capitals allowed). The server keeps the name and only updates how it is written.
+    private var unchanged: Bool { clean == handle }
 
     /// Letters still available. Never negative: `sanitizeHandle` truncates at the maximum.
     private var remaining: Int { max(0, Limits.usernameMaxChars - clean.count) }
@@ -2253,7 +2255,7 @@ struct UsernameEditView: View {
             withAnimation { status = .problem(problem) }
             return
         }
-        guard value.count >= Limits.usernameMinChars || (value == ChatService.ownerShortHandle && ChatService.iAmOwnerAccount) else {
+        guard value.count >= Limits.usernameMinChars || ownerShortName else {
             withAnimation { status = .quiet }; return
         }
         guard value != lastAsked else { return }
@@ -2287,7 +2289,8 @@ struct UsernameEditView: View {
     /// the only thing that can actually make the name yours.
     private func done() async {
         let value = clean
-        guard value.count >= Limits.usernameMinChars else { return }
+        // @v passes too (owner, 2026-10-07: Done did nothing on @V; same fix as the ship branch).
+        guard value.count >= Limits.usernameMinChars || ownerShortName else { return }
         if unchanged { dismiss(); return }
         claiming = true
         do {
