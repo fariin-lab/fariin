@@ -3885,7 +3885,11 @@ final class CallService: NSObject {
     private var pendingRemoteCandidates: [RTCIceCandidate] = []
 
     private func addOrBuffer(_ candidate: RTCIceCandidate) {
-        guard let pc, pc.remoteDescription != nil else {
+        // Audit M-041, 2026-10-07: also buffer a candidate from an ICE RESTART that beat its restart
+        // description here. Its ufrag is the new one, the remote description still carries the old,
+        // and libwebrtc drops it, so the very routes the restart found never got tried.
+        guard let pc, let remote = pc.remoteDescription,
+              Self.matchesUfrag(candidate, of: remote) else {
             // Capped (the reference engine keeps at most 30 early messages): a remote description
             // that never arrives must not let this grow for the life of a stuck call. Oldest go first.
             if pendingRemoteCandidates.count >= 100 { pendingRemoteCandidates.removeFirst() }
@@ -3899,10 +3903,28 @@ final class CallService: NSObject {
         // Always on MAIN: called from SDP completions (WebRTC thread) while Firestore listeners (main)
         // append to pendingRemoteCandidates - the unsynchronized mix raced/lost candidates.
         guard Thread.isMainThread else { DispatchQueue.main.async { self.flushPendingCandidates() }; return }
-        guard let pc, pc.remoteDescription != nil, !pendingRemoteCandidates.isEmpty else { return }
-        let pending = pendingRemoteCandidates
-        pendingRemoteCandidates = []
+        guard let pc, let remote = pc.remoteDescription, !pendingRemoteCandidates.isEmpty else { return }
+        // Audit M-041: only the ones for the description now in place. The rest stay buffered: a
+        // later restart's (its description has not landed yet) or an older generation's (harmless,
+        // and the cap ages them out).
+        let pending = pendingRemoteCandidates.filter { Self.matchesUfrag($0, of: remote) }
+        pendingRemoteCandidates.removeAll { Self.matchesUfrag($0, of: remote) }
         for c in pending { pc.add(c) { err in if let err { print("call: flush addIceCandidate failed:", err) } } }
+    }
+
+    /// Audit M-041, 2026-10-07: does this candidate belong to the ICE generation of `description`?
+    /// Both are compared by ufrag: libwebrtc writes `ufrag <x>` into every candidate line and
+    /// `a=ice-ufrag:<x>` into the description, and a restart changes it. Nothing is added to the
+    /// wire. A candidate or description without one (another engine) counts as a match, which is
+    /// the old behaviour.
+    private static func matchesUfrag(_ candidate: RTCIceCandidate, of description: RTCSessionDescription) -> Bool {
+        let parts = candidate.sdp.split(separator: " ")
+        guard let i = parts.firstIndex(of: "ufrag"), i + 1 < parts.count else { return true }
+        let theirs = String(parts[i + 1])
+        guard let line = description.sdp.components(separatedBy: "\n")
+                .first(where: { $0.hasPrefix("a=ice-ufrag:") }) else { return true }
+        let current = line.dropFirst("a=ice-ufrag:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        return current.isEmpty || current == theirs
     }
 
     private func observeRemoteCandidates(_ col: CollectionReference) {
