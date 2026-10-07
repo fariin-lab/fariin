@@ -93,8 +93,10 @@ final class ConversationsRepository {
     @ObservationIgnored private var listBurnTimer: Timer?
     @ObservationIgnored private var listBurnAsked: [String: Date] = [:]
     @ObservationIgnored private var foregroundObserver: NSObjectProtocol?
-    /// The last list the listener handed `publish`, kept so a timer can re-publish it without a snapshot.
-    @ObservationIgnored private var lastRaw: [Conversation] = []
+    /// The last list handed to `publish` (block-filtered, before the demo rows and the expiry
+    /// blanking), kept so a timer can re-publish it without a snapshot. Not `lastRaw` below, which
+    /// is the listener's unfiltered window and serves the block re-filter.
+    @ObservationIgnored private var lastPublished: [Conversation] = []
 
     /// 2026-09-24 feature-audit: there is an older page and the window may still grow to fetch it.
     var canLoadOlder: Bool { hasOlder && windowLimit < Self.maxWindow }
@@ -418,7 +420,7 @@ final class ConversationsRepository {
     }
 
     private func publish(_ raw: [Conversation]) {
-        lastRaw = raw
+        lastPublished = raw
         scheduleListBurn()   // what is due now is burned, and the next expiry gets its timer
         // The demo chats are added HERE and nowhere else. The live listener reassigns the whole
         // array on every snapshot, so injecting them at the switch would have them wiped a second
@@ -646,9 +648,9 @@ final class ConversationsRepository {
     private func scheduleListBurn() {
         listBurnTimer?.invalidate(); listBurnTimer = nil
         let now = Date()
-        let due = lastRaw.filter { c in c.lastExpiresAt.map { $0 <= now } ?? false }
+        let due = lastPublished.filter { c in c.lastExpiresAt.map { $0 <= now } ?? false }
         if !due.isEmpty { burnList(due) }
-        var next = lastRaw.compactMap(\.lastExpiresAt).filter { $0 > now }.min()
+        var next = lastPublished.compactMap(\.lastExpiresAt).filter { $0 > now }.min()
         if !due.isEmpty { next = min(next ?? .distantFuture, now.addingTimeInterval(30)) }
         guard let next, next != .distantFuture else { return }
         // A fifth of a second past the mark, so the message is genuinely due when it is looked at.
@@ -660,8 +662,8 @@ final class ConversationsRepository {
 
     /// Re-publish the last list: blanks what has just fallen due, burns it, re-arms the timer.
     private func listBurnTick() {
-        guard !lastRaw.isEmpty else { return }   // nothing has arrived yet; the first snapshot will do all of this
-        publish(lastRaw)
+        guard !lastPublished.isEmpty else { return }   // nothing has arrived yet; the first snapshot will do all of this
+        publish(lastPublished)
     }
 
     /// Ask the server to delete what is due in each chat. No ids: the server finds them itself
@@ -709,6 +711,7 @@ final class ConversationsRepository {
         loadingWholeList = false   // 2026-09-24 feature-audit
         pendingConvs = nil
         lastRaw = []   // 2026-09-24 decision D8
+        lastPublished = []; listBurnAsked = [:]   // the old account's expiry timer must not re-publish into the new one
         conversations = []
         hasLoaded = false
         loadFailed = false   // 2026-09-24 audit: belongs to the account that just went away
