@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: call link join screen. (1) A revoked, expired or deleted link shows "no longer valid" at once, not after a few seconds. (2) Join on a link starts faster: the join pass is fetched while the screen is up. (3) Close, Leave and Join take the tap anywhere on the pill.
+            THIS BUILD: CALLS, A BIG RELIABILITY ROUND. A full audit of the call system found 166 bugs; 146 are fixed here. Highlights: a call can no longer stop ringing or ring late because of a repeated call alert; a phone no longer ignores every call after one failed call; answering in the last second of a ring is no longer dropped; a call stuck on "Connecting..." ends after about 35 s; your own network dropping no longer ends the call too early; AirPods are no longer forced onto the loudspeaker; muting in the first second of a group call really mutes; signing out ends every call first; App Lock covers the call screen; "Reconnecting..." shows in group calls; photos and names show in group-chat and link calls; badges no longer hide under the status bar.
+            NEW: screen sharing from the "..." menu in calls. Group call screen fills the whole screen, softer tiles with a speaker glow, a new ringing screen with the person's photo, camera-off tiles in the person's colour. The minimized group call shows the last person who spoke. Call links are now call.fariin.com/voice and /video. Usernames may use capital letters.
+            KNOWN UNTIL THE SERVER UPDATE: "Add people" in a call may fail, and a phone may keep ringing after the caller hangs up, until the matching server update is live.
+
+            PLEASE TEST: 1:1 and group calls, mute right after joining, a call link join, screen share, minimize and restore, sign out during a call.
+
+            EARLIER (build 841): call link join screen. (1) A revoked, expired or deleted link shows "no longer valid" at once, not after a few seconds. (2) Join on a link starts faster: the join pass is fetched while the screen is up. (3) Close, Leave and Join take the tap anywhere on the pill.
 
             EARLIER (build 835): a call link in a chat shows a card with a video icon, "Kulan Call" and a Join Call button; tap the card or the button to open the join screen. Long press, reactions and double-tap work on it like any message. New call list photos are bigger (the Glowers size).
 
