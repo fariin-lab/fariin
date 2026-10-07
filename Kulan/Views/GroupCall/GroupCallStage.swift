@@ -328,7 +328,11 @@ final class GroupCallStage: ObservableObject {
             }()
             let photo = isLocal ? (ProfileStore.shared.me?.photoUrl ?? member?.photoUrl) : member?.photoUrl
             let camera = Self.livePublication(p.firstCameraPublication)
-            let screen = Self.livePublication(p.firstScreenSharePublication)
+            // Screen sharing, 2026-10-07: MY share never marks my own tile as presenting. My screen
+            // is not drawn back to me (`videoTrack`), so a presenter flag on my tile would only cost
+            // me the two-person view, move my own pip to the front of the grid and auto-focus a big
+            // tile of my own camera or avatar. The others see my share; I keep my normal view.
+            let screen = isLocal ? nil : Self.livePublication(p.firstScreenSharePublication)
             let sharing = screen != nil
             if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now; newShare = true }
             if !sharing { shareStartedAt[id] = nil }
