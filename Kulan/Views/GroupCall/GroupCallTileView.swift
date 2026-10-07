@@ -23,6 +23,10 @@ struct GroupCallTileView: View {
     var onTap: () -> Void
     /// Long press (remote tiles; from `GroupCallStage.tileMenu(for:)`). nil = no menu.
     var menu: CallTileMenu? = nil
+    /// Audit M-101, 2026-10-07: how far the top badges (hand, network, pin) sit below this tile's
+    /// own top edge beyond their usual inset, for a tile whose top runs under the status bar or
+    /// the header. 0 for every tile that does not touch the top of the screen.
+    var topClearance: CGFloat = 0
 
     @State private var showVideoNote = false
 
@@ -207,12 +211,14 @@ struct GroupCallTileView: View {
                     }
                 }
                 .padding(inset)
+                .padding(.top, topClearance)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .transition(.opacity)
             }
             if showNetwork && !networkLeading {
                 badge("wifi.exclamationmark", size: 22, glyph: 11)
                     .padding(inset)
+                    .padding(.top, topClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .transition(.opacity)
             }
@@ -220,6 +226,7 @@ struct GroupCallTileView: View {
             if isPinned && style != .strip && style != .pip && style != .focus {
                 badge("pin.fill", size: 22, glyph: 11)
                     .padding(inset)
+                    .padding(.top, topClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .transition(.opacity)
             }
@@ -232,11 +239,7 @@ struct GroupCallTileView: View {
     }
 
     private func badge(_ symbol: String, size: CGFloat, glyph: CGFloat) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: glyph, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(Circle().fill(Color.black.opacity(0.7)))
+        GroupCallBadge(symbol: symbol, size: size, glyph: glyph)
     }
 
     // MARK: - VoiceOver
@@ -258,6 +261,36 @@ struct GroupCallTileView: View {
     private var accessibilityHintText: String {
         if showsUnavailable { return "Double-tap to hear why" }
         return isPinned ? "Double-tap to unpin" : "Double-tap to focus"
+    }
+}
+
+/// The tile's round mark (muted, poor network, pinned): a white glyph on a dark circle. Its own type
+/// so the two-person screen draws the same marks (audit M-080, 2026-10-07).
+struct GroupCallBadge: View {
+    let symbol: String
+    let size: CGFloat
+    let glyph: CGFloat
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: glyph, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(Circle().fill(Color.black.opacity(0.7)))
+    }
+}
+
+/// Audit M-101, 2026-10-07: the distance from the top of the screen that a tile's top marks must
+/// clear (the status bar, and the header while it shows). Set by GroupCallView on the stage; the
+/// grid and the focus view turn it into each top tile's own `topClearance`.
+private struct GroupCallTopClearanceKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var groupCallTopClearance: CGFloat {
+        get { self[GroupCallTopClearanceKey.self] }
+        set { self[GroupCallTopClearanceKey.self] = newValue }
     }
 }
 
@@ -350,12 +383,18 @@ private struct CallTileMenuPreview: View {
 struct TileBackdrop: View {   // also the minimized card's and the demo's camera-off backdrop
     let photoUrl: String?
     @State private var colour: Color?
+    /// Audit M-138, 2026-10-07: the photo `colour` was taken from. State outlives a new `photoUrl`
+    /// (the initial value above is read only once), so without this a changed photo kept the old
+    /// photo's colour for good.
+    @State private var colourURL: String?
 
     init(photoUrl: String?) {
         self.photoUrl = photoUrl
         // First frame from the caches the avatar is drawn from (memory lookups only), so a tile
         // whose person is already on screen does not flash grey before its colour.
-        _colour = State(initialValue: GroupCallRingingView.cachedColour(photoUrl))
+        let cached = GroupCallRingingView.cachedColour(photoUrl)
+        _colour = State(initialValue: cached)
+        _colourURL = State(initialValue: cached == nil ? nil : photoUrl)
     }
 
     var body: some View {
@@ -374,13 +413,22 @@ struct TileBackdrop: View {   // also the minimized card's and the demo's camera
             .clipped()
             .animation(GroupCallMotion.fade, value: colour != nil)
             .task(id: photoUrl) {
-                guard let s = photoUrl, !s.isEmpty else { colour = nil; return }
-                if colour != nil { return }
-                if let p = await ProfilePalette.resolve(url: s) { colour = Color(p.page); return }
+                guard let s = photoUrl, !s.isEmpty else { colour = nil; colourURL = nil; return }
+                if colour != nil, colourURL == s { return }
+                // A different photo: its own colour from the caches, else none until it resolves.
+                if colourURL != s {
+                    colour = GroupCallRingingView.cachedColour(s)
+                    colourURL = colour == nil ? nil : s
+                    if colour != nil { return }
+                }
+                if let p = await ProfilePalette.resolve(url: s) {
+                    guard !Task.isCancelled else { return }
+                    colour = Color(p.page); colourURL = s; return
+                }
                 // Not on disk yet: load the avatar the way AvatarView does, then take its colour.
                 let img = await ProfilePhotoLoader.shared.avatar(s)
                 guard !Task.isCancelled, let img, let p = ProfilePalette.now(img, url: s) else { return }
-                colour = Color(p.page)
+                colour = Color(p.page); colourURL = s
             }
     }
 }

@@ -24,6 +24,11 @@ final class GroupCallStage: ObservableObject {
     @Published private(set) var mode: CallStageMode = .grid
     /// Mirrors `room.connectionState` for the status banner (spec §14: reconnecting / lost).
     @Published private(set) var connectionState: ConnectionState
+    /// Audit M-026, 2026-10-07: the SDK's quick reconnect, which keeps `connectionState` at
+    /// `.connected` (`GroupCallSocial.quickReconnecting`, mirrored here so the views can watch it).
+    @Published private(set) var quickReconnecting = false
+    /// What every "Reconnecting…" reads: a full reconnect or a quick one.
+    var isReconnecting: Bool { connectionState == .reconnecting || quickReconnecting }
     /// Set by a tile's "Remove…" (long press). The screen asks "Remove <name> from the call?", runs
     /// the service's remove and clears it. Cleared here if that person leaves first.
     @Published var removeCandidate: CallTile?
@@ -98,6 +103,13 @@ final class GroupCallStage: ObservableObject {
         // A hand going up or down rebuilds the tiles. The sink runs before the new value is stored
         // (a @Published fires in willSet), so the rebuild is deferred a turn, never run inline.
         GroupCallSocial.shared.$raisedHands
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.scheduleRefresh() }
+            }
+            .store(in: &subscriptions)
+        // Audit M-026, 2026-10-07: a quick reconnect starting or ending. Deferred a turn for the
+        // same willSet reason as the hands above.
+        GroupCallSocial.shared.$quickReconnecting
             .sink { [weak self] _ in
                 Task { @MainActor in self?.scheduleRefresh() }
             }
@@ -239,6 +251,8 @@ final class GroupCallStage: ObservableObject {
     func canModerate(_ tile: CallTile) -> Bool {
         let service = GroupCallService.shared
         guard !tile.isLocal, !tile.uid.isEmpty, tile.uid != service.myUid else { return false }
+        // Audit M-072, 2026-10-07 (with fix/F4): a group call's live roles first, as the people list.
+        if let live = service.groupRole(of: tile.uid) { return service.myRole.canModerate(live) }
         let attribute = participants[tile.id]?.attributes["role"]
         // No attribute (a server without roles yet): the tile's host mark, itself server-sourced.
         let role: CallRole = (attribute == nil && tile.isHost) ? .owner : CallRole(attribute: attribute)
@@ -286,6 +300,28 @@ final class GroupCallStage: ObservableObject {
         refresh()
     }
 
+    // Audit M-079, 2026-10-07: names and photos of people in the room who are not on the call's
+    // member list (every group-chat and link call). Kept across stages (the screen is rebuilt on
+    // every restore from the card); asked at most once per uid per stage.
+    private static var peerProfiles: [String: (name: String, photo: String?)] = [:]
+    private var peerLookups: Set<String> = []
+
+    /// What the profile store has for this uid, nil until its one read has answered. The photo
+    /// goes through the same privacy answer the chat search uses (`ProfilePhotoIndex.header`).
+    private func peerProfile(_ uid: String) -> (name: String, photo: String?)? {
+        guard !uid.isEmpty else { return nil }
+        if let known = Self.peerProfiles[uid] { return known }
+        guard peerLookups.insert(uid).inserted else { return nil }
+        Task { @MainActor [weak self] in
+            guard let p = await ProfileStore.shared.fetch(uid) else { return }
+            let photo = ProfilePhotoIndex.header(uid: uid, fallbackPhoto: p.photoUrl, fallbackPoster: nil,
+                                                 iAmContact: PrivacyPrefs.mayViewPhotoOf(uid)).photoUrl
+            Self.peerProfiles[uid] = (name: p.name, photo: photo)
+            self?.scheduleRefresh()
+        }
+        return nil
+    }
+
     // MARK: - Building the tiles
 
     /// Many delegate events arrive in a burst (a join brings publish + subscribe + quality); one
@@ -320,13 +356,20 @@ final class GroupCallStage: ObservableObject {
 
             let uid = p.identity?.stringValue ?? ""
             let member = profiles[uid]
+            // Audit M-079, 2026-10-07: group-chat and link calls have no member list, so a remote
+            // had no photo at all and could be named "Member" (the server's word when it had no
+            // name). Such a person is looked up in the app's own profile store, once per uid.
+            let looked = (member == nil && !isLocal) ? peerProfile(uid) : nil
             let name: String = {
-                if let n = p.name, !n.isEmpty { return n }
+                if let n = p.name, !n.isEmpty, n != "Member" { return n }
                 if let n = member?.name, !n.isEmpty { return n }
+                if let n = looked?.name, !n.isEmpty { return n }
+                if let n = p.name, !n.isEmpty { return n }
                 if isLocal, let n = ProfileStore.shared.me?.name, !n.isEmpty { return n }
                 return isLocal ? "You" : "Member"
             }()
-            let photo = isLocal ? (ProfileStore.shared.me?.photoUrl ?? member?.photoUrl) : member?.photoUrl
+            let photo = isLocal ? (ProfileStore.shared.me?.photoUrl ?? member?.photoUrl)
+                : (member?.photoUrl ?? looked?.photo)
             let camera = Self.livePublication(p.firstCameraPublication)
             // Screen sharing, 2026-10-07: MY share never marks my own tile as presenting. My screen
             // is not drawn back to me (`videoTrack`), so a presenter flag on my tile would only cost
@@ -335,7 +378,12 @@ final class GroupCallStage: ObservableObject {
             let screen = isLocal ? nil : Self.livePublication(p.firstScreenSharePublication)
             let sharing = screen != nil
             if sharing, !isLocal, shareStartedAt[id] == nil { shareStartedAt[id] = now; newShare = true }
-            if !sharing { shareStartedAt[id] = nil }
+            // Audit M-136, 2026-10-07: a share ENDS when its publication goes, not when its track
+            // blips. A track dropped for a moment (a resubscribe, a quality switch) used to end the
+            // share here and "start" it again a tick later, which cleared the viewer's pin and
+            // yanked the stage. It still starts only once its picture is really here (above).
+            let sharePublished = !isLocal && p.firstScreenSharePublication != nil
+            if !sharePublished { shareStartedAt[id] = nil }
 
             // Media still on its way (the reference app's waiting tile, then its error tile).
             // Remotes only: my own camera has no wait to show me.
@@ -429,7 +477,13 @@ final class GroupCallStage: ObservableObject {
         // Spec §8: the highlight follows the tracker (0.3s to take over, 1.5s hold), not the raw flag.
         // Remotes only: my own voice would hold the highlight while I talk, so nobody answering me
         // could take it, and my tile is the self pip, which never shows the ring anyway.
-        let speaking = Set(built.filter { $0.isSpeaking && !$0.isLocal }.map(\.id))
+        // Audit M-137, 2026-10-07: only while really connected, and never a muted tile. The raw
+        // flag can stay true through a reconnect (no audio arrives to clear it), which froze the
+        // highlight on whoever spoke last before the blip.
+        let live = connectionState == .connected && !quickReconnecting
+        let speaking: Set<String> = live
+            ? Set(built.filter { $0.isSpeaking && !$0.isLocal && !$0.isMuted }.map(\.id))
+            : []
         _ = speakerTracker.update(speaking: speaking, now: now)
         let speaker = speakerTracker.activeSpeakerId.flatMap { present.contains($0) ? $0 : nil }
         // Remembered for the speaker page, which keeps the last speaker large through a silence.
@@ -466,6 +520,8 @@ final class GroupCallStage: ObservableObject {
     private func syncConnectionState() {
         let state = room.connectionState
         if state != connectionState { connectionState = state }
+        let quick = state != .disconnected && GroupCallSocial.shared.quickReconnecting
+        if quick != quickReconnecting { quickReconnecting = quick }
         // The tick has nothing to watch in a closed room; it comes back if the room reconnects.
         if state == .disconnected { stopTimer() } else { startTimer() }
     }

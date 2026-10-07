@@ -88,6 +88,13 @@ struct GroupCallView: View {
     /// stack's 10pt padding, the header and the 16pt gap under it.
     private var stageLift: CGFloat { winInsets.top + 10 + headerHeight + 16 }
 
+    /// Audit M-101, 2026-10-07: with the stage running up behind the header (the full-screen stage
+    /// the owner asked for, 2026-10-07 plan #1), a top-row tile's badges and the focus tile's
+    /// "Pinned" / "Presenting" label sat under the status bar and the Dynamic Island. The stage
+    /// stays full screen; only those top marks move down, measured from the screen's top edge:
+    /// under the header while it shows, under the status bar while the chrome is away.
+    private var topClearance: CGFloat { chromeVisible ? stageLift : winInsets.top }
+
     private var headerBar: some View {
         header.padding(.horizontal, 14)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
@@ -162,7 +169,7 @@ struct GroupCallView: View {
             .animation(GroupCallMotion.fade, value: showMore)
             .background(insetsReader)
             .onChange(of: frontKind) { _, kind in frontChanged(kind) }
-            .onChange(of: duoHasVideo) { _, _ in showChrome() }
+            .onChange(of: duoHasVideo) { _, video in duoVideoChanged(video) }
             .onChange(of: service.joinState) { _, state in joinStateChanged(state) }
             .onAppear { armAutoHide() }
             .onDisappear { hideTask?.cancel() }
@@ -182,6 +189,13 @@ struct GroupCallView: View {
 
     private func frontChanged(_ kind: Int) {
         if kind != 2 { duoSwapped = false }
+        showChrome()
+    }
+
+    /// Audit M-100, 2026-10-07: both cameras off hides the corner tile, the only way to swap back,
+    /// so a swap made earlier is dropped then (GroupCallDuoView also ignores it without the tile).
+    private func duoVideoChanged(_ video: Bool) {
+        if !video { duoSwapped = false }
         showChrome()
     }
 
@@ -224,7 +238,7 @@ struct GroupCallView: View {
             // present this screen (chat, group info, the root layer) and only one had an onDismiss, so
             // the join carried on into a live call with no screen and no card. Leaving is decided in
             // one place; a live call is untouched here (its covers minimize it).
-            .onDisappear { service.screenClosed() }
+            .onDisappear { screenGone() }
             // 2026-09-24 decision D25: a start that failed or was refused says so, and OK closes the
             // screen. Held until the cover has finished coming up: a refusal lands within the same beat
             // as the tap, and an alert asked for mid-presentation is dropped by UIKit.
@@ -243,6 +257,16 @@ struct GroupCallView: View {
             .sheet(isPresented: $showParticipants) { GroupCallParticipantsSheet(stage: stage) }
     }
 
+    /// Audit M-031, 2026-10-07: "a live call is untouched here (its covers minimize it)" held for
+    /// only two of the four covers. The chat's and the group page's covers have no onDismiss, so
+    /// when that page itself went away (a notification tap to another chat, removed from the
+    /// group, the chat deleted elsewhere) the call ran on with no screen and no card. Any screen
+    /// that goes while its call is live and was not minimized or ended hands it to the card.
+    private func screenGone() {
+        service.screenClosed()
+        if service.isActive, !service.minimized, !service.leaving { service.minimized = true }
+    }
+
     private func settle() async {
         try? await Task.sleep(nanoseconds: 500_000_000)
         settled = true
@@ -250,8 +274,11 @@ struct GroupCallView: View {
 
     private var noticeTitle: String { service.notice?.title ?? "" }
     private var noticeShown: Binding<Bool> {
+        // Audit M-159, 2026-10-07: OK closes the screen only for a call that is not running (a
+        // failed or refused start, D25). On a live call it closed the call screen over a call that
+        // went on (in-call failures are toasts now; this is the backstop).
         Binding(get: { settled && service.notice != nil },
-                set: { if !$0 { service.notice = nil; dismiss() } })
+                set: { if !$0 { service.notice = nil; if !service.isActive { dismiss() } } })
     }
     @ViewBuilder
     private var noticeMessage: some View {
@@ -310,8 +337,12 @@ struct GroupCallView: View {
         let everyone: [Participant] = [room.localParticipant as Participant]
             + room.remoteParticipants.values.map { $0 as Participant }
         var hosts: Set<String> = []
-        for p in everyone where CallRole(attribute: p.attributes["role"]) == .owner {
-            if let uid = p.identity?.stringValue, !uid.isEmpty { hosts.insert(uid) }
+        for p in everyone {
+            guard let uid = p.identity?.stringValue, !uid.isEmpty else { continue }
+            // Audit M-072, 2026-10-07 (with fix/F4): a group call's live role first; the attribute
+            // was frozen at join.
+            let role = service.groupRole(of: uid) ?? CallRole(attribute: p.attributes["role"])
+            if role == .owner { hosts.insert(uid) }
         }
         // A server without roles yet: the link's creator (server-written `creatorUid`) as before.
         let me = service.myUid
@@ -333,6 +364,8 @@ struct GroupCallView: View {
             .background(stageSizeReader)
             // The strip's trailing gap clears the pip as it is really drawn (small or enlarged).
             .environment(\.groupCallSelfPipWidth, selfPipWidth)
+            // Audit M-101, 2026-10-07: what the tiles' top marks must clear (see `topClearance`).
+            .environment(\.groupCallTopClearance, topClearance)
             .overlay(alignment: .bottomTrailing) { selfPip }
             .animation(GroupCallMotion.stage(reduceMotion: reduceMotion), value: stage.mode)
             .contentShape(Rectangle())
@@ -458,7 +491,8 @@ struct GroupCallView: View {
 
     private var remoteCount: Int { stage.tiles.reduce(0) { $1.isLocal ? $0 : $0 + 1 } }
     private var isAlone: Bool { service.joinState == .joined && remoteCount == 0 }
-    private var isReconnecting: Bool { stage.connectionState == .reconnecting }
+    // Audit M-026, 2026-10-07: the quick reconnect too (it never leaves `.connected`).
+    private var isReconnecting: Bool { stage.isReconnecting }
 
     // MARK: - The chrome's hide rule
 

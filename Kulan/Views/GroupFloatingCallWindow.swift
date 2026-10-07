@@ -17,6 +17,8 @@ import LiveKit
 struct GroupFloatingCallWindow: View {
     @ObservedObject private var service = GroupCallService.shared
     @ObservedObject private var room = GroupCallService.shared.room
+    /// Audit M-026, 2026-10-07: the quick reconnect's flag (`GroupCallSocial.quickReconnecting`).
+    @ObservedObject private var social = GroupCallSocial.shared
 
     private let w: CGFloat = 112
     private let h: CGFloat = 199   // 9:16, the 1:1 card's shape
@@ -51,7 +53,7 @@ struct GroupFloatingCallWindow: View {
                 // CallContainer re-presents GroupCallView when `minimized` clears.
                 // Through the morph, the 1:1 card's way: the screen grows out of this card over
                 // 0.35s instead of cutting straight in (owner, 2026-10-07).
-                .onTapGesture { CallPipMorph.restore { service.minimized = false } }
+                .onTapGesture { cardTapped() }
                 .padding(.top, insets.top + 8 + base.height)
                 .padding(.trailing, 12 - base.width)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -68,6 +70,19 @@ struct GroupFloatingCallWindow: View {
             if let id { shownId = id }
         }
         .accessibilityLabel("Back to the call")
+    }
+
+    /// Audit M-146, 2026-10-07: a tap while the call is already over or being left (the card can
+    /// outlive it for a moment) did the restore into a dead call. Ignored then.
+    private func cardTapped() {
+        guard service.isActive, !service.leaving else { return }
+        CallPipMorph.restore { service.minimized = false }
+    }
+
+    /// Audit M-026, 2026-10-07: either kind of reconnect, the call screen's own reading.
+    private var reconnecting: Bool {
+        room.connectionState == .reconnecting
+            || (room.connectionState != .disconnected && social.quickReconnecting)
     }
 
     // MARK: - Drag
@@ -175,7 +190,6 @@ struct GroupFloatingCallWindow: View {
 
     /// The call screen's own words (`GroupCallWords`), so minimizing never renames the stage.
     private func stageLabel(at now: Date) -> String? {
-        let reconnecting = room.connectionState == .reconnecting
         if let words = GroupCallWords.status(joinState: service.joinState, connecting: service.connecting,
                                              reconnecting: reconnecting) { return words }
         if remotes.isEmpty { return GroupCallWords.alone(ringing: service.ringingNames(at: now)) }
@@ -215,6 +229,20 @@ struct GroupFloatingCallWindow: View {
         }
         .id(shown.id)   // a new speaker is a new view, never the old one's last frame or colour
         .frame(width: w, height: h)
+        // Audit M-026, 2026-10-07: a quick reconnect keeps everyone in the room, so the card kept
+        // showing a person over a frozen call with nothing said. The header's word, small.
+        .overlay(alignment: .bottom) {
+            if reconnecting {
+                Text("Reconnecting…")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Capsule().fill(Color.black.opacity(0.6)))
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+            }
+        }
         .transition(.opacity)
     }
 

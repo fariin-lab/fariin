@@ -61,6 +61,13 @@ struct IncomingGroupCallLayer: View {
         .onChange(of: CallService.shared.state) { _, state in
             // owner, 2026-10-06: one ring at a time; the system ring for a group call stops too.
             if state != .idle { GroupCallRinging.shared.oneToOneTookOver() }
+            // Audit M-064, 2026-10-07: a 1:1 call answered (or placed) while a link's pre-join
+            // screen is up: the lobby covered the 1:1 screen and its camera kept running. The lobby
+            // goes; its didSet ends a join or a knock still running from it. A ring alone leaves it
+            // up (it may be declined). Not once the call itself fills that cover.
+            if state == .active || state == .outgoing, service.lobby != nil, !service.roomInLobbyCover {
+                service.lobby = nil
+            }
             guard state == .idle else { service.reevaluateInvites(); return }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -108,15 +115,25 @@ struct IncomingGroupCallLayer: View {
 private struct LobbyCoverContent: View {
     let lobby: GroupCallService.Lobby
     @ObservedObject private var service = GroupCallService.shared
+    /// Audit M-063, 2026-10-07: the call has filled this cover at least once.
+    @State private var roomShown = false
     var body: some View {
         ZStack {
             if service.roomInLobbyCover {
                 GroupCallView().transition(.opacity)
+            } else if roomShown || service.lobby == nil {
+                // Audit M-063, 2026-10-07: the cover is on its way down (the call inside it was
+                // minimized or ended, or the lobby was closed). It used to build the lobby again for
+                // that moment: a second camera session and a fresh join-token request. Black instead.
+                // The swap from the lobby to the call (audit 11-1, `aac312e8`) is untouched.
+                Color.black.ignoresSafeArea()
             } else {
                 CallLobbyView(lobby: lobby).transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: service.roomInLobbyCover)
+        .onAppear { if service.roomInLobbyCover { roomShown = true } }
+        .onChange(of: service.roomInLobbyCover) { _, on in if on { roomShown = true } }
     }
 }
 
