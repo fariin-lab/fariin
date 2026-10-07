@@ -9,11 +9,28 @@ struct AddPeopleSheet: View {
     let onAdd: ([CallMember]) -> Void
     /// The bottom button. A link call sends the link instead of adding to a member list.
     let actionTitle: String
+    /// Audit M-103, 2026-10-07: the second line of a row that cannot be picked, per uid ("Left",
+    /// "Didn't join", "Removed from this call"). Without one an `alreadyIn` row says "In this call",
+    /// which it used to say for everyone ever invited, here or not.
+    let notes: [String: String]
+    /// Audit M-102, 2026-10-07: people who cannot be picked and are not in the call (the owner
+    /// removed them). Not counted toward the call's size; one of them in an add made it all fail.
+    let unavailable: Set<String>
 
-    init(alreadyIn: Set<String>, actionTitle: String = "Add to call", onAdd: @escaping ([CallMember]) -> Void) {
+    init(alreadyIn: Set<String>, notes: [String: String] = [:], unavailable: Set<String> = [],
+         actionTitle: String = "Add to call", onAdd: @escaping ([CallMember]) -> Void) {
         self.alreadyIn = alreadyIn.filter { !$0.isEmpty }
+        self.notes = notes
+        self.unavailable = unavailable.subtracting(alreadyIn)
         self.actionTitle = actionTitle
         self.onAdd = onAdd
+    }
+
+    /// Audit M-151, 2026-10-07: what I call this person on my own screen. A private contact name
+    /// is shown here but never sent: `member(_:)` carries the profile name, because the people I
+    /// add are written into the shared call doc that everyone in the call reads.
+    private func shown(_ p: CallMember) -> String {
+        ContactNames.shared.name(for: p.uid) ?? p.name
     }
 
     /// Everyone in the call, the people already in it included. Matches the ad-hoc room's cap.
@@ -39,7 +56,9 @@ struct AddPeopleSheet: View {
     }
 
     private func member(_ c: Conversation) -> CallMember {
-        CallMember(uid: c.otherUid(me), name: c.name(for: me), photoUrl: c.photoUrl(for: me))
+        // The profile name (see `shown`), the same fallback `Conversation.name(for:)` uses.
+        let other = c.otherUid(me)
+        return CallMember(uid: other, name: c.names[other] ?? "User", photoUrl: c.photoUrl(for: me))
     }
 
     /// One entry per person, newest chat first.
@@ -62,7 +81,7 @@ struct AddPeopleSheet: View {
 
     private var matches: [CallMember] {
         let q = trimmedQuery.lowercased()
-        let local = people.filter { $0.name.lowercased().contains(q) }
+        let local = people.filter { shown($0).lowercased().contains(q) || $0.name.lowercased().contains(q) }
         let localIds = Set(local.map(\.uid))
         return local + found.filter { !localIds.contains($0.uid) }
     }
@@ -83,10 +102,10 @@ struct AddPeopleSheet: View {
 
     /// A–Z sections, "#" last.
     private var sections: [AZSection] {
-        let grouped = Dictionary(grouping: people) { Self.letter($0.name) }
+        let grouped = Dictionary(grouping: people) { Self.letter(shown($0)) }
         return grouped.keys
             .sorted { ($0 == "#" ? "~" : $0) < ($1 == "#" ? "~" : $1) }
-            .map { key in AZSection(letter: key, people: grouped[key, default: []].sorted { $0.name.lowercased() < $1.name.lowercased() }) }
+            .map { key in AZSection(letter: key, people: grouped[key, default: []].sorted { shown($0).lowercased() < shown($1).lowercased() }) }
     }
 
     var body: some View {
@@ -152,7 +171,7 @@ struct AddPeopleSheet: View {
                     ForEach(selected) { p in
                         VStack(spacing: 4) {
                             ZStack(alignment: .topTrailing) {
-                                AvatarView(name: p.name, photoUrl: p.photoUrl, size: 52)
+                                AvatarView(name: shown(p), photoUrl: p.photoUrl, size: 52)
                                 Button { selected.removeAll { $0.uid == p.uid } } label: {
                                     Image(systemName: "xmark.circle.fill")
                                         .font(.system(size: 18))
@@ -162,7 +181,7 @@ struct AddPeopleSheet: View {
                                 .buttonStyle(.plain)
                                 .offset(x: 4, y: -4)
                             }
-                            Text(p.name).font(.caption2).lineLimit(1).frame(width: 56)
+                            Text(shown(p)).font(.caption2).lineLimit(1).frame(width: 56)
                         }
                     }
                 }
@@ -179,18 +198,20 @@ struct AddPeopleSheet: View {
 
     private func row(_ p: CallMember) -> some View {
         let inCall = alreadyIn.contains(p.uid)
+        let locked = inCall || unavailable.contains(p.uid)
         let on = inCall || selected.contains { $0.uid == p.uid }
+        let note: String? = notes[p.uid] ?? (inCall ? "In this call" : nil)
         return Button { toggle(p) } label: {
             HStack(spacing: 12) {
-                AvatarView(name: p.name, photoUrl: p.photoUrl, size: 40)
+                AvatarView(name: shown(p), photoUrl: p.photoUrl, size: 40)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
-                        Text(p.name).font(.system(size: 17)).foregroundStyle(.primary)
+                        Text(shown(p)).font(.system(size: 17)).foregroundStyle(.primary)
                         VerifiedMark(uid: p.uid, size: 13)
                     }
                     .lineLimit(1)
-                    if inCall {
-                        Text("In this call").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                    if locked, let note {
+                        Text(note).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                     } else if let about = abouts[p.uid] {
                         Text(about).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -201,13 +222,13 @@ struct AddPeopleSheet: View {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 22, weight: .light))
                     .foregroundStyle(on ? Color.primary : Color.secondary)
-                    .opacity(inCall ? 0.5 : 1)
+                    .opacity(locked ? 0.5 : 1)
             }
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(inCall)
+        .disabled(locked)
         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 28))   // clear of the index
         .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
     }
@@ -260,7 +281,7 @@ struct AddPeopleSheet: View {
     // MARK: - Actions
 
     private func toggle(_ p: CallMember) {
-        guard !alreadyIn.contains(p.uid) else { return }
+        guard !alreadyIn.contains(p.uid), !unavailable.contains(p.uid) else { return }
         if selected.contains(where: { $0.uid == p.uid }) {
             selected.removeAll { $0.uid == p.uid }
             return

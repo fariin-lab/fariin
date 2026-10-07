@@ -13,6 +13,11 @@ struct CallLinkDetailsView: View {
     @State private var approval: Bool?
     @State private var approvalFailed = false
     @State private var isVideo: Bool?   // Call Type (owner, 2026-10-06); nil until read
+    /// Audit M-095, 2026-10-07: per switch, what the server last confirmed and whether a save runs.
+    @State private var approvalSaved: Bool?
+    @State private var approvalSaving = false
+    @State private var videoSaved: Bool?
+    @State private var videoSaving = false
     @State private var confirmDelete = false
     @State private var deleting = false
     @State private var deleteFailed = false
@@ -93,13 +98,15 @@ struct CallLinkDetailsView: View {
         .task {
             guard current.admin, approval == nil else { return }
             approval = await CallLinkService.shared.approval(for: link)
+            approvalSaved = approval
             isVideo = await CallLinkService.shared.isVideo(link)
+            videoSaved = isVideo
         }
         .alert("Delete this call link?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { delete() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("People who have it will no longer be able to join.")
+            Text(deleteMessage)
         }
         .alert("Couldn't change setting", isPresented: $approvalFailed) {
             Button("OK", role: .cancel) {}
@@ -118,28 +125,55 @@ struct CallLinkDetailsView: View {
         }
     }
 
+    /// Audit M-023, 2026-10-07: deleting the link of the call I am in also closes that call on
+    /// the server, so the question says so.
+    private var deleteMessage: String {
+        let group = GroupCallService.shared
+        if group.isActive, group.currentLink?.roomId == current.roomId {
+            return "People who have it will no longer be able to join, and the call on it ends for everyone in it."
+        }
+        return "People who have it will no longer be able to join."
+    }
+
+    /// Audit M-095, 2026-10-07 (both switches): one save at a time, the newest value sent when
+    /// it ends, a refusal back to what the server last confirmed. Two quick flips used to race as
+    /// two unordered calls and could leave the server opposite to the switch.
     private func setVideo(_ on: Bool) {
-        let before = isVideo
         isVideo = on
+        guard !videoSaving else { return }
+        videoSaving = true
         Task { @MainActor in
-            do { try await CallLinkService.shared.setVideo(link, on: on) }
-            catch {
-                isVideo = before
-                approvalFailed = true
+            while let want = isVideo, want != videoSaved {
+                do {
+                    try await CallLinkService.shared.setVideo(link, on: want)
+                    videoSaved = want
+                } catch {
+                    isVideo = videoSaved
+                    approvalFailed = true
+                    break
+                }
             }
+            videoSaving = false
         }
     }
 
     /// Saved to the server at once. The switch moves first; a refusal puts it back and says so.
     private func setApproval(_ on: Bool) {
-        let before = approval
         approval = on
+        guard !approvalSaving else { return }
+        approvalSaving = true
         Task { @MainActor in
-            do { try await CallLinkService.shared.setApproval(link, on: on) }
-            catch {
-                approval = before
-                approvalFailed = true
+            while let want = approval, want != approvalSaved {
+                do {
+                    try await CallLinkService.shared.setApproval(link, on: want)
+                    approvalSaved = want
+                } catch {
+                    approval = approvalSaved
+                    approvalFailed = true
+                    break
+                }
             }
+            approvalSaving = false
         }
     }
 

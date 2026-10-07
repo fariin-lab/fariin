@@ -16,6 +16,11 @@ struct GroupCallParticipantsSheet: View {
     /// Link calls: the link's approval setting, read when the sheet opens (creator only).
     @State private var approval: Bool?
     @State private var approvalFailed = false
+    /// Audit M-095, 2026-10-07: the value the server last confirmed, and whether a save is running.
+    @State private var approvalSaved: Bool?
+    @State private var approvalSaving = false
+    /// Audit M-161, 2026-10-07: the setting could not be read (shown as such, with a retry).
+    @State private var approvalLoadFailed = false
     // Group call permissions, 2026-10-06: the owner's and admins' controls.
     @State private var removeTarget: CallTile?
     /// Link calls, the link's owner: "Remove and Block" on this person, waiting for the confirmation.
@@ -75,18 +80,50 @@ struct GroupCallParticipantsSheet: View {
 
     private var aloneInCall: Bool { !stage.tiles.contains { !$0.isLocal } }
 
+    /// The call screen draws the 1:1 look (GroupCallView `front`): joined, at most one other
+    /// person, nobody presenting.
+    private var twoPersonLook: Bool {
+        service.joinState == .joined
+            && stage.tiles.filter { !$0.isLocal }.count <= 1
+            && !stage.tiles.contains { $0.isScreenShare }
+    }
+
     /// Invited and not here: still ringing for the first minute, then "Didn't join". Someone who
     /// came in and has since gone says so.
+    /// Audit M-065 and M-158, 2026-10-07: "Ringing…" is the service's own answer per person
+    /// (`ringingMembers`, each inside their own ring minute), not one room-wide clock that "Add
+    /// people" restarted for everyone; and someone who declined or was busy says so instead of
+    /// "Ringing…".
     private func invited(at now: Date) -> [Row] {
         let here = Set(stage.tiles.map(\.uid))
-        let ringing = service.roomStartedAt.map { now.timeIntervalSince($0) < 60 } ?? false
+        let ringing = Set(service.ringingMembers(at: now).map(\.uid))
         return service.members
             .filter { !here.contains($0.uid) && $0.uid != service.myUid }
             .map { m in
-                let sub = service.joinedUids.contains(m.uid) ? "Left"
-                    : ringing ? "Ringing…" : "Didn't join"
-                return Row(id: m.uid, name: m.name, photoUrl: m.photoUrl, subtitle: sub)
+                Row(id: m.uid, name: m.name, photoUrl: m.photoUrl, subtitle: absentNote(m.uid, ringing: ringing))
             }
+    }
+
+    /// Why an invited person is not in the call right now.
+    private func absentNote(_ uid: String, ringing: Set<String>) -> String {
+        if service.joinedUids.contains(uid) { return "Left" }
+        if service.declinedUids.contains(uid) { return "Declined" }
+        if service.busyUids.contains(uid) { return "Busy" }
+        return ringing.contains(uid) ? "Ringing…" : "Didn't join"
+    }
+
+    /// Audit M-102 and M-103, 2026-10-07: Add people's line for each person it will not let me
+    /// pick. "In this call" only for someone who has a tile now; the rest say why they are not
+    /// here. They stay unpickable: ringing someone again needs the server's "ring again" (round 2).
+    private func addNotes(removed: Set<String>) -> [String: String] {
+        let here = Set(stage.tiles.map(\.uid))
+        let ringing = Set(service.ringingMembers(at: Date()).map(\.uid))
+        var notes: [String: String] = [:]
+        for m in service.members where !here.contains(m.uid) {
+            notes[m.uid] = absentNote(m.uid, ringing: ringing)
+        }
+        for uid in removed { notes[uid] = "Removed from this call" }
+        return notes
     }
 
     // The list's sections, one property each: as one expression the body was too big for the
@@ -185,10 +222,7 @@ struct GroupCallParticipantsSheet: View {
     @ViewBuilder private var hostSection: some View {
         if ownsLink, let link {
             Section {
-                Toggle("Require approval to join",
-                       isOn: Binding(get: { approval ?? true }, set: { setApproval($0, link) }))
-                    .disabled(approval == nil || service.linkRevoked)
-                    .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
+                approvalRow(link)
                 Button(role: .destructive) { confirmRevoke = true } label: {
                     HStack {
                         Label("Revoke link", systemImage: "arrow.triangle.2.circlepath")
@@ -200,6 +234,42 @@ struct GroupCallParticipantsSheet: View {
             } footer: {
                 Text("Revoking stops the old link and makes a new one for this call at once.")
             }
+        }
+    }
+
+    /// Audit M-161, 2026-10-07: the switch only once the setting is known. While unknown it showed
+    /// ON and greyed out, so an owner could believe approval protected a call it did not. Now:
+    /// a spinner while it loads, "Couldn't load" with a retry when the read failed.
+    @ViewBuilder private func approvalRow(_ link: ActiveCallLink) -> some View {
+        if let value = approval {
+            Toggle("Require approval to join",
+                   isOn: Binding(get: { approval ?? value }, set: { setApproval($0, link) }))
+                .disabled(service.linkRevoked)
+                .tint(.green)   // green always (owner, 2026-10-06: white-on-white in dark mode)
+        } else {
+            HStack {
+                Text("Require approval to join")
+                Spacer(minLength: 8)
+                if approvalLoadFailed {
+                    Button("Couldn't load. Retry") { Task { await loadApproval(link) } }
+                        .font(.subheadline)
+                        .buttonStyle(.borderless)
+                } else {
+                    ProgressView()
+                }
+            }
+        }
+    }
+
+    /// Reads the link's approval setting (each time the sheet opens, and on Retry).
+    private func loadApproval(_ link: ActiveCallLink) async {
+        approvalLoadFailed = false
+        if let value = await CallLinkService.shared.approval(for: link) {
+            guard !approvalSaving else { return }   // a save in flight knows better
+            approval = value
+            approvalSaved = value
+        } else if approval == nil {
+            approvalLoadFailed = true
         }
     }
 
@@ -288,7 +358,7 @@ struct GroupCallParticipantsSheet: View {
         .navigationTitle(sheetTitle)
         .task {
             guard ownsLink, let link, approval == nil else { return }
-            approval = await CallLinkService.shared.approval(for: link)
+            await loadApproval(link)
             if await CallLinkService.shared.isRevoked(link) == true { service.noteLinkRevoked() }
         }
     }
@@ -351,7 +421,11 @@ struct GroupCallParticipantsSheet: View {
         .sheet(isPresented: $showRequests) { CallLinkBulkRequestsSheet() }
         .sheet(isPresented: $showAdd) {
             if service.isAdhoc {
-                AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid))) { people in
+                // `removedUids`: server-written, read by the service (audit M-102, fix/F4).
+                let removed = service.removedUids
+                AddPeopleSheet(alreadyIn: Set(service.members.map(\.uid)),
+                               notes: addNotes(removed: removed),
+                               unavailable: removed) { people in
                     Task { await service.invite(people) }
                 }
             } else if let url = linkURL {
@@ -377,12 +451,26 @@ struct GroupCallParticipantsSheet: View {
     }
 
     /// Saved at once; a refusal puts the switch back and says so (same as the link's own page).
+    /// Audit M-095, 2026-10-07: one save at a time. Each flip used to fire its own unordered call,
+    /// so two quick flips could land in the wrong order and leave the server opposite to the
+    /// switch. Now a flip during a save waits; when the save ends, the switch's value then is sent
+    /// if it differs. A refusal goes back to what the server last confirmed, never a stale guess.
     private func setApproval(_ on: Bool, _ link: ActiveCallLink) {
-        let before = approval
         approval = on
+        guard !approvalSaving else { return }
+        approvalSaving = true
         Task { @MainActor in
-            do { try await CallLinkService.shared.setApproval(link, on: on) }
-            catch { approval = before; approvalFailed = true }
+            while let want = approval, want != approvalSaved {
+                do {
+                    try await CallLinkService.shared.setApproval(link, on: want)
+                    approvalSaved = want
+                } catch {
+                    approval = approvalSaved
+                    approvalFailed = true
+                    break
+                }
+            }
+            approvalSaving = false
         }
     }
 
@@ -391,6 +479,9 @@ struct GroupCallParticipantsSheet: View {
     /// Their role as the server signed it into their join pass, never a flag of ours.
     private func role(of t: CallTile) -> CallRole {
         _ = service.rolesVersion   // redraw when anyone's attributes change
+        // Audit M-072, 2026-10-07 (with fix/F4): a group call reads roles from the group as it is
+        // now; the attribute was frozen at join, so a new owner or a demoted admin was shown wrong.
+        if let live = service.groupRole(of: t.uid) { return live }
         let attr = stage.participant(t.id)?.attributes["role"]
         // No attribute (a server without roles yet): the tile's host mark, itself server-sourced.
         if attr == nil, t.isHost { return .owner }
@@ -491,8 +582,10 @@ struct GroupCallParticipantsSheet: View {
     // MARK: - In call rows
 
     private func isSpeaking(_ t: CallTile) -> Bool {
-        // The tile's own flag is not republished on every flicker; the stage's store is live.
-        stage.speech(for: t.id).isSpeaking || t.id == stage.activeSpeakerId
+        // Audit M-135, 2026-10-07: the stage's settled speaker only. The raw flag was read here
+        // too, but nothing redraws this list when only that flag changes (it is never published),
+        // so the green ring stuck on or never showed.
+        t.id == stage.activeSpeakerId
     }
 
     /// A remote row shows that person large and closes the sheet. Already focused stays focused:
@@ -532,7 +625,9 @@ struct GroupCallParticipantsSheet: View {
 
     private func focusButton(_ t: CallTile) -> some View {
         Button {
-            if stage.pinnedId != t.id { stage.togglePin(t.id) }
+            // Audit M-162, 2026-10-07: no pin in the two-person look (the other person is already
+            // the whole screen). It was set silently there and took over once a third joined.
+            if !twoPersonLook, stage.pinnedId != t.id { stage.togglePin(t.id) }
             dismiss()
         } label: {
             rowContent(t).contentShape(Rectangle())
