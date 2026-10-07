@@ -465,6 +465,7 @@ final class GroupCallService: ObservableObject {
     /// `syncMic` applies the latest wish, one SDK call at a time.
     func toggleMic() {
         guard !leaving else { return }   // audit M-060: the dead call screen's buttons do nothing
+        guard isActive || connecting || waitingForApproval else { return }   // no call, nothing to mute
         micOn.toggle()
         // Still joining: the wish is what the join publishes with (`startMuted`), not a call on a
         // room that is not up yet.
@@ -1043,7 +1044,11 @@ final class GroupCallService: ObservableObject {
     /// had started in between. A second caller now waits for the run in progress.
     private var disconnectRun: Task<Void, Never>?
     private func disconnect() async {
-        if let running = disconnectRun { await running.value; return }
+        if let running = disconnectRun {
+            await running.value
+            hangingUp = false   // set again by an `end()` that arrived during that run
+            return
+        }
         let run = Task { @MainActor in await self.runDisconnect() }
         disconnectRun = run
         await run.value
@@ -1375,6 +1380,7 @@ final class GroupCallService: ObservableObject {
         guard let k = CallLinkKey(text: key) else { refuseJoin(Self.linkGone); return }
         let roomId = k.roomId
         connecting = true; isVideo = video
+        micOn = mic   // audit M-002: a Mute tapped while joining toggles from the lobby's choice
         callTitle = "Kulan Call"
         isLinkCreator = false
         let gen = joinGeneration   // owner audit 2026-10-06 #4
@@ -1700,6 +1706,7 @@ final class GroupCallService: ObservableObject {
         // A join minimized with the chevron that then failed must not start the next call minimized.
         let wasMinimized = minimized
         minimized = false
+        micOn = true   // audit M-002: a lobby's or a joining tap's mute is not carried to the next call
         let inLobby = lobbyJoin && lobby != nil   // read before the reset clears it
         resetRoomState()
         if inLobby {
