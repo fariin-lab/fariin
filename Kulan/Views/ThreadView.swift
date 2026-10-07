@@ -1913,20 +1913,14 @@ struct ThreadView: View {
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .safeAreaInset(edge: .top) {
-            if groupCallActive && !GroupCallService.shared.isActive {
-                Button {
+            if groupCallActive {
+                GroupCallJoinBar(video: groupCallVideo) {
                     InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
-                    Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo) }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: groupCallVideo ? "video.fill" : "phone.fill")
-                        Text("Group call in progress").fontWeight(.medium)
-                        Spacer()
-                        Text("Join").fontWeight(.semibold)
-                    }
-                    .font(.subheadline).foregroundStyle(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(Color.green)
+                    // audit M-059, 2026-10-07: Join only joins. A stale bar (the call ended a moment
+                    // ago) used to start a brand-new call that rang the whole group again; with
+                    // `requireLive` an ended call is refused with "Call ended" instead. Only the
+                    // Call button creates.
+                    Task { await GroupCallService.shared.start(cid: cid, title: title, video: groupCallVideo, requireLive: true) }
                 }
             }
         }
@@ -8308,6 +8302,33 @@ enum ViewedOnce {
 /// while the others were secondary grey on a flat received-bubble tint, so two pills a few lines
 /// apart read as two different things (user screenshot, "make it the same, no difference"). One
 /// modifier now owns the look, which is also what stops it drifting again.
+/// The green "Group call in progress · Join" bar over a group chat.
+/// audit M-016, 2026-10-07: it showed whenever I was not IN a call, so while a join was still
+/// connecting, or while I waited at a link's door for approval, a tap started a second join on the
+/// one shared room. It now hides for those too. It is its own small view so it can watch the group
+/// service (the thread does not, and only re-read `isActive` when something else redrew it).
+private struct GroupCallJoinBar: View {
+    @ObservedObject private var service = GroupCallService.shared
+    let video: Bool
+    let onJoin: () -> Void
+
+    var body: some View {
+        if !service.isActive && !service.connecting && !service.waitingForApproval {
+            Button(action: onJoin) {
+                HStack(spacing: 8) {
+                    Image(systemName: video ? "video.fill" : "phone.fill")
+                    Text("Group call in progress").fontWeight(.medium)
+                    Spacer()
+                    Text("Join").fontWeight(.semibold)
+                }
+                .font(.subheadline).foregroundStyle(.white)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Color.green)
+            }
+        }
+    }
+}
+
 struct ChatNoticePill: ViewModifier {
     /// ⛔ THE SAME SURFACE AN INCOMING BUBBLE WEARS — owner, 2026-08-24: the Today badge, the pin
     /// notice and the disappearing-message badge "must be like bubble color… the bubble now adapts

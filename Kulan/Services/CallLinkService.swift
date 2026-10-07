@@ -301,10 +301,17 @@ final class CallLinkService {
 
     func prepare() {
         guard prepared == nil, preparing == nil, me != nil else { return }
+        // audit M-156, 2026-10-07: a link made ahead belongs to the account that asked for it. One
+        // still in flight across a sign-out and a new sign-in used to land in `prepared` (reset had
+        // already run) and was handed to the NEXT account's first Create, a link whose server-side
+        // owner was the previous account; its end also cleared the new account's own `preparing`.
+        // Both writes now happen only while the generation is the one the request started under.
+        let gen = generation
         preparing = Task { @MainActor [weak self] in
             let d = try? await self?.makeOnServer()
-            self?.preparing = nil
-            if self?.prepared == nil { self?.prepared = d }
+            guard let self, self.generation == gen else { return nil }
+            self.preparing = nil
+            if self.prepared == nil { self.prepared = d }
             return d
         }
     }
@@ -312,7 +319,8 @@ final class CallLinkService {
     /// Hands back a ready link: the one made ahead if there is one (or is about to be), else a new one.
     func create() async throws -> CallLinkDraft {
         if let d = prepared { prepared = nil; prepare(); return d }
-        if let t = preparing, let d = await t.value {
+        let gen = generation   // audit M-156: the wait below can span a sign-out
+        if let t = preparing, let d = await t.value, generation == gen {
             if prepared?.roomId == d.roomId { prepared = nil }
             prepare()
             return d
@@ -453,6 +461,17 @@ final class CallLinkService {
                 // Same rule as makeOnServer: only a roomId collision is worth another key.
                 lastError = error
                 let ns = error as NSError
+                // audit M-068, 2026-10-07: the server now refuses a second, different replacement
+                // ("already replaced": another device, or a retry after a lost reply, made the new
+                // link first). When another device made it, that device already put it in my list
+                // on the server, so re-read the list to show it in place of the old row; then report
+                // the refusal as before. (A lost reply on THIS device leaves the new link without its
+                // key on this phone: recovering it is the deferred idempotency design.)
+                if ns.domain == FunctionsErrorDomain,
+                   FunctionsErrorCode(rawValue: ns.code) == .failedPrecondition {
+                    await load()
+                    throw error
+                }
                 guard ns.domain == FunctionsErrorDomain,
                       FunctionsErrorCode(rawValue: ns.code) == .alreadyExists else { throw error }
             }

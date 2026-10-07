@@ -2743,10 +2743,27 @@ enum ChatService {
         // it that way too). Re-stamping on the final merge shoved the row past messages sent DURING
         // the call once re-sorted from the server. Stamp only when this write is the creator (the
         // other side never wrote the live row, e.g. an old build placed the call).
-        if (try? await msgRef.getDocument())?.exists != true {
+        let existing = try? await msgRef.getDocument()
+        // audit M-036, 2026-10-07: a late or repeated ring (a push APNs held until after the call,
+        // or the callee's other device that lost the answered-elsewhere race) finished as "missed"
+        // on THIS phone and merged that over the shared row, so a call somebody answered turned
+        // into a red "Missed call" in the chat, the preview and the Calls tab. An answered call
+        // stays answered: a "missed" from any device does not overwrite it, nor the preview.
+        if outcome == "missed", existing?.data()?["callOutcome"] as? String == "answered" { return }
+        if existing?.exists != true {
             fields["createdAt"] = FieldValue.serverTimestamp()
         }
-        try? await msgRef.setData(fields, merge: true)
+        do {
+            try await msgRef.setData(fields, merge: true)
+        } catch _ where fields["createdAt"] != nil {
+            // audit M-149, 2026-10-07: the read said "no row", and the other side's live row landed
+            // before this write. The write was then an UPDATE that also changed `createdAt`, which
+            // the rules refuse (only the outcome, duration and video keys may change), so this
+            // side's outcome was lost silently. Write the outcome again without the stamp: the row
+            // keeps the time the other side gave it.
+            fields.removeValue(forKey: "createdAt")
+            try? await msgRef.setData(fields, merge: true)
+        } catch {}
         // Declines write NO marker of their own (owner's 2026-08-12 order): a rejected
         // call records as missed everywhere, so callers can never tell a decline from a ring-out.
         let marker: String = {
@@ -2777,7 +2794,8 @@ enum ChatService {
             "updatedAt": FieldValue.serverTimestamp(),
         ], merge: true)
         // Keep the Calls tab (list + missed badge) live — the history repo has no listener.
-        await CallsRepository.shared.load(force: true)
+        // audit M-150, 2026-10-07: only this chat's rows changed, so only this chat is re-read.
+        await CallsRepository.shared.refreshAfterCall(cid: cid)
     }
 
     /// "0:53" — voice-note length for markers and previews.

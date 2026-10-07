@@ -240,6 +240,7 @@ final class DeviceRegistry: ObservableObject {
         stopWatching()
         if let uid { UserDefaults.standard.removeObject(forKey: Self.registeredKey(uid)) }
         await Push.unregister()          // needs auth, so before signOut
+        await SessionWipe.endCallsBeforeSignOut()   // audit M-015, 2026-10-07: same reason
         try? Auth.auth().signOut()
         SessionWipe.wipeAccountData()
         revoked = false
@@ -327,6 +328,10 @@ final class DeviceRegistry: ObservableObject {
             var pushRemovals = tokenRemovals
             if let voip = data["voipToken"] as? String {
                 pushRemovals["groupRingTokens"] = FieldValue.arrayRemove([voip])
+                // audit M-004, 2026-10-07: and from `voipCancelTokens`, the list the server's ring
+                // cancel push goes to (the app adds the same token there on registration). Left
+                // behind, a signed-out phone kept getting cancel pushes for this account.
+                pushRemovals["voipCancelTokens"] = FieldValue.arrayRemove([voip])
             }
             batch.setData(pushRemovals, forDocument: user.collection("push").document("tokens"), merge: true)
         }
