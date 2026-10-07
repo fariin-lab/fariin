@@ -74,7 +74,9 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            BUILD 833: THE FULL GROUP CALL SYSTEM. NEEDS TWO PHONES TO TEST.
+            BUILD 833: THE FULL GROUP CALL SYSTEM + YOUR EIGHT REPORTS FROM 832. NEEDS TWO PHONES TO TEST.
+
+            YOUR REPORTS: (1) Calling... is quiet now; the ringing tone starts only when the other phone is actually ringing, and the speaker button just moves it to the loudspeaker. (2) The small call card keeps the person's colour instead of going black. (3) Call link pre-join screen: Leave and Join stay the same size with the camera off, and the screen uses the sizes from your screenshot. (4) All Media follows a dark/light switch straight away. (5) Calls tab: links and calls are one list in time order, so your calls are no longer hidden under the links. (6) Disappearing messages go on time in chats you do not have open too, from the chat list, and their banners go with them (needs the server update). (7) Leaving a chat after scrolling up and coming back lands exactly where you were. (8) The chat clears expired messages the moment the app comes back to the front.
 
             RINGING: being invited to a call (Add people), and a group chat's call starting, now RING like a real call, on the lock screen too, with Answer and Decline. If you are already in a call the caller sees "<Name> is busy". The ring stops when the caller hangs up, after 60 seconds, or when you answer or decline on your other phone. A late ring never rings. The caller sees "Ringing Alice..." and hears the ringing tone until someone joins. Answering a video invitation keeps your camera off if you never gave camera access.
             BEFORE YOU JOIN A LINK: shows who is in the call ("Alice and Bob are in this call"), "Ask to Join" when the host approves people, and stays up with "Waiting to be let in" until you are in. A full call or a dead link says so.
