@@ -37,6 +37,11 @@ struct ChatReadingPosition: Equatable {
     /// `onScreenPercentage` expressed the same idea as a fraction of the row; points survive a row
     /// that comes back at a different height just as well and need no second lookup to apply.
     let offsetFromTop: CGFloat
+    /// The list's top inset (the bar) when `offsetFromTop` was measured. On reopen the bar's inset
+    /// arrives a few milliseconds AFTER the first land, and the land is wrong by exactly it until the
+    /// one-time re-pin; knowing the saved inset lets the list keep the row hidden until then (owner,
+    /// 2026-10-07: "a small jumping movement" on every reopen). 0 where nobody measured it.
+    var topInset: CGFloat = 0
 }
 
 final class ChatScrollStore {
