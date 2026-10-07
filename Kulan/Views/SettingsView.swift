@@ -2284,7 +2284,7 @@ struct UsernameEditView: View {
     /// the only thing that can actually make the name yours.
     private func done() async {
         let value = clean
-        guard value.count >= Limits.usernameMinChars else { return }
+        guard value.count >= Limits.usernameMinChars || ownerShortName else { return }   // @v for the admin: the Done button allowed it, this silently refused it (owner, 2026-10-07)
         if unchanged { dismiss(); return }
         claiming = true
         do {
