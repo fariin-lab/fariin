@@ -109,7 +109,7 @@ struct CreateCallLinkSheet: View {
                 // One thing per line, in the order a person uses them: what the call is, Join, the
                 // three ways to hand the link on as round buttons, then the two settings, plain.
                 VStack(spacing: 22) {
-                    CallLinkHero(key: draft.key, title: draft.title) { join() }
+                    CallLinkHero(key: draft.key, title: draft.title, video: draft.video) { join() }
                     CallLinkShareRows(draft: draft, compact: true) {
                         await CallLinkService.shared.persist(draft)
                     }
@@ -239,6 +239,9 @@ struct CreateCallLinkSheet: View {
 struct CallLinkAvatar: View {
     let key: String     // the formatted root key
     let size: CGFloat
+    /// The link's call type: a camera for Video, a phone for Voice (owner, 2026-10-07: Voice was
+    /// picked and the top still showed a camera). Video where the type is not known.
+    var video: Bool = true
 
     /// Eight calm colours, mid-tone so white reads on all of them in light and dark.
     private static let palette: [Color] = [
@@ -257,7 +260,7 @@ struct CallLinkAvatar: View {
             .fill(Self.color(for: key))
             .frame(width: size, height: size)
             .overlay {
-                Image(systemName: "video.fill")
+                Image(systemName: video ? "video.fill" : "phone.fill")
                     .font(.system(size: size * 0.38, weight: .semibold))
                     .foregroundStyle(.white)
             }
@@ -271,6 +274,7 @@ struct CallLinkAvatar: View {
 struct CallLinkHero: View {
     let key: String
     let title: String
+    var video: Bool = true   // the icon follows the Call Type row
     let onJoin: () -> Void
     @Environment(\.colorScheme) private var scheme
 
@@ -281,15 +285,19 @@ struct CallLinkHero: View {
     var body: some View {
         VStack(spacing: 22) {
             VStack(spacing: 8) {
-                CallLinkAvatar(key: key, size: 64)
+                CallLinkAvatar(key: key, size: 64, video: video)
+                    .animation(.easeInOut(duration: 0.2), value: video)
                 Text(title)
                     .font(.title3.weight(.semibold))
                     .lineLimit(1)
+                // Blue, as a link reads, and on two lines instead of cut in the middle (owner,
+                // 2026-10-07).
                 Text(shortLink)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .foregroundStyle(Theme.defaultBubble(scheme == .dark))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Button(action: onJoin) {
                 Text("Join Call")

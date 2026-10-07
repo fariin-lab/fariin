@@ -30,7 +30,7 @@ struct CallLinkDetailsView: View {
             // ⛔ THE SAME MINIMALIST LAYOUT AS THE CREATE SHEET — owner, 2026-10-04: what the call is
             // and Join, the three ways to pass it on as tiles, the two settings plain, Delete last.
             VStack(spacing: 22) {
-                CallLinkHero(key: current.key, title: current.title) {
+                CallLinkHero(key: current.key, title: current.title, video: isVideo ?? true) {
                     GroupCallService.shared.openLobby(key: current.key)   // pre-join screen (2026-10-06)
                 }
                 CallLinkShareRows(saved: current, compact: true)
