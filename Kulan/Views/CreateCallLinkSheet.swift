@@ -98,13 +98,7 @@ struct CreateCallLinkSheet: View {
     // content plus the home-indicator band, so content that fits does not move at all
     // (`scrollBounceBehavior(.basedOnSize)`); only a larger text size makes it scroll.
     var body: some View {
-        VStack(spacing: 0) {
-            header
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 8)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
-            ScrollView {
+        ScrollView {
                 // ⛔ MINIMALIST — owner, 2026-10-04: "redesign this sheet, minimalist and clear".
                 // One thing per line, in the order a person uses them: what the call is, Join, the
                 // three ways to hand the link on as round buttons, then the two settings, plain.
@@ -142,8 +136,18 @@ struct CreateCallLinkSheet: View {
                 .padding(.top, 8)
                 .padding(.bottom, 12)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-            }
-            .scrollBounceBehavior(.basedOnSize)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        // The header floats over the content with the system's soft scroll edge under it, instead of
+        // standing as a band the content is cut against on a hard line (owner, 2026-10-07: "the sheet
+        // header has a border"). The avatar now fades under the title when the sheet scrolls.
+        .scrollEdgeEffectStyle(.soft, for: .top)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            header
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
         }
         .background(Color(.systemGroupedBackground))
         // + the home-indicator band (owner, 2026-10-06: the Call Type row was cut off at the bottom):

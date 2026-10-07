@@ -23,8 +23,11 @@ enum CallPipMorph {
     /// cross-fade runs in the middle of the move (`fadeDelay` .. + `fadeDuration`), so the screen is
     /// seen travelling into the card and back out of it.
     static let duration: TimeInterval = 0.35
-    static let fadeDelay: TimeInterval = 0.06
-    static let fadeDuration: TimeInterval = 0.22
+    // Late and short (owner, 2026-10-07): with the two pictures side by side from the first frame,
+    // the shrinking screen's avatar and the card's avatar were both visible for most of the flight,
+    // moving different ways. The hand-over now happens in the last stretch, when both are small.
+    static let fadeDelay: TimeInterval = 0.17
+    static let fadeDuration: TimeInterval = 0.15
     static let cardRadius: CGFloat = 20
 
     /// A restore waiting for the call screen to reach the window. See `CallPipMorphProbe`.
@@ -55,8 +58,11 @@ enum CallPipMorph {
         box.layer.cornerCurve = .continuous
         box.isUserInteractionEnabled = false
         box.backgroundColor = .black
+        // No autoresizing: a full-screen picture stretched into the card's shape is squeezed (the
+        // card is wider for its height than the screen), and its avatar slid sideways while the
+        // card's own avatar sat elsewhere, two faces drifting apart (owner, 2026-10-07). The flight
+        // below scales it uniformly, cropped to the card, so the picture only shrinks.
         screen.frame = box.bounds
-        screen.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         box.addSubview(screen)
         win.addSubview(box)
         minimizeInFlight = true
@@ -77,25 +83,36 @@ enum CallPipMorph {
                     return
                 }
                 // The preview's own picture under the fading screen, as their pip window carries its
-                // live content while it shrinks. Taken with the overlay out of the way, then the real
-                // card is hidden until the flight lands so there are never two.
-                box.isHidden = true
-                let card = win.resizableSnapshotView(from: target, afterScreenUpdates: true, withCapInsets: .zero)
-                box.isHidden = false
+                // live content while it shrinks. Taken from the root view, which holds the card and
+                // not this overlay, so the overlay stays up: it used to be hidden for the shot, and
+                // `afterScreenUpdates` draws a frame, so the card and the chat showed for one frame
+                // before the full screen came back and the flight began (owner, 2026-10-07: "becomes
+                // the mini preview, then full again, then the zoom out"). The real card is then hidden
+                // until the flight lands so there are never two.
+                let root = win.rootViewController?.view
+                let card = root?.resizableSnapshotView(from: root!.convert(target, from: win),
+                                                       afterScreenUpdates: true, withCapInsets: .zero)
                 if let card {
-                    card.frame = box.bounds
-                    card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                    // Scaled uniformly from the card's shape, never stretched to the screen's.
+                    card.frame = fillFrame(target.size, in: box.bounds.size)
+                    card.alpha = 0
                     box.insertSubview(card, belowSubview: screen)
                 }
                 CallService.shared.cardHiddenForMorph = true
                 InstantCover.release()   // the cover's cut is done; this flight must move
+                // One picture at a time: the screen shrinks alone for most of the flight and hands
+                // over to the card's picture in a short cross-fade near the end, when both are small
+                // and close, instead of two faces visible side by side from the first frame.
                 UIView.animate(withDuration: fadeDuration, delay: fadeDelay, options: [.curveEaseIn], animations: {
                     screen.alpha = 0
+                    card?.alpha = 1
                 })
                 UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
                                options: [], animations: {
                     box.frame = target
                     box.layer.cornerRadius = cardRadius
+                    screen.frame = fillFrame(win.bounds.size, in: target.size)
+                    card?.frame = CGRect(origin: .zero, size: target.size)
                 }, completion: { _ in
                     minimizeInFlight = false
                     CallService.shared.cardHiddenForMorph = false
@@ -152,8 +169,7 @@ enum CallPipMorph {
             v.layer.cornerCurve = .continuous
             v.clipsToBounds = true
             v.addSubview(card)   // off the window (#43) and into the call view, in one move
-            card.frame = v.bounds
-            card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            card.frame = v.bounds   // = the card's own size at this moment
             v.layoutIfNeeded()
             v.alpha = 1
             InstantCover.release()   // the cover's cut is done; this flight must move
@@ -164,12 +180,26 @@ enum CallPipMorph {
                            options: [], animations: {
                 v.frame = win.bounds
                 v.layer.cornerRadius = 0
+                // The card's picture grows uniformly, cropped, over the screen taking shape beneath it:
+                // the same rule as the shrink, so nothing is stretched (owner, 2026-10-07).
+                card.frame = fillFrame(from.size, in: win.bounds.size)
                 v.layoutIfNeeded()
             }, completion: { _ in
                 card.removeFromSuperview()
                 v.clipsToBounds = false
             })
         }
+    }
+
+    /// Where a picture of `content` size sits when scaled uniformly to FILL a `container`, centred and
+    /// overflowing on the longer side (what `clipsToBounds` then crops). The flights use it so a
+    /// snapshot only ever shrinks or grows; it is never squeezed into another shape.
+    private static func fillFrame(_ content: CGSize, in container: CGSize) -> CGRect {
+        guard content.width > 0, content.height > 0 else { return CGRect(origin: .zero, size: container) }
+        let scale = max(container.width / content.width, container.height / content.height)
+        let size = CGSize(width: content.width * scale, height: content.height * scale)
+        return CGRect(x: (container.width - size.width) / 2, y: (container.height - size.height) / 2,
+                      width: size.width, height: size.height)
     }
 
     /// The presented controller that holds `view`: up the parents to the one UIKit presented.
