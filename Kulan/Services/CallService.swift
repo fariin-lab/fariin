@@ -2161,6 +2161,10 @@ final class CallService: NSObject {
         mediaResetObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
                 guard let self, self.inLiveCall else { return }
+                // Audit M-120, 2026-10-07: a reset wipes the session's category and mode with
+                // everything else, and only the output port was put back, so the call came back on
+                // the default category. Set the call's own category first, as the interruption path does.
+                self.applyCallAudioCategory()
                 let rtc = RTCAudioSession.sharedInstance()
                 rtc.isAudioEnabled = false
                 rtc.isAudioEnabled = true
