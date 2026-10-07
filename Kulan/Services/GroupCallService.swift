@@ -261,7 +261,10 @@ final class GroupCallService: ObservableObject {
 
     // MARK: Multi-person (ad-hoc) and link calls
     @Published var activeRoom: GroupRoom? {          // set with activeCid; nil while no call is up
-        didSet { if activeRoom != oldValue { followGroupRoles() } }   // audit M-072, 2026-10-07
+        didSet {
+            if activeRoom != oldValue { followGroupRoles() }   // audit M-072, 2026-10-07
+            if case .adhoc(let id)? = activeRoom { adhocRoomsJoinedHere.insert(id) }   // audit M-028 round 2
+        }
     }
     @Published var members: [CallMember] = []        // ad-hoc: everyone invited, live from the doc
     @Published var joinedUids: Set<String> = []      // ad-hoc: everyone who ever connected
@@ -297,6 +300,12 @@ final class GroupCallService: ObservableObject {
     /// the tap lands before the auth listener's first start, and that start used to wipe the
     /// invitation the tap had just raised. A start for this same account keeps it.
     private var tappedInviteUid: String?
+    /// audit M-028 (round 2), 2026-10-07: multi-person rooms THIS phone has been in. Being on a
+    /// room's `joined` list hid its invitation for good, so a person dropped from the call (or whose
+    /// phone died) had no way back. Now `joined` only means "answered on my other phone": for a room
+    /// this phone was in and is not in now, the invitation may show again. A plain leave stays
+    /// quiet, because `declinedInvites` keeps it (only a drop takes the room out of that set).
+    private var adhocRoomsJoinedHere: Set<String> = []
     /// audit M-094, 2026-10-07: two people who started a multi-person call to each other at the same
     /// moment. The one whose room id sorts higher gives its room up and joins the other's; this is
     /// the room to join once its own room is down (`reevaluateInvites`), and when that was decided.
@@ -552,16 +561,23 @@ final class GroupCallService: ObservableObject {
         if let uid { payload["targetUid"] = uid }
         // audit M-152, 2026-10-07: the answer can land after this call is gone (or another one has
         // started). Only the call that asked acts on it.
-        let gen = joinGeneration
+        // audit round 2 N5, 2026-10-07: and the JOIN that asked. A room dropped by the server does not
+        // bump the generation, so a new call in the same group could pass the first two checks and be
+        // ended by the old call's late answer; every join stamps its own `joinedAt`.
+        let gen = joinGeneration, joined = joinedAt
+        let sameCall = { [weak self] in
+            guard let self else { return false }
+            return gen == self.joinGeneration && self.activeRoom == r && self.joinedAt == joined
+        }
         if action == .end { endingForAll = true }
         do {
             _ = try await functions.httpsCallable("callAdmin").call(payload)
         } catch {
-            if action == .end, gen == joinGeneration, activeRoom == r { endingForAll = false }
+            if action == .end, sameCall() { endingForAll = false }
             throw error
         }
         // The server closed the room and the call's record; I leave quietly, like any hang-up.
-        if action == .end, gen == joinGeneration, activeRoom == r { end() }
+        if action == .end, sameCall() { end() }
     }
 
     /// Link calls: the link people should be sent now (the new one after "Make a new link").
@@ -1581,7 +1597,12 @@ final class GroupCallService: ObservableObject {
             // audit M-127, 2026-10-07: "not found" means they withdrew (or the link is gone).
             // There is nothing left to answer, and putting the card back left a ghost that stuck.
             let ns = error as NSError
-            if ns.domain == FunctionsErrorDomain, ns.code == FunctionsErrorCode.notFound.rawValue { return }
+            // audit round 2 (M-129 seam), 2026-10-07: "failed precondition" is the server saying the
+            // request was already answered (my other device, or a revoke or new link denying it).
+            // That is done too: the card stays gone.
+            if ns.domain == FunctionsErrorDomain,
+               ns.code == FunctionsErrorCode.notFound.rawValue
+                || ns.code == FunctionsErrorCode.failedPrecondition.rawValue { return }
             // Still waiting on the server, so it goes back in the list.
             if !pendingRequests.contains(who) { pendingRequests.append(who) }
         }
@@ -2213,7 +2234,7 @@ final class GroupCallService: ObservableObject {
         guard uid != inviteUid else { return }
         inviteUid = uid
         inviteListener?.remove(); inviteListener = nil
-        inviteDocs = []; declinedInvites = []
+        inviteDocs = []; declinedInvites = []; adhocRoomsJoinedHere = []
         // audit M-097, 2026-10-07: an invitation a tapped push raised for this same account stays
         // (on a cold launch the tap lands before this first start). Any other account's goes.
         if uid == nil || uid != tappedInviteUid {
@@ -2297,7 +2318,9 @@ final class GroupCallService: ObservableObject {
             let d = doc.data
             guard let by = d["startedBy"] as? String, by != me,
                   !blocks.contains(by),
-                  !(d["joined"] as? [String] ?? []).contains(me),
+                  // audit M-028 (round 2): answered on my other phone hides it; having been in it on
+                  // this phone (dropped, now out) does not. See `adhocRoomsJoinedHere`.
+                  adhocRoomsJoinedHere.contains(doc.id) || !(d["joined"] as? [String] ?? []).contains(me),
                   // Said no on my other phone, or on this one's lock screen before the app's own
                   // list loaded (the server keeps the answer on the call's doc).
                   !(d["declined"] as? [String] ?? []).contains(me),
@@ -2334,7 +2357,9 @@ final class GroupCallService: ObservableObject {
               let snap = try? await db.collection("groupCalls").document(roomId).getDocument(),
               let d = snap.data(with: .estimate), d["active"] as? Bool == true,
               (d["members"] as? [String] ?? []).contains(me),
-              !(d["joined"] as? [String] ?? []).contains(me),
+              // audit M-028 (round 2), 2026-10-07: no `joined` check here any more. A tap is the
+              // person asking to go in, and a member dropped from the call (or whose other phone
+              // died) is on that list for good; this is their way back while the call is live.
               activeCid == nil, !connecting, !waitingForApproval,
               CallService.shared.state == .idle,
               let invite = makeInvite(id: roomId, data: d),
