@@ -225,8 +225,12 @@ struct GroupFloatingCallWindow: View {
                     .clipped()
             } else {
                 let m = service.members.first { $0.uid == shown.id }
-                TileBackdrop(photoUrl: m?.photoUrl)
-                AvatarView(name: displayName(shown.id, member: m), photoUrl: m?.photoUrl, size: w - 36)
+                // Audit round 2 (verifier V4, M-079): no member entry (group-chat and link calls)
+                // = the stage's own profile lookup, so the card shows the face the screen does.
+                let peer = m == nil ? GroupCallStage.peerForCard(shown.id) : nil
+                let photo = m?.photoUrl ?? peer?.photo
+                TileBackdrop(photoUrl: photo)
+                AvatarView(name: displayName(shown.id, member: m, peer: peer), photoUrl: photo, size: w - 36)
             }
         }
         .id(shown.id)   // a new speaker is a new view, never the old one's last frame or colour
@@ -248,11 +252,14 @@ struct GroupFloatingCallWindow: View {
         .transition(.opacity)
     }
 
-    /// The name the call screen gives this person (`GroupCallStage`): the room's, then the member's.
-    private func displayName(_ id: String, member: CallMember?) -> String {
+    /// The name the call screen gives this person (`GroupCallStage`): the room's (unless it is the
+    /// server's "Member" placeholder), the member's, the profile store's, then the room's anyway.
+    private func displayName(_ id: String, member: CallMember?,
+                             peer: (name: String, photo: String?)?) -> String {
         let p = room.remoteParticipants.values.first { Self.key($0) == id }
-        if let n = p?.name, !n.isEmpty { return n }
+        if let n = p?.name, !n.isEmpty, n != "Member" { return n }
         if let n = member?.name, !n.isEmpty { return n }
+        if let n = peer?.name, !n.isEmpty { return n }
         return "Member"
     }
 

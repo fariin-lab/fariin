@@ -307,7 +307,24 @@ final class GroupCallStage: ObservableObject {
     private var peerLookups: Set<String> = []
     /// Sign-out (verifier V4): the photos here passed the OLD account's privacy check, so the
     /// next account on this phone must not see them. Called by `SessionWipe.wipeAccountData`.
-    static func clearPeerProfiles() { peerProfiles = [:] }
+    static func clearPeerProfiles() { peerProfiles = [:]; cardLookups = [] }
+
+    /// Audit round 2 (verifier V4, M-079), 2026-10-07: the same lookup for the minimized card,
+    /// which has no stage. The cached answer if there is one; otherwise one read per uid (until the
+    /// next sign-out) whose answer the card picks up on its next redraw (it redraws with the room).
+    private static var cardLookups: Set<String> = []
+    static func peerForCard(_ uid: String) -> (name: String, photo: String?)? {
+        guard !uid.isEmpty else { return nil }
+        if let known = peerProfiles[uid] { return known }
+        guard cardLookups.insert(uid).inserted else { return nil }
+        Task { @MainActor in
+            guard let p = await ProfileStore.shared.fetch(uid) else { return }
+            let photo = ProfilePhotoIndex.header(uid: uid, fallbackPhoto: p.photoUrl, fallbackPoster: nil,
+                                                 iAmContact: PrivacyPrefs.mayViewPhotoOf(uid)).photoUrl
+            peerProfiles[uid] = (name: p.name, photo: photo)
+        }
+        return nil
+    }
 
     /// What the profile store has for this uid, nil until its one read has answered. The photo
     /// goes through the same privacy answer the chat search uses (`ProfilePhotoIndex.header`).
