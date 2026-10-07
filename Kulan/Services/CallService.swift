@@ -121,6 +121,7 @@ final class CallService: NSObject {
                 stopLinkMonitor()
                 stopPathMonitor()
                 restartRequestsSent = 0; restartRequestsSeen = 0
+                restartInFlightAt = nil; pcIceServersFetchedAt = nil   // audit M-117, M-009
                 stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 callAudioLive = false
@@ -760,13 +761,60 @@ final class CallService: NSObject {
     /// STUN fallback rather than fail the call — a call that might not traverse beats no call at all — and
     /// the in-flight fetch is left running so the NEXT call is warm either way.
     private func awaitIceServers(timeout: Double = 2.0) async {
-        if fetchedIceServers != nil { return }
+        if fetchedIceServers != nil {
+            // Audit M-009, 2026-10-07: a list still inside its 90 minutes can be 89 minutes old, which
+            // leaves a call started on it about half an hour before the relay refuses its credentials.
+            // Past 30 minutes, ask for a fresh one and wait a short, bounded moment for it; on timeout
+            // the old list (still valid) is used and the fetch keeps running for the restart path
+            // (`applyNewerIceServers`).
+            guard let at = iceServersFetchedAt,
+                  Date().timeIntervalSince(at) > Self.iceServersRefreshAge else { return }
+            let refresh = Task { await self.refreshIceServers() }
+            let until = Date().addingTimeInterval(min(timeout, 1.0))
+            while iceServersFetchedAt == at, Date() < until {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            _ = refresh
+            return
+        }
         let fetch = Task { await self.refreshIceServers() }
         let deadline = Date().addingTimeInterval(timeout)
         while fetchedIceServers == nil, Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         _ = fetch   // deliberately NOT cancelled: let it finish and warm the next call
+    }
+
+    /// Audit M-009, 2026-10-07: past this age a list is refreshed at call start and on a drop.
+    private static let iceServersRefreshAge: TimeInterval = 30 * 60
+    /// When the list the LIVE connection was built with was fetched; nil = the STUN-only fallback.
+    /// The connection used to keep its creation-time servers for life, so a call that started on the
+    /// fallback (the TURN list landed a few seconds late) could never get a relay, and every ICE
+    /// restart on carrier NAT failed the same way. Compared with `iceServersFetchedAt` to tell when a
+    /// newer list is in hand.
+    private var pcIceServersFetchedAt: Date?
+
+    /// Audit M-009, 2026-10-07: hand the live connection a newer TURN list than the one it was built
+    /// with, if one is cached. Called right before an ICE restart (both sides), because only the
+    /// gathering a restart starts uses the new servers. Everything else in `config` is unchanged, so
+    /// libwebrtc accepts the change mid-call.
+    private func applyNewerIceServers(to connection: RTCPeerConnection) {
+        guard fetchedIceServers != nil, let at = iceServersFetchedAt, at != pcIceServersFetchedAt else { return }
+        if connection.setConfiguration(config) {
+            pcIceServersFetchedAt = at
+        } else {
+            print("call: M-009 setConfiguration refused the newer ICE servers")
+        }
+    }
+
+    /// Audit M-009, 2026-10-07: the media path dropped. With no list, or one past the refresh age,
+    /// start a fetch now so the restart (or its 8s retry) can use it.
+    private func refreshIceServersForReconnect() {
+        // No list at all (the fallback call whose fetch failed) reads as stale too. A fresh list that
+        // simply landed after the connection was built needs no fetch: the restart picks it up.
+        let stale = iceServersFetchedAt.map { Date().timeIntervalSince($0) > Self.iceServersRefreshAge } ?? true
+        guard stale else { return }
+        Task { await self.refreshIceServers() }
     }
 
     /// 2026-09-24 audit: true when this call must be relayed (the peer is not an established
@@ -791,6 +839,8 @@ final class CallService: NSObject {
 
     private func makePeerConnection() -> RTCPeerConnection? {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        // Audit M-009: remember which list this connection carries (nil = STUN fallback).
+        pcIceServersFetchedAt = fetchedIceServers == nil ? nil : iceServersFetchedAt
         let connection = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
         // Local mic track.
         let audioSource = Self.factory.audioSource(with: nil)
@@ -2367,7 +2417,10 @@ final class CallService: NSObject {
     // "Reconnecting…" and give up after a hard cap.
     private func enterReconnecting(restartAfter delay: Double) {
         guard state == .active || state == .reconnecting else { return }
-        if state == .active { state = .reconnecting }
+        if state == .active {
+            state = .reconnecting
+            refreshIceServersForReconnect()   // audit M-009: a relay for the restart, if we lack one
+        }
         // Hard cap: if we still haven't recovered, end as Failed.
         if reconnectGiveUpWork == nil {
             let g = DispatchWorkItem { [weak self] in
@@ -2481,10 +2534,21 @@ final class CallService: NSObject {
         lastPathKey = nil
     }
 
+    /// Audit M-117, 2026-10-07: when the caller's last restart offer went out; cleared when its
+    /// answer is applied and at the end of the call.
+    private var restartInFlightAt: Date?
+
     // Caller-only: renegotiate ICE (new credentials + candidates), media keeps flowing
     // on recovery. Cheaper than a full re-offer — DTLS/SRTP keys are preserved.
     private func restartIce() {
         guard isCaller, let pc = pc, let id = callId else { return }
+        // Audit M-117, 2026-10-07: the path monitor, the callee's request and our own ICE drop can all
+        // fire within a second, and each new offer invalidates the answer the last one is waiting
+        // for, so the restarts kept cancelling each other. One at a time: a restart whose answer has
+        // not landed and that is under 6s old covers the others. The 8s retry is outside the window.
+        if let t = restartInFlightAt, Date().timeIntervalSince(t) < 6 { return }
+        restartInFlightAt = Date()
+        applyNewerIceServers(to: pc)   // audit M-009: a relay that arrived after the call started
         negotiationVersion += 1
         let v = negotiationVersion
         let constraints = RTCMediaConstraints(mandatoryConstraints: ["IceRestart": "true"],
@@ -3777,6 +3841,9 @@ final class CallService: NSObject {
                let pc = self.pc,
                let sdp = self.signalSdp(sealed: ro["enc"], plain: ro["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
+                // Audit M-009, 2026-10-07: the callee gathers anew for this restart too, so it gets
+                // the newer relay list first, if one arrived after its connection was built.
+                self.applyNewerIceServers(to: pc)
                 pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { _ in
                     self.flushPendingCandidates()
                     let c = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
@@ -3804,6 +3871,7 @@ final class CallService: NSObject {
                v == self.negotiationVersion, v > self.appliedRemoteRestart, let pc = self.pc,
                let sdp = self.signalSdp(sealed: ra["enc"], plain: ra["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
+                self.restartInFlightAt = nil   // audit M-117: this restart is answered
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
             // The other side's camera on/off (per-side, no permission).
