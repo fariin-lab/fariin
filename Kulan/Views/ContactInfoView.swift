@@ -761,6 +761,11 @@ struct ContactInfoView: View {
             guard let u = note.object as? String, u == gatedPosterUrl else { return }
             photoPalette = ProfilePalette.cached(for: u)
         }
+        // Owner, 2026-10-08: this person's profile read failed and came good after recovery.
+        .onReceive(NotificationCenter.default.publisher(for: ProfileStore.profileRefreshed)) { note in
+            guard let u = note.object as? String, u == otherUid else { return }
+            Task { await load() }
+        }
         // ⚠️ THE REFUSAL IS SAID WHERE THE CALL WAS TRIED, AND THIS IS ONE OF THE PLACES IT IS
         // TRIED. Same fix as ThreadView's, and the same report a screen later (owner, 2026-08-07:
         // "you forget in profile — when I enter that user profile then I try to call, nothing

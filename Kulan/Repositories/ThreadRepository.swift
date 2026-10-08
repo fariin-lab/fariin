@@ -790,22 +790,7 @@ final class ThreadRepository {
                     // a stale answer.
                     CallPrivacyIndex.record(uid: other, privacy: privacy)
                 }
-            presenceListener?.remove()   // same re-entry rule as the message listener above
-        presenceListener = db.collection("users").document(other)
-                .collection("presence").document("state")
-                .addSnapshotListener { [weak self] snap, error in
-                    // Owner, 2026-10-08: a denied presence read is a normal privacy outcome, so it is
-                    // not reported and not retried in a loop. Keep the last known value; the handle is
-                    // dropped so a recovery or a reopen can try again.
-                    guard let snap else {
-                        print("[Recovery] chat presence listener ended (privacy or network): \(error?.localizedDescription ?? "?")")
-                        self?.presenceListener = nil
-                        return
-                    }
-                    let d = snap.data()
-                    self?.otherOnline = d?["online"] as? Bool ?? false
-                    if let ts = d?["lastActive"] as? Timestamp { self?.otherLastActive = ts.dateValue() }
-                }
+            attachPresence(other)
         }
         expiryTimer?.invalidate()
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
@@ -1002,12 +987,47 @@ final class ThreadRepository {
     /// Owner, 2026-10-08: re-attach when any of this chat's listeners is dead. `start()` re-attaches all
     /// of them together. Presence is left out of the foreground check because a denied presence read
     /// is normal and would otherwise restart the chat every time the app comes forward.
+    /// Owner, 2026-10-08: set when the presence read was refused (code 7, a privacy outcome). A refused
+    /// presence is not a dead chat: it never restarts the whole chat, only retries presence alone.
+    private var presenceRefused = false
+    private var presenceRetriedThisRecovery = false
+
+    private func attachPresence(_ other: String) {
+        presenceListener?.remove()   // same re-entry rule as the message listener
+        presenceListener = db.collection("users").document(other)
+            .collection("presence").document("state")
+            .addSnapshotListener { [weak self] snap, error in
+                // Owner, 2026-10-08: a denied presence read is a normal privacy outcome, so it is
+                // not reported and not retried in a loop. Keep the last known value; the handle is
+                // dropped so a recovery or a reopen can try again.
+                guard let snap else {
+                    print("[Recovery] chat presence listener ended (privacy or network): \(error?.localizedDescription ?? "?")")
+                    let ns = error as NSError?
+                    if ns?.domain == FirestoreErrorDomain, ns?.code == 7 { self?.presenceRefused = true }
+                    self?.presenceListener = nil
+                    return
+                }
+                self?.presenceRefused = false
+                let d = snap.data()
+                self?.otherOnline = d?["online"] as? Bool ?? false
+                if let ts = d?["lastActive"] as? Timestamp { self?.otherLastActive = ts.dateValue() }
+            }
+    }
+
     private func reattachIfDead(includePresence: Bool) {
         guard !cid.isEmpty, !DemoMode.isDemoConversation(cid), listener != nil || listenerFailed else { return }
         let oneToOne = !otherUid.isEmpty
+        if includePresence { presenceRetriedThisRecovery = false }
         let dead = listenerFailed || listener == nil || convListener == nil
-            || (oneToOne && (userListener == nil || (includePresence && presenceListener == nil)))
-        guard dead else { return }
+            || (oneToOne && (userListener == nil || (includePresence && presenceListener == nil && !presenceRefused)))
+        guard dead else {
+            // Presence alone, once per recovery, never the whole chat.
+            if includePresence, oneToOne, presenceListener == nil, !presenceRetriedThisRecovery {
+                presenceRetriedThisRecovery = true
+                attachPresence(otherUid)
+            }
+            return
+        }
         listenerRetries = 0
         start()
     }

@@ -17,6 +17,10 @@ final class ProfileStore {
             ProfileStore.shared.startPrivacySync()
             Task { await ProfileStore.shared.refetchFailed() }   // 2026-10-08
         }
+        // Owner, 2026-10-08: the network coming back also re-reads profiles whose read failed.
+        NotificationCenter.default.addObserver(forName: .networkCameBack, object: nil, queue: .main) { _ in
+            Task { await ProfileStore.shared.refetchFailed() }
+        }
     }
 
     private let db = Firestore.firestore()
@@ -36,7 +40,8 @@ final class ProfileStore {
         // cancels; signing out and into another account during that read would publish the OLD
         // account's profile as `me` and import its privacy switches into the new one's defaults.
         guard Auth.auth().currentUser?.uid == uid else { return }
-        me = fresh ?? me
+        // Owner, 2026-10-08: refetchFailed calls this from a task group, so `me` is set on the main actor.
+        await MainActor.run { self.me = fresh ?? self.me }
         Self.adoptServerPrivacy(me?.privacy)
         startPrivacySync()   // 2026-09-24 decision D11: keep them in step with my other devices
         // 2026-09-24 fix-all #136: a photo change the app was killed in the middle of is finished

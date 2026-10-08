@@ -73,6 +73,10 @@ final class ConnectionStatus {
 
     private(set) var state: State = .online
 
+    /// Is there a route off this device at all. `SessionRecovery` reads it so an outage is not
+    /// mistaken for a stuck stream.
+    var routeUp: Bool { hasRoute }
+
     /// How long the server has to stay silent before the label appears. Long enough that a cold
     /// launch and an ordinary hiccup pass unremarked, short enough to be useful on a bad line.
     private static let settle: TimeInterval = 2.5
@@ -89,11 +93,25 @@ final class ConnectionStatus {
     // "Connecting" forever and never asked for a recovery, so a stuck connection looked like a slow
     // one until a restart. Every `tickEvery` it checks, while the app is active and the network path
     // is up, whether the server has gone `stallAfter` without answering AND something is actually
-    // waiting on it (the header already says "Connecting", the probe read is hanging, or writes are
-    // still unconfirmed). A quiet, healthy app has none of those, so it costs nothing there.
-    // `SessionRecovery.noteStall` rate-limits, so calling it every tick is safe.
+    // waiting on it (the probe read is hanging, or writes are still unconfirmed). A quiet, healthy
+    // app has none of those, so it costs nothing there. `SessionRecovery.noteStall` rate-limits, so
+    // calling it every tick is safe.
+    // Round 2, 2026-10-08: the "Connecting" label by itself no longer counts. It is a guess from a
+    // quiet cache, and on its own it fired a reset every minute through a whole outage.
     private static let stallAfter: TimeInterval = 20
     private static let tickEvery: TimeInterval = 5
+
+    // ⛔ THE KEEPALIVE — owner, 2026-10-08, round 2. A stream can go dead without an error and without
+    // anything waiting on it, so nothing above would ever notice. The reference app pings its socket;
+    // this does the Firestore version: while the app is active, the path is up and someone is signed
+    // in, one small server read of the probe's own document every `heartbeatEvery`. An answer ends
+    // any stall episode; no answer in `heartbeatTimeout` (or code 14 / 4) is a stall; a refusal goes
+    // to SessionRecovery as one. Paused in the background.
+    private static let heartbeatEvery: TimeInterval = 30
+    private static let heartbeatTimeout: TimeInterval = 15
+    private var heartbeatLoop: Task<Void, Never>?
+    private var heartbeatStarted: Date?
+    private var heartbeatGen = 0
     private var watchdog: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var routeUpSince = Date()
@@ -117,7 +135,12 @@ final class ConnectionStatus {
         // The probe follows the signed-in account, and stops with it: a listener left on the previous
         // user's document is both a leak and a permission error waiting to happen.
         authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
-            Task { @MainActor in self?.watch(uid: user?.uid) }
+            let uid = user?.uid
+            Task { @MainActor in
+                // Signed out: the next account starts with clean recovery counters.
+                if uid == nil { SessionRecovery.reset() }
+                self?.watch(uid: uid)
+            }
         }
         let center = NotificationCenter.default
         observers.append(center.addObserver(
@@ -128,6 +151,11 @@ final class ConnectionStatus {
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.becameActive() }
             })
+        observers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stopHeartbeat() }
+            })
+        if UIApplication.shared.applicationState != .background { startHeartbeat() }
         watchdog = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.tickEvery))
@@ -153,6 +181,7 @@ final class ConnectionStatus {
     /// been quiet for a minute is asked once, so a stall that began off screen is noticed.
     private func becameActive() {
         activeSince = Date()
+        startHeartbeat()
         if let uid = probeUid, probe == nil { watch(uid: uid, force: true) }
         if Date().timeIntervalSince(lastServerAnswer) > 60 { armSettle() }
     }
@@ -164,12 +193,72 @@ final class ConnectionStatus {
         let now = Date()
         let since = max(lastServerAnswer, routeUpSince, activeSince, recoveredAt)
         guard now.timeIntervalSince(since) >= Self.stallAfter else { return }
-        let readHung = probeReadStarted.map { now.timeIntervalSince($0) >= Self.stallAfter } ?? false
+        let readHung = [probeReadStarted, heartbeatStarted].contains { started in
+            started.map { now.timeIntervalSince($0) >= Self.stallAfter } ?? false
+        }
         let writesHung = writesWaitStarted.map {
             now.timeIntervalSince(max($0, routeUpSince, recoveredAt)) >= Self.stallAfter
         } ?? false
-        guard state == .connecting || readHung || writesHung else { return }
+        guard readHung || writesHung else { return }
         SessionRecovery.noteStall("connection watchdog")
+    }
+
+    /// Any proof that the server is answering: the clock restarts, the header clears, and
+    /// SessionRecovery closes its stall episode.
+    private func serverAnswered() {
+        lastServerAnswer = Date()
+        retryDelay = Self.settle   // 2026-09-24 fix-all #216
+        if hasRoute { state = .online }
+        SessionRecovery.noteServerAnswered()
+    }
+
+    private func startHeartbeat() {
+        guard heartbeatLoop == nil else { return }
+        heartbeatLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.heartbeatEvery))
+                guard !Task.isCancelled, let self else { return }
+                self.heartbeat()
+            }
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatLoop?.cancel()
+        heartbeatLoop = nil
+        heartbeatStarted = nil
+        heartbeatGen += 1   // a read still in flight reports nothing
+    }
+
+    /// One server read of the probe's document, with its own 15s limit. One at a time.
+    private func heartbeat() {
+        guard hasRoute, let uid = probeUid, Auth.auth().currentUser != nil,
+              UIApplication.shared.applicationState == .active, heartbeatStarted == nil else { return }
+        heartbeatGen += 1
+        let gen = heartbeatGen
+        heartbeatStarted = Date()
+        Task { [weak self] in
+            do {
+                _ = try await Firestore.firestore().collection("users").document(uid)
+                    .getDocument(source: .server)
+                guard let self, self.heartbeatGen == gen else { return }
+                self.heartbeatStarted = nil
+                self.serverAnswered()
+            } catch {
+                guard let self, self.heartbeatGen == gen else { return }
+                self.heartbeatStarted = nil
+                // 14 / 4 become a stall inside noteRefusal; 7 / 16 a refusal; anything else is ignored.
+                SessionRecovery.noteRefusal(error, "heartbeat")
+            }
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.heartbeatTimeout))
+            guard let self, self.heartbeatGen == gen, self.heartbeatStarted != nil else { return }
+            self.heartbeatStarted = nil
+            self.heartbeatGen += 1   // the late answer, if it ever comes, is ignored
+            print("[Recovery] heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
+            SessionRecovery.noteStall("heartbeat")
+        }
     }
 
     /// Writes that sit unconfirmed while the path is up are the clearest sign of a stuck stream: the
@@ -232,10 +321,8 @@ final class ConnectionStatus {
     /// cached snapshot only ever starts the clock; it never itself declares us disconnected.
     func noteSnapshot(fromCache: Bool) {
         guard !fromCache else { armSettle(); return }
-        lastServerAnswer = Date()
-        retryDelay = Self.settle   // 2026-09-24 fix-all #216
         pending?.cancel(); pending = nil
-        if hasRoute { state = .online }
+        serverAnswered()
     }
 
     private func routeChanged(_ up: Bool) {
@@ -307,9 +394,7 @@ final class ConnectionStatus {
             _ = try await Firestore.firestore().collection("users").document(uid)
                 .getDocument(source: .server)
             if gen == probeReadGen { probeReadStarted = nil }
-            lastServerAnswer = Date()
-            retryDelay = Self.settle   // 2026-09-24 fix-all #216
-            if hasRoute { state = .online }
+            serverAnswered()
         } catch {
             if gen == probeReadGen { probeReadStarted = nil }
             if hasRoute {

@@ -37,6 +37,10 @@ enum SendQueue {
         /// automatic path sends it again. The entry is kept only so the chat can still draw it as a
         /// failed bubble with Resend / Delete; a Resend re-adds it without this flag.
         var refused: Bool? = nil
+        /// Owner, 2026-10-08: when it was refused and how many times. A refusal inside an outage
+        /// (codes 7/16) is cleared once on recovery and retried; a second refusal is final.
+        var refusedAt: Double? = nil
+        var refusedCount: Int? = nil
         /// 2026-09-24 fix-all #220: the link card's text rides the entry, so a Retry or a re-drive
         /// after a kill sends the card again instead of bare text. Its image is not stored here; it
         /// is the composer's draft copy in DiskImageCache under `previewImageKey(clientId)`.
@@ -82,7 +86,28 @@ enum SendQueue {
         var map = load()
         guard map[clientId] != nil else { return }
         map[clientId]?.refused = true
+        map[clientId]?.refusedAt = Date().timeIntervalSince1970
+        map[clientId]?.refusedCount = (map[clientId]?.refusedCount ?? 0) + 1
         save(map)
+    }
+
+    /// Owner, 2026-10-08: a send refused while the session was bad (not a real rule) was never
+    /// retried. On recovery, un-refuse entries refused in the last 30 minutes that were refused only
+    /// once, then drain. drainAll's alreadySent check stops any duplicate; a second refusal stays final.
+    private static let recoveryObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+        let cutoff = Date().timeIntervalSince1970 - 30 * 60
+        lock.lock()
+        var map = load()
+        var cleared = 0
+        for (k, e) in map where e.refused == true && (e.refusedCount ?? 1) < 2 && (e.refusedAt ?? 0) >= cutoff {
+            map[k]?.refused = nil
+            cleared += 1
+        }
+        if cleared > 0 { save(map) }
+        lock.unlock()
+        print("[Recovery] send queue: cleared \(cleared) refused sends after recovery")
+        if cleared > 0 { Task { @MainActor in await drainAll() } }
     }
 
     private static let key = "sendQueue.v1"
@@ -174,6 +199,7 @@ enum SendQueue {
     /// bubble. `alreadySent` still guards against re-sending anything that landed before the kill.
     @MainActor
     static func drainAll() async {
+        _ = recoveryObserver  // installs the one-time recovery observer (lazy static)
         let open = AppRouter.shared.activeChatId
         // 2026-09-24 decision D-composer-2: a refused send is never re-driven automatically.
         let entries = allPending().filter { $0.cid != open && $0.refused != true }

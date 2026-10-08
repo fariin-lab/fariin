@@ -158,7 +158,7 @@ final class ScreenShareStageUIView: UIView, UIScrollViewDelegate, RTCVideoViewDe
 
     // MARK: - RTCVideoViewDelegate
 
-    func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {
+    nonisolated func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.videoSize = size

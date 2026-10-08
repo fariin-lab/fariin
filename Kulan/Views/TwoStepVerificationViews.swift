@@ -466,17 +466,28 @@ enum TwoStepGate {
     }
 
     /// Tries the saved renew once. true when there was one and it went through.
-    @discardableResult
+    /// ⛔ ONE RENEW IN FLIGHT, AND EVERY CALLER GETS ITS ANSWER — check, 2026-10-08. A second caller
+    /// used to get `false` at once while the first was still running, so a foreground retry and a
+    /// `needsTwoStep` arriving a second later raised the password page and the renew then succeeded
+    /// under it. Now a caller during a renew awaits that same renew's result.
+    @MainActor private static var inFlightRenew: Task<Bool, Never>?
+
+    @MainActor @discardableResult
     static func retryPendingRenew() async -> Bool {
-        guard setFlag(renewing: true) else { return false }
-        defer { _ = setFlag(renewing: false) }
-        guard let token = pendingRenew() else { return false }
-        if await attemptRenew(token: token) {
-            UserDefaults.standard.removeObject(forKey: pendingKey)
-            print("[Recovery] pending two-step renew went through")
-            return true
+        if let running = inFlightRenew { return await running.value }
+        let task = Task<Bool, Never> { @MainActor in
+            guard let token = pendingRenew() else { return false }
+            if await attemptRenew(token: token) {
+                UserDefaults.standard.removeObject(forKey: pendingKey)
+                print("[Recovery] pending two-step renew went through")
+                return true
+            }
+            return false
         }
-        return false
+        inFlightRenew = task
+        let ok = await task.value
+        inFlightRenew = nil
+        return ok
     }
 
     /// Call ONCE at launch. Retries a saved renew on app foreground and on `SessionRecovery.recovered`.

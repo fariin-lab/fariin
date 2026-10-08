@@ -37,7 +37,15 @@ import FirebaseFunctions
 /// in through `noteStall`. What a mature messenger does when its socket goes quiet is drop it and
 /// dial again, so this does the same: a fresh token (10s at most), then Firestore's network switched
 /// off and on, which drops the stuck stream and reconnects. Pending writes are kept and sent again.
-/// Stall recoveries are spaced 20s, 40s, then every 60s while the stall lasts.
+/// Stall recoveries are spaced 20s, 60s, 120s, then every 300s while the stall lasts.
+///
+/// ⛔ A REAL OUTAGE MUST NOT TURN INTO A STORM — owner, 2026-10-08, round 2. With no route there is
+/// nothing to reset, so a stall is ignored until the path is back. With a route that answers nothing
+/// (a hotel login page), only the FIRST reset of an episode posts `recovered`: Firestore's listeners
+/// survive the network switch, so later resets have nothing to re-attach. The episode ends when
+/// `ConnectionStatus` hears the server again (`noteServerAnswered`). During a live call the network
+/// is never switched: only the token is refreshed. Every wait is jittered (x0.8 to x1.25) so many
+/// phones coming back from the same outage do not all knock at the same second.
 ///
 /// ⚠️ ONLY READS A SIGNED-IN MEMBER IS ALWAYS ALLOWED REPORT HERE: my chat list, my own documents, an
 /// open chat's messages, anyone's profile document (`allow get: if signedIn()`). Presence and the
@@ -50,14 +58,17 @@ enum SessionRecovery {
     static let recovered = Notification.Name("SessionRecovery.recovered")
     static let needsTwoStep = Notification.Name("SessionRecovery.needsTwoStep")
     static let sessionEnded = Notification.Name("SessionRecovery.sessionEnded")
+    /// 2026-10-08: the refusal came back after `persistentAfter` fresh tokens in a row. Retries go on
+    /// at the steady pace regardless. Nothing on screen listens to this yet.
+    static let persistentRefusal = Notification.Name("SessionRecovery.persistentRefusal")
 
     /// Refusal back-off; after the last one, every `steadyDelay` while the app is active.
     private static let delays: [Double] = [1, 3, 10, 30, 60]
     private static let steadyDelay: Double = 60
-    /// Stall recoveries: the gap before the 2nd, the 3rd, and every later one while the stall lasts.
-    private static let stallGaps: [Double] = [20, 40, 60]
-    /// Three minutes with no stall recovery and the spacing starts again from the beginning.
-    private static let stallQuiet: Double = 180
+    /// Refusals that came back after a fresh token, in a row, before `persistentRefusal` is posted.
+    private static let persistentAfter = 5
+    /// Stall recoveries: the gap before the 2nd, the 3rd, the 4th, and every later one in the episode.
+    private static let stallGaps: [Double] = [20, 60, 120, 300]
     private static let tokenTimeout: Double = 10
 
     @MainActor private static var attempt = 0
@@ -65,12 +76,43 @@ enum SessionRecovery {
     @MainActor private static var unrecovered = false
     @MainActor private static var lastRecoveredAt = Date.distantPast
     @MainActor private static var foregroundObserver: NSObjectProtocol?
+    @MainActor private static var refusalReturns = 0
+    @MainActor private static var persistentPosted = false
     @MainActor private static var stallRunning = false
     @MainActor private static var stallStep = 0
-    @MainActor private static var lastStallAt = Date.distantPast
+    @MainActor private static var nextStallAt = Date.distantPast
+    /// This stall episode already posted `recovered`; later resets in it stay quiet.
+    @MainActor private static var stallEpisodeRecovered = false
 
     @MainActor private static var isActive: Bool {
         UIApplication.shared.applicationState == .active
+    }
+
+    /// Every back-off wait times a random 0.8 to 1.25.
+    private static func jittered(_ delay: Double) -> Double {
+        delay * Double.random(in: 0.8...1.25)
+    }
+
+    /// `ConnectionStatus` heard the server (a server snapshot, or a server read that answered): the
+    /// stall episode is over, and the next stall starts from a fresh reset that posts `recovered`.
+    @MainActor static func noteServerAnswered() {
+        guard stallStep > 0 || stallEpisodeRecovered else { return }
+        print("[Recovery] server answered, stall episode over")
+        stallStep = 0
+        nextStallAt = .distantPast
+        stallEpisodeRecovered = false
+    }
+
+    /// Signed out: nothing carries over to the next account.
+    @MainActor static func reset() {
+        attempt = 0
+        unrecovered = false
+        lastRecoveredAt = .distantPast
+        refusalReturns = 0
+        persistentPosted = false
+        stallStep = 0
+        nextStallAt = .distantPast
+        stallEpisodeRecovered = false
     }
 
     @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
@@ -92,10 +134,18 @@ enum SessionRecovery {
         guard Auth.auth().currentUser != nil else { return }
         if Date().timeIntervalSince(lastRecoveredAt) > 300 {
             attempt = 0
+            refusalReturns = 0
+            persistentPosted = false
         } else if !unrecovered {
             // Refused again within five minutes of a fresh token that passed: the token is not the
             // whole story. Keep trying at the steady pace and say so.
             print("[Recovery] refusal survived a fresh token (\(from)), retrying every \(Int(steadyDelay))s")
+            refusalReturns += 1
+            if refusalReturns >= persistentAfter && !persistentPosted {
+                persistentPosted = true
+                print("[Recovery] persistent refusal")
+                NotificationCenter.default.post(name: persistentRefusal, object: nil)
+            }
         }
         // One line per new episode, not one per caller: many listeners fail at the same moment.
         if !unrecovered {
@@ -108,19 +158,21 @@ enum SessionRecovery {
 
     /// The connection looks stuck without a refusal: no server answer for a long time while the
     /// network path is up, or Firestore's 14 / 4. Safe to call from many places at once: one stall
-    /// recovery runs at a time, and they are spaced 20s, 40s, then 60s apart.
+    /// recovery runs at a time, and they are spaced 20s, 60s, 120s, then 300s apart (jittered).
     @MainActor static func noteStall(_ from: String) {
         guard Auth.auth().currentUser != nil, isActive, !stallRunning else { return }
-        let since = Date().timeIntervalSince(lastStallAt)
-        if since > stallQuiet { stallStep = 0 }
-        let gap = stallStep == 0 ? 0 : stallGaps[min(stallStep - 1, stallGaps.count - 1)]
-        guard since >= gap else { return }
+        // No route off the phone: an outage, not a stuck stream. Nothing to reset until it is back.
+        guard ConnectionStatus.shared.routeUp else { return }
+        let now = Date()
+        guard now >= nextStallAt else { return }
         stallStep += 1
+        let gap = stallGaps[min(stallStep - 1, stallGaps.count - 1)]
+        nextStallAt = now.addingTimeInterval(jittered(gap))
         stallRunning = true
-        lastStallAt = Date()
+        let announce = !stallEpisodeRecovered
         print("[Recovery] stall (\(from)), recovery \(stallStep)")
         Task { @MainActor in
-            await recoverStall()
+            await recoverStall(announce: announce)
             stallRunning = false
         }
     }
@@ -129,7 +181,7 @@ enum SessionRecovery {
         // In the background nothing is retried; `didBecomeActive` starts it again.
         guard !scheduled, isActive else { return }
         scheduled = true
-        let delay = attempt < delays.count ? delays[attempt] : steadyDelay
+        let delay = jittered(attempt < delays.count ? delays[attempt] : steadyDelay)
         attempt += 1
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -161,9 +213,10 @@ enum SessionRecovery {
         }
     }
 
-    /// A fresh token, then Firestore's network off and on. Ends in `recovered`, or in `needsTwoStep`
-    /// / `sessionEnded` exactly as a refusal recovery would.
-    @MainActor private static func recoverStall() async {
+    /// A fresh token, then Firestore's network off and on. Ends in `recovered` (first reset of the
+    /// episode only, `announce`), or in `needsTwoStep` / `sessionEnded` exactly as a refusal recovery
+    /// would.
+    @MainActor private static func recoverStall(announce: Bool) async {
         guard isActive, let user = Auth.auth().currentUser else { return }
         let uid = user.uid
         var passedToken = false
@@ -186,6 +239,13 @@ enum SessionRecovery {
             print("[Recovery] stall: token refresh timed out, resetting the connection anyway")
         }
         guard isActive, Auth.auth().currentUser?.uid == uid else { return }
+        // ⛔ NEVER DURING A LIVE CALL — owner, 2026-10-08: switching Firestore's network off drops the
+        // call's signalling listeners mid-call. The fresh token above is all a call gets.
+        let callState = CallService.shared.state
+        if callState != .idle && callState != .ended {
+            print("[Recovery] stall: in a call, token refreshed, connection left alone")
+            return
+        }
         // ⚠️ BOTH CALLS, ALWAYS: a network left switched off would be far worse than the stall.
         let db = Firestore.firestore()
         do { try await db.disableNetwork() } catch { print("[Recovery] disableNetwork failed:", error) }
@@ -195,6 +255,13 @@ enum SessionRecovery {
             unrecovered = false
             lastRecoveredAt = Date()
         }
+        // Firestore's listeners live through the switch, so only the first reset of an episode has
+        // anything to re-attach; posting on every reset of a long outage would re-attach for nothing.
+        guard announce else {
+            print("[Recovery] stall: connection reset again, same episode")
+            return
+        }
+        stallEpisodeRecovered = true
         print("[Recovery] stall: connection reset, posting recovered")
         NotificationCenter.default.post(name: recovered, object: nil)
     }

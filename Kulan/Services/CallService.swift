@@ -582,6 +582,9 @@ final class CallService: NSObject {
     private var listeners: [ListenerRegistration] = []
     private var incomingListener: ListenerRegistration?
     private var ringingWatcher: ListenerRegistration?   // while .incoming: detect caller-cancel before answer
+    /// Calls whose refused ring watch was already re-checked once (2026-10-08): a second refusal ends
+    /// the ring quietly instead of looping token refresh → read → re-attach → refused.
+    private var ringRechecked: Set<String> = []
 
     // LISTENERS THAT COME BACK (owner, 2026-10-08). A Firestore listener that ends in an error is
     // dead for good, and every one in this file threw its error away: after one refused token or
@@ -3348,8 +3351,30 @@ final class CallService: NSObject {
             if let err = err as NSError?, err.domain == FirestoreErrorDomain, err.code == 7,
                !attachedAs.isEmpty, attachedAs == self.me, self.callId == id, self.state == .incoming {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
-                self.recordWritten = true
-                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+                // Owner, 2026-10-08: a refused SESSION (not a foreign ring) looks the same here and
+                // used to kill real rings. Fresh token and one server read first: end quietly only if
+                // that read is still refused or the doc is really gone; otherwise listen again.
+                Task { @MainActor [weak self] in
+                    _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
+                    var stillGone = false
+                    do {
+                        let fresh = try await Firestore.firestore().collection("calls").document(id).getDocument(source: .server)
+                        stillGone = !fresh.exists
+                    } catch {
+                        let ns = error as NSError
+                        stillGone = ns.domain == FirestoreErrorDomain && ns.code == 7
+                    }
+                    guard let self, self.callId == id, self.state == .incoming else { return }
+                    let firstRecheck = self.ringRechecked.insert(id).inserted
+                    if stillGone || !firstRecheck {
+                        print("[Recovery] ring watch: call doc still refused or gone, ending quietly")
+                        self.recordWritten = true
+                        self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+                    } else {
+                        print("[Recovery] ring watch: call doc readable again, re-attaching")
+                        self.watchRingingCancel(id)
+                    }
+                }
                 return
             }
             // Any other error leaves this watcher dead (owner, 2026-10-08). The registration is kept,
