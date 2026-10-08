@@ -142,6 +142,7 @@ struct ImageViewerView: View {
     }
 
     @State private var chromeHidden = false     // single-tap toggles header + toolbar (Apple Photos)
+    @State private var chromeEntered = false    // the open fade (0.15 s linear), see `chromeLayer`
     @State private var saved = false
     @State private var saveError = false
     @State private var confirmDelete = false
@@ -569,9 +570,18 @@ struct ImageViewerView: View {
             if gallery.count > 1 { thumbStrip }
             bottomBar
         }
-        .opacity(chromeVisible ? 1 : 0)
+        .opacity(chromeVisible && chromeEntered ? 1 : 0)
         .allowsHitTesting(chromeVisible)
         .animation(.easeInOut(duration: 0.25), value: chromeVisible)
+        // ⛔ THE BUTTONS FADE IN, THEY DO NOT POP — owner, 2026-10-08: "the reference app's buttons
+        // appear smooth, mine pop". Read from its gallery (`GalleryControllerNode.animateIn`): header
+        // and footer start at alpha 0 and fade to 1 over 0.15 s, linear, as the photo opens. Ours were
+        // drawn at full opacity on the first frame, and the glass buttons played their own appear
+        // bounce on top of it.
+        .onAppear {
+            guard !chromeEntered else { return }
+            withAnimation(.linear(duration: 0.15)) { chromeEntered = true }
+        }
     }
 
     // Floating Liquid Glass header: back · You/name + date · "…" menu (Go to Chat / Save Image / Delete).

@@ -50,6 +50,7 @@ struct VideoPlayerScreen: View {
     @State private var duration: Double = 0
     @State private var scrubbing = false
     @State private var showChrome = true
+    @State private var chromeEntered = false   // the open fade (0.15 s linear)
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
     @State private var interruptObserver: NSObjectProtocol?
@@ -86,8 +87,19 @@ struct VideoPlayerScreen: View {
         // The bottom panel measures from the screen's bottom EDGE, as theirs does on every phone;
         // the top bar keeps the top safe area.
         .ignoresSafeArea(edges: .bottom)
-        .overlay(alignment: .top) { if showChrome { topBar } }
-        .overlay(alignment: .bottom) { if showChrome, player != nil { bottomPanel } }
+        // ⛔ FADE IN ON OPEN, NO POP — owner, 2026-10-08. The reference gallery's `animateIn`: both
+        // bars start at alpha 0 and fade to 1 over 0.15 s, linear, as the media opens. Ours drew the
+        // top bar at full opacity on the first frame and dropped the bottom panel in, unanimated,
+        // the moment the player was ready.
+        .overlay(alignment: .top) { if showChrome { topBar.opacity(chromeEntered ? 1 : 0) } }
+        .overlay(alignment: .bottom) {
+            if showChrome, player != nil { bottomPanel.opacity(chromeEntered ? 1 : 0).transition(.opacity) }
+        }
+        .animation(.linear(duration: 0.15), value: player != nil)
+        .onAppear {
+            guard !chromeEntered else { return }
+            withAnimation(.linear(duration: 0.15)) { chromeEntered = true }
+        }
         // Both bars together, 0.3s ease-in-out — theirs.
         .animation(.easeInOut(duration: 0.3), value: showChrome)
         .animation(.easeInOut(duration: 0.2), value: isPlaying)
