@@ -84,10 +84,11 @@ enum SendQueue {
     static func markRefused(clientId: String) {
         lock.lock(); defer { lock.unlock() }
         var map = load()
-        guard map[clientId] != nil else { return }
-        map[clientId]?.refused = true
-        map[clientId]?.refusedAt = Date().timeIntervalSince1970
-        map[clientId]?.refusedCount = (map[clientId]?.refusedCount ?? 0) + 1
+        guard var entry = map[clientId] else { return }
+        entry.refused = true
+        entry.refusedAt = Date().timeIntervalSince1970
+        entry.refusedCount = (entry.refusedCount ?? 0) + 1
+        map[clientId] = entry
         save(map)
     }
 
