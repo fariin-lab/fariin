@@ -7,11 +7,14 @@ import UIKit
 /// start one silently), so the "Share Screen" menu item presses this view's button for the user.
 ///
 /// `showsMicrophoneButton` is off: the call's own microphone already carries the voice, and the
-/// extension sends no audio at all in v1.
+/// extension takes only the shared app's audio, never the microphone.
 struct ScreenSharePickerView: UIViewRepresentable {
+    /// Bundle id of the broadcast upload extension.
+    static let broadcastExtension = "com.kulan.messenger.native.broadcast"
+
     func makeUIView(context: Context) -> RPSystemBroadcastPickerView {
         let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
-        picker.preferredExtension = KSSocketPath.broadcastExtension
+        picker.preferredExtension = Self.broadcastExtension
         picker.showsMicrophoneButton = false
         ScreenSharePicker.current = picker
         return picker

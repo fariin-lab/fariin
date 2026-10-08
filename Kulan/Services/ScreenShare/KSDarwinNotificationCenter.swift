@@ -15,16 +15,17 @@
  */
 
 // Modified for Kulan: copied from LiveKit 2.17.0 Broadcast/Support/DarwinNotificationCenter.swift
-// (internal there), renamed with a KS prefix. The notification NAMES are unchanged on purpose: they
-// are the ones the extension's LKSampleHandler posts and listens for.
+// (internal there), renamed with a KS prefix. Screen share v3 (2026-10-08): the NAMES are now the
+// v3 extension's own (Shared/ScreenShareIPC.swift; must stay equal to those constants), so every
+// existing caller (CallService's late-start stop, GroupCallService) talks to the new extension.
 
 import Combine
 import Foundation
 
 enum KSDarwinNotification: String {
-    case broadcastStarted = "iOS_BroadcastStarted"
-    case broadcastStopped = "iOS_BroadcastStopped"
-    case broadcastRequestStop = "iOS_BroadcastRequestStop"
+    case broadcastStarted = "com.kulan.ss3.started"
+    case broadcastStopped = "com.kulan.ss3.stopped"
+    case broadcastRequestStop = "com.kulan.ss3.stop"
 }
 
 final class KSDarwinNotificationCenter: @unchecked Sendable {

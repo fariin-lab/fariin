@@ -39,6 +39,9 @@ targets:
     platform: iOS
     sources:
       - path: Kulan
+      # 2026-10-08 screen share v3: the shared-memory channel with the BroadcastUpload extension.
+      # Lives outside Kulan/ so the folder source above does not pick it up a second time.
+      - path: Shared/ScreenShareIPC.swift
     info:
       path: Kulan/Info.plist
       properties:
@@ -111,8 +114,12 @@ targets:
         # The key name is the purpose key LocationFetcher passes; change both together.
         NSLocationTemporaryUsageDescriptionDictionary:
           ShareLocation: "Fariin needs your precise location to share where you are in this chat."
+        # Landscape is listed so a shared screen can be watched sideways; the app still locks itself
+        # to portrait at runtime (AppDelegate supportedInterfaceOrientationsFor -> OrientationLock).
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         CFBundleURLTypes:
           - CFBundleURLName: com.kulan.messenger
             CFBundleURLSchemes: [kulan]
@@ -200,11 +207,11 @@ targets:
         SWIFT_VERSION: "5.10"
         APPLICATION_EXTENSION_API_ONLY: YES
 
-  # ⛔ THE SCREEN SHARING EXTENSION — 2026-10-07. iOS starts it when the person taps Start in the
-  # system broadcast sheet; it hands screen frames to the app through a socket in the App Group
-  # container (LiveKit's LKSampleHandler, see BroadcastUpload/SampleHandler.swift). Group calls and
-  # 1:1 calls share this one extension. The id and the group follow LiveKit's defaults
-  # (app id + ".broadcast", "group." + app id), so no RTC* keys are needed in either Info.plist.
+  # ⛔ THE SCREEN SHARING EXTENSION — 2026-10-07, v3 2026-10-08. iOS starts it when the person taps
+  # Start in the system broadcast sheet; it hands NV12 frames and app audio to the app through
+  # memory-mapped files in the App Group container (Shared/ScreenShareIPC.swift, compiled into both
+  # targets; see BroadcastUpload/SampleHandler.swift). No LiveKit here any more: it would only add
+  # memory under the ~50 MB extension cap. Ids: app id + ".broadcast", group "group." + app id.
   # Its App ID and profile are made by the Fastfile; the App Group itself must be ticked on both
   # App IDs in the developer portal first (see BroadcastUpload.entitlements).
   BroadcastUpload:
@@ -212,6 +219,7 @@ targets:
     platform: iOS
     sources:
       - path: BroadcastUpload
+      - path: Shared/ScreenShareIPC.swift
     info:
       path: BroadcastUpload/Info.plist
       properties:
@@ -232,10 +240,12 @@ targets:
         SWIFT_VERSION: "5.10"
         APPLICATION_EXTENSION_API_ONLY: YES
         CODE_SIGN_ENTITLEMENTS: BroadcastUpload/BroadcastUpload.entitlements
-        OTHER_LDFLAGS: "$(inherited) -ObjC"
     dependencies:
-      - package: LiveKit
-        product: LiveKit
+      - sdk: ReplayKit.framework
+      - sdk: VideoToolbox.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
 
   # Unit tests for logic that can run with no network and no device: the weak-link pause/resume
   # decision and the upload staging guarantee. Deliberately NOT a UI or integration suite. Anything

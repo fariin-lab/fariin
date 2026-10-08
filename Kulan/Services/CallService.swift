@@ -172,6 +172,11 @@ final class CallService: NSObject {
                 stopScreenShare(requestExtensionStop: true, signal: false)
                 remoteScreenSharing = false
                 screenShareNotice = nil   // belongs to the call that just ended
+                // Screen share v3: dual-mode state belongs to the connection that just died.
+                ScreenShareAudioMixer.shared.isMixing = false
+                shareUsesTrack = false; screenSource = nil; screenTrack = nil
+                remoteScreenTrack = nil; remoteScreenMode = "camera"; peerHasScreen2 = false
+                screenUpgradeOfferAt = nil; screenUpgradeAttempts = 0
                 videoSource = nil
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
@@ -327,6 +332,9 @@ final class CallService: NSObject {
         mark("mediaUp")          // still the moment the user stops waiting, which is what we measure
         writeTimeline()
         CallKitManager.shared.reportConnected()
+        // Screen share v3: open the screen m-line now if the callee is v3 (caps already read). A
+        // beat later so the answer's own work settles first; call-doc snapshots retry it anyway.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.upgradeScreenTransceiverIfDue() }
         // The live row goes "Ringing" → "Ongoing". Caller only — one writer, and it is the device
         // that created the row.
         if isCaller, let id = callId, !otherUid.isEmpty {
@@ -411,7 +419,9 @@ final class CallService: NSObject {
     }
     /// When their share started (nil while they are not sharing), so the "is sharing" label can fade.
     private(set) var remoteScreenSharingSince: Date?
-    var isVideo: Bool { cameraOn || remoteCameraOn || screenSharing }   // show the video layout
+    // remoteScreenSharing: in dual mode their `cams` is their real camera, which may be off while
+    // they share. In fallback their `cams` is true for the share anyway, so nothing changes there.
+    var isVideo: Bool { cameraOn || remoteCameraOn || screenSharing || remoteScreenSharing }   // show the video layout
     /// A VIDEO CALL, as opposed to a call with a camera on right now: placed as video, or a camera
     /// has been on at some point. The minimized card keys on this (owner, 2026-10-05: a video call
     /// minimized while ringing, camera not up yet, showed the voice card). The video card already
@@ -447,7 +457,10 @@ final class CallService: NSObject {
     /// yourself fullscreen, leaving the app put the OTHER person in the floating window: the big screen
     /// showed one feed and the PiP the other. `isLocalExpanded` is the same state the layout uses, so the
     /// two can never disagree again.
-    var bigScreenTrack: RTCVideoTrack? { isLocalExpanded ? localVideoTrack : remoteVideoTrack }
+    var bigScreenTrack: RTCVideoTrack? {
+        if isLocalExpanded { return localVideoTrack }
+        return remoteScreenSharing ? remoteShareTrack : remoteVideoTrack   // dual mode: their screen
+    }
 
     /// The WHOLE call layout for a floating window — big feed plus corner tile, like FaceTime — so the
     /// floating window is the call screen in miniature instead of one lone feed. Both follow the same
@@ -474,8 +487,9 @@ final class CallService: NSObject {
         var f = PiPFeeds()
         // My track carries my SCREEN while sharing: it is live, and it is never mirrored (mirrored
         // text is unreadable, and a screen is not a selfie).
-        let localLive = cameraOn || screenSharing
-        let mirrorLocal = usingFrontCamera && !screenSharing
+        // Dual mode: my track stays my camera during a share, so only the fallback share counts here.
+        let localLive = cameraOn || shareOwnsCamera
+        let mirrorLocal = usingFrontCamera && !shareOwnsCamera
         if isLocalExpanded {
             f.big = localLive ? localVideoTrack : nil
             f.mirrorBig = mirrorLocal
@@ -484,6 +498,8 @@ final class CallService: NSObject {
             f.tileName = otherName; f.tilePhotoUrl = otherPhotoUrl
         } else {
             f.big = remoteCameraOn ? remoteVideoTrack : nil
+            // Their dual-mode share is on its own track and goes big, whatever their camera is doing.
+            if remoteScreenSharing, remoteScreenMode == "track", let screen = remoteScreenTrack { f.big = screen }
             f.bigName = otherName; f.bigPhotoUrl = otherPhotoUrl
             f.tile = localLive ? localVideoTrack : nil
             f.mirrorTile = mirrorLocal
@@ -539,6 +555,43 @@ final class CallService: NSObject {
     var cardStashed = false
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
+
+    // MARK: Screen share v3 dual mode (screen on its own track, camera keeps running)
+    //
+    // Every new 1:1 connection carries a SECOND video transceiver for the screen (see
+    // `screenTransceiver`). Dual mode needs both phones to say `caps.<uid>: ["screen2"]` in the call
+    // doc AND that transceiver to be negotiated for sending. Anything else is FALLBACK: today's
+    // behaviour, the screen replaces the camera on the camera's own source.
+    //
+    // Old-build safety: the caller offers the screen m-line RECVONLY, so an old callee (which binds
+    // every incoming video track to its one remote view) never gets a second sending track. Once the
+    // callee's caps say screen2, the caller flips it to sendrecv with one re-offer after connect
+    // (`upgradeScreenTransceiverIfDue`). The callee can send on it from its first answer.
+    /// Capability tag this build writes into the call doc.
+    private static let screenCap = "screen2"
+    /// The other phone wrote `caps.<them>` with screen2.
+    private(set) var peerHasScreen2 = false
+    /// THEIR screen in dual mode (the second video transceiver's receiver). Their camera stays on
+    /// `remoteVideoTrack`.
+    private(set) var remoteScreenTrack: RTCVideoTrack?
+    /// How THEIR share is carried, from `screenMode.<them>`: "track" (dual mode, on
+    /// `remoteScreenTrack`) or "camera" (fallback, on `remoteVideoTrack`). Old builds never write it.
+    private(set) var remoteScreenMode: String = "camera"
+    /// The track showing THEIR shared screen, whichever way it is carried.
+    var remoteShareTrack: RTCVideoTrack? { remoteScreenMode == "track" ? remoteScreenTrack : remoteVideoTrack }
+    /// MY current (or pending) share runs in dual mode. Decided when the share is asked for.
+    private(set) var shareUsesTrack = false
+    /// The share has taken over the camera's source (fallback mode): every camera path stands off.
+    private var shareOwnsCamera: Bool { screenSharing && !shareUsesTrack }
+    /// The camera button stays usable while sharing (dual mode). Before a share: whether one would be.
+    var canUseCameraWhileSharing: Bool { screenSharing ? shareUsesTrack : dualModeAvailable }
+    /// Dual-mode source and track ("screen0"), alive only for a dual-mode share.
+    @ObservationIgnored private var screenSource: RTCVideoSource?
+    @ObservationIgnored private var screenTrack: RTCVideoTrack?
+    /// The caller's one-time re-offer that turns the screen m-line to sendrecv (bounded retries).
+    @ObservationIgnored private var screenUpgradeOfferAt: Date?
+    @ObservationIgnored private var screenUpgradeAttempts = 0
+
     private var videoCapturer: RTCCameraVideoCapturer?
     /// The ONE video source behind `localVideoTrack`. The camera capturer feeds it normally; during a
     /// screen share the ScreenShareCapturer feeds it instead (same track, same sender).
@@ -687,7 +740,9 @@ final class CallService: NSObject {
 
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
-        return RTCPeerConnectionFactory()
+        // Screen share v3: the factory carries the app-audio mixer (capture post-processing), so
+        // the shared app's sound rides in my mic track while I share. Plain factory if unavailable.
+        return ScreenShareAudioMixer.makeFactory()
     }()
 
     // STUN-only fallback (used until the real TURN relay list arrives from the server, and if
@@ -951,6 +1006,9 @@ final class CallService: NSObject {
         // frames, no camera). This makes a mid-call camera toggle a pure track-enable with NO
         // renegotiation (which is fragile + glare-prone) and no black-remote-on-re-toggle bugs.
         addLocalVideo(to: connection)
+        // Screen share v3: the caller puts the screen's m-line in the offer, right after the camera's,
+        // so it is always the SECOND video m-line. The callee gets its transceiver from the offer.
+        if isCaller { addScreenTransceiver(to: connection) }
         applyDataSaver(to: connection)
         // The CALLER opens it, because the caller writes the offer and the channel has to be in that
         // offer to be negotiated at all. The callee receives it through `didOpen` instead.
@@ -1101,6 +1159,72 @@ final class CallService: NSObject {
         connection.add(track, streamIds: ["stream0"])
     }
 
+    // MARK: - Screen transceiver (screen share v3, dual mode)
+
+    /// Caller only, once, at setup. RECVONLY in the first offer: an old callee then has nothing new
+    /// arriving and keeps today's experience exactly. A new callee answers it sendonly (it can share
+    /// at once); the caller's own sending side is opened by `upgradeScreenTransceiverIfDue`.
+    private func addScreenTransceiver(to connection: RTCPeerConnection?) {
+        guard let connection else { return }
+        let ini = RTCRtpTransceiverInit()
+        ini.direction = .recvOnly
+        ini.streamIds = ["screen0"]
+        if connection.addTransceiver(of: .video, init: ini) == nil {
+            print("[ScreenShare] could not add the screen transceiver; this call shares in fallback mode")
+        }
+    }
+
+    /// The screen's transceiver: the SECOND video transceiver in `pc.transceivers` order, on both
+    /// sides. Nil on a call with an old peer as caller (its offer has one video m-line).
+    private func screenTransceiver(in pc: RTCPeerConnection) -> RTCRtpTransceiver? {
+        let video = pc.transceivers.filter { $0.mediaType == .video }
+        return video.count >= 2 ? video[1] : nil
+    }
+
+    /// The camera's transceiver: the first video transceiver.
+    private func cameraTransceiver(in pc: RTCPeerConnection) -> RTCRtpTransceiver? {
+        pc.transceivers.first { $0.mediaType == .video }
+    }
+
+    /// The screen transceiver has been negotiated with a sending direction on MY side.
+    private func screenCanSend(_ pc: RTCPeerConnection) -> Bool {
+        guard let t = screenTransceiver(in: pc) else { return false }
+        var current = RTCRtpTransceiverDirection.inactive
+        guard t.currentDirection(&current) else { return false }
+        return current == .sendRecv || current == .sendOnly
+    }
+
+    /// A share started now would run in dual mode.
+    private var dualModeAvailable: Bool {
+        guard peerHasScreen2, let pc else { return false }
+        return screenCanSend(pc)
+    }
+
+    /// Callee, after setRemoteDescription(offer) and before createAnswer: an offer with two video
+    /// m-lines came from a v3 caller, so the second one becomes our screen sender. Idempotent.
+    private func acceptScreenTransceiver(_ pc: RTCPeerConnection) {
+        guard let t = screenTransceiver(in: pc), t.direction != .sendRecv else { return }
+        t.setDirection(.sendRecv, error: nil)
+    }
+
+    /// Caller: once the call is up and the callee has said screen2, turn the screen m-line to
+    /// sendrecv with one re-offer (no ICE restart; the restartOffer/restartAnswer path carries it).
+    /// Called on every call-doc snapshot, so it retries by itself; at most 3 tries per call.
+    private func upgradeScreenTransceiverIfDue() {
+        guard isCaller, peerHasScreen2, state == .active, connectedDate != nil,
+              let pc, pc.remoteDescription != nil, pc.signalingState == .stable,
+              let t = screenTransceiver(in: pc) else { return }
+        var current = RTCRtpTransceiverDirection.inactive
+        if t.currentDirection(&current), current == .sendRecv { return }
+        guard screenUpgradeAttempts < 3 else { return }
+        if let at = screenUpgradeOfferAt, Date().timeIntervalSince(at) < 8 { return }
+        if t.direction != .sendRecv { t.setDirection(.sendRecv, error: nil) }
+        screenUpgradeAttempts += 1
+        screenUpgradeOfferAt = Date()
+        print("[ScreenShare] opening the screen m-line for sending (try \(screenUpgradeAttempts))")
+        restartIce(iceRestart: false)
+    }
+
     // Ask for camera access, then feed frames into the local track (off the main thread). Without
     // the access check the capturer can silently never produce frames -> black video on both ends.
     private func startCameraCapture() {
@@ -1125,7 +1249,7 @@ final class CallService: NSObject {
     /// `cams` said true (seeded from the call type) and the other side got a black tile. Undo the
     /// intent the same way a camera-off tap does, and say why. Main only.
     private func cameraAccessDenied() {
-        guard inLiveCall, cameraOn, !screenSharing else { return }
+        guard inLiveCall, cameraOn, !shareOwnsCamera else { return }
         cameraDenied = true
         cameraOn = false
         localVideoTrack?.isEnabled = false
@@ -1145,10 +1269,10 @@ final class CallService: NSObject {
     /// `cameraPausedByBackground` is deliberately NOT in here: that pause is recovered BY restarting
     /// the capture (resumeCameraIfReallyBack), so blocking starts on it would make it permanent.
     private var cameraShouldRun: Bool {
-        // `!screenSharing`: the share owns the video source while it runs. A thermal step, a
+        // `!shareOwnsCamera`: a fallback share owns the video source while it runs. A thermal step, a
         // foreground backstop or an interruption retry must not start the camera into the same source
         // and interleave camera frames with screen frames. stopScreenShare restarts it if wanted.
-        inLiveCall && cameraOn && !videoPausedForNetwork && !isHeld && !screenSharing
+        inLiveCall && cameraOn && !videoPausedForNetwork && !isHeld && !shareOwnsCamera
     }
 
     /// Re-checks `cameraShouldRun` on main AFTER whatever async hop led here (permission callback,
@@ -1301,7 +1425,7 @@ final class CallService: NSObject {
     private var pendingSwitchTarget: Bool?
 
     func switchCamera() {
-        guard cameraOn, !screenSharing, let capturer = videoCapturer else { return }
+        guard cameraOn, !shareOwnsCamera, let capturer = videoCapturer else { return }
         let next = !usingFrontCamera
         // Deliberately NOT flipping the mirror here (it used to): the frozen last frame keeps its
         // own mirroring through the restart gap; mirror and content swap together at the flip's
@@ -1325,9 +1449,10 @@ final class CallService: NSObject {
         // a doc that already exists.
         guard state == .active || state == .reconnecting || (state == .outgoing && !on) else { return }
         if on { cameraDenied = false }   // audit M-011: a new try; a refusal sets it again
-        // The share owns the track while it runs (the camera button is disabled then). Toggling here
+        // A FALLBACK share owns the track while it runs (the camera button is disabled then; a
+        // dual-mode share leaves the camera to the user). Toggling here
         // would disable the track under the share, or announce cams=false over a live screen.
-        guard !screenSharing else { return }
+        guard !shareOwnsCamera else { return }
         cameraOn = on
         // Turning my own camera off while I am the one FULL SCREEN would leave the big view showing my
         // switched-off camera and push the other person into the corner. Go back to the normal layout.
@@ -1428,10 +1553,10 @@ final class CallService: NSObject {
         }
     }
 
-    /// The `cams.<me>` value: what my video is ACTUALLY carrying. True for the length of a screen
-    /// share, so the other side's existing video layout shows it; otherwise the real camera state.
+    /// The `cams.<me>` value: what my video is ACTUALLY carrying. True for the length of a FALLBACK
+    /// screen share (dual mode sends the screen on its own track), so the other side's existing video layout shows it; otherwise the real camera state.
     private var camsSignal: Bool {
-        screenSharing || (cameraOn && !cameraPausedByBackground && !videoPausedForNetwork && !isHeld)
+        shareOwnsCamera || (cameraOn && !cameraPausedByBackground && !videoPausedForNetwork && !isHeld)
     }
 
     // MARK: - Screen share (1:1)
@@ -1457,8 +1582,22 @@ final class CallService: NSObject {
         stopScreenShare(requestExtensionStop: false, signal: false)
         disarmLateShareStop()   // audit M-106: this new picker's "started" must not be answered with a stop
         screenShareNotice = nil   // a new attempt; the last one's line is old news
-        guard let source = videoSource else { return }
-        let capturer = ScreenShareCapturer(delegate: source)
+        // Screen share v3: dual mode (both phones v3, screen m-line negotiated for sending) feeds a
+        // dedicated screencast source on its own track; otherwise the camera's source, as before.
+        let dual = dualModeAvailable
+        let source: RTCVideoSource
+        if dual {
+            let s = Self.factory.videoSource(forScreenCast: true)
+            screenSource = s
+            screenTrack = Self.factory.videoTrack(with: s, trackId: "screen0")
+            source = s
+        } else {
+            guard let s = videoSource else { return }
+            source = s
+        }
+        shareUsesTrack = dual
+        print("[ScreenShare] share requested, mode \(dual ? "track" : "camera")")
+        let capturer = ScreenShareCapturer(source: source)
         let session = ScreenShareSession { frame, rotation in
             capturer.push(frame, rotationDegrees: rotation)
         }
@@ -1468,7 +1607,10 @@ final class CallService: NSObject {
             self.setScreenSharePhase(.live)
         }
         session.onEnded = { [weak self] reason in self?.screenShareEnded(reason) }
-        guard session.start() else { return }   // App Group not provisioned: nothing to listen on
+        guard session.start() else {   // App Group not provisioned: nothing to listen on
+            shareUsesTrack = false; screenSource = nil; screenTrack = nil
+            return
+        }
         screenCapturer = capturer
         screenShareSession = session
         setScreenSharePhase(.picking)
@@ -1490,17 +1632,36 @@ final class CallService: NSObject {
         // Started into a call that cannot carry it (put on hold, or already ending): end it again.
         guard state == .active || state == .reconnecting, !isHeld else { stopScreenShare(); return }
         screenSharePendingTimeout?.cancel(); screenSharePendingTimeout = nil
+        // Dual mode: the screen track goes onto the screen transceiver's sender. A track swap, no
+        // renegotiation: the m-line was negotiated at setup.
+        var screenSender: RTCRtpSender?
+        if shareUsesTrack {
+            guard let pc, let sender = screenTransceiver(in: pc)?.sender, let track = screenTrack else {
+                print("[ScreenShare] dual mode lost its screen sender before the start")
+                stopScreenShare(notice: "Couldn't start screen sharing")
+                return
+            }
+            screenSender = sender
+            sender.track = track
+        }
         screenSharing = true
         setScreenSharePhase(.starting)   // .live once the first frame is decoded (onFirstFrame)
-        // Camera FIRST, screen second (the reference order): the camera capturer stops, and only
-        // then does the screen capturer go live on the same source, so no camera frame lands between
-        // screen frames. `cameraOn` is untouched; it is what the stop path restores.
-        if let camera = videoCapturer {
-            camera.stopCapture { capturer.setLive(true) }
-        } else {
+        if screenSender != nil {
+            // Dual mode: the camera keeps running exactly as the user had it.
             capturer.setLive(true)
+        } else {
+            // Camera FIRST, screen second (the reference order): the camera capturer stops, and only
+            // then does the screen capturer go live on the same source, so no camera frame lands
+            // between screen frames. `cameraOn` is untouched; it is what the stop path restores.
+            if let camera = videoCapturer {
+                camera.stopCapture { capturer.setLive(true) }
+            } else {
+                capturer.setLive(true)
+            }
+            localVideoTrack?.isEnabled = true   // a voice call's track is disabled until now
         }
-        localVideoTrack?.isEnabled = true   // a voice call's track is disabled until now
+        // The shared app's sound rides in my mic track while I share (both modes).
+        ScreenShareAudioMixer.shared.isMixing = true
         shareQuality.reset(); shareLastSent = nil   // each share starts at the top tier
         applyShareTier()
         broadcastScreenState()
@@ -1520,6 +1681,13 @@ final class CallService: NSObject {
         let pendingOnly = screenShareSession != nil && !screenSharing
         screenShareSession?.stop(); screenShareSession = nil
         screenCapturer?.stop(); screenCapturer = nil
+        ScreenShareAudioMixer.shared.isMixing = false
+        // Dual mode: take the screen off its sender (no renegotiation) and release it.
+        let wasTrack = shareUsesTrack
+        if wasTrack, let pc, let sender = screenTransceiver(in: pc)?.sender, sender.track != nil {
+            sender.track = nil
+        }
+        screenSource = nil; screenTrack = nil
         setScreenSharePhase(.off)   // every exit converges here, whatever the order
         if let notice, hadShare { screenShareNotice = notice }
         if requestExtensionStop, hadShare {
@@ -1529,10 +1697,17 @@ final class CallService: NSObject {
         // (the sheet finished after the call ended, or after the 60s wait), and the stop posted just
         // now went out before that extension was listening.
         if requestExtensionStop, pendingOnly { armLateShareStop() }
-        guard screenSharing else { return }
+        guard screenSharing else { shareUsesTrack = false; return }
         screenSharing = false
         shareQuality.reset(); shareLastSent = nil
-        applyScreenShareEncoding(false)
+        applyScreenShareEncoding(false, track: wasTrack)
+        shareUsesTrack = false
+        if wasTrack {
+            // Dual mode never touched the camera: nothing to bring back.
+            if signal { broadcastScreenState() }
+            updateInCallScreenBehavior()
+            return
+        }
         // The camera comes back only if it was on before the share and nothing else holds it now
         // (hold, weak link, call ending). An interrupted camera is left to its own retry, which
         // re-enables the track once the session is really running.
@@ -1584,10 +1759,9 @@ final class CallService: NSObject {
     /// Puts the ladder's current tier on the encoder, the capturer and the receive gate (no point
     /// decoding frames the encoder will drop), and on `screenShareLink` for the call screen.
     private func applyShareTier() {
-        let tier = shareQuality.tier
         applyScreenShareEncoding(true)
-        screenCapturer?.setMaxFramerate(tier.maxFramerate)
-        screenShareSession?.setMaxFramerate(tier.maxFramerate)
+        screenCapturer?.setMaxFramerate(shareFramerate)
+        screenShareSession?.setMaxFramerate(shareFramerate)
         let link: ScreenShareLink
         switch shareQuality.index {
         case 0, 1: link = .good
@@ -1624,28 +1798,59 @@ final class CallService: NSObject {
 
     /// Encoder settings for a screen, and back. A screen keeps its RESOLUTION when the link is weak
     /// (text stays readable, the frame rate drops instead) and takes the ladder's current tier
-    /// (ScreenShareQuality: 2.5 Mbps / 20 fps at best). Use Less Data never scales it down; only the
+    /// (ScreenShareQuality: 2.5 Mbps / 30 fps at best). Use Less Data never scales it down; only the
     /// ladder's last tier does. Stopping returns the camera's own settings.
-    private func applyScreenShareEncoding(_ on: Bool) {
+    /// Dual mode (`track`, default `shareUsesTrack`): the tier goes on the SCREEN sender only, and the
+    /// camera sender, which keeps running, is held to 300 kbps / 15 fps / half size so the screen
+    /// gets the link first (the reference app's priority). Both are put back on stop.
+    private func applyScreenShareEncoding(_ on: Bool, track: Bool? = nil) {
         guard let pc else { return }
-        let tier = shareQuality.tier
-        for sender in pc.senders where sender.track?.kind == "video" {
-            let params = sender.parameters
-            let preference: RTCDegradationPreference = on ? .maintainResolution : .balanced
-            params.degradationPreference = NSNumber(value: preference.rawValue)
-            for enc in params.encodings {
-                if on {
-                    enc.maxBitrateBps = NSNumber(value: tier.maxBitrate)
-                    enc.maxFramerate = NSNumber(value: tier.maxFramerate)
-                    enc.scaleResolutionDownBy = tier.scaleDown > 1 ? NSNumber(value: tier.scaleDown) : nil
-                } else {
-                    enc.maxFramerate = nil
-                    enc.scaleResolutionDownBy = nil
+        if track ?? shareUsesTrack {
+            if let screen = screenTransceiver(in: pc)?.sender { setShareEncoding(on, to: screen) }
+            if let camera = cameraTransceiver(in: pc)?.sender {
+                let params = camera.parameters
+                for enc in params.encodings {
+                    if on {
+                        enc.maxBitrateBps = NSNumber(value: 300_000)
+                        enc.maxFramerate = NSNumber(value: 15)
+                        enc.scaleResolutionDownBy = NSNumber(value: 2.0)
+                    } else {
+                        enc.maxFramerate = nil
+                        enc.scaleResolutionDownBy = nil
+                    }
                 }
+                camera.parameters = params
             }
-            sender.parameters = params
+        } else {
+            for sender in pc.senders where sender.track?.kind == "video" { setShareEncoding(on, to: sender) }
         }
         if !on { applyDataSaver(to: pc) }   // the camera's cap, or Use Less Data, exactly as before
+    }
+
+    /// The ladder's tier on one sender (on), or the plain camera settings back (off).
+    private func setShareEncoding(_ on: Bool, to sender: RTCRtpSender) {
+        let tier = shareQuality.tier
+        let params = sender.parameters
+        let preference: RTCDegradationPreference = on ? .maintainResolution : .balanced
+        params.degradationPreference = NSNumber(value: preference.rawValue)
+        for enc in params.encodings {
+            if on {
+                enc.maxBitrateBps = NSNumber(value: tier.maxBitrate)
+                enc.maxFramerate = NSNumber(value: shareFramerate)
+                enc.scaleResolutionDownBy = tier.scaleDown > 1 ? NSNumber(value: tier.scaleDown) : nil
+            } else {
+                enc.maxFramerate = nil
+                enc.scaleResolutionDownBy = nil
+            }
+        }
+        sender.parameters = params
+    }
+
+    /// The share's frame rate for the current tier. Screen share v3 runs the top tier at 30 fps
+    /// (the extension paces to 30); ScreenShareQuality's own T0 value is used when it is higher.
+    private var shareFramerate: Int {
+        let fps = shareQuality.tier.maxFramerate
+        return shareQuality.index == 0 ? max(30, fps) : fps
     }
 
     /// Tell the other side my screen is (or is no longer) what my video carries, together with the
@@ -1654,10 +1859,14 @@ final class CallService: NSObject {
     private func broadcastScreenState(attempt: Int = 0) {
         guard let id = callId else { return }
         let sharing = screenSharing
-        db.collection("calls").document(id).updateData([
+        var fields: [String: Any] = [
             "screen.\(me)": sharing,
             "cams.\(me)": camsSignal
-        ]) { [weak self] err in
+        ]
+        // Screen share v3: how the share is carried, in the same write as `screen` so the viewer
+        // never picks the wrong track. Old builds ignore it.
+        if sharing { fields["screenMode.\(me)"] = shareUsesTrack ? "track" : "camera" }
+        db.collection("calls").document(id).updateData(fields) { [weak self] err in
             guard let self, err != nil, attempt < 3 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 guard let self, self.callId == id, self.inLiveCall, self.screenSharing == sharing else { return }
@@ -1672,7 +1881,7 @@ final class CallService: NSObject {
     func updateInCallScreenBehavior() {
         let inCall = state == .active || state == .reconnecting
         // A share counts as video here (keep-awake, no proximity blanking), unlike in the audio policy.
-        let videoShowing = cameraOn || remoteCameraOn || screenSharing
+        let videoShowing = cameraOn || remoteCameraOn || screenSharing || remoteScreenSharing
         let proximity = inCall && !videoShowing && audioRoute == .earpiece
         let keepAwake = inCall && videoShowing
         DispatchQueue.main.async {   // UIDevice + SleepBlocker are main-actor
@@ -1727,7 +1936,7 @@ final class CallService: NSObject {
               let reason = AVCaptureSession.InterruptionReason(rawValue: raw),
               isVideoInterruption(reason) else { return }
         // Not during a share: the camera is stopped then, and disabling the track would cut the screen.
-        guard inLiveCall, cameraOn, !cameraPausedByBackground, !screenSharing else { return }
+        guard inLiveCall, cameraOn, !cameraPausedByBackground, !shareOwnsCamera else { return }
         cameraPausedByBackground = true
         localVideoTrack?.isEnabled = false   // stop sending, so they get the avatar and not a frozen face
         broadcastCameraState()
@@ -2018,6 +2227,8 @@ final class CallService: NSObject {
     /// side's loss and round-trip time from its receiver reports. Lowered, never ended: a share on a
     /// bad link still shows the screen, at a lower frame rate first.
     private func sampleShareQuality(_ pc: RTCPeerConnection) {
+        // Dual mode: only the screen's outbound stream counts (the capped camera runs beside it).
+        let screenMid: String? = shareUsesTrack ? screenTransceiver(in: pc)?.mid : nil
         pc.statistics { [weak self] report in
             var available: Double?
             var bytesSent: Double?
@@ -2033,6 +2244,7 @@ final class CallService: NSObject {
                           let b = (v["availableOutgoingBitrate"] as? NSNumber)?.doubleValue else { continue }
                     available = max(available ?? 0, b)
                 case "outbound-rtp" where kind == "video":
+                    if let want = screenMid, !want.isEmpty, let mid = v["mid"] as? String, mid != want { continue }
                     if let b = (v["bytesSent"] as? NSNumber)?.doubleValue { bytesSent = (bytesSent ?? 0) + b }
                     if (v["qualityLimitationReason"] as? String) == "bandwidth" { limited = true }
                 case "remote-inbound-rtp" where kind == "video":
@@ -2134,6 +2346,17 @@ final class CallService: NSObject {
         // Their screen share. Read BEFORE `cams`: the sharer writes both in one update, and the cams
         // change it brings must not be taken for a camera (see the audio policy skip below). A
         // missing key under an existing map means "not sharing" (the map may only hold my own key).
+        // Screen share v3: their capability, and how their share is carried. Old builds write
+        // neither: no caps = fallback for my shares, no screenMode = their share is on their camera.
+        if let caps = d["caps"] as? [String: Any], let theirs = caps[otherUid] as? [String] {
+            let v3 = theirs.contains(Self.screenCap)
+            if v3 != peerHasScreen2 { peerHasScreen2 = v3 }
+        }
+        if let modes = d["screenMode"] as? [String: String], let mode = modes[otherUid],
+           mode != remoteScreenMode {
+            remoteScreenMode = mode == "track" ? "track" : "camera"
+        }
+        upgradeScreenTransceiverIfDue()
         var screenChanged = false
         if let screens = d["screen"] as? [String: Bool] {
             let on = screens[otherUid] ?? false
@@ -2142,6 +2365,15 @@ final class CallService: NSObject {
                 screenChanged = true
                 // Their screen goes BIG: un-swap if I had my own feed fullscreen.
                 if on, isLocalExpanded { isLocalExpanded = false }
+                // Dual mode: no `cams` flip comes with it, so do here what that flip does in fallback
+                // (call screen back up, keep-awake on).
+                if remoteScreenMode == "track" {
+                    if on, state == .active || state == .reconnecting {
+                        minimized = false
+                        if UIApplication.shared.applicationState != .active { postVideoSharingNote() }
+                    }
+                    updateInCallScreenBehavior()
+                }
             }
         }
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
@@ -2164,7 +2396,9 @@ final class CallService: NSObject {
             // A `cams` flip that only comes from their screen share starting or stopping is not a
             // camera: a voice call must not jump to the loudspeaker (or log as video) because they
             // shared their screen. Audio routing stays exactly where it was.
-            if !(screenChanged || remoteScreenSharing) {
+            // Dual mode: their `cams` is their real camera even while they share, so it counts.
+            let camsIsTheShare = (screenChanged || remoteScreenSharing) && remoteScreenMode != "track"
+            if !camsIsTheShare {
                 applyVideoAudioPolicy()    // SAME handling as my own toggle — see applyVideoAudioPolicy
             }
             updateInCallScreenBehavior()   // their video appearing/leaving flips keep-awake/proximity
@@ -2955,7 +3189,9 @@ final class CallService: NSObject {
 
     // Caller-only: renegotiate ICE (new credentials + candidates), media keeps flowing
     // on recovery. Cheaper than a full re-offer — DTLS/SRTP keys are preserved.
-    private func restartIce() {
+    /// `iceRestart: false` (screen share v3): the same caller re-offer without new ICE credentials,
+    /// used once to open the screen m-line. Old callees answer it like any restart offer.
+    private func restartIce(iceRestart: Bool = true) {
         guard isCaller, let pc = pc, let id = callId else { return }
         // Audit M-117, 2026-10-07: the path monitor, the callee's request and our own ICE drop can all
         // fire within a second, and each new offer invalidates the answer the last one is waiting
@@ -2963,10 +3199,10 @@ final class CallService: NSObject {
         // not landed and that is under 6s old covers the others. The 8s retry is outside the window.
         if let t = restartInFlightAt, Date().timeIntervalSince(t) < 6 { return }
         restartInFlightAt = Date()
-        applyNewerIceServers(to: pc)   // audit M-009: a relay that arrived after the call started
+        if iceRestart { applyNewerIceServers(to: pc) }   // audit M-009: a relay that arrived after the call started
         negotiationVersion += 1
         let v = negotiationVersion
-        let constraints = RTCMediaConstraints(mandatoryConstraints: ["IceRestart": "true"],
+        let constraints = RTCMediaConstraints(mandatoryConstraints: iceRestart ? ["IceRestart": "true"] : nil,
                                               optionalConstraints: nil)
         pc.offer(for: constraints) { [weak self] sdp, _ in
             guard let self, let sdp, let pc = self.pc else { return }
@@ -3215,6 +3451,7 @@ final class CallService: NSObject {
                         "type": self.cameraOn ? "video" : "voice",
                         "status": "ringing",
                         "cams": [self.me: self.cameraOn],   // seed my camera state (per-side)
+                        "caps": [self.me: [Self.screenCap]],   // screen share v3 capability
                         "createdAt": FieldValue.serverTimestamp(),
                     ]
                     // Muted during "Calling..." (audit M-051, 2026-10-07): say so from the first doc,
@@ -4461,6 +4698,9 @@ final class CallService: NSObject {
         pc.setRemoteDescription(remote) { [weak self] _ in
             guard let self, stillOurs(), let pc = self.pc else { return }
             self.flushPendingCandidates()   // caller's candidates were buffered until now (C1)
+            // Screen share v3: a second video m-line in the offer is the caller's screen slot; ours
+            // sends too. An old caller's offer has one, and this does nothing.
+            self.acceptScreenTransceiver(pc)
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc.answer(for: constraints) { answerSdp, _ in
                 // NO SILENT DEATHS past this point (the 12:27 call: he accepted, this chain died
@@ -4496,6 +4736,7 @@ final class CallService: NSObject {
                         var data: [String: Any] = self.sealSignal(local.sdp).map { enc -> [String: Any] in ["answerEnc": enc] }
                             ?? ["answer": ["sdp": local.sdp, "type": "answer"]]
                         data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
+                        data["caps.\(self.me)"] = [Self.screenCap]   // screen share v3 capability
                         guard self.wasAccepted else { self.heldPreAnswer = data; return }
                         data["status"] = "active"
                         self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
@@ -4807,6 +5048,7 @@ final class CallService: NSObject {
                 self.applyNewerIceServers(to: pc)
                 pc.setRemoteDescription(RTCSessionDescription(type: .offer, sdp: sdp)) { _ in
                     self.flushPendingCandidates()
+                    self.acceptScreenTransceiver(pc)   // screen share v3, idempotent
                     let c = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
                     pc.answer(for: c) { ans, _ in
                         guard let ans else { return }
@@ -5545,11 +5787,14 @@ extension CallService: RTCPeerConnectionDelegate {
     // Unified-plan remote track arrival: grab the remote video track for rendering.
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
         if let track = rtpReceiver.track as? RTCVideoTrack {
+            // Screen share v3: the SECOND video transceiver's receiver is their screen; the first is
+            // their camera, as always. Worked out here, on the thread that delivered the receiver.
+            let isScreen = screenTransceiver(in: peerConnection)?.receiver.receiverId == rtpReceiver.receiverId
             // Just bind the remote feed for rendering. isVideo is driven by the consent handshake (or
             // the initial call type) — NOT flipped here, so an unsolicited track can't force video on.
             DispatchQueue.main.async {
                 guard peerConnection === self.pc else { return }   // #45: not after the reset nilled it
-                self.remoteVideoTrack = track
+                if isScreen { self.remoteScreenTrack = track } else { self.remoteVideoTrack = track }
             }
         }
     }

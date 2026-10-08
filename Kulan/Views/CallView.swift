@@ -280,6 +280,9 @@ struct CallView: View {
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
+                        // Landscape: clear the notch side and the far side (both zero in portrait).
+                        .padding(.leading, winInsets.left)
+                        .padding(.trailing, winInsets.right)
                         .frame(maxWidth: .infinity)        // full-width header (centered name/status)
                         .opacity(controlsVisible ? 1 : 0)
                         .allowsHitTesting(controlsVisible) // hidden buttons must not eat the tap
@@ -355,7 +358,11 @@ struct CallView: View {
             }
             .onReceive(ticker) { now = $0 }
             .onAppear { armAutoHide() }
+            // Screen share v3: landscape is allowed only while this screen shows their shared
+            // screen. Their share ending, the call ending or a minimize brings portrait back.
+            .onChange(of: landscapeWanted, initial: true) { _, on in OrientationLock.allowLandscape(on) }
             .onDisappear {
+                OrientationLock.allowLandscape(false)
                 hideTask?.cancel()
                 topPillTask?.cancel()
                 topPillDone?(); topPillDone = nil   // a notice cut short is still cleared
@@ -383,7 +390,11 @@ struct CallView: View {
                 showControls()
             }
             // Their share starting or ending brings the chrome back; it never stays hidden after.
-            .onChange(of: call.remoteScreenSharing) { _, _ in showControls() }
+            // A swap to my own camera is undone when their share starts, so the share is what shows.
+            .onChange(of: call.remoteScreenSharing) { _, live in
+                if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
+                showControls()
+            }
             // A NEW share from them: say who it is, once, then get off the picture.
             .onChange(of: call.remoteScreenSharingSince) { _, since in
                 guard since != nil else { return }
@@ -456,12 +467,23 @@ struct CallView: View {
     // Never while my screen is shared (2026-10-08): my feed is then the screen itself, and drawing it
     // here was a picture of the call inside the call. The big view stays theirs, as without a share.
     private var showLocalFull: Bool {
-        call.isVideo && !call.screenSharing && (isLocalExpanded || (!hasRemote && !connectedCall))
+        call.isVideo && !myScreenOnCamera && (isLocalExpanded || (!hasRemote && !connectedCall))
     }
     /// Their shared screen owns the big view, on the zoomable stage instead of the plain renderer.
+    /// The stage's track is `remoteShareTrack`: their screen track in dual mode, their camera track
+    /// when the share rides on it (fallback).
     private var stageShown: Bool {
-        !showLocalFull && call.remoteScreenSharing && call.remoteVideoTrack != nil
+        !showLocalFull && call.remoteScreenSharing && call.remoteShareTrack != nil
     }
+    /// Fallback share: my screen replaced my camera on my one video track, so my local feed IS the
+    /// screen. In dual mode (`canUseCameraWhileSharing`) my camera track stays my camera.
+    private var myScreenOnCamera: Bool { call.screenSharing && !call.canUseCameraWhileSharing }
+    /// Fallback share from them: their camera track carries their screen (draw it whole, never cropped).
+    private var theirScreenOnCamera: Bool { call.remoteScreenSharing && call.remoteScreenMode != "track" }
+    /// Watching their share in dual mode: the corner tile is THEIR camera, mine is hidden.
+    private var watchingDual: Bool { stageShown && call.remoteScreenMode == "track" }
+    /// Landscape only while this screen shows their shared screen.
+    private var landscapeWanted: Bool { stageShown && !call.minimized && call.state != .ended }
     // Avatar fills the big view whenever there is no remote video to show (voice call, or their
     // camera is off mid-call) and I haven't swapped my own feed fullscreen.
     // The photo fills the big view whenever whoever is BIG has no live camera — including MYSELF, now
@@ -503,8 +525,8 @@ struct CallView: View {
                 // Their shared screen goes to the stage below, so this renderer lets go of the track
                 // meanwhile (two renderers on one track would draw it twice).
                 VideoRendererView(track: stageShown ? nil : full,
-                                  mirror: showLocalFull && call.usingFrontCamera && !call.screenSharing,
-                                  fit: !showLocalFull && call.remoteScreenSharing)
+                                  mirror: showLocalFull && call.usingFrontCamera && !myScreenOnCamera,
+                                  fit: !showLocalFull && theirScreenOnCamera)
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
                     // natural dimensions) that can exceed the screen and oversize the ZStack, which
@@ -518,7 +540,7 @@ struct CallView: View {
             // Screen share viewer, 2026-10-08: their screen whole, with pinch/pan/double-tap zoom, and
             // nothing over it but the chrome. A single tap sends the chrome away and back.
             if stageShown {
-                ScreenShareStageView(track: call.remoteVideoTrack, onSingleTap: { toggleChrome() })
+                ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleChrome() })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
                     .transition(.opacity)
@@ -536,7 +558,10 @@ struct CallView: View {
         HStack {
             // The ONLY way to minimize the call (swipe-to-minimize removed — screen is locked).
             // The reference app's 0.2s shrink into the card (`CallPipMorph`).
-            Button { CallPipMorph.minimize { call.minimized = true } } label: {
+            Button {
+                OrientationLock.allowLandscape(false)   // the card lives in portrait
+                CallPipMorph.minimize { call.minimized = true }
+            } label: {
                 // The minimise glyph rather than a bare chevron: this button shrinks the call
                             // into the pill, it does not dismiss or scroll anything.
                             topCircle("arrow.down.right.and.arrow.up.left")
@@ -666,9 +691,15 @@ struct CallView: View {
 
     private func pipLayer(_ geo: GeometryProxy) -> some View {
         let safeBottom = winInsets.bottom
-        let pipIsLocal = !isLocalExpanded                                   // small window = the OTHER feed
+        let landscape = geo.size.width > geo.size.height
+        // Watching their share in dual mode, the tile is THEIR camera (mine is hidden: minimal).
+        let dualWatch = watchingDual
+        let pipIsLocal = !isLocalExpanded && !dualWatch                     // small window = the OTHER feed
         let feeds = call.pipFeeds
-        let pipTrack = feeds.tile
+        // My tile carries my camera, or my screen only in a fallback share (in dual mode my track
+        // stays my camera, live only while it is on).
+        let pipTrack: RTCVideoTrack? = dualWatch ? (call.remoteCameraOn ? call.remoteVideoTrack : nil)
+            : (pipIsLocal ? ((call.cameraOn || myScreenOnCamera) ? call.localVideoTrack : nil) : feeds.tile)
         // THE TILE BREATHES WITH THE CHROME (owner's 2026-08-12 side-by-side reference, exact
         // numbers read from the reference implementation): menus up → the tile grows; menus away →
         // it shrinks toward the corner, so the tap that toggles the controls is FELT on the tile
@@ -676,19 +707,24 @@ struct CallView: View {
         // the camera's own aspect fitted inside; for our 9:16 portrait feed that is 135×240 and
         // 79×140 (the old fixed 104×150 was a squashed crop).
         // While my screen is shared the tile is only the small "Sharing" card (2026-10-08), square.
-        let sharingCard = pipIsLocal && call.screenSharing
-        let tileW: CGFloat = sharingCard ? (controlsVisible ? 96 : 72) : (controlsVisible ? 135 : 79)
-        let tileH: CGFloat = sharingCard ? (controlsVisible ? 96 : 72) : (controlsVisible ? 240 : 140)
+        // Landscape (their shared screen on stage): a smaller tile, 160pt box / 110pt without chrome.
+        let sharingCard = pipIsLocal && myScreenOnCamera
+        let tileW: CGFloat = sharingCard ? (controlsVisible ? 96 : 72)
+            : (landscape ? (controlsVisible ? 90 : 62) : (controlsVisible ? 135 : 79))
+        let tileH: CGFloat = sharingCard ? (controlsVisible ? 96 : 72)
+            : (landscape ? (controlsVisible ? 160 : 110) : (controlsVisible ? 240 : 140))
         // The Stop Sharing pill sits centred above the bar; lift the tile's home clear of it.
-        let pillLift: CGFloat = call.screenSharePhase == .off ? 0
+        // Landscape: the tile lives at the trailing edge beside the centred bar, nothing to clear.
+        let pillLift: CGFloat = (call.screenSharePhase == .off || landscape) ? 0
             : 54 + (call.screenSharePhase == .live && call.screenShareLink == .poor ? 22 : 0)
         // HOME IS THE BOTTOM CORNER (owner's report: ours landed on TOP after accept; the standard
         // is the bottom). Gutters are 12pt; with the chrome up the tile clears the control bar,
         // with it away it drops toward the bottom edge. Drag can park it in any corner; these are
         // the travel bounds.
-        let bottomPad = safeBottom + (controlsVisible ? 132 : 12) + pillLift
-        let maxLeft = -(geo.size.width - tileW - 24)
-        let maxUp = -max(0, geo.size.height - tileH - (winInsets.top + 60) - bottomPad)
+        let bottomPad = safeBottom + ((controlsVisible && !landscape) ? 132 : 12) + pillLift
+        let trailingPad = 12 + winInsets.right
+        let maxLeft = -(geo.size.width - tileW - 24 - winInsets.left - winInsets.right)
+        let maxUp = -max(0, geo.size.height - tileH - (landscape ? 76 : winInsets.top + 60) - bottomPad)
         // The bounds move when the chrome toggles — the tile grows and its home rises (his 544
         // report: park the card at the top by hand, tap the screen, and the grown card slid off the
         // top edge). Owner audit 2026-10-06 #18: so the stored thing is the CORNER, and the offset is
@@ -699,7 +735,7 @@ struct CallView: View {
         // went off, which left an empty corner and — because the tile is also the tap target for the
         // swap — took the only way back with it. Now it stays, holding that person's photo instead of
         // their video, exactly like FaceTime.
-        let visible = feeds.showsTile
+        let visible = dualWatch ? (feeds.showsTile && pipTrack != nil) : feeds.showsTile
         return Group {
             if visible {
                 ZStack(alignment: .topTrailing) {
@@ -719,7 +755,7 @@ struct CallView: View {
                         .overlay(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous)
                             .stroke(.white.opacity(tileEntering ? 0 : 0.25), lineWidth: 1))
                     // The flip glyph belongs to a LIVE local camera only — and never to the hand-off.
-                    if pipIsLocal, pipTrack != nil, !tileEntering, !call.screenSharing {
+                    if pipIsLocal, pipTrack != nil, !tileEntering, !myScreenOnCamera {
                         Button { flipCamera() } label: {
                             Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
@@ -751,7 +787,9 @@ struct CallView: View {
                     // any swap can always be undone by tapping it again.
                     guard feeds.showsTile else { toggleControls(); return }
                     // No swap while my screen is shared: my feed is the screen (see showLocalFull).
-                    guard !call.screenSharing else { showControls(); return }
+                    guard !myScreenOnCamera else { showControls(); return }
+                    // Their camera beside their shared screen: the screen keeps the big view.
+                    guard !dualWatch else { showControls(); return }
                     // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
                     // (chrome hidden) only grows it — same result as tapping the screen. Only a tap
                     // on the already-grown tile swaps fullscreen. Small → bigger → fullscreen.
@@ -761,7 +799,7 @@ struct CallView: View {
                     withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
                 }
                 .padding(.bottom, tileEntering ? 0 : bottomPad)
-                .padding(.trailing, tileEntering ? 0 : 12)
+                .padding(.trailing, tileEntering ? 0 : trailingPad)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 // Size and home both move when the chrome toggles — one spring for the whole relayout.
                 .animation(.spring(duration: 0.4), value: controlsVisible)
@@ -778,7 +816,7 @@ struct CallView: View {
         // animates. Voice calls and re-appearances (minimize/restore) don't qualify: the guard keys on
         // the tile NEWLY appearing while the call is video and the local feed is not user-expanded.
         .onChange(of: visible) { was, shows in
-            guard shows, !was, call.isVideo, !isLocalExpanded else { return }
+            guard shows, !was, call.isVideo, !isLocalExpanded, !watchingDual else { return }
             // M-056: only the first connect of a call that was showing my live camera full screen.
             // Round 2 (verify V3 N4), 2026-10-07: the flag is SPENT at the first tile appearance
             // whatever happens next. Checked together with `cameraOn`, a camera turned off while
@@ -800,13 +838,14 @@ struct CallView: View {
     // dark card when it is not.
     @ViewBuilder
     private func tileContent(track: RTCVideoTrack?, isLocal: Bool, feeds: CallService.PiPFeeds) -> some View {
-        if isLocal && call.screenSharing {
+        if isLocal && myScreenOnCamera {
             // My own live screen is never drawn back to me (2026-10-08): a calm card says it is on.
+            // Dual mode never gets here: my tile is my camera and "Sharing" lives in the Stop pill.
             ScreenSharingCard(compact: !controlsVisible)
         } else if let track {
             VideoRendererView(track: track,
-                              mirror: isLocal && call.usingFrontCamera && !call.screenSharing,
-                              fit: !isLocal && call.remoteScreenSharing)
+                              mirror: isLocal && call.usingFrontCamera && !myScreenOnCamera,
+                              fit: !isLocal && theirScreenOnCamera)
         } else {
             ZStack {
                 Color.black
@@ -825,9 +864,10 @@ struct CallView: View {
     /// Audit M-052, 2026-10-07: the camera button worked only in `.active`, so during "Reconnecting…"
     /// (and while a video call rang out) there was no way to turn the camera OFF. Now: on or off while
     /// connected or reconnecting, and off (never on) while still ringing out. The service applies the
-    /// same rule in `setMyCamera`. Still dimmed while my screen is shared (the share owns the video).
+    /// same rule in `setMyCamera`. Dimmed while my screen is shared only in a fallback share (the
+    /// share owns my one video track); in dual mode the camera works beside the share.
     private var cameraButtonEnabled: Bool {
-        guard !call.screenSharing else { return false }
+        guard !call.screenSharing || call.canUseCameraWhileSharing else { return false }
         switch call.state {
         case .active, .reconnecting: return true
         case .outgoing:              return call.cameraOn
@@ -912,7 +952,7 @@ struct CallView: View {
                 .disabled(!cameraButtonEnabled)
                 .opacity(cameraButtonEnabled ? 1 : 0.4)
             // Flip front/back only while my camera is on (and actually showing, not a shared screen).
-            if call.cameraOn && !call.screenSharing {
+            if call.cameraOn && !myScreenOnCamera {
                 callCircle("arrow.triangle.2.circlepath", active: false, label: "Flip camera") { flipCamera() }
             }
             speakerCircle
@@ -1845,14 +1885,15 @@ struct FloatingCallWindow: View {
         // call screen and the system PiP (owner's 2026-08-12 rule — the tile's home is the bottom).
         return ZStack(alignment: .bottomTrailing) {
             Color.black
-            if call.screenSharing, let big = feeds.big, big === call.localVideoTrack {
+            if call.screenSharing, !call.canUseCameraWhileSharing, let big = feeds.big, big === call.localVideoTrack {
                 // My shared screen is never drawn back to me, here either (2026-10-08).
                 ScreenSharingCard(compact: true)
                     .frame(width: w, height: h)
             } else if let big = feeds.big {
                 VideoRendererView(track: big,
-                                  mirror: feeds.mirrorBig && !call.screenSharing,
-                                  fit: call.remoteScreenSharing && big === call.remoteVideoTrack)
+                                  mirror: feeds.mirrorBig && !(call.screenSharing && !call.canUseCameraWhileSharing),
+                                  fit: call.remoteScreenSharing && call.remoteScreenMode != "track"
+                                       && big === call.remoteVideoTrack)
                     .frame(width: w, height: h)
                     .clipped()
             } else {
@@ -1864,12 +1905,13 @@ struct FloatingCallWindow: View {
             if feeds.showsTile {
                 let tw = w * 0.34
                 Group {
-                    if call.screenSharing, let tile = feeds.tile, tile === call.localVideoTrack {
+                    if call.screenSharing, !call.canUseCameraWhileSharing, let tile = feeds.tile, tile === call.localVideoTrack {
                         ScreenSharingCard(compact: true)
                     } else if let tile = feeds.tile {
                         VideoRendererView(track: tile,
-                                          mirror: feeds.mirrorTile && !call.screenSharing,
-                                          fit: call.remoteScreenSharing && tile === call.remoteVideoTrack)
+                                          mirror: feeds.mirrorTile && !(call.screenSharing && !call.canUseCameraWhileSharing),
+                                          fit: call.remoteScreenSharing && call.remoteScreenMode != "track"
+                                               && tile === call.remoteVideoTrack)
                     } else {
                         ZStack {
                             Color.black

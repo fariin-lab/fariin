@@ -3,9 +3,9 @@ import Foundation
 import QuartzCore
 import WebRTC
 
-/// Feeds screen frames from the broadcast extension into the 1:1 call's EXISTING video source, in
-/// place of the camera capturer. Same source, same track, same sender: no renegotiation, and the
-/// other side keeps its one remote video view.
+/// Feeds screen frames from the broadcast extension into a GIVEN video source. CallService picks the
+/// source: the camera's own source in fallback mode (screen replaces camera, same sender), or a
+/// dedicated screen source on the second video transceiver in dual mode (camera keeps running).
 ///
 /// Frames pushed before `setLive(true)` are only remembered, so the camera capturer can finish
 /// stopping first and the share's first frame is then sent at once (no black gap, no camera frame
@@ -15,9 +15,9 @@ import WebRTC
 ///
 /// All state lives on one serial queue; `push`, `setLive` and `stop` may be called from any thread.
 final class ScreenShareCapturer: RTCVideoCapturer {
-    /// Ceiling on frames handed to WebRTC. The receive loop already throttles to the tier's rate
-    /// before it decodes; this is the backstop, a little looser (x0.75 of the frame time) so decode
-    /// jitter there does not halve the rate. Follows the share's quality tier (`setMaxFramerate`).
+    /// Ceiling on frames handed to WebRTC. The session's timer already reads at the tier's rate; this
+    /// is the backstop, a little looser (x0.75 of the frame time) so timer jitter does not halve the
+    /// rate. Follows the share's quality tier (`setMaxFramerate`).
     private static func pushInterval(fps: Int) -> CFTimeInterval { 0.75 / Double(max(1, fps)) }
     /// Re-send the last frame when the screen has been static this long.
     private static let repeatInterval: CFTimeInterval = 1.0
@@ -26,13 +26,18 @@ final class ScreenShareCapturer: RTCVideoCapturer {
     private var lastBuffer: RTCCVPixelBuffer?
     private var lastRotation: RTCVideoRotation = ._0
     private var lastPushAt: CFTimeInterval = 0
-    private var minPushInterval: CFTimeInterval = ScreenShareCapturer.pushInterval(fps: 20)
+    private var lastStampNs: Int64 = 0
+    private var minPushInterval: CFTimeInterval = ScreenShareCapturer.pushInterval(fps: 30)
     private var live = false
     private var stopped = false
     private var repeatTimer: DispatchSourceTimer?
 
-    /// ReplayKit orientation, already turned into degrees by the extension: up 0, left 90,
-    /// down 180, right 270, anything else (the mirrored ones) 0.
+    /// Pushes into `source` (an RTCVideoSource is the capturer's delegate). Same as `init(delegate:)`.
+    convenience init(source: RTCVideoSource) {
+        self.init(delegate: source)
+    }
+
+    /// Clockwise rotation in degrees (0, 90, 180, 270) to WebRTC's rotation. Anything else is 0.
     static func rotation(degrees: Int) -> RTCVideoRotation {
         switch degrees {
         case 90: return ._90
@@ -42,7 +47,8 @@ final class ScreenShareCapturer: RTCVideoCapturer {
         }
     }
 
-    /// A decoded screen frame. Kept as "the last frame" always; sent only while live.
+    /// A screen frame. Kept as "the last frame" always; sent only while live. The buffer must not be
+    /// written to afterwards (the session hands over a fresh pool buffer each time).
     func push(_ pixelBuffer: CVPixelBuffer, rotationDegrees: Int) {
         let buffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
         let rotation = Self.rotation(degrees: rotationDegrees)
@@ -112,9 +118,12 @@ final class ScreenShareCapturer: RTCVideoCapturer {
 
     private func emit(_ buffer: RTCCVPixelBuffer, rotation: RTCVideoRotation, at now: CFTimeInterval) {
         lastPushAt = now
-        // Wall-clock stamp, not the capture time: a repeated frame must carry a NEW timestamp or the
-        // encoder drops it as a duplicate.
-        let frame = RTCVideoFrame(buffer: buffer, rotation: rotation, timeStampNs: Int64(now * 1_000_000_000))
+        // Host-clock stamp at send time, always increasing: a repeated frame must carry a NEW
+        // timestamp or the encoder drops it as a duplicate. The session delivers each frame within a
+        // timer tick of its capture, so this is within ~33 ms of the extension's capture time.
+        let stamp = max(Int64(now * 1_000_000_000), lastStampNs + 1)
+        lastStampNs = stamp
+        let frame = RTCVideoFrame(buffer: buffer, rotation: rotation, timeStampNs: stamp)
         delegate?.capturer(self, didCapture: frame)
     }
 }

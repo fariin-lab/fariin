@@ -23,6 +23,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
 
     private var voipRegistry: PKPushRegistry?
 
+    // Portrait everywhere, except the call screen showing the other person's shared screen
+    // (see OrientationLock).
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        MainActor.assumeIsolated { OrientationLock.mask }
+    }
+
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // Large PERSISTENT URLCache — this is the story viewer's cache tier (StoryUI's image loader +

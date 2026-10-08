@@ -1,59 +1,69 @@
-import Combine
 import CoreVideo
 import Foundation
-import QuartzCore
+import ImageIO
 
-/// ONE 1:1 screen share's link to the broadcast extension: the socket listener, the extension's
-/// started/stopped notifications, the frame-rate gate and the JPEG decode. CallService owns the call
-/// side (camera, sender, signalling); this owns the extension side.
+/// ONE 1:1 screen share's link to the broadcast extension (screen share v3, 2026-10-08): the shared
+/// memory reader, the extension's started/stopped notifications and both liveness rules. CallService
+/// owns the call side (sources, senders, signalling); this owns the extension side.
 ///
-/// The socket is listened on ONLY while a 1:1 share is wanted. A group call's LiveKit room listens
-/// on the same path while it shares, so the two must never overlap (CallService refuses to start
-/// this during a group call).
+/// The extension writes NV12 frames into a memory-mapped double buffer in the App Group
+/// (`ScreenShareIPC.VideoChannel`, seqlock). A timer on our own serial queue polls it at the
+/// quality tier's frame rate, copies a new frame into a pool buffer and hands it to `onFrame`. No
+/// socket, no JPEG, no decode. The still-screen once-a-second repeat lives in ScreenShareCapturer.
 ///
-/// Threading: `start`, `stop`, `onStarted` and `onEnded` are main-queue. `onFrame` is called on the
-/// receive task's thread.
+/// Liveness, both ways (the reference app's rule): we stamp `appAliveNs` every second while the
+/// share is wanted, and the extension finishes itself when that goes 4 s stale. The extension stamps
+/// its keepalive every 0.5 s, frames or not, and a keepalive older than 2 s once it has started
+/// means it is gone (killed, crashed, ended without its notification).
+///
+/// Threading: `start`, `stop`, `checkLiveness`, `onStarted`, `onFirstFrame` and `onEnded` are
+/// main-queue. `onFrame` is called on the session's reader queue.
 final class ScreenShareSession {
-    /// The extension's frames are cut to the quality tier's rate BEFORE decoding (the decode is the
-    /// expensive part, and a frame the encoder will drop is not worth decoding). 0.9 of the frame
-    /// time, so arrival jitter does not halve 15 fps to 7.5 (15 fps -> 0.06 s, the old fixed gate).
-    private static func frameInterval(fps: Int) -> CFTimeInterval { 0.9 / Double(max(1, fps)) }
-    /// How often a running share checks that the extension's socket is still there.
+    /// Write `appAliveNs` this often (the extension gives up after 4 s).
+    private static let appAliveIntervalNs: UInt64 = 1_000_000_000
+    /// How often a running share checks the extension's keepalive from the main queue.
     private static let livenessInterval: TimeInterval = 2
-    /// "Started" was posted but no frame followed: the extension could not reach us (App Group not
-    /// provisioned on one side, or it died at once). Give up instead of sharing nothing forever.
+    /// "Started" was posted but no frame followed: give up instead of sharing nothing forever.
     private static let firstFrameTimeout: TimeInterval = 10
 
     /// Main. The broadcast is really running: the first frame arrived or the extension said so.
     var onStarted: (() -> Void)?
-    /// Main. The first decoded frame went to `onFrame`: the share is really on the far side's screen.
+    /// Main. The first frame went to `onFrame`: the share is really on the far side's screen.
     var onFirstFrame: (() -> Void)?
     /// Main. The broadcast ended on the extension's side. Not called after `stop()`.
     var onEnded: ((EndReason) -> Void)?
 
     /// Why the extension's side ended, so the call screen can say something true about it.
     enum EndReason {
-        /// Socket closed, "stopped" posted, or a socket error: the red pill, Control Centre, the
-        /// extension killed for memory.
+        /// The extension posted "stopped": the red pill, Control Centre, its own error.
         case extensionEnded
+        /// The extension's keepalive went stale: killed for memory, crashed, or gone silently.
+        case extensionGone
         /// "Started" was posted and no frame followed in time.
         case noFirstFrame
     }
 
+    /// Frame in, clockwise rotation in degrees (0, 90, 180, 270). Reader queue.
     private let onFrame: (CVPixelBuffer, Int) -> Void
-    private var task: Task<Void, Never>?
-    private var notes = Set<AnyCancellable>()
-    private let lock = NSLock()
-    private var receiver: KSBroadcastReceiver?   // under `lock`
-    private var cancelled = false                // under `lock`, mirrors `finished` for the task
-    // M-105, the frame-rate gate, shared by the receive loop and the delayed flush.
-    private let gateLock = NSLock()
-    private var lastAccepted: CFTimeInterval = 0 // under `gateLock`
-    private var minFrameInterval: CFTimeInterval = ScreenShareSession.frameInterval(fps: 15)   // under `gateLock`
-    private var pendingImage: KSBroadcastReceiver.EncodedImage?   // under `gateLock`
-    private let deliverLock = NSLock()           // one decode / onFrame at a time
+    private let queue = DispatchQueue(label: "kulan.screenshare.reader", qos: .userInitiated)
+
+    // Reader queue only.
+    private var video: ScreenShareIPC.VideoChannel?
+    private var control: ScreenShareIPC.Control?
+    private var timer: DispatchSourceTimer?
+    private var fps = 30
+    private var lastSeq: UInt64 = 0
+    private var lastAliveWriteNs: UInt64 = 0
+    private var pool: CVPixelBufferPool?
+    private var poolWidth = 0
+    private var poolHeight = 0
+    private var poolFullRange = false
+    private var readerStopped = false
+
     // Main only.
+    private var observers: [ScreenShareIPC.DarwinObserver] = []
     private var finished = false
+    private var started = false
     private var startedFired = false
     private var gotFrame = false
     private var livenessTimer: Timer?
@@ -62,123 +72,147 @@ final class ScreenShareSession {
         self.onFrame = onFrame
     }
 
-    /// Begins listening. False when the App Group container is unavailable (not provisioned), in
-    /// which case nothing was started.
+    /// Maps the shared files and begins polling. False when the App Group container is unavailable
+    /// (not provisioned), in which case nothing was started. Main.
     func start() -> Bool {
-        guard task == nil, !finished, let path = KSSocketPath.broadcast else { return false }
-        // Straight .sink, as LiveKit uses it: the Darwin publisher ignores demand, so no operator
-        // sits in between. The hop to main is explicit.
-        let center = KSDarwinNotificationCenter.shared
-        center.publisher(for: .broadcastStarted)
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.extensionSaidStarted() } }
-            .store(in: &notes)
-        center.publisher(for: .broadcastStopped)
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.finish(.extensionEnded) } }
-            .store(in: &notes)
-        task = Task.detached(priority: .userInitiated) { [weak self] in
-            await self?.receiveLoop(path)
+        guard !finished, observers.isEmpty,
+              let video = ScreenShareIPC.VideoChannel(),
+              let control = ScreenShareIPC.Control() else { return false }
+        // Clears a stale stop from the last share and stamps alive BEFORE the picker shows, so the
+        // extension never starts into "the call has ended".
+        control.markShareWanted()
+        observers = [
+            ScreenShareIPC.DarwinObserver(name: ScreenShareIPC.Notify.started) { [weak self] in
+                DispatchQueue.main.async { self?.extensionSaidStarted() }
+            },
+            ScreenShareIPC.DarwinObserver(name: ScreenShareIPC.Notify.stopped) { [weak self] in
+                DispatchQueue.main.async { self?.finish(.extensionEnded) }
+            },
+        ]
+        let baseline = video.seq   // the seq continues across broadcasts: old frames stay unread
+        queue.async { [weak self] in
+            guard let self, !self.readerStopped else { return }
+            self.video = video
+            self.control = control
+            self.lastSeq = baseline
+            self.lastAliveWriteNs = ScreenShareIPC.nowNs()
+            self.startTimer()
         }
+        NSLog("[ScreenShare] session: listening (seq %llu)", baseline)
         return true
     }
 
-    /// The quality tier's frame-rate ceiling. Any thread.
+    /// The quality tier's frame-rate ceiling: the poll rate. Any thread.
     func setMaxFramerate(_ fps: Int) {
-        let interval = Self.frameInterval(fps: fps)
-        gateLock.lock()
-        minFrameInterval = interval
-        gateLock.unlock()
+        let value = min(60, max(1, fps))
+        queue.async { [weak self] in
+            guard let self, self.fps != value else { return }
+            self.fps = value
+            if self.timer != nil { self.startTimer() }
+        }
     }
 
-    /// Main. Ends the share now if the extension's socket is gone without the read loop having said
-    /// so yet. Called on a timer while running, and by CallService on return to the foreground.
+    /// Main. Ends the share now if the extension's keepalive is stale. Called on a timer while
+    /// running, and by CallService on return to the foreground.
     ///
-    /// ⚠️ SILENCE ALONE NEVER ENDS A SHARE. ReplayKit sends nothing at all for a still screen, so a
-    /// share of a page someone is reading can go a minute without a frame and is perfectly healthy;
-    /// the capturer re-sends the last frame each second meanwhile, so the far side's picture stays
-    /// up. The socket is the truth (design note, 2026-10-07): the extension finishing, crashing or
-    /// being killed closes it.
+    /// ⚠️ A still screen is healthy: ReplayKit sends no frames for it, but the extension keeps
+    /// stamping its keepalive, so only a dead extension trips this.
     func checkLiveness() {
-        guard !finished, gotFrame else { return }
-        lock.lock()
-        let receiver = self.receiver
-        lock.unlock()
-        if receiver?.isClosed ?? true { finish(.extensionEnded) }
+        guard !finished, started else { return }
+        queue.async { [weak self] in
+            guard let self, let video = self.video else { return }
+            let keepalive = video.keepaliveNs
+            let now = ScreenShareIPC.nowNs()
+            let stale = keepalive == 0 || (now > keepalive && now - keepalive > ScreenShareIPC.keepaliveTimeoutNs)
+            guard stale else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.finished else { return }
+                NSLog("[ScreenShare] session: extension keepalive stale")
+                self.finish(.extensionGone)
+            }
+        }
     }
 
-    /// Stops listening and closes the socket. Idempotent; `onEnded` is NOT called.
+    /// Asks the extension to finish (flag + notification) and stops reading. Idempotent; `onEnded`
+    /// is NOT called. Main.
     func stop() {
         guard !finished else { return }
         finished = true
-        tearDown()
+        tearDown(requestStop: true)
     }
 
-    // MARK: - Private
+    // MARK: - Reader queue
 
-    private func receiveLoop(_ path: KSSocketPath) async {
-        do {
-            let receiver = try await KSBroadcastReceiver(socketPath: path)
-            lock.lock()
-            let alreadyCancelled = cancelled
-            if !alreadyCancelled { self.receiver = receiver }
-            lock.unlock()
-            if alreadyCancelled { receiver.close(); return }
+    private func startTimer() {
+        timer?.cancel()
+        let interval = DispatchTimeInterval.nanoseconds(1_000_000_000 / fps)
+        let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        t.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(2))
+        t.setEventHandler { [weak self] in self?.tick() }
+        timer = t
+        t.resume()
+    }
 
-            let decoder = KSBroadcastImageDecoder()
-            while let image = try await receiver.nextImage() {
-                if Task.isCancelled { break }
-                // Audit M-105, 2026-10-07: a frame inside the 60ms gate used to be thrown away. When it
-                // was the LAST change before the screen went still, nothing newer ever came (ReplayKit
-                // sends nothing for a static screen) and the far side kept the older picture for good,
-                // the capturer's once-a-second repeat re-sending that stale frame. The newest gated
-                // frame is now kept and sent when the gate opens, still without decoding the skipped ones.
-                let now = CACurrentMediaTime()
-                gateLock.lock()
-                let wait = minFrameInterval - (now - lastAccepted)
-                if wait > 0 {
-                    let scheduleFlush = pendingImage == nil
-                    pendingImage = image
-                    gateLock.unlock()
-                    if scheduleFlush { flushPending(after: wait, decoder: decoder) }
-                    continue
-                }
-                lastAccepted = now
-                pendingImage = nil
-                gateLock.unlock()
-                deliver(image, decoder: decoder)
-            }
-        } catch {
-            // Cancelled by stop(), or the socket failed. Either way the share is over.
+    private func tick() {
+        guard !readerStopped, let video else { return }
+        let now = ScreenShareIPC.nowNs()
+        if now &- lastAliveWriteNs >= Self.appAliveIntervalNs {
+            control?.appAliveNs = now
+            lastAliveWriteNs = now
         }
-        DispatchQueue.main.async { [weak self] in self?.finish(.extensionEnded) }
-    }
-
-    /// M-105: decode and hand on one frame. Serialised, so the loop and a delayed flush never decode
-    /// at once (one decoder) and frames reach `onFrame` in order. Nothing goes out after `stop()`.
-    private func deliver(_ image: KSBroadcastReceiver.EncodedImage, decoder: KSBroadcastImageDecoder) {
-        deliverLock.lock()
-        defer { deliverLock.unlock() }
-        lock.lock()
-        let stopped = cancelled
-        lock.unlock()
-        guard !stopped, let buffer = try? decoder.decode(image.jpeg) else { return }
-        onFrame(buffer, image.rotation)
+        guard let frame = video.readFrame(newerThan: lastSeq, makeBuffer: { info in self.makeBuffer(info) }) else {
+            return
+        }
+        lastSeq = frame.0.seq
+        onFrame(frame.1, Self.degrees(orientation: frame.0.orientation))
         DispatchQueue.main.async { [weak self] in self?.frameArrived() }
     }
 
-    /// M-105: once the gate opens, send the newest frame that arrived while it was shut, unless the
-    /// loop has already sent a newer one (it clears `pendingImage` when it does).
-    private func flushPending(after wait: CFTimeInterval, decoder: KSBroadcastImageDecoder) {
-        Task.detached(priority: .userInitiated) { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(max(0, wait) * 1_000_000_000))
-            guard let self else { return }
-            self.gateLock.lock()
-            let image = self.pendingImage
-            self.pendingImage = nil
-            if image != nil { self.lastAccepted = CACurrentMediaTime() }
-            self.gateLock.unlock()
-            if let image { self.deliver(image, decoder: decoder) }
+    /// A fresh NV12 buffer of the frame's size and range, from a pool rebuilt when either changes.
+    private func makeBuffer(_ info: ScreenShareIPC.FrameInfo) -> CVPixelBuffer? {
+        if pool == nil || poolWidth != info.width || poolHeight != info.height || poolFullRange != info.fullRange {
+            pool = nil
+            let format = info.fullRange ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                        : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            let attrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: format,
+                kCVPixelBufferWidthKey as String: info.width,
+                kCVPixelBufferHeightKey as String: info.height,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+            ]
+            let poolAttrs: [String: Any] = [kCVPixelBufferPoolMinimumBufferCountKey as String: 3]
+            var created: CVPixelBufferPool?
+            guard CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary,
+                                          attrs as CFDictionary, &created) == kCVReturnSuccess,
+                  let created else {
+                NSLog("[ScreenShare] session: pool create failed %dx%d", info.width, info.height)
+                return nil
+            }
+            pool = created
+            poolWidth = info.width
+            poolHeight = info.height
+            poolFullRange = info.fullRange
+        }
+        guard let pool else { return nil }
+        var out: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out) == kCVReturnSuccess else {
+            return nil
+        }
+        return out
+    }
+
+    /// CGImagePropertyOrientation (from RPVideoSampleOrientationKey) to clockwise degrees. The
+    /// mirrored values never come from ReplayKit; they get their unmirrored rotation.
+    static func degrees(orientation raw: UInt32) -> Int {
+        switch CGImagePropertyOrientation(rawValue: raw) {
+        case .down?, .downMirrored?: return 180
+        case .left?, .leftMirrored?: return 90
+        case .right?, .rightMirrored?: return 270
+        default: return 0
         }
     }
+
+    // MARK: - Main
 
     private func frameArrived() {
         guard !finished else { return }
@@ -186,19 +220,13 @@ final class ScreenShareSession {
         // onStarted can stop us (a share that began into a held call): no timer for a dead session.
         guard !finished, !gotFrame else { return }
         gotFrame = true
-        startLivenessTimer()
+        NSLog("[ScreenShare] session: first frame")
         onFirstFrame?()
-    }
-
-    private func startLivenessTimer() {
-        livenessTimer?.invalidate()
-        livenessTimer = Timer.scheduledTimer(withTimeInterval: Self.livenessInterval, repeats: true) { [weak self] _ in
-            self?.checkLiveness()
-        }
     }
 
     private func extensionSaidStarted() {
         guard !finished else { return }
+        NSLog("[ScreenShare] session: extension started")
         fireStarted()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstFrameTimeout) { [weak self] in
             guard let self, !self.finished, !self.gotFrame else { return }
@@ -209,6 +237,11 @@ final class ScreenShareSession {
     private func fireStarted() {
         guard !startedFired else { return }
         startedFired = true
+        started = true
+        livenessTimer?.invalidate()
+        livenessTimer = Timer.scheduledTimer(withTimeInterval: Self.livenessInterval, repeats: true) { [weak self] _ in
+            self?.checkLiveness()
+        }
         onStarted?()
     }
 
@@ -216,20 +249,24 @@ final class ScreenShareSession {
     private func finish(_ reason: EndReason) {
         guard !finished else { return }
         finished = true
-        tearDown()
+        NSLog("[ScreenShare] session: ended (%@)", String(describing: reason))
+        // Ask anyway: a stale keepalive may be a stuck extension, and a stop costs nothing.
+        tearDown(requestStop: reason != .extensionEnded)
         onEnded?(reason)
     }
 
-    private func tearDown() {
+    private func tearDown(requestStop: Bool) {
         livenessTimer?.invalidate(); livenessTimer = nil
-        notes.removeAll()
-        task?.cancel()
-        task = nil
-        lock.lock()
-        cancelled = true
-        let receiver = self.receiver
-        self.receiver = nil
-        lock.unlock()
-        receiver?.close()
+        observers.removeAll()
+        // Strong on purpose: CallService drops the session right after stop(), and the stop request
+        // to the extension must still go out.
+        queue.async {
+            self.readerStopped = true
+            self.timer?.cancel(); self.timer = nil
+            if requestStop { self.control?.requestStop() }
+            self.control = nil
+            self.video = nil
+            self.pool = nil
+        }
     }
 }

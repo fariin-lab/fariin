@@ -55,7 +55,7 @@ final class ScreenShareStageUIView: UIView, UIScrollViewDelegate, RTCVideoViewDe
 
     private var videoSize: CGSize = .zero
     private var lastFitBounds: CGSize = .zero
-    private var lastFitVideo: CGSize = .zero
+    private var lastFitAspect: CGFloat = 0
     private var boundTrack: RTCVideoTrack?
     private var backdropAttached = false
 
@@ -187,29 +187,64 @@ final class ScreenShareStageUIView: UIView, UIScrollViewDelegate, RTCVideoViewDe
         return CGSize(width: (videoSize.width * scale).rounded(), height: (videoSize.height * scale).rounded())
     }
 
-    private func refitIfNeeded() {
-        guard bounds.size != lastFitBounds || videoSize != lastFitVideo else { return }
-        let fitted = fittedSize()
-        let wasZoomed = scrollView.zoomScale > 1.001
-        lastFitBounds = bounds.size
-        lastFitVideo = videoSize
+    private func aspect(_ s: CGSize) -> CGFloat {
+        s.width > 0 && s.height > 0 ? s.width / s.height : 0
+    }
 
-        let apply = {
-            self.scrollView.zoomScale = 1
-            self.container.frame = CGRect(origin: .zero, size: fitted)
-            self.video.frame = self.container.bounds
-            self.scrollView.contentSize = fitted
-            self.centerContent()
-            // At rest the picture sits in the middle: the offset that shows the centring inset.
-            let inset = self.scrollView.contentInset
-            self.scrollView.contentOffset = CGPoint(x: -inset.left, y: -inset.top)
+    // Three different changes, three different answers:
+    //  - the view turned (phone rotated to/from landscape), same picture: refit at the same zoom.
+    //    This runs inside the rotation's own animation, so the picture turns with the screen.
+    //  - the picture's SIZE changed but not its shape (the sender's quality tier stepped): nothing
+    //    to do, the fitted rect is the same and the zoom stays.
+    //  - the picture's SHAPE changed (the sender turned their phone, or switched app): drop the zoom
+    //    and slide to the new fit in a short move, no fade.
+    private func refitIfNeeded() {
+        let newAspect = aspect(videoSize)
+        let oldAspect = lastFitAspect
+        let aspectChanged = abs(newAspect - oldAspect) > 0.01
+        let oldBounds = lastFitBounds
+        guard bounds.size != oldBounds || aspectChanged else { return }
+        lastFitBounds = bounds.size
+        lastFitAspect = newAspect
+        let fitted = fittedSize()
+        let zoom = scrollView.zoomScale
+
+        if aspectChanged || zoom <= 1.001 || oldBounds == .zero {
+            let apply = {
+                self.scrollView.zoomScale = 1
+                self.container.frame = CGRect(origin: .zero, size: fitted)
+                self.video.frame = self.container.bounds
+                self.scrollView.contentSize = fitted
+                self.centerContent()
+                // At rest the picture sits in the middle: the offset that shows the centring inset.
+                let inset = self.scrollView.contentInset
+                self.scrollView.contentOffset = CGPoint(x: -inset.left, y: -inset.top)
+            }
+            if aspectChanged, oldAspect > 0, newAspect > 0 {
+                UIView.animate(withDuration: 0.22, delay: 0,
+                               options: [.curveEaseInOut, .beginFromCurrentState], animations: apply)
+            } else {
+                apply()
+            }
+            return
         }
-        // The aspect or the bounds changed (sharer rotated / switched app): drop the zoom, re-fit.
-        if wasZoomed {
-            UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseInOut], animations: apply)
-        } else {
-            apply()
-        }
+
+        // Turned while zoomed in: keep the zoom and keep the same spot of their screen in the middle.
+        let zoomed = container.frame.size
+        let fx = zoomed.width > 0 ? (scrollView.contentOffset.x + oldBounds.width / 2) / zoomed.width : 0.5
+        let fy = zoomed.height > 0 ? (scrollView.contentOffset.y + oldBounds.height / 2) / zoomed.height : 0.5
+        scrollView.zoomScale = 1
+        container.frame = CGRect(origin: .zero, size: fitted)
+        video.frame = container.bounds
+        scrollView.contentSize = fitted
+        scrollView.zoomScale = zoom
+        centerContent()
+        let z = container.frame.size
+        let inset = scrollView.contentInset
+        let w = scrollView.bounds.width, h = scrollView.bounds.height
+        let x = min(max(fx * z.width - w / 2, -inset.left), max(-inset.left, z.width - w + inset.right))
+        let y = min(max(fy * z.height - h / 2, -inset.top), max(-inset.top, z.height - h + inset.bottom))
+        scrollView.contentOffset = CGPoint(x: x, y: y)
     }
 
     private func centerContent() {
