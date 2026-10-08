@@ -1896,14 +1896,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// that — `continuityDelta` finds nothing, returns a delta of zero, and the reader jumps by
     /// whatever moved above them. A viewport holds a dozen or so rows, so the cap bought nothing.
     /// (Their third tier, any row in the window, is still not implemented here.)
+    ///
+    /// ⛔ INSIDE THE LANDING HOLD THE RESTORED ROW IS ASKED FIRST — owner, builds 842/843, the reopen
+    /// jump. A restored position is TOP-relative (`reportReadingPosition`: the top-most row and its
+    /// distance below the top edge), while every mover here is bottom-biased. So when a visible row
+    /// under the restored one took its real height during the open (a cold `RenderedHeightStore`
+    /// after launch, a changed signature from the first server window), the bottom row was held and
+    /// the restored row slid by the growth: inside `adoptHeight` for good, and in the apply only until
+    /// its completion re-landed it, a frame after the screen had drawn. The reference app's continuity
+    /// takes a preferred row before the visible list; while a restore is being held, that row is the
+    /// one the reader was put on, so the correction lands in the same layout transaction.
     private func continuityAnchors(relativeToTop: Bool) -> [Anchor] {
         let visible = viewportIndexPaths()
         let ordered: [IndexPath] = relativeToTop ? visible : Array(visible.reversed())
-        return ordered.compactMap { ip -> Anchor? in
+        var anchors = ordered.compactMap { ip -> Anchor? in
             guard let id = dataSource.itemIdentifier(for: ip),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
             return Anchor(id: id, distanceFromOrigin: attr.frame.minY - collectionView.contentOffset.y)
         }
+        if didFirstLand, Date() < landingHoldUntil, landedTarget?.offset != nil,
+           let restored = landedTarget?.id,
+           let i = anchors.firstIndex(where: { $0.id == restored }) {
+            anchors.insert(anchors.remove(at: i), at: 0)
+        }
+        return anchors
     }
 
     /// ⛔ THE FIRST ANCHOR THAT SURVIVED THE CHANGE, NOT THE FIRST ANCHOR — the reference app's
@@ -4751,7 +4767,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // app able to notice, because the two other correctors only speak for a reader at or beyond
         // the newest message. So the one moment we know we stood down while the ground moved is the
         // moment to put the reader back where they were.
-        restoreRecordedDistance()
+        // ⛔ NOT ON THE OPEN ITSELF (owner, builds 842/843, the reopen jump). The distance is recorded
+        // at the land and not again when a row below the reader takes its real height, so on the
+        // first appearance `maxContentOffsetY - distance` moved a just-restored reader by that growth,
+        // with no hold behind it. Inside the hold the landing is the position; the distance is only
+        // for coming back from a pushed screen.
+        if reassertLandingIfHeld() { anchorOnDisappear = nil } else { restoreRecordedDistance() }
         // Swiping back with the KEYBOARD UP: dismiss the keyboard the moment the pop gesture begins, so the
         // transition runs against a settled layout instead of fighting a live keyboard teardown.
         if !popGestureHooked, let pop = navigationController?.interactivePopGestureRecognizer {
