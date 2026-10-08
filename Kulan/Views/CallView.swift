@@ -50,6 +50,12 @@ struct CallView: View {
     /// by the hand-off. Without it the hand-off also ran when the OTHER camera came on mid-call (the
     /// tile newly appears then too), and blew my avatar or my black tile up over their new video.
     @State private var ringingPreviewShown = false
+    /// Screen share, 2026-10-08: the one small pill under the header ("Ana is sharing their screen",
+    /// or a share notice from CallService). `topPillDone` runs when it leaves or is replaced, so a
+    /// notice is always cleared even when a newer pill cuts it short.
+    @State private var topPill: String?
+    @State private var topPillTask: DispatchWorkItem?
+    @State private var topPillDone: (() -> Void)?
 
     // MARK: - Auto-hiding controls (the standard video-call behaviour)
 
@@ -101,6 +107,46 @@ struct CallView: View {
         } else {
             showControls()
         }
+    }
+
+    // Screen share viewer, 2026-10-08: a single tap on their shared screen sends the chrome (header,
+    // bar, corner tile) away for a clean view and brings it back. Only while they are sharing; on
+    // any other screen this does nothing, and the normal show/hide above stays in charge.
+    private func toggleChrome() {
+        guard call.remoteScreenSharing, !UIAccessibility.isVoiceOverRunning else { return }
+        if controlsVisible {
+            hideTask?.cancel()
+            withAnimation(.easeInOut(duration: 0.25)) { controlsVisible = false }
+        } else {
+            withAnimation(.easeInOut(duration: 0.25)) { controlsVisible = true }
+            armAutoHide()
+        }
+    }
+
+    /// Shows `text` in the top pill for `seconds`, then fades it (0.3s) and runs `done`.
+    private func showTopPill(_ text: String, for seconds: TimeInterval, done: (() -> Void)? = nil) {
+        topPillTask?.cancel()
+        topPillDone?()
+        topPillDone = done
+        withAnimation(.easeInOut(duration: 0.3)) { topPill = text }
+        let work = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.3)) { topPill = nil }
+            topPillDone?()
+            topPillDone = nil
+        }
+        topPillTask = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func showShareNotice(_ notice: String?) {
+        guard let notice else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        showTopPill(notice, for: 2.5) { call.clearScreenShareNotice() }
+    }
+
+    private var otherFirstName: String {
+        let first = call.otherName.split(separator: " ").first.map(String.init) ?? ""
+        return first.isEmpty ? call.otherName : first
     }
 
     // The switch's OUT half. The return half lives in .onChange(of: call.cameraSwitchFlip): it runs
@@ -221,9 +267,11 @@ struct CallView: View {
                 // Tap anywhere that is not a button or the tile to show/hide the controls. It sits
                 // ABOVE the video and BELOW everything interactive, so the buttons and the corner tile
                 // keep their own taps.
+                // Off while their screen is on stage: the stage takes its own taps, pinches and pans.
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { toggleControls() }
+                    .allowsHitTesting(!stageShown)
                 // zIndex: the video card is the TOP layer, always (owner's side-by-side reference,
                 // 2026-08-12: on a voice call that turns on a camera, ours slid UNDER the avatar
                 // circle; the standard is avatar behind, card in front). The card's drag bounds
@@ -272,10 +320,46 @@ struct CallView: View {
                         .accessibilityHidden(!controlsVisible)   // #19, as the top bar
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the screen (never collapse/offset)
+
+                // Screen share, 2026-10-08: the small pill under the header. Its own layer, so it
+                // never pushes the avatar or the bar around, and it stays when the chrome is away.
+                VStack {
+                    if let topPill {
+                        Text(topPill)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .padding(.horizontal, 14)
+                            .frame(height: 32)
+                            .liquidGlass(Capsule(), interactive: false)
+                            .transition(.opacity)
+                    }
+                    Spacer()
+                }
+                .padding(.top, winInsets.top + 96)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+                .zIndex(3)
+
+                // The sharer's one control, centred just above the bar and not part of it.
+                VStack(spacing: 6) {
+                    Spacer()
+                    sharePill
+                }
+                .padding(.bottom, sharePillBottom)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: call.screenSharePhase)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: call.screenShareLink)
+                .animation(.easeInOut(duration: 0.25), value: controlsVisible)
+                .zIndex(3)
             }
             .onReceive(ticker) { now = $0 }
             .onAppear { armAutoHide() }
-            .onDisappear { hideTask?.cancel() }
+            .onDisappear {
+                hideTask?.cancel()
+                topPillTask?.cancel()
+                topPillDone?(); topPillDone = nil   // a notice cut short is still cleared
+            }
             // ⛔ ALWAYS DARK (owner, 2026-08-20). A call is a dark screen whatever the phone is set
             // to — the controls, the name and the glass circles are all drawn for a dark ground, and
             // on a light phone the system-coloured pieces among them came out light on black.
@@ -292,6 +376,21 @@ struct CallView: View {
             }
             .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
             .onChange(of: call.isVideo) { _, _ in showControls() }
+            // Screen share, 2026-10-08. My share going live: my feed leaves the big view (it would be
+            // a picture of this very screen), so a swap I had made is undone.
+            .onChange(of: call.screenSharing) { _, live in
+                if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
+                showControls()
+            }
+            // Their share starting or ending brings the chrome back; it never stays hidden after.
+            .onChange(of: call.remoteScreenSharing) { _, _ in showControls() }
+            // A NEW share from them: say who it is, once, then get off the picture.
+            .onChange(of: call.remoteScreenSharingSince) { _, since in
+                guard since != nil else { return }
+                showTopPill("\(otherFirstName) is sharing their screen", for: 3)
+            }
+            .onChange(of: call.screenShareNotice) { _, notice in showShareNotice(notice) }
+            .onAppear { showShareNotice(call.screenShareNotice) }
             // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
             // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
             .onChange(of: showAddPeople) { _, up in
@@ -354,8 +453,14 @@ struct CallView: View {
     // call is CONNECTED and their camera is off, THEY own the big view (avatar) and I go to the PiP —
     // my video never fills the screen just because they turned their camera off (they'd "vanish").
     private var connectedCall: Bool { call.state == .active || call.state == .reconnecting }
+    // Never while my screen is shared (2026-10-08): my feed is then the screen itself, and drawing it
+    // here was a picture of the call inside the call. The big view stays theirs, as without a share.
     private var showLocalFull: Bool {
-        call.isVideo && (isLocalExpanded || (!hasRemote && !connectedCall))
+        call.isVideo && !call.screenSharing && (isLocalExpanded || (!hasRemote && !connectedCall))
+    }
+    /// Their shared screen owns the big view, on the zoomable stage instead of the plain renderer.
+    private var stageShown: Bool {
+        !showLocalFull && call.remoteScreenSharing && call.remoteVideoTrack != nil
     }
     // Avatar fills the big view whenever there is no remote video to show (voice call, or their
     // camera is off mid-call) and I haven't swapped my own feed fullscreen.
@@ -363,8 +468,9 @@ struct CallView: View {
     // that you can swap your own switched-off camera up there. It used to hard-return false for
     // `isLocalExpanded`, which left that case as a black screen.
     private var showAvatar: Bool {
+        if stageShown { return false }
         if !call.isVideo { return true }
-        if showLocalFull { return !(call.cameraOn || call.screenSharing) }   // my feed owns the big view
+        if showLocalFull { return !call.cameraOn }   // my feed owns the big view
         return !hasRemote
     }
 
@@ -376,7 +482,7 @@ struct CallView: View {
         // Only show a fullscreen feed that is ACTUALLY LIVE. Otherwise hide the renderer (opacity 0) so
         // the shared Metal view doesn't keep its last frame on screen — that stale frame was YOUR frozen
         // ringing-preview showing as the background behind the avatar when the other camera is off.
-        let canShow = full != nil && (showLocalFull ? (call.cameraOn || call.screenSharing) : hasRemote)
+        let canShow = full != nil && !stageShown && (showLocalFull ? call.cameraOn : hasRemote)
         // STABILITY (LiveKit pattern): never swap view-tree branches. The gradient/avatar-blur is
         // a permanent base, and ONE Metal renderer stays mounted on top for the whole video call —
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
@@ -394,8 +500,9 @@ struct CallView: View {
             (call.isVideo ? Color.black : (shownPalette.map { Color($0.page) } ?? Color.black))
                 .animation(.easeOut(duration: 0.35), value: shownPalette?.key)
             if call.isVideo {
-                // A shared screen is never mirrored (mine) and never cropped (theirs: shown whole).
-                VideoRendererView(track: full,
+                // Their shared screen goes to the stage below, so this renderer lets go of the track
+                // meanwhile (two renderers on one track would draw it twice).
+                VideoRendererView(track: stageShown ? nil : full,
                                   mirror: showLocalFull && call.usingFrontCamera && !call.screenSharing,
                                   fit: !showLocalFull && call.remoteScreenSharing)
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
@@ -408,7 +515,16 @@ struct CallView: View {
                     .opacity(canShow ? 1 : 0)
                     .animation(.easeInOut(duration: 0.2), value: canShow)
             }
+            // Screen share viewer, 2026-10-08: their screen whole, with pinch/pan/double-tap zoom, and
+            // nothing over it but the chrome. A single tap sends the chrome away and back.
+            if stageShown {
+                ScreenShareStageView(track: call.remoteVideoTrack, onSingleTap: { toggleChrome() })
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: stageShown)
         .frame(width: geo.size.width, height: geo.size.height)
         .clipped()
         .ignoresSafeArea()
@@ -472,13 +588,16 @@ struct CallView: View {
                 }
                 // Same rule as Add people: a call that has not connected has nobody to show it to.
                 // Starting opens the system's broadcast sheet; its countdown is the consent.
-                Button { call.toggleScreenShare() } label: {
-                    Label(call.screenSharing ? "Stop Sharing" : "Share Screen",
-                          systemImage: call.screenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                let sharingOn = call.screenSharePhase != .off
+                Button {
+                    if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
+                } label: {
+                    Label(sharingOn ? "Stop Sharing" : "Share Screen",
+                          systemImage: sharingOn ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
                 }
                 // Audit M-165, 2026-10-07: STOPPING is never disabled. During "Reconnecting…" the
                 // rule above greyed out Stop Sharing too, and the share could not be ended from here.
-                .disabled(!call.screenSharing && !(call.state == .active && call.connectedDate != nil))
+                .disabled(!sharingOn && !(call.state == .active && call.connectedDate != nil))
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -491,6 +610,8 @@ struct CallView: View {
             LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
+                // Never dim a shared screen (owner, 2026-10-08): it has to read exactly as sent.
+                .opacity(stageShown ? 0 : 1)
         )
     }
 
@@ -554,13 +675,18 @@ struct CallView: View {
         // too. The rule there is a square bounding box — 240pt with chrome, 140pt without — with
         // the camera's own aspect fitted inside; for our 9:16 portrait feed that is 135×240 and
         // 79×140 (the old fixed 104×150 was a squashed crop).
-        let tileW: CGFloat = controlsVisible ? 135 : 79
-        let tileH: CGFloat = controlsVisible ? 240 : 140
+        // While my screen is shared the tile is only the small "Sharing" card (2026-10-08), square.
+        let sharingCard = pipIsLocal && call.screenSharing
+        let tileW: CGFloat = sharingCard ? (controlsVisible ? 96 : 72) : (controlsVisible ? 135 : 79)
+        let tileH: CGFloat = sharingCard ? (controlsVisible ? 96 : 72) : (controlsVisible ? 240 : 140)
+        // The Stop Sharing pill sits centred above the bar; lift the tile's home clear of it.
+        let pillLift: CGFloat = call.screenSharePhase == .off ? 0
+            : 54 + (call.screenSharePhase == .live && call.screenShareLink == .poor ? 22 : 0)
         // HOME IS THE BOTTOM CORNER (owner's report: ours landed on TOP after accept; the standard
         // is the bottom). Gutters are 12pt; with the chrome up the tile clears the control bar,
         // with it away it drops toward the bottom edge. Drag can park it in any corner; these are
         // the travel bounds.
-        let bottomPad = safeBottom + (controlsVisible ? 132 : 12)
+        let bottomPad = safeBottom + (controlsVisible ? 132 : 12) + pillLift
         let maxLeft = -(geo.size.width - tileW - 24)
         let maxUp = -max(0, geo.size.height - tileH - (winInsets.top + 60) - bottomPad)
         // The bounds move when the chrome toggles — the tile grows and its home rises (his 544
@@ -593,7 +719,7 @@ struct CallView: View {
                         .overlay(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous)
                             .stroke(.white.opacity(tileEntering ? 0 : 0.25), lineWidth: 1))
                     // The flip glyph belongs to a LIVE local camera only — and never to the hand-off.
-                    if pipIsLocal, pipTrack != nil, !tileEntering {
+                    if pipIsLocal, pipTrack != nil, !tileEntering, !call.screenSharing {
                         Button { flipCamera() } label: {
                             Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
@@ -624,6 +750,8 @@ struct CallView: View {
                     // camera went off, taking the only way back with it. The tile never hides now, so
                     // any swap can always be undone by tapping it again.
                     guard feeds.showsTile else { toggleControls(); return }
+                    // No swap while my screen is shared: my feed is the screen (see showLocalFull).
+                    guard !call.screenSharing else { showControls(); return }
                     // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
                     // (chrome hidden) only grows it — same result as tapping the screen. Only a tap
                     // on the already-grown tile swaps fullscreen. Small → bigger → fullscreen.
@@ -637,6 +765,10 @@ struct CallView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 // Size and home both move when the chrome toggles — one spring for the whole relayout.
                 .animation(.spring(duration: 0.4), value: controlsVisible)
+                // On their shared screen the tile is chrome: it leaves and returns with the bar.
+                .opacity(stageShown && !controlsVisible ? 0 : 1)
+                .allowsHitTesting(!(stageShown && !controlsVisible))
+                .accessibilityHidden(stageShown && !controlsVisible)
             }
         }
         // The trigger: the tile appearing on a VIDEO call is the accept moment — my preview owned the
@@ -668,7 +800,10 @@ struct CallView: View {
     // dark card when it is not.
     @ViewBuilder
     private func tileContent(track: RTCVideoTrack?, isLocal: Bool, feeds: CallService.PiPFeeds) -> some View {
-        if let track {
+        if isLocal && call.screenSharing {
+            // My own live screen is never drawn back to me (2026-10-08): a calm card says it is on.
+            ScreenSharingCard(compact: !controlsVisible)
+        } else if let track {
             VideoRendererView(track: track,
                               mirror: isLocal && call.usingFrontCamera && !call.screenSharing,
                               fit: !isLocal && call.remoteScreenSharing)
@@ -697,6 +832,66 @@ struct CallView: View {
         case .active, .reconnecting: return true
         case .outgoing:              return call.cameraOn
         default:                     return false
+        }
+    }
+
+    // MARK: - Screen share pill (2026-10-08)
+
+    /// Just above the bar (bar is 52 + 2×12 tall, 14pt gap), or the bar's own spot while it is away.
+    private var sharePillBottom: CGFloat {
+        var bottom: CGFloat = winInsets.bottom + 22
+        if controlsVisible {
+            bottom += 76 + 14
+            if call.cameraDenied { bottom += 32 }   // clear the "Allow camera access" line
+        }
+        return bottom
+    }
+
+    // The sharer's state, right on the call screen instead of only in the "…" menu: a neutral
+    // "Starting…" while the share comes up, then one red Stop Sharing pill. Never part of the bar.
+    @ViewBuilder private var sharePill: some View {
+        switch call.screenSharePhase {
+        case .off:
+            EmptyView()
+        case .picking, .starting:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(.white)
+                Text("Starting…").font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .frame(height: 40)
+            .liquidGlass(Capsule(), interactive: false)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            .accessibilityElement(children: .combine)
+        case .live:
+            VStack(spacing: 6) {
+                Button {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    call.stopScreenShareByUser()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "rectangle.on.rectangle.slash")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Stop Sharing").font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .frame(height: 40)
+                    .background(Color(.systemRed), in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(CallControlStyle())
+                .accessibilityLabel("Stop sharing screen")
+                if call.screenShareLink == .poor {
+                    Text("Poor connection · sharing at lower quality")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .shadow(color: .black.opacity(0.5), radius: 4)
+                        .transition(.opacity)
+                }
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
         }
     }
 
@@ -1650,7 +1845,11 @@ struct FloatingCallWindow: View {
         // call screen and the system PiP (owner's 2026-08-12 rule — the tile's home is the bottom).
         return ZStack(alignment: .bottomTrailing) {
             Color.black
-            if let big = feeds.big {
+            if call.screenSharing, let big = feeds.big, big === call.localVideoTrack {
+                // My shared screen is never drawn back to me, here either (2026-10-08).
+                ScreenSharingCard(compact: true)
+                    .frame(width: w, height: h)
+            } else if let big = feeds.big {
                 VideoRendererView(track: big,
                                   mirror: feeds.mirrorBig && !call.screenSharing,
                                   fit: call.remoteScreenSharing && big === call.remoteVideoTrack)
@@ -1665,7 +1864,9 @@ struct FloatingCallWindow: View {
             if feeds.showsTile {
                 let tw = w * 0.34
                 Group {
-                    if let tile = feeds.tile {
+                    if call.screenSharing, let tile = feeds.tile, tile === call.localVideoTrack {
+                        ScreenSharingCard(compact: true)
+                    } else if let tile = feeds.tile {
                         VideoRendererView(track: tile,
                                           mirror: feeds.mirrorTile && !call.screenSharing,
                                           fit: call.remoteScreenSharing && tile === call.remoteVideoTrack)
@@ -1896,5 +2097,28 @@ struct CallControlStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.88 : 1)
             .opacity(configuration.isPressed ? 0.82 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+/// What stands in for my own feed while my screen is shared (2026-10-08). The reference app never
+/// draws the sharer's screen back to them either; drawing it was a picture of the call inside itself.
+struct ScreenSharingCard: View {
+    var compact = false
+
+    var body: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: compact ? 4 : 6) {
+                Image(systemName: "rectangle.on.rectangle")
+                    .font(.system(size: compact ? 16 : 22, weight: .semibold))
+                Text("Sharing")
+                    .font(.system(size: compact ? 11 : 13, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .foregroundStyle(.white.opacity(0.85))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Sharing your screen")
     }
 }

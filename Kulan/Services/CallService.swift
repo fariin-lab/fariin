@@ -104,7 +104,12 @@ final class CallService: NSObject {
                 // lost, and nothing sent it again, so the other side never saw it for the whole call.
                 if oldValue == .reconnecting
                     || (oldValue != .active && (isMuted || isHeld)) { broadcastMuteState() }
-                if oldValue == .reconnecting, screenSharing { broadcastScreenState() }   // same reason
+                if oldValue == .reconnecting, screenSharing {
+                    broadcastScreenState()   // same reason
+                    // The ICE restart keeps the sender, but its parameters are put back anyway: one
+                    // cheap write, and the share comes out of the drop at the tier it went in with.
+                    applyScreenShareEncoding(true)
+                }
                 // Audit M-121, 2026-10-07: the camera signal too (a share's write above carries it).
                 if oldValue == .reconnecting, !screenSharing { broadcastCameraState() }
                 startRouteObservation()   // smart speaker button: track where audio actually goes
@@ -166,6 +171,7 @@ final class CallService: NSObject {
                 // outlive the call. Idempotent.
                 stopScreenShare(requestExtensionStop: true, signal: false)
                 remoteScreenSharing = false
+                screenShareNotice = nil   // belongs to the call that just ended
                 videoSource = nil
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
@@ -380,9 +386,31 @@ final class CallService: NSObject {
     /// camera the user had, and every camera-only rule (speaker default, CallKit hasVideo, capture
     /// interruptions) keeps reading the camera and nothing else.
     private(set) var screenSharing = false
+    /// Where MY share is, for the call screen. `screenSharing` is true for `.starting` and `.live`
+    /// (unchanged meaning: the share has begun and owns the video source).
+    ///   picking  - the system picker was asked for; nothing in the call has changed yet.
+    ///   starting - the extension is connected; its first frame has not been decoded yet.
+    ///   live     - frames are flowing to the other side.
+    /// Every path goes through `setScreenSharePhase`, which never leaves it on after the call.
+    enum ScreenSharePhase: Equatable { case off, picking, starting, live }
+    private(set) var screenSharePhase: ScreenSharePhase = .off
+    /// One short line for the call screen when MY share ended without me pressing Stop, or never got
+    /// going. Nil after the user's own Stop. The view shows it and calls `clearScreenShareNotice()`.
+    var screenShareNotice: String?
+    /// How well my share is getting through, from the quality ladder (ScreenShareQuality):
+    /// T0-T1 good, T2 constrained, T3 poor. `.good` whenever not sharing.
+    enum ScreenShareLink: Equatable { case good, constrained, poor }
+    private(set) var screenShareLink: ScreenShareLink = .good
     /// THEIR screen is what their video carries (from the `screen` signal). The big view switches to
     /// aspect FIT and never crops it; their `cams` is also true meanwhile, so the video layout shows.
-    private(set) var remoteScreenSharing = false
+    private(set) var remoteScreenSharing = false {
+        didSet {
+            guard remoteScreenSharing != oldValue else { return }
+            remoteScreenSharingSince = remoteScreenSharing ? Date() : nil
+        }
+    }
+    /// When their share started (nil while they are not sharing), so the "is sharing" label can fade.
+    private(set) var remoteScreenSharingSince: Date?
     var isVideo: Bool { cameraOn || remoteCameraOn || screenSharing }   // show the video layout
     /// A VIDEO CALL, as opposed to a call with a camera on right now: placed as video, or a camera
     /// has been on at some point. The minimized card keys on this (owner, 2026-10-05: a video call
@@ -524,15 +552,11 @@ final class CallService: NSObject {
     /// with a stop request for 60s. See `armLateShareStop`.
     @ObservationIgnored private var lateShareStop: AnyCancellable?
     @ObservationIgnored private var lateShareStopExpiry: DispatchWorkItem?
-    /// Audit M-107, 2026-10-07: the share's own weak-link windows and whether its cap is lowered.
-    @ObservationIgnored private var shareLinkPolicy = WeakLinkPolicy(floorBitrate: 800_000, pauseAfter: 5, resumeAfter: 15)
-    @ObservationIgnored private var shareBitrateLowered = false
-    /// Audit round 2 (V1 new bug 3, M-107), 2026-10-07: the RESTORE windows, used only while the cap
-    /// is lowered. The 800 kbps floor above can never be crossed from under a 600 kbps cap (the
-    /// estimate tracks what is sent), so a lowered share stayed blurred for good. Restoring needs
-    /// 15s at or above 500 kbps, which a healthy link at the lowered cap reaches; if the link is
-    /// still weak at 2 Mbps, the floor above lowers it again 5s later.
-    @ObservationIgnored private var shareRestorePolicy = WeakLinkPolicy(floorBitrate: 500_000, pauseAfter: 5, resumeAfter: 15)
+    /// The share's quality ladder (owner, 2026-10-08), in place of audit M-107's single 2 Mbps /
+    /// 600 kbps switch. Four tiers, frame rate gives first; see ScreenShareQuality.
+    @ObservationIgnored private var shareQuality = ScreenShareQuality()
+    /// The video sender's bytesSent at the previous stats read, for its real send rate.
+    @ObservationIgnored private var shareLastSent: (bytes: Double, at: Date)?
     private(set) var callId: String?
     /// Readable so the call screen can draw a verified mark beside the name. Still only writable in
     /// here: who is on the other end of a call is decided by the signalling, never by a view.
@@ -1395,23 +1419,30 @@ final class CallService: NSObject {
 
     /// The "..." menu's Share Screen / Stop Sharing.
     func toggleScreenShare() {
-        if screenSharing { stopScreenShare(); return }
+        if screenSharing { stopScreenShareByUser(); return }
         guard state == .active, connectedDate != nil else { return }
         // A group call's LiveKit room listens on the same socket path while it shares.
         guard !inGroupCall else { return }
         // A picker opened earlier that never started a broadcast: begin again from scratch.
         stopScreenShare(requestExtensionStop: false, signal: false)
         disarmLateShareStop()   // audit M-106: this new picker's "started" must not be answered with a stop
+        screenShareNotice = nil   // a new attempt; the last one's line is old news
         guard let source = videoSource else { return }
         let capturer = ScreenShareCapturer(delegate: source)
         let session = ScreenShareSession { frame, rotation in
             capturer.push(frame, rotationDegrees: rotation)
         }
         session.onStarted = { [weak self] in self?.beginScreenShare() }
-        session.onEnded = { [weak self] in self?.stopScreenShare() }
+        session.onFirstFrame = { [weak self] in
+            guard let self, self.screenSharing else { return }
+            self.setScreenSharePhase(.live)
+        }
+        session.onEnded = { [weak self] reason in self?.screenShareEnded(reason) }
         guard session.start() else { return }   // App Group not provisioned: nothing to listen on
         screenCapturer = capturer
         screenShareSession = session
+        setScreenSharePhase(.picking)
+        // Picker abandoned: back to off, silently (closing the sheet is not a failure).
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, !self.screenSharing else { return }
             self.stopScreenShare(requestExtensionStop: true, signal: false)   // a sheet finished after the wait must not leave the extension recording with no one listening
@@ -1430,6 +1461,7 @@ final class CallService: NSObject {
         guard state == .active || state == .reconnecting, !isHeld else { stopScreenShare(); return }
         screenSharePendingTimeout?.cancel(); screenSharePendingTimeout = nil
         screenSharing = true
+        setScreenSharePhase(.starting)   // .live once the first frame is decoded (onFirstFrame)
         // Camera FIRST, screen second (the reference order): the camera capturer stops, and only
         // then does the screen capturer go live on the same source, so no camera frame lands between
         // screen frames. `cameraOn` is untouched; it is what the stop path restores.
@@ -1439,8 +1471,8 @@ final class CallService: NSObject {
             capturer.setLive(true)
         }
         localVideoTrack?.isEnabled = true   // a voice call's track is disabled until now
-        shareBitrateLowered = false; shareLinkPolicy.reset(); shareRestorePolicy.reset()   // audit M-107: each share starts at full rate
-        applyScreenShareEncoding(true)
+        shareQuality.reset(); shareLastSent = nil   // each share starts at the top tier
+        applyShareTier()
         broadcastScreenState()
         updateInCallScreenBehavior()
     }
@@ -1450,12 +1482,16 @@ final class CallService: NSObject {
     /// - signal: write `screen`/`cams` to the call doc and bring the camera back. False once the call
     ///   is over (finishCall runs this before the state reaches .ended, so `cameraShouldRun` would
     ///   still say yes and start a camera nobody will see).
-    func stopScreenShare(requestExtensionStop: Bool = true, signal: Bool = true) {
+    /// - notice: the line for the call screen when the user did NOT press Stop. Only shown if there
+    ///   was a share (or a pending one) to end.
+    func stopScreenShare(requestExtensionStop: Bool = true, signal: Bool = true, notice: String? = nil) {
         screenSharePendingTimeout?.cancel(); screenSharePendingTimeout = nil
         let hadShare = screenShareSession != nil || screenSharing
         let pendingOnly = screenShareSession != nil && !screenSharing
         screenShareSession?.stop(); screenShareSession = nil
         screenCapturer?.stop(); screenCapturer = nil
+        setScreenSharePhase(.off)   // every exit converges here, whatever the order
+        if let notice, hadShare { screenShareNotice = notice }
         if requestExtensionStop, hadShare {
             KSDarwinNotificationCenter.shared.postNotification(.broadcastRequestStop)
         }
@@ -1465,7 +1501,7 @@ final class CallService: NSObject {
         if requestExtensionStop, pendingOnly { armLateShareStop() }
         guard screenSharing else { return }
         screenSharing = false
-        shareBitrateLowered = false; shareLinkPolicy.reset(); shareRestorePolicy.reset()   // audit M-107
+        shareQuality.reset(); shareLastSent = nil
         applyScreenShareEncoding(false)
         // The camera comes back only if it was on before the share and nothing else holds it now
         // (hold, weak link, call ending). An interrupted camera is left to its own retry, which
@@ -1477,6 +1513,58 @@ final class CallService: NSObject {
         if !cameraOn, isLocalExpanded { isLocalExpanded = false }
         if signal { broadcastScreenState() }
         updateInCallScreenBehavior()
+    }
+
+    /// The in-app Stop: the pill, the menu, any phase. The user's own choice, so no notice. A share
+    /// still in the picker or waiting for its first frame is cancelled the same way (session and
+    /// pending wait torn down, the extension told to stop, the late-start guard armed).
+    func stopScreenShareByUser() {
+        stopScreenShare()
+    }
+
+    func clearScreenShareNotice() {
+        screenShareNotice = nil
+    }
+
+    /// The extension's side ended on its own. What the user is told depends on how far it got:
+    /// still in the picker says nothing (closing the sheet is not a failure), never reaching the
+    /// first frame is a failed start, and anything after that is a share that stopped.
+    private func screenShareEnded(_ reason: ScreenShareSession.EndReason) {
+        let notice: String?
+        if screenSharePhase == .picking {
+            notice = nil
+        } else if reason == .noFirstFrame || screenSharePhase == .starting {
+            notice = "Couldn't start screen sharing"
+        } else {
+            notice = "Screen sharing stopped"
+        }
+        stopScreenShare(notice: notice)
+    }
+
+    /// The one place `screenSharePhase` changes. A call that is gone has no share, whatever order the
+    /// extension's callbacks land in, so anything but `.off` is refused once the call is over.
+    private func setScreenSharePhase(_ phase: ScreenSharePhase) {
+        let next: ScreenSharePhase = inLiveCall ? phase : .off
+        if next != .live { shareLastSent = nil }
+        if next == .off, screenShareLink != .good { screenShareLink = .good }
+        guard screenSharePhase != next else { return }
+        screenSharePhase = next
+    }
+
+    /// Puts the ladder's current tier on the encoder, the capturer and the receive gate (no point
+    /// decoding frames the encoder will drop), and on `screenShareLink` for the call screen.
+    private func applyShareTier() {
+        let tier = shareQuality.tier
+        applyScreenShareEncoding(true)
+        screenCapturer?.setMaxFramerate(tier.maxFramerate)
+        screenShareSession?.setMaxFramerate(tier.maxFramerate)
+        let link: ScreenShareLink
+        switch shareQuality.index {
+        case 0, 1: link = .good
+        case 2: link = .constrained
+        default: link = .poor
+        }
+        if screenShareLink != link { screenShareLink = link }
     }
 
     /// Audit M-106, 2026-10-07: for 60s after a pending share was abandoned, a "broadcast started"
@@ -1505,23 +1593,25 @@ final class CallService: NSObject {
     }
 
     /// Encoder settings for a screen, and back. A screen keeps its RESOLUTION when the link is weak
-    /// (text stays readable, the frame rate drops instead), gets ~2 Mbps at up to 15 fps, and is never
-    /// scaled down (not even by Use Less Data). Stopping returns the camera's own settings.
+    /// (text stays readable, the frame rate drops instead) and takes the ladder's current tier
+    /// (ScreenShareQuality: 2.5 Mbps / 20 fps at best). Use Less Data never scales it down; only the
+    /// ladder's last tier does. Stopping returns the camera's own settings.
     private func applyScreenShareEncoding(_ on: Bool) {
         guard let pc else { return }
+        let tier = shareQuality.tier
         for sender in pc.senders where sender.track?.kind == "video" {
             let params = sender.parameters
             let preference: RTCDegradationPreference = on ? .maintainResolution : .balanced
             params.degradationPreference = NSNumber(value: preference.rawValue)
             for enc in params.encodings {
                 if on {
-                    // Audit M-107: about 600 kbps while the link is weak, so the share leaves the
-                    // voice room to get through (see applyShareLinkQuality).
-                    enc.maxBitrateBps = NSNumber(value: shareBitrateLowered ? 600_000 : 2_000_000)
-                    enc.maxFramerate = NSNumber(value: 15)
+                    enc.maxBitrateBps = NSNumber(value: tier.maxBitrate)
+                    enc.maxFramerate = NSNumber(value: tier.maxFramerate)
+                    enc.scaleResolutionDownBy = tier.scaleDown > 1 ? NSNumber(value: tier.scaleDown) : nil
+                } else {
+                    enc.maxFramerate = nil
+                    enc.scaleResolutionDownBy = nil
                 }
-                if !on { enc.maxFramerate = nil }
-                enc.scaleResolutionDownBy = nil
             }
             sender.parameters = params
         }
@@ -1858,10 +1948,11 @@ final class CallService: NSObject {
         // A screen share is never paused for the link. Its encoder keeps the resolution and drops
         // frame rate instead (maintainResolution), and the camera's windows start fresh when the
         // camera comes back.
-        // Audit M-107, 2026-10-07: a share is still never PAUSED, but it is watched now. Up to 2 Mbps
-        // with no weak-link check could starve the voice; a sustained weak verdict lowers its cap
-        // instead (applyShareLinkQuality).
+        // Audit M-107, 2026-10-07: a share is still never PAUSED, but it is watched now. A share at
+        // full rate on a weak link could starve the voice; it walks down the quality ladder instead
+        // (owner, 2026-10-08: sampleShareQuality).
         guard cameraOn || screenSharing else { linkPolicy.reset(); return }
+        if screenSharing { linkPolicy.reset(); sampleShareQuality(pc); return }
         pc.statistics { [weak self] report in
             // The ACTIVE pair's estimate. This is what WebRTC's own congestion controller concluded, so
             // it already folds in loss and round-trip time; a separate packet-loss rule bolted on top
@@ -1876,8 +1967,9 @@ final class CallService: NSObject {
 
     private func applyLinkQuality(_ bitrate: Double?) {
         guard inLiveCall else { return }
-        // A share has its own windows (audit M-107); the camera's start fresh when it comes back.
-        if screenSharing { linkPolicy.reset(); applyShareLinkQuality(bitrate); return }
+        // A share has its own ladder (sampleShareQuality); the camera's windows start fresh when it
+        // comes back. This only catches a camera read that landed after the share began.
+        if screenSharing { linkPolicy.reset(); return }
         guard cameraOn else { return }
         // HOLD OWNS THE PAUSE while it lasts (owner audit 2026-10-06 #1). Hold reuses the weak-link
         // pause flag, so a HEALTHY link read ten seconds into a phone call came back as .resume and
@@ -1890,24 +1982,55 @@ final class CallService: NSObject {
         }
     }
 
-    /// Audit M-107, 2026-10-07: under about 800 kbps for 5s, the share's cap drops to about 600 kbps;
-    /// back to 2 Mbps after 15s at or above 500 kbps (round 2: `shareRestorePolicy`, a level the
-    /// lowered cap can reach). Lowered, not ended: the encoder already keeps the resolution and drops
-    /// frames, so text stays readable. Main only.
-    private func applyShareLinkQuality(_ bitrate: Double?) {
-        let now = Date()
-        if shareBitrateLowered {
-            // Only the restore decision applies while lowered (paused = true asks for .resume only).
-            guard shareRestorePolicy.evaluate(bitrate: bitrate, paused: true, now: now) == .resume else { return }
-            shareBitrateLowered = false
-            shareLinkPolicy.reset(); shareRestorePolicy.reset()
-            applyScreenShareEncoding(true)
-        } else {
-            guard shareLinkPolicy.evaluate(bitrate: bitrate, paused: false, now: now) == .pause else { return }
-            shareBitrateLowered = true
-            shareLinkPolicy.reset(); shareRestorePolicy.reset()
-            applyScreenShareEncoding(true)
+    /// Owner, 2026-10-08: the share adapts to the link instead of one fixed cap. Every 2s (the link
+    /// monitor's tick) one stats read feeds ScreenShareQuality: the active pair's available bitrate,
+    /// the video sender's real send rate and WebRTC's own "limited by bandwidth" verdict, and the far
+    /// side's loss and round-trip time from its receiver reports. Lowered, never ended: a share on a
+    /// bad link still shows the screen, at a lower frame rate first.
+    private func sampleShareQuality(_ pc: RTCPeerConnection) {
+        pc.statistics { [weak self] report in
+            var available: Double?
+            var bytesSent: Double?
+            var loss: Double?
+            var rtt: Double?
+            var limited = false
+            for stat in report.statistics.values {
+                let v = stat.values
+                let kind = (v["kind"] as? String) ?? (v["mediaType"] as? String)
+                switch stat.type {
+                case "candidate-pair":
+                    guard (v["state"] as? String) == "succeeded",
+                          let b = (v["availableOutgoingBitrate"] as? NSNumber)?.doubleValue else { continue }
+                    available = max(available ?? 0, b)
+                case "outbound-rtp" where kind == "video":
+                    if let b = (v["bytesSent"] as? NSNumber)?.doubleValue { bytesSent = (bytesSent ?? 0) + b }
+                    if (v["qualityLimitationReason"] as? String) == "bandwidth" { limited = true }
+                case "remote-inbound-rtp" where kind == "video":
+                    if let f = (v["fractionLost"] as? NSNumber)?.doubleValue { loss = max(loss ?? 0, f) }
+                    if let r = (v["roundTripTime"] as? NSNumber)?.doubleValue { rtt = max(rtt ?? 0, r) }
+                default:
+                    break
+                }
+            }
+            let sample = ScreenShareQuality.Sample(availableBitrate: available, sendBitrate: nil,
+                                                   fractionLost: loss, roundTripTime: rtt,
+                                                   bandwidthLimited: limited)
+            let sent = bytesSent
+            DispatchQueue.main.async { self?.applyShareSample(sample, bytesSent: sent) }
         }
+    }
+
+    /// Main. Only while frames are flowing: a share still starting has nothing to measure.
+    private func applyShareSample(_ sample: ScreenShareQuality.Sample, bytesSent: Double?) {
+        guard inLiveCall, screenSharePhase == .live else { shareLastSent = nil; return }
+        let now = Date()
+        var sample = sample
+        if let bytesSent, let last = shareLastSent, bytesSent >= last.bytes {
+            let elapsed = now.timeIntervalSince(last.at)
+            if elapsed > 0.5 { sample.sendBitrate = (bytesSent - last.bytes) * 8 / elapsed }
+        }
+        shareLastSent = bytesSent.map { (bytes: $0, at: now) }
+        if shareQuality.evaluate(sample) { applyShareTier() }
     }
 
     private func pauseVideoForWeakLink() {
@@ -1943,6 +2066,9 @@ final class CallService: NSObject {
     // session correctly does nothing here rather than announcing video that does not exist.
     func appWillEnterForeground() {
         resumeCameraIfReallyBack()
+        // A share keeps running in the background. Coming back, make sure its extension is really
+        // still there; a socket that died while we were suspended ends it now, with the notice.
+        screenShareSession?.checkLiveness()
         // TAKE THE SYSTEM PiP DOWN OURSELVES. Nothing here ever did, and iOS only dismisses a PiP window
         // on return by itself when that window is in its NORMAL state. Fling it to the screen edge and
         // iOS STASHES it instead — parked, not dismissed, and it survives the app coming forward. Our own
@@ -2047,7 +2173,7 @@ final class CallService: NSObject {
         if held {
             // A share ENDS on hold (not paused): the person is on a phone call now, and their screen
             // would show it. Stopped first, so the camera logic below sees the plain camera state.
-            stopScreenShare()
+            stopScreenShare(notice: screenSharing ? "Screen sharing stopped" : nil)
             pauseVideoForWeakLink()
             // pauseVideoForWeakLink stands down when a capture interruption already holds the camera,
             // and an interrupted session resumes ITSELF when the interruption ends, which would have

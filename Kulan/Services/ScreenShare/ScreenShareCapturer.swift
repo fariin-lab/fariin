@@ -15,9 +15,10 @@ import WebRTC
 ///
 /// All state lives on one serial queue; `push`, `setLive` and `stop` may be called from any thread.
 final class ScreenShareCapturer: RTCVideoCapturer {
-    /// Ceiling on frames handed to WebRTC. The receive loop already throttles to ~15 fps before it
-    /// decodes; this is the backstop, a little looser so decode jitter there does not halve the rate.
-    private static let minPushInterval: CFTimeInterval = 1.0 / 20.0
+    /// Ceiling on frames handed to WebRTC. The receive loop already throttles to the tier's rate
+    /// before it decodes; this is the backstop, a little looser (x0.75 of the frame time) so decode
+    /// jitter there does not halve the rate. Follows the share's quality tier (`setMaxFramerate`).
+    private static func pushInterval(fps: Int) -> CFTimeInterval { 0.75 / Double(max(1, fps)) }
     /// Re-send the last frame when the screen has been static this long.
     private static let repeatInterval: CFTimeInterval = 1.0
 
@@ -25,6 +26,7 @@ final class ScreenShareCapturer: RTCVideoCapturer {
     private var lastBuffer: RTCCVPixelBuffer?
     private var lastRotation: RTCVideoRotation = ._0
     private var lastPushAt: CFTimeInterval = 0
+    private var minPushInterval: CFTimeInterval = ScreenShareCapturer.pushInterval(fps: 20)
     private var live = false
     private var stopped = false
     private var repeatTimer: DispatchSourceTimer?
@@ -50,9 +52,16 @@ final class ScreenShareCapturer: RTCVideoCapturer {
             self.lastRotation = rotation
             guard self.live else { return }
             let now = CACurrentMediaTime()
-            guard now - self.lastPushAt >= Self.minPushInterval else { return }
+            guard now - self.lastPushAt >= self.minPushInterval else { return }
             self.emit(buffer, rotation: rotation, at: now)
         }
+    }
+
+    /// The quality tier's frame-rate ceiling (CallService's ladder). The once-a-second repeat for a
+    /// still screen is not affected.
+    func setMaxFramerate(_ fps: Int) {
+        let interval = Self.pushInterval(fps: fps)
+        queue.async { [weak self] in self?.minPushInterval = interval }
     }
 
     /// Start (or pause) handing frames to the video source. Going live sends the newest frame at

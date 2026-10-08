@@ -14,18 +14,31 @@ import QuartzCore
 /// Threading: `start`, `stop`, `onStarted` and `onEnded` are main-queue. `onFrame` is called on the
 /// receive task's thread.
 final class ScreenShareSession {
-    /// The extension's frames are cut to this rate BEFORE decoding (the decode is the expensive part).
-    /// Slightly under 1/15 s so arrival jitter does not halve 15 fps to 7.5.
-    private static let minFrameInterval: CFTimeInterval = 0.06
+    /// The extension's frames are cut to the quality tier's rate BEFORE decoding (the decode is the
+    /// expensive part, and a frame the encoder will drop is not worth decoding). 0.9 of the frame
+    /// time, so arrival jitter does not halve 15 fps to 7.5 (15 fps -> 0.06 s, the old fixed gate).
+    private static func frameInterval(fps: Int) -> CFTimeInterval { 0.9 / Double(max(1, fps)) }
+    /// How often a running share checks that the extension's socket is still there.
+    private static let livenessInterval: TimeInterval = 2
     /// "Started" was posted but no frame followed: the extension could not reach us (App Group not
     /// provisioned on one side, or it died at once). Give up instead of sharing nothing forever.
     private static let firstFrameTimeout: TimeInterval = 10
 
     /// Main. The broadcast is really running: the first frame arrived or the extension said so.
     var onStarted: (() -> Void)?
-    /// Main. The broadcast ended on the extension's side: socket closed, "stopped" posted, error.
-    /// Not called after `stop()`.
-    var onEnded: (() -> Void)?
+    /// Main. The first decoded frame went to `onFrame`: the share is really on the far side's screen.
+    var onFirstFrame: (() -> Void)?
+    /// Main. The broadcast ended on the extension's side. Not called after `stop()`.
+    var onEnded: ((EndReason) -> Void)?
+
+    /// Why the extension's side ended, so the call screen can say something true about it.
+    enum EndReason {
+        /// Socket closed, "stopped" posted, or a socket error: the red pill, Control Centre, the
+        /// extension killed for memory.
+        case extensionEnded
+        /// "Started" was posted and no frame followed in time.
+        case noFirstFrame
+    }
 
     private let onFrame: (CVPixelBuffer, Int) -> Void
     private var task: Task<Void, Never>?
@@ -36,12 +49,14 @@ final class ScreenShareSession {
     // M-105, the frame-rate gate, shared by the receive loop and the delayed flush.
     private let gateLock = NSLock()
     private var lastAccepted: CFTimeInterval = 0 // under `gateLock`
+    private var minFrameInterval: CFTimeInterval = ScreenShareSession.frameInterval(fps: 15)   // under `gateLock`
     private var pendingImage: KSBroadcastReceiver.EncodedImage?   // under `gateLock`
     private let deliverLock = NSLock()           // one decode / onFrame at a time
     // Main only.
     private var finished = false
     private var startedFired = false
     private var gotFrame = false
+    private var livenessTimer: Timer?
 
     init(onFrame: @escaping (CVPixelBuffer, Int) -> Void) {
         self.onFrame = onFrame
@@ -58,12 +73,36 @@ final class ScreenShareSession {
             .sink { [weak self] _ in DispatchQueue.main.async { self?.extensionSaidStarted() } }
             .store(in: &notes)
         center.publisher(for: .broadcastStopped)
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.finish() } }
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.finish(.extensionEnded) } }
             .store(in: &notes)
         task = Task.detached(priority: .userInitiated) { [weak self] in
             await self?.receiveLoop(path)
         }
         return true
+    }
+
+    /// The quality tier's frame-rate ceiling. Any thread.
+    func setMaxFramerate(_ fps: Int) {
+        let interval = Self.frameInterval(fps: fps)
+        gateLock.lock()
+        minFrameInterval = interval
+        gateLock.unlock()
+    }
+
+    /// Main. Ends the share now if the extension's socket is gone without the read loop having said
+    /// so yet. Called on a timer while running, and by CallService on return to the foreground.
+    ///
+    /// ⚠️ SILENCE ALONE NEVER ENDS A SHARE. ReplayKit sends nothing at all for a still screen, so a
+    /// share of a page someone is reading can go a minute without a frame and is perfectly healthy;
+    /// the capturer re-sends the last frame each second meanwhile, so the far side's picture stays
+    /// up. The socket is the truth (design note, 2026-10-07): the extension finishing, crashing or
+    /// being killed closes it.
+    func checkLiveness() {
+        guard !finished, gotFrame else { return }
+        lock.lock()
+        let receiver = self.receiver
+        lock.unlock()
+        if receiver?.isClosed ?? true { finish(.extensionEnded) }
     }
 
     /// Stops listening and closes the socket. Idempotent; `onEnded` is NOT called.
@@ -94,7 +133,7 @@ final class ScreenShareSession {
                 // frame is now kept and sent when the gate opens, still without decoding the skipped ones.
                 let now = CACurrentMediaTime()
                 gateLock.lock()
-                let wait = Self.minFrameInterval - (now - lastAccepted)
+                let wait = minFrameInterval - (now - lastAccepted)
                 if wait > 0 {
                     let scheduleFlush = pendingImage == nil
                     pendingImage = image
@@ -110,7 +149,7 @@ final class ScreenShareSession {
         } catch {
             // Cancelled by stop(), or the socket failed. Either way the share is over.
         }
-        DispatchQueue.main.async { [weak self] in self?.finish() }
+        DispatchQueue.main.async { [weak self] in self?.finish(.extensionEnded) }
     }
 
     /// M-105: decode and hand on one frame. Serialised, so the loop and a delayed flush never decode
@@ -143,8 +182,19 @@ final class ScreenShareSession {
 
     private func frameArrived() {
         guard !finished else { return }
-        gotFrame = true
         fireStarted()
+        // onStarted can stop us (a share that began into a held call): no timer for a dead session.
+        guard !finished, !gotFrame else { return }
+        gotFrame = true
+        startLivenessTimer()
+        onFirstFrame?()
+    }
+
+    private func startLivenessTimer() {
+        livenessTimer?.invalidate()
+        livenessTimer = Timer.scheduledTimer(withTimeInterval: Self.livenessInterval, repeats: true) { [weak self] _ in
+            self?.checkLiveness()
+        }
     }
 
     private func extensionSaidStarted() {
@@ -152,7 +202,7 @@ final class ScreenShareSession {
         fireStarted()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstFrameTimeout) { [weak self] in
             guard let self, !self.finished, !self.gotFrame else { return }
-            self.finish()
+            self.finish(.noFirstFrame)
         }
     }
 
@@ -163,14 +213,15 @@ final class ScreenShareSession {
     }
 
     /// The extension's side ended.
-    private func finish() {
+    private func finish(_ reason: EndReason) {
         guard !finished else { return }
         finished = true
         tearDown()
-        onEnded?()
+        onEnded?(reason)
     }
 
     private func tearDown() {
+        livenessTimer?.invalidate(); livenessTimer = nil
         notes.removeAll()
         task?.cancel()
         task = nil
