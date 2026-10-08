@@ -218,14 +218,9 @@ service cloud.firestore {
     // 2026-09-24 decision D7: the caller is `u`'s friend, by the app's one meaning of the word
     // (`PrivacyPrefs.isContact`, `CallService.decideAllowed`): an accepted 1:1, or a chat from
     // before message requests (no `startedBy`) that carries a message.
-    // 1:1 audit r3 F1, 2026-10-08: only a REAL 1:1 counts: not a group, and its members are the two
-    // halves of its id. The create rule now enforces both; this is the second wall for any older doc.
     function isFriendOf(u) {
       let c = /databases/$(database)/documents/conversations/$(pairCid(u));
       return exists(c)
-        && get(c).data.get('type', '') != 'group'
-        && get(c).data.get('users', []).hasAll([request.auth.uid, u])
-        && get(c).data.get('users', []).size() == 2
         && (get(c).data.get('startedBy', '') != ''
               ? get(c).data.get('accepted', false) == true
               : get(c).data.get('lastMessage', '') != '');
@@ -235,13 +230,6 @@ service cloud.firestore {
     // an ABSENT value is My Chats too, the same default `PrivacyPrefs.defaultAudience` and
     // `CallPrivacyIndex` use. A callee with no profile document reads as Everyone, the direction
     // `acceptsFromStrangers` leans.
-    // 1:1 audit r3 J2, 2026-10-08: the owner's switch for the silent call block (r2 G6), read by
-    // the calls create rule. `config/calls` has no match block: only the server/console writes it.
-    // Absent or false = a blocked caller's create is refused (builds 840-843 need that).
-    function silentCallBlocks() {
-      return exists(/databases/$(database)/documents/config/calls)
-        && get(/databases/$(database)/documents/config/calls).data.get('silentBlocks', false) == true;
-    }
     function callsAllowedBy(u) {
       return !exists(/databases/$(database)/documents/users/$(u))
         || get(/databases/$(database)/documents/users/$(u)).data.get('privacy', {}).get('calls', 'contacts') == 'everyone'
@@ -679,10 +667,7 @@ service cloud.firestore {
           && tokenListOk('groupRingTokens')
           // audit 2026-10-07 (F10 handoff): `voipCancelTokens`, the VoIP token listed by builds that
           // understand a ring-end push. Same cap as the others.
-          && tokenListOk('voipCancelTokens')
-          // 1:1 audit r3 F6/J8, 2026-10-08: the VoIP token again, listed by builds that name the
-          // caller themselves; the server leaves the name out of their ring push.
-          && tokenListOk('voipNamelessTokens');
+          && tokenListOk('voipCancelTokens');
       }
 
       // Which sticker packs you have added, and the order you keep them in. A subcollection
@@ -708,15 +693,6 @@ service cloud.firestore {
       // read that they are on it. The rules read it through `isBlockedByUser` (call create only;
       // messages and new chats stay silent, 2026-09-24 decision D8), which ignores these read rules. The document carries only
       // `at`, the server's time of the block.
-      // 1:1 audit r3 F2, 2026-10-08: the server's verdict on a call ringing me, `{allowed: bool}`,
-      // written by onCallCreated in the same commit as the call's `screenedAt`. On the CALLEE's
-      // side so the caller cannot read it (the call doc only says "the server has looked").
-      // Callee get only; no client writes, no listing.
-      match /callScreens/{callId} {
-        allow get: if signedIn() && request.auth.uid == uid;
-        allow list, write: if false;
-      }
-
       match /blocked/{other} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
         // 2026-09-26: `at` may be EARLIER than now, never later. Moving a block that was recorded
@@ -1470,22 +1446,9 @@ service cloud.firestore {
             && request.resource.data.users.size() >= 2
             && request.resource.data.users.size() <= 30
             && request.auth.uid in request.resource.data.admins
-            // 1:1 audit r3 F1, 2026-10-08: a group is never born at a 1:1 id. Every call and
-            // friend check reads `conversations/{a_b}`; a group there (members of the creator's
-            // choosing, a `lastMessage`, no `startedBy`) read as an old accepted chat. The app
-            // mints group ids with `document()` (letters and digits, never "_").
-            && !cid.matches('.*_.*')
           )
           || (
-            // 1:1 audit r3 F1, 2026-10-08: THE ID IS THE MEMBERSHIP, enforced here too. The two
-            // members are exactly the two halves of the id (sorted, as `ChatService.convId`), so
-            // nobody can create my pair id with a second account of theirs as "the other member"
-            // and accept it themselves. And it is not a group in disguise.
-            request.resource.data.get('type', '') != 'group'
-            && request.resource.data.users.size() == 2
-            && cid == (request.resource.data.users[0] < request.resource.data.users[1]
-                         ? request.resource.data.users[0] + '_' + request.resource.data.users[1]
-                         : request.resource.data.users[1] + '_' + request.resource.data.users[0])
+            request.resource.data.users.size() == 2
             && (request.auth.uid == otherMember() || acceptsFromStrangers(otherMember()))
             // ...and not somebody who deleted my last request this week (§10). Same guard shape
             // as the privacy read above; the document is theirs and this is the only reader.
@@ -1682,7 +1645,6 @@ service cloud.firestore {
           // 2026-09-24 decision D24: admins, the owner included, are held to the same private-map
           // pin as members: no client admin write touches another member's block/mute/read state.
           || (resource.data.get('type', '') == 'group' && request.auth.uid in resource.data.admins
-              && request.resource.data.get('type', '') == 'group'   // 1:1 audit r3 F1: a group stays a group
               && groupFloorsKept()
               && ownerHandOffOK()
               && privateMapsUntouched()
@@ -2436,18 +2398,9 @@ service cloud.firestore {
         // through and onCallCreated sends no push and writes no `screenedAt`, so the callee never
         // rings and the caller hears an ordinary no answer, as in the reference app.
         && callsAllowedBy(request.resource.data.callee)
-        // 1:1 audit r3 J2, 2026-10-08: the block refusal is BACK while builds 840-843 are in use.
-        // An open 840-841 app settles a ringing doc before its block gate: it writes "busy" (the
-        // blocked caller learns I am on another call) and a "Missed call" row from them into my
-        // chat. A refused create tells the caller only "blocked", once, as before r2; it does not
-        // let them watch me. When 840-843 are gone, the owner sets `config/calls.silentBlocks =
-        // true` (admin write, no rules deploy) and G6's silent block is live again.
-        && (!isBlockedByUser(request.resource.data.callee) || silentCallBlocks())
         // 1:1 audit r2 G8, 2026-10-08: `screenedAt` is the server's "checks passed, ring now"
         // (onCallCreated). No client writes it, here or on update.
         && !('screenedAt' in request.resource.data)
-        // 1:1 audit r3 F3, 2026-10-08: the answer fields are the callee's, never written at create.
-        && !request.resource.data.keys().hasAny(['acceptedAt', 'answeredTokenHash', 'answeredDevice'])
         // owner audit 2026-10-06 #26: the server's clock, never the caller's. A call created with
         // `createdAt` missing or in the future was never timed out by sweepCalls and slipped past
         // the phone's 60s stale-ring guard, so it rang on every app launch. The app writes
@@ -2467,45 +2420,15 @@ service cloud.firestore {
         && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
         && request.resource.data.get('callerName', null) == resource.data.get('callerName', null)
         && request.resource.data.get('callerPhoto', null) == resource.data.get('callerPhoto', null)
-        && request.resource.data.get('screenedAt', null) == resource.data.get('screenedAt', null)   // 1:1 audit r2 G8
-        // 1:1 audit r3 F3, 2026-10-08: only the callee writes the answer. The caller could set
-        // `acceptedAt` + a made-up `answeredTokenHash` and the server's "answered elsewhere" push
-        // then silenced every one of the callee's phones with no missed call left behind.
-        && (request.auth.uid == resource.data.callee
-            || !request.resource.data.diff(resource.data).affectedKeys()
-                  .hasAny(['acceptedAt', 'answeredTokenHash', 'answeredDevice']))
-        // 1:1 audit r3 J1, 2026-10-08: once the call is answered, the callee's side cannot end it as
-        // a ring (declined / missed / busy). Builds 840-843 end a ring blindly, so my other, older
-        // phone still ringing (its Decline, its 60 s timer) dropped the call I was on. That write is
-        // refused now and only its own ring stops. The answering phone ends with `hangup` (or
-        // `failed`), which stays allowed, and the caller may end the call any way.
-        && (request.auth.uid != resource.data.callee
-            || resource.data.get('acceptedAt', null) == null
-            || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'endReason'])
-            || !(request.resource.data.get('endReason', '') in ['declined', 'missed', 'busy']));
+        && request.resource.data.get('screenedAt', null) == resource.data.get('screenedAt', null);   // 1:1 audit r2 G8
       // NO delete. THIRD stray paste of the message-request decline rule, after the two removed from
       // /users and story views on 2026-08-04. A call document has `caller` and `callee`, not `users`
       // or `startedBy`, so it could only ever error. Nothing in the app deletes a call, so nothing
       // was broken by it — but a rule that reads fields from a different collection is a trap for
       // whoever reads it next. Also spotted by Gemini.
-      // 1:1 audit r3 F7, 2026-10-08: only the two candidate lists, each written by its own side,
-      // only the candidate fields, bounded, and nothing once the call has ended (the server's scrub
-      // and sweep clear these two names only). Phones only ever add; no update or delete.
       match /{sub}/{candidate} {
-        allow read: if signedIn()
+        allow read, write: if signedIn()
           && (request.auth.uid == parties().caller || request.auth.uid == parties().callee);
-        allow create: if signedIn()
-          && ((sub == 'callerCandidates' && request.auth.uid == parties().caller)
-              || (sub == 'calleeCandidates' && request.auth.uid == parties().callee))
-          && parties().get('status', '') != 'ended'
-          && request.resource.data.keys().hasOnly(['candidate', 'sdpMLineIndex', 'sdpMid', 'enc'])
-          && (!('candidate' in request.resource.data)
-              || (request.resource.data.candidate is string && request.resource.data.candidate.size() <= 2048))
-          && (!('sdpMid' in request.resource.data) || request.resource.data.sdpMid == null
-              || (request.resource.data.sdpMid is string && request.resource.data.sdpMid.size() <= 64))
-          && (!('enc' in request.resource.data)
-              || (request.resource.data.enc is string && request.resource.data.enc.size() <= 8192));
-        allow update, delete: if false;
       }
     }
 

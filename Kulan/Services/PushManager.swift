@@ -460,7 +460,10 @@ enum Push {
         // server sends those only there, so an older build never gets a push it would ring for.
         Firestore.firestore().collection("users").document(uid).collection("push").document("tokens")
             .setData(["groupRingTokens": FieldValue.arrayUnion([token]),
-                      "voipCancelTokens": FieldValue.arrayUnion([token])], merge: true)
+                      "voipCancelTokens": FieldValue.arrayUnion([token]),
+                      // 1:1 audit r3 F6/J8, 2026-10-08: this build names the caller itself (from its
+                      // own chats), so the server leaves the name out of its ring push through Apple.
+                      "voipNamelessTokens": FieldValue.arrayUnion([token])], merge: true)
         // And on this device's row, so a remote sign-out can pull this device's ring token.
         Task { @MainActor in DeviceRegistry.shared.recordVoipToken(token) }
     }
@@ -566,6 +569,7 @@ enum Push {
             if let voip = latestVoipToken {
                 pushUpdates["groupRingTokens"] = FieldValue.arrayRemove([voip])
                 pushUpdates["voipCancelTokens"] = FieldValue.arrayRemove([voip])   // audit M-004
+                pushUpdates["voipNamelessTokens"] = FieldValue.arrayRemove([voip])   // 1:1 audit r3 F6
             }
             batch.setData(pushUpdates, forDocument: doc.collection("push").document("tokens"), merge: true)
             do { try await batch.commit(); return }
