@@ -200,6 +200,9 @@ enum SessionRecovery {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
                 guard stallDuringCall else { return }   // the server kept answering meanwhile
+                // 1:1 audit check, 2026-10-08: noteStall drops a call made in the background, so
+                // the reset stays owed and runs on the next foreground.
+                guard isActive else { runOwedResetOnForeground(); return }
                 stallDuringCall = false
                 noteStall("after call")
             }
@@ -355,6 +358,26 @@ enum SessionRecovery {
                 once.finish(.timedOut)
             }
         }
+    }
+
+    /// 1:1 audit check, 2026-10-08: the after-call reset owed when the call ended in the background.
+    @MainActor private static var owedResetObserver: NSObjectProtocol?
+
+    @MainActor private static func runOwedResetOnForeground() {
+        guard owedResetObserver == nil else { return }
+        owedResetObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    if let o = owedResetObserver { NotificationCenter.default.removeObserver(o) }
+                    owedResetObserver = nil
+                    guard stallDuringCall else { return }   // answered meanwhile, or signed out
+                    stallDuringCall = false
+                    // A new call already up: its own stalls take the in-call path from here.
+                    let s = CallService.shared.state
+                    guard s == .idle || s == .ended else { return }
+                    noteStall("after call")
+                }
+            }
     }
 
     @MainActor private static func watchForeground() {

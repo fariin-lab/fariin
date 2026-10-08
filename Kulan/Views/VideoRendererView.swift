@@ -99,7 +99,12 @@ final class UprightVideoForwarder: NSObject, RTCVideoRenderer {
 
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }
-        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        // 1:1 audit check, 2026-10-08: the last release can come from the WebRTC thread.
+        if Thread.isMainThread {
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        } else {
+            DispatchQueue.main.async { UIDevice.current.endGeneratingDeviceOrientationNotifications() }
+        }
     }
 
     /// Main only.
@@ -135,17 +140,17 @@ final class UprightVideoForwarder: NSObject, RTCVideoRenderer {
     private func apply(rotation: RTCVideoRotation) {
         guard let view else { return }
         lock.lock(); let on = uprightFlag; let o = orientation; lock.unlock()
-        var override: RTCVideoRotation?
+        var rot: RTCVideoRotation?   // 1:1 audit check, 2026-10-08: not a keyword name
         let portraitView = view.bounds.height >= view.bounds.width
         if on, UIDevice.current.userInterfaceIdiom == .phone, portraitView, o.isLandscape {
             // landscapeLeft turns the frame a further 90°, landscapeRight 270° (the reference app's table).
             let extra = o == .landscapeLeft ? 90 : 270
-            override = RTCVideoRotation(rawValue: (rotation.rawValue + extra) % 360)
+            rot = RTCVideoRotation(rawValue: (rotation.rawValue + extra) % 360)
         }
-        view.rotationOverride = override.map { NSNumber(value: $0.rawValue) }
+        view.rotationOverride = rot.map { NSNumber(value: $0.rawValue) }
         // Sideways phone, upright picture: fill when both are landscape, fit when the sender is portrait.
         let remoteLandscape = rotation == ._0 || rotation == ._180
-        forcesFit = override != nil && !remoteLandscape
+        forcesFit = rot != nil && !remoteLandscape
         let mode: UIView.ContentMode = (fit || forcesFit) ? .scaleAspectFit : .scaleAspectFill
         if view.videoContentMode != mode { view.videoContentMode = mode }
     }

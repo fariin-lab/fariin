@@ -68,6 +68,8 @@ final class CallService: NSObject {
 
     var state: State = .idle {
         didSet {
+            // 1:1 audit check, 2026-10-08: a new call never inherits the teardown flag.
+            if state == .outgoing || state == .incoming { tearingDown = false }
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
             // Audit M-049, 2026-10-07: not with AirPods, a headset or a car connected. The override
@@ -167,6 +169,11 @@ final class CallService: NSObject {
                 sealSignalling = false   // #27: each call decides its own sealing
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
+                // 1:1 audit check, 2026-10-08: per-call reconnect clocks and the stall flag.
+                iceCheckingSince = nil; reconnectStartedAt = nil
+                lastIceConnectedAt = nil; relayRefreshTriedAt = nil
+                stopRemoteFreezeWatch()
+                tearingDown = false
                 // Backstop for an end that skipped finishCall: no share, and no socket listener, may
                 // outlive the call. Idempotent.
                 stopScreenShare(requestExtensionStop: true, signal: false)
@@ -1799,11 +1806,19 @@ final class CallService: NSObject {
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self, weak pending] _ in
             self?.clearPickerReturn()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self, weak session = pending] in
+            // 1:1 audit check, 2026-10-08: 6 s covers the 3-2-1 countdown plus the extension's
+            // launch; a broadcast already stamping its keepalive is never stopped here.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self, weak session = pending] in
                 guard let self, let session, self.screenShareSession === session,
-                      !self.screenSharing, self.screenSharePhase == .picking else { return }
-                print("[Call] screen share sheet closed without a start")
-                self.stopScreenShare(requestExtensionStop: true, signal: false)
+                      !self.screenSharing, !session.hasStarted,
+                      self.screenSharePhase == .picking else { return }
+                session.extensionKeepaliveFresh { [weak self, weak session] fresh in
+                    guard !fresh, let self, let session, self.screenShareSession === session,
+                          !self.screenSharing, !session.hasStarted,
+                          self.screenSharePhase == .picking else { return }
+                    print("[Call] screen share sheet closed without a start")
+                    self.stopScreenShare(requestExtensionStop: true, signal: false)
+                }
             }
         }
     }
@@ -2440,7 +2455,7 @@ final class CallService: NSObject {
         // (owner, 2026-10-08: sampleShareQuality).
         guard cameraOn || screenSharing else { linkPolicy.reset(); return }
         if screenSharing { linkPolicy.reset(); sampleShareQuality(pc); return }
-        pc.statistics { [weak self] report in
+        pc.statistics { [weak self, weak pc] report in
             // The ACTIVE pair's estimate. This is what WebRTC's own congestion controller concluded, so
             // it already folds in loss and round-trip time; a separate packet-loss rule bolted on top
             // would only add noise and a second thing to tune.
@@ -2454,12 +2469,13 @@ final class CallService: NSObject {
                 .filter { $0.type == "candidate-pair" && ($0.values["state"] as? String) == "succeeded" }
                 .compactMap { ($0.values["availableOutgoingBitrate"] as? NSNumber)?.doubleValue }
                 .max()
-            DispatchQueue.main.async { self?.applyLinkQuality(bitrate) }
+            DispatchQueue.main.async { self?.applyLinkQuality(bitrate, from: pc) }
         }
     }
 
-    private func applyLinkQuality(_ bitrate: Double?) {
-        guard inLiveCall else { return }
+    private func applyLinkQuality(_ bitrate: Double?, from source: RTCPeerConnection?) {
+        // 1:1 audit check, 2026-10-08: a read from the last call's connection is dropped.
+        guard inLiveCall, let source, source === pc else { return }
         // A share has its own ladder (sampleShareQuality); the camera's windows start fresh when it
         // comes back. This only catches a camera read that landed after the share began.
         if screenSharing { linkPolicy.reset(); return }
@@ -2988,11 +3004,13 @@ final class CallService: NSObject {
                       let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                       AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
                 // Give CallKit its turn first; only step in if audio is still off after it.
+                let id = self.callId   // 1:1 audit check, 2026-10-08: never touch the next call
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     // Not while on hold: there the silence is deliberate and CallKit owns the unhold.
                     // 1:1 audit #27 (owner, 2026-10-08): and not for a caller whose call only rings
                     // (#26: the unit waits for the accept there).
-                    guard self.inLiveCall, !self.isHeld, self.callAudioUnitMayStart else { return }
+                    guard self.callId == id, self.inLiveCall, !self.isHeld, !self.tearingDown,
+                          self.callAudioUnitMayStart else { return }
                     // Re-set the call's category and mode FIRST (audit 05, low): enabling audio alone
                     // skipped the half of didActivate that configures the session, so a speaker call
                     // could come back on the earpiece-tuned echo canceller until the next route event.
@@ -3219,10 +3237,13 @@ final class CallService: NSObject {
     /// like the reference app; the track itself was already silent until then. Read by didActivate.
     var callAudioUnitMayStart: Bool { !(isCaller && state == .outgoing && !calleeAccepted) }
 
+    /// 1:1 audit check, 2026-10-08: set at the top of finishCall, cleared at the .idle reset.
+    private var tearingDown = false
+
     /// Turns the WebRTC audio unit on once the call may have it (#26). Also covers a call CallKit
     /// never activated, which the old ringback used to switch on as a side effect. Idempotent.
     private func startCallAudioUnitIfDue() {
-        guard inLiveCall, !isHeld, callAudioUnitMayStart else { return }
+        guard inLiveCall, !isHeld, !tearingDown, callAudioUnitMayStart else { return }
         let rtc = RTCAudioSession.sharedInstance()
         if !rtc.isAudioEnabled { rtc.isAudioEnabled = true }
     }
@@ -3461,6 +3482,9 @@ final class CallService: NSObject {
         iceRestartWork?.cancel(); iceRestartWork = nil
         iceRestartRetryWork?.cancel(); iceRestartRetryWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
+        // 1:1 audit check, 2026-10-08: a leftover item made the next call's first drop a no-op.
+        reconnectGraceWork?.cancel(); reconnectGraceWork = nil
+        restartDeferWork?.cancel(); restartDeferWork = nil
         // A pending ringback fallback must die with the call, or a call that ends inside its 1.2s
         // window would start a ringback nothing is left to stop.
         ringbackFallback?.invalidate(); ringbackFallback = nil
@@ -3562,7 +3586,7 @@ final class CallService: NSObject {
             guard let self, self.callId == id, self.state == .reconnecting else { return }
             let now = Date()
             let elapsed = self.reconnectStartedAt.map { now.timeIntervalSince($0) } ?? 60
-            let peerAlive = self.lastPeerBeatAt.map { now.timeIntervalSince($0) < 10 } == true
+            let peerAlive = self.lastPeerBeatAt.map { now.timeIntervalSince($0) < 12 } == true   // 1:1 audit check, 2026-10-08: calm beat is 10 s
                 && self.lastPeerBeatValue != 0
             let checking = self.iceCheckingSince != nil
             if elapsed < 60, peerAlive || checking {
@@ -3670,27 +3694,28 @@ final class CallService: NSObject {
     /// 1:1 audit #8 (owner, 2026-10-08): whether the call's route was Wi-Fi at the last path update.
     private var lastPathWasWifi: Bool?
 
-    /// 1:1 audit #19 (owner, 2026-10-08): the numeric address(es) on one interface, for the path key.
-    /// IPv4 when there is one; otherwise the IPv6 ones that are not link-local (fe80, the same on
-    /// every network). Empty when nothing can be read: the key then falls back to the old one.
+    /// 1:1 audit #19 (owner, 2026-10-08): the IPv4 address(es) on one interface, for the path key.
+    /// 1:1 audit check, 2026-10-08: IPv6 is left out. Temporary (privacy) IPv6 addresses rotate
+    /// on their own, and each rotation restarted ICE; the gateways and the name still tell an
+    /// IPv6-only move apart. Empty when nothing can be read: the key then falls back to the old one.
     private static func interfaceAddress(_ name: String) -> String {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0, let start = head else { return "" }
         defer { freeifaddrs(head) }
-        var v4: [String] = [], v6: [String] = []
+        var v4: [String] = []
         var cursor: UnsafeMutablePointer<ifaddrs>? = start
         while let p = cursor {
             defer { cursor = p.pointee.ifa_next }
             guard let sa = p.pointee.ifa_addr, String(cString: p.pointee.ifa_name) == name else { continue }
-            let family = Int32(sa.pointee.sa_family)
-            guard family == AF_INET || family == AF_INET6 else { continue }
+            guard Int32(sa.pointee.sa_family) == AF_INET else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count),
                               nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            let text = String(cString: host)
-            if family == AF_INET { v4.append(text) } else if !text.lowercased().hasPrefix("fe80") { v6.append(text) }
+            // Not the deprecated String(cString:) on an array.
+            let text = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            v4.append(text)
         }
-        return (v4.isEmpty ? v6 : v4).sorted().joined(separator: ",")
+        return v4.sorted().joined(separator: ",")
     }
 
     /// Audit M-117, 2026-10-07: when the caller's last restart offer went out; cleared when its
@@ -6010,6 +6035,7 @@ final class CallService: NSObject {
 
     private func finishCall(updateRemote: Bool, clearCallKit: Bool, localUser: Bool) {
         guard state != .ended, state != .idle else { return }   // re-entry guard: only finish once
+        tearingDown = true   // 1:1 audit check, 2026-10-08: no audio unit start during teardown
         cancelTimers()
         stopRingback()
         // Owner audit 2026-10-06 #9: a dial whose call doc never reached the server was never placed.
@@ -6203,7 +6229,11 @@ final class CallService: NSObject {
         pc = nil
         localAudioTrack = nil          // 1:1 audit #42: no mic source held between calls
         if let id = callId { ringRechecked.remove(id) }   // #42: the set no longer only grows
-        if !pendingGlareBusy.isEmpty { flushGlareBusy() }  // #25: a dial that ended while its create ran
+        // #25 + 1:1 audit check, 2026-10-08: busy the held losers only if my call doc exists;
+        // a dial that never landed lets them ring here instead.
+        if !pendingGlareBusy.isEmpty {
+            if callDocCreated { flushGlareBusy() } else { releaseGlareLosers() }
+        }
         // 1:1 audit #1: captured before `isCaller` is cleared below. Only someone who was in the call
         // hears the end tone; a ring this phone never answered ends silently.
         let heardCall = isCaller || wasAccepted || connectedDate != nil

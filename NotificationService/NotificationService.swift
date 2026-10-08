@@ -68,12 +68,14 @@ final class NotificationService: UNNotificationServiceExtension {
         guard pread(fd, &stamp, MemoryLayout<UInt64>.size, keepaliveOffset) == MemoryLayout<UInt64>.size,
               stamp != 0 else { return false }
         let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)   // the same clock the extension stamps with
-        return now >= stamp ? now - stamp <= keepaliveTimeoutNs : true
+        // 1:1 audit check, 2026-10-08: a stamp from before a reboot (clock restarted below it) is stale.
+        return now >= stamp && now - stamp <= keepaliveTimeoutNs
     }
 
     private static func hidingTextDuringShare(_ content: UNNotificationContent) -> UNNotificationContent {
         guard screenShareLive(),
               let copy = content.mutableCopy() as? UNMutableNotificationContent else { return content }
+        copy.title = "Kulan"   // 1:1 audit check, 2026-10-08: the sender's name is hidden too
         copy.subtitle = ""
         copy.body = "New message"
         return copy

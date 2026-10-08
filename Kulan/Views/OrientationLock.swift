@@ -22,10 +22,24 @@ enum OrientationLock {
     static func mask(for window: UIWindow?) -> UIInterfaceOrientationMask {
         guard mask != .portrait else { return .portrait }
         if ownerUnknown { return mask }
-        guard let window, let owner = landscapeOwner, topController(in: window) === owner else {
+        // 1:1 audit check, 2026-10-08: the owner may sit anywhere in the presented chain, so an
+        // alert or sheet over the call screen keeps landscape.
+        guard let window, let owner = landscapeOwner, chain(in: window).contains(where: { $0 === owner }) else {
             return .portrait
         }
         return mask
+    }
+
+    /// The window's root and everything presented over it, up to the top controller.
+    private static func chain(in window: UIWindow) -> [UIViewController] {
+        var out: [UIViewController] = []
+        var vc = window.rootViewController
+        while let current = vc {
+            out.append(current)
+            guard let next = current.presentedViewController, !next.isBeingDismissed else { break }
+            vc = next
+        }
+        return out
     }
 
     private static func topController(in window: UIWindow) -> UIViewController? {
@@ -34,23 +48,42 @@ enum OrientationLock {
         return vc
     }
 
-    /// The top controller of the key window (where the call screen is when it asks).
-    private static func currentTopController() -> UIViewController? {
+    /// The key window (or the one with something presented), where the call screen is.
+    private static func currentWindow() -> UIWindow? {
         let windows = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
-        guard let window = windows.first(where: { $0.isKeyWindow })
-                ?? windows.first(where: { $0.rootViewController?.presentedViewController != nil }) else { return nil }
+        return windows.first(where: { $0.isKeyWindow })
+            ?? windows.first(where: { $0.rootViewController?.presentedViewController != nil })
+    }
+
+    /// The top controller of the key window (where the call screen is when it asks).
+    private static func currentTopController() -> UIViewController? {
+        guard let window = currentWindow() else { return nil }
         return topController(in: window)
     }
 
     static func allowLandscape(_ on: Bool) {
         let wanted: UIInterfaceOrientationMask = on ? .allButUpsideDown : .portrait
-        guard wanted != mask else { return }
+        // 1:1 audit check, 2026-10-08: refresh the owner on every "on", before the early return,
+        // so an owner caught as a passing alert is corrected. A live owner still in the chain is
+        // kept, so a later call made while an alert is up does not hand landscape to the alert.
+        var ownerChanged = false
         if on {
-            landscapeOwner = currentTopController()
-            ownerUnknown = landscapeOwner == nil
-        } else {
+            let window = currentWindow()
+            let stillInChain = landscapeOwner.map { owner in
+                window.map { chain(in: $0).contains { $0 === owner } } ?? false
+            } ?? false
+            if !stillInChain {
+                let fresh = currentTopController()
+                ownerChanged = fresh !== landscapeOwner
+                landscapeOwner = fresh
+                ownerUnknown = fresh == nil
+            }
+        }
+        // A new owner while already on: the controllers below re-read the mask too.
+        guard wanted != mask || ownerChanged else { return }
+        if !on {
             landscapeOwner = nil
             ownerUnknown = false
         }

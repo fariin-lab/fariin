@@ -121,6 +121,20 @@ final class ScreenShareSession {
         extensionSaidStarted()
     }
 
+    /// Main. True once the extension said it started (1:1 audit check, 2026-10-08).
+    var hasStarted: Bool { started }
+
+    /// Main. Answers on main whether the extension's keepalive is fresh right now, i.e. a broadcast
+    /// is already running even if "started" has not arrived yet (1:1 audit check, 2026-10-08).
+    func extensionKeepaliveFresh(_ done: @escaping (Bool) -> Void) {
+        queue.async { [weak self] in
+            let stamp = self?.video?.keepaliveNs ?? 0
+            let now = ScreenShareIPC.nowNs()
+            let fresh = stamp != 0 && now >= stamp && now - stamp <= ScreenShareIPC.keepaliveTimeoutNs
+            DispatchQueue.main.async { done(fresh) }
+        }
+    }
+
     /// The quality tier's frame-rate ceiling: the poll rate. Any thread.
     func setMaxFramerate(_ fps: Int) {
         let value = min(60, max(1, fps))
