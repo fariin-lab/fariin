@@ -450,6 +450,10 @@ final class CallKitManager: NSObject {
         if let uuid = activeUUID { provider.reportCall(with: uuid, endedAt: nil, reason: reason) }
         activeUUID = nil; activeCallId = nil
     }
+
+    /// 1:1 audit r2 D3: true while a CallKit mute action is being applied (main queue only). In the
+    /// class body: an extension cannot hold stored properties.
+    private var applyingSystemMute = false
 }
 
 extension CallKitManager: CXProviderDelegate {
@@ -580,9 +584,6 @@ extension CallKitManager: CXProviderDelegate {
         }
         action.fulfill()
     }
-
-    /// 1:1 audit r2 D3: true while a CallKit mute action is being applied (main queue only).
-    private var applyingSystemMute = false
 
     // HOLD. There was no handler at all, so when a normal cellular call arrived mid-call iOS had no way
     // to put us on hold and the outcome was undefined — while the other side saw a running timer, silence

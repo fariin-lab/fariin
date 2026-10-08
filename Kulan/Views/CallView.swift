@@ -175,7 +175,7 @@ struct CallView: View {
         showControls()
         // 1:1 audit r2 H9c/H10, 2026-10-08: a paused camera sends no `cameraSwitchFlip` (the switch is
         // only recorded), and Reduce Motion wants no turn: switch without the edge-on hold.
-        if !call.localVideoLive || reduceMotion {
+        if !call.localPreviewLive || reduceMotion {
             call.switchCamera()
             return
         }
@@ -556,8 +556,9 @@ struct CallView: View {
     private var showAvatar: Bool {
         if stageShown { return false }
         if !call.isVideo { return true }
-        // 1:1 audit #11: `localVideoLive`, not `cameraOn`: a paused camera is my photo, not a frozen frame.
-        if showLocalFull { return !call.localVideoLive }   // my feed owns the big view
+        // 1:1 audit #11: not `cameraOn`: a paused camera is my photo, not a frozen frame. r2 check,
+        // 2026-10-08: `localPreviewLive`, so my tile shows the camera while it starts.
+        if showLocalFull { return !call.localPreviewLive }   // my feed owns the big view
         return !hasRemote
     }
 
@@ -569,7 +570,7 @@ struct CallView: View {
         // Only show a fullscreen feed that is ACTUALLY LIVE. Otherwise hide the renderer (opacity 0) so
         // the shared Metal view doesn't keep its last frame on screen — that stale frame was YOUR frozen
         // ringing-preview showing as the background behind the avatar when the other camera is off.
-        let canShow = full != nil && !stageShown && (showLocalFull ? call.localVideoLive : hasRemote)
+        let canShow = full != nil && !stageShown && (showLocalFull ? call.localPreviewLive : hasRemote)
         // STABILITY (LiveKit pattern): never swap view-tree branches. The gradient/avatar-blur is
         // a permanent base, and ONE Metal renderer stays mounted on top for the whole video call —
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
@@ -793,7 +794,7 @@ struct CallView: View {
         // stays my camera, live only while it is on).
         // 1:1 audit #11/#13: live video only; a paused or stalled camera shows the photo card.
         let pipTrack: RTCVideoTrack? = dualWatch ? (call.remoteVideoLive ? call.remoteVideoTrack : nil)
-            : (pipIsLocal ? ((call.localVideoLive || myScreenOnCamera) ? call.localVideoTrack : nil) : feeds.tile)
+            : (pipIsLocal ? ((call.localPreviewLive || myScreenOnCamera) ? call.localVideoTrack : nil) : feeds.tile)
         // THE TILE BREATHES WITH THE CHROME (owner's 2026-08-12 side-by-side reference, exact
         // numbers read from the reference implementation): menus up → the tile grows; menus away →
         // it shrinks toward the corner, so the tap that toggles the controls is FELT on the tile

@@ -4659,10 +4659,14 @@ struct ThreadView: View {
         let state = CallService.shared.state
         let callsEnabled = state == .idle || state == .ended   // their `currentCall == nil`
         if !isGroup && !otherUid.isEmpty {
+            // 1:1 audit r2 check, 2026-10-08 (B4): live call with this chat's person = buttons stay
+            // on, and startCall's same-person branch brings that call back instead of dialling.
+            let liveWithThem = CallService.shared.otherUid == otherUid
+                && (state == .outgoing || state == .active || state == .reconnecting)
             return .conversation(
                 audio: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) },
                 video: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) },
-                callsEnabled: callsEnabled)
+                callsEnabled: callsEnabled || liveWithThem)
         }
         if isGroup && CallFeatures.groupCalls {
             return .conversation(audio: { startGroupCall(video: false) },

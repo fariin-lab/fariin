@@ -10,6 +10,9 @@ final class NetworkState {
     private let monitor = NWPathMonitor()
     private(set) var isWifi = true     // optimistic until the first path update
     private(set) var isOnline = true   // optimistic until the first path update
+    /// 1:1 audit r2 check, 2026-10-08: plainly no path (`.unsatisfied`). `.requiresConnection` (an
+    /// on-demand VPN, cellular waking up) is not offline, so a dial is not refused for it.
+    private(set) var isUnsatisfied = false
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
@@ -17,6 +20,7 @@ final class NetworkState {
             let wasOnline = self.isOnline
             self.isWifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
             self.isOnline = path.status == .satisfied
+            self.isUnsatisfied = path.status == .unsatisfied
             // THE MOMENT THE SIGNAL COMES BACK, and it is announced rather than polled. A send that
             // died on a dropped connection has no way of knowing the line is up again, so it sat
             // there saying "Not delivered" until somebody tapped it — on a phone in a place where
