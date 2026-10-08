@@ -215,6 +215,7 @@ final class GroupCallService: ObservableObject {
 
     /// Opens the pre-join screen for a link. Busy (a call already up or starting) says so instead.
     func openLobby(key: String) {
+        guard CallFeatures.callLinks else { Self.presentOverTop(Self.linksOff); return }
         guard lobby == nil else { return }
         guard activeCid == nil, !connecting, !waitingForApproval, !Self.oneToOneLive else {   // audit M-111
             Self.presentOverTop(Self.busyNotice)
@@ -1778,6 +1779,8 @@ final class GroupCallService: ObservableObject {
     }
 
     private static let linkGone = Notice(title: "This call link is no longer valid", message: nil)
+    /// `CallFeatures.callLinks` is off (owner, 2026-10-08).
+    private static let linksOff = Notice(title: "Call links aren't available yet", message: nil)
 
     /// A join that starts somewhere else (an invitation answered on the lock screen, a chat's Join
     /// bar) while the lobby of some link is open: the lobby goes first. The call screen is a second

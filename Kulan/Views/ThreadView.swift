@@ -1913,7 +1913,7 @@ struct ThreadView: View {
         }
         .fullScreenCover(isPresented: $showGroupCall) { GroupCallView() }
         .safeAreaInset(edge: .top) {
-            if groupCallActive {
+            if groupCallActive && CallFeatures.groupCalls {
                 GroupCallJoinBar(video: groupCallVideo) {
                     InstantCover.run { showGroupCall = true }   // a cut, not a slide (owner, 2026-10-06)
                     // audit M-059, 2026-10-07: Join only joins. A stale bar (the call ended a moment
@@ -4662,7 +4662,7 @@ struct ThreadView: View {
                 video: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) },
                 callsEnabled: callsEnabled)
         }
-        if isGroup {
+        if isGroup && CallFeatures.groupCalls {
             return .conversation(audio: { startGroupCall(video: false) },
                                  video: { startGroupCall(video: true) },
                                  callsEnabled: callsEnabled)

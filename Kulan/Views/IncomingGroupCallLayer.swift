@@ -31,7 +31,8 @@ struct IncomingGroupCallLayer: View {
             Color.clear.frame(width: 0, height: 0).allowsHitTesting(false)
             // owner, 2026-10-06: not for a room already declined on the lock screen (the list of
             // invitations can load after that decline).
-            if let invite = service.incomingInvite, !GroupCallRinging.shared.isDeclined(invite.roomId) {
+            if CallFeatures.groupCalls, let invite = service.incomingInvite,
+               !GroupCallRinging.shared.isDeclined(invite.roomId) {
                 IncomingGroupCallScreen(invite: invite)
                     .transition(.opacity)
             }

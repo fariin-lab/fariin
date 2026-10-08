@@ -281,8 +281,10 @@ struct GroupInfoView: View {
     /// hang it on, so it becomes a peer of the others rather than a new place to hunt for.
     private var groupGlassActions: some View {
         HStack(spacing: 0) {
-            Button { startCall(video: false) } label: { PosterActionIcon(icon: "phone.fill") }.tint(.primary)
-            Button { startCall(video: true) } label: { PosterActionIcon(icon: "video.fill") }.tint(.primary)
+            if CallFeatures.groupCalls {
+                Button { startCall(video: false) } label: { PosterActionIcon(icon: "phone.fill") }.tint(.primary)
+                Button { startCall(video: true) } label: { PosterActionIcon(icon: "video.fill") }.tint(.primary)
+            }
             Button { showMute = true } label: { PosterActionIcon(icon: "ic_bell_off") }.tint(.primary)
             if canEditInfo {
                 PhotosPicker(selection: $avatarItem, matching: .images) {

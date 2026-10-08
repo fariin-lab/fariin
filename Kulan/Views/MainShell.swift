@@ -724,7 +724,8 @@ struct CallsView: View {
         }
     }
     private var mergedRows: [CallsRow] {
-        (shownLinks.map(CallsRow.link) + shownRuns.map(CallsRow.run)).sorted { $0.date > $1.date }
+        let links = CallFeatures.callLinks ? shownLinks.map(CallsRow.link) : []
+        return (links + shownRuns.map(CallsRow.run)).sorted { $0.date > $1.date }
     }
 
     /// A link row as the list holds it: pickable in Select mode, with its long-press menu. Its own
@@ -943,7 +944,7 @@ struct CallsView: View {
                         // Call links sit on top of the history, the create row first. The create row
                         // steps aside while rows are being picked; the links stay, and can be picked
                         // and deleted with the calls (owner, 2026-10-05).
-                        if !selecting { createLinkRow }
+                        if !selecting && CallFeatures.callLinks { createLinkRow }
                         // Links and calls in ONE time-ordered list; see `mergedRows` for why.
                         ForEach(mergedRows) { row in
                             switch row {

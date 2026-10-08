@@ -466,8 +466,10 @@ struct CallView: View {
             Menu {
                 // Only once the call is really connected: moving a ringing call onto a
                 // multi-person one would invite people to a conversation that never started.
-                Button { showAddPeople = true } label: { Label("Add people", systemImage: "person.badge.plus") }
-                    .disabled(!(call.state == .active && call.connectedDate != nil))
+                if CallFeatures.groupCalls {
+                    Button { showAddPeople = true } label: { Label("Add people", systemImage: "person.badge.plus") }
+                        .disabled(!(call.state == .active && call.connectedDate != nil))
+                }
                 // Same rule as Add people: a call that has not connected has nobody to show it to.
                 // Starting opens the system's broadcast sheet; its countdown is the consent.
                 Button { call.toggleScreenShare() } label: {
