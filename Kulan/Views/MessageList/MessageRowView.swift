@@ -1674,7 +1674,8 @@ final class MessageRowView: UIView {
         if let box = checkbox, m.selected != fromSelected {
             box.refreshSelected(m.selected)
         }
-        if case .bubble = plan?.body, m.highlighted != fromHighlighted {
+        // The mark goes ON at once (it lights only after the jump has landed) and fades OFF smoothly.
+        if case .bubble = plan?.body, m.highlighted != fromHighlighted, fromHighlighted {
             let a = CABasicAnimation(keyPath: "fillColor")
             a.fromValue = UIColor.label.withAlphaComponent(fromHighlighted ? 0.18 : 0).cgColor
             a.toValue = highlight.shape.fillColor

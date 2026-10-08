@@ -4165,7 +4165,8 @@ struct ThreadView: View {
 
     private func flashAndScroll(_ id: String) {
         nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
-        highlightId = id
+        // An older flash ends now; this one lights only when the row has LANDED (below).
+        if highlightId != nil { highlightId = nil }
         // the reference app's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
         // (the bubble's own 0.4s ease drives the fade). The old 2.2s hold felt sluggish across every
         // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ the reference app's timing.
@@ -4183,7 +4184,25 @@ struct ThreadView: View {
                 guard seq == flashSeq else { return }
                 waited += 1
             }
-            try? await Task.sleep(nanoseconds: 600_000_000)
+            // ⛔ AND THE GLIDE HAS STOPPED — owner, 2026-10-08, pinned message: the mark "takes too
+            // long to appear or stay visible". `onVisible` fires as the row PEEKS in at the edge,
+            // mid-glide, so the hold ran out while the list was still moving and the row landed
+            // already fading. The list has landed when the set of rows on screen stops changing
+            // for 150ms (at most 1.5s more). Only then does the mark go on, at once, like the
+            // reference app, and it holds 1s before its 0.4s fade.
+            var last = visibleRows.ids
+            var still = 0
+            var settle = 0
+            while still < 3, settle < 30 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard seq == flashSeq else { return }
+                let now = visibleRows.ids
+                still = now == last ? still + 1 : 0
+                last = now
+                settle += 1
+            }
+            highlightId = id
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard seq == flashSeq, highlightId == id else { return }
             withAnimation { highlightId = nil }
         }
