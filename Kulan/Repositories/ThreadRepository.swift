@@ -777,7 +777,7 @@ final class ThreadRepository {
                     // 2026-09-24 decision D15: gone or hidden-for-deletion is a deleted account.
                     // A missing doc counts only when the server said so: a cold cache also reports
                     // "does not exist" on its first snapshot, which is not a deletion.
-                    if let snap, snap.exists || !snap.metadata.isFromCache {
+                    if snap.exists || !snap.metadata.isFromCache {
                         let deleted = !snap.exists || (snap.data()?["isHidden"] as? Bool) == true
                         if self?.otherAccountDeleted != deleted { self?.otherAccountDeleted = deleted }
                     }
