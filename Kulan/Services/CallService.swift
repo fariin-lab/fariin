@@ -5471,7 +5471,10 @@ final class CallService: NSObject {
             // show is ended on this phone only; the caller's own ring-out closes the doc.
             if gate == .blocked {
                 self.recordWritten = true
-                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+                // Already answered (lock screen, inside the read): the accept is on the doc, so the
+                // caller would sit in a dead "connected" call. Hang up for real then; the answer
+                // already revealed this phone, so the end write leaks nothing new.
+                self.finishCall(updateRemote: self.state != .incoming, clearCallKit: true, localUser: true)
                 return
             }
             guard gate == .allowed else {
@@ -5666,9 +5669,15 @@ final class CallService: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             guard !settled.done else { return }
             ref.getDocument(source: .cache) { [weak self] cached, _ in
-                guard let self, let cached, cached.exists else { return }
-                let ok = self.decideAllowed(cached)
-                DispatchQueue.main.async { finish(ok) }
+                guard let self else { return }
+                if let cached, cached.exists {
+                    let ok = self.decideAllowed(cached)
+                    DispatchQueue.main.async { finish(ok) }
+                } else if !BlockList.snapshot.contains(caller) {
+                    // Nothing cached and not on my block list: ring now rather than wait for a
+                    // slow radio; the live read can no longer change a call already ringing.
+                    DispatchQueue.main.async { finish(.allowed) }
+                }
             }
         }
         ref.getDocument { [weak self] cs, err in
@@ -6803,28 +6812,11 @@ final class CallService: NSObject {
                     return nil
                 }) { _, err in
                     if let err { Self.reportToRecovery(err, "call end") }
-                    // 1:1 audit r2 check, 2026-10-08: offline, the transaction cannot run. Queue a
-                    // plain end ONLY when the cached doc shows no answer, so the caller is not left
-                    // ringing out after my Decline.
-                    let ns = err.map { $0 as NSError }
-                    guard let ns, ns.domain == FirestoreErrorDomain,
-                          ns.code == 14 else {   // 14 = unavailable
-                        endWrites.leave()
-                        return
-                    }
-                    ref.getDocument(source: .cache) { cached, _ in
-                        let d = cached?.data() ?? [:]
-                        let owner = d["answeredDevice"] as? String ?? ""
-                        guard cached?.exists == true, d["acceptedAt"] == nil,
-                              (d["status"] as? String) != "ended", owner.isEmpty || owner == claim else {
-                            endWrites.leave()
-                            return
-                        }
-                        ref.updateData(["status": "ended", "endReason": reason.rawValue]) { e in
-                            if let e { Self.reportToRecovery(e, "call end") }
-                        }
-                        endWrites.leave()   // offline: the write is queued, do not hold the task for it
-                    }
+                    // No offline fallback on purpose (check, 2026-10-08): a queued plain write is
+                    // applied blindly on reconnect and could end a call my other device answered in
+                    // between, which is the bug this transaction exists for. Offline, the caller
+                    // rings out instead.
+                    endWrites.leave()
                 }
             } else {
                 endWrites.enter()
