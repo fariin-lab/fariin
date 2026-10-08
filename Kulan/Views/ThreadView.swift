@@ -2503,6 +2503,13 @@ struct ThreadView: View {
                         }
                     }
                 }
+                // ⛔ THE NEXT PIN SLIDES IN — owner, 2026-10-08, with the reference app's screenshot.
+                // Read from its banner (`animatePinnedMessageTransition`): the old thumbnail + text
+                // slide UP by the banner height while the new ones slide up into place from below,
+                // both at once, a 0.3 s critically damped spring, clipped to the banner. The count
+                // indicator and the pin button stay where they are.
+                ZStack(alignment: .leading) {
+                HStack(spacing: 10) {
                 if let m = msg, m.isImage, let url = m.imageUrl {
                     SecureImageView(imageUrl: url, enc: m.enc, cid: cid)
                         .frame(width: 32, height: 32)
@@ -2548,7 +2555,13 @@ struct ThreadView: View {
                     } ?? "Tap to view")
                         .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .id(pid)
+                .transition(.asymmetric(insertion: .move(edge: .bottom), removal: .move(edge: .top)))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .clipped()
                 // Pin icon → context menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
                 Menu {
                     if !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false) {
@@ -2613,7 +2626,12 @@ struct ThreadView: View {
                             // landed. Moving on after a failed jump (toast or the pinned sheet) left
                             // the bar naming a pin the reader never reached. The index test skips the
                             // advance if the pin list changed (and reset the index) while this paged.
-                            if ids.count > 1, min(pinIndex, ids.count - 1) == idx { pinIndex = (idx + 1) % ids.count }   // next tap shows the next pin
+                            if ids.count > 1, min(pinIndex, ids.count - 1) == idx {
+                                // The reference banner's spring: 0.3 s, damping 1 (no bounce).
+                                withAnimation(.spring(response: 0.3, dampingFraction: 1)) {
+                                    pinIndex = (idx + 1) % ids.count   // next tap shows the next pin
+                                }
+                            }
                         }
                         else if repo.pinnedGone.contains(pid) { showJumpToast("Pinned message was deleted") }
                         else { showPinnedSheet = true }
