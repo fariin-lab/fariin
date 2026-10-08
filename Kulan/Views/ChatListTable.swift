@@ -1481,6 +1481,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
         guard let conv = host.conversation(id) else { return cell }
         configureChatCell(c, id: id, content: host.content(for: conv))
+        // The reference app's rule, by id: only the chat being opened may be built grey.
+        if !tableView.isEditing {
+            if id == openedRowId {
+                tableView.selectRow(at: indexPath, animated: false, scrollPosition: .none)
+            } else {
+                tableView.deselectRow(at: indexPath, animated: false)
+            }
+        }
         return c
     }
 
@@ -2050,20 +2058,47 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// nothing in this list may be grey. Acts only on the open → closed edge, so the row still
     /// stays pressed while a chat slides IN.
     private var chatWasOpen = false
+    /// ⛔ THE GREY ROW, FOURTH PASS — owner, 2026-10-08: "sometimes" a row is still grey with no chat
+    /// open. Every pass before this one cleared the grey on an EVENT (appear, pop, path edge) and by
+    /// POSITION, so a selection that outlived its event, or rode a diff onto a recycled cell, stayed.
+    /// The reference app's chat list decides it by ID instead: the cell for the open chat is selected
+    /// and every other cell is deselected, each time a cell is built. `openedRowId` is that fact here,
+    /// set by the tap and dropped when the chat closes or never opened.
+    private var openedRowId: String?
+
     func setChatOpen(_ open: Bool) {
         defer { chatWasOpen = open }
-        guard chatWasOpen, !open else { return }
-        // After the pop's own pass, so nothing the arrival does re-applies a selection under it.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.tableView.isEditing else { return }
-            for ip in self.tableView.indexPathsForSelectedRows ?? [] {
-                self.tableView.deselectRow(at: ip, animated: true)
-            }
-            for cell in self.tableView.visibleCells where cell.isSelected {
-                cell.setSelected(false, animated: true)
-            }
-            self.clearStuckHighlights(in: self.tableView)
+        if chatWasOpen, !open {
+            openedRowId = nil
+            // After the pop's own pass, so nothing the arrival does re-applies a selection under it.
+            DispatchQueue.main.async { [weak self] in self?.clearGreyRows() }
+        } else if !open, openedRowId == nil,
+                  !(tableView.indexPathsForSelectedRows ?? []).isEmpty || tableView.visibleCells.contains(where: \.isSelected) {
+            // No chat open and none on its way: a grey row here is left over, whatever left it.
+            DispatchQueue.main.async { [weak self] in self?.clearGreyRows() }
         }
+    }
+
+    /// A tap that opens nothing (the push dropped, e.g. under a pop still landing) has no close edge
+    /// to clear it. If no chat is open shortly after the tap, the grey goes.
+    private func expectChatToOpen(_ id: String) {
+        openedRowId = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, !self.chatWasOpen, self.openedRowId == id else { return }
+            self.openedRowId = nil
+            self.clearGreyRows()
+        }
+    }
+
+    private func clearGreyRows() {
+        guard !tableView.isEditing else { return }
+        for ip in tableView.indexPathsForSelectedRows ?? [] {
+            tableView.deselectRow(at: ip, animated: true)
+        }
+        for cell in tableView.visibleCells where cell.isSelected {
+            cell.setSelected(false, animated: true)
+        }
+        clearStuckHighlights(in: tableView)
     }
 
     private func clearStuckHighlights(in tableView: UITableView) {
@@ -2154,6 +2189,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
                 tableView.deselectRow(at: indexPath, animated: true)   // nothing opens: no row left grey
                 return
             }
+            expectChatToOpen(id)
             host?.parent.onOpenPerson(u)
             return
         }
@@ -2161,6 +2197,7 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
             tableView.deselectRow(at: indexPath, animated: true)
             return
         }
+        expectChatToOpen(c.id)
         host?.parent.onOpen(c)
     }
 
