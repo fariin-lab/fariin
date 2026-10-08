@@ -38,6 +38,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var stopObserver: ScreenShareIPC.DarwinObserver?
     private var running = false
     private var ended = false
+    /// Started without the app asking (Control Center): until the app stamps `appAliveNs` after
+    /// `startNs`, the 4 s rule waits `adoptGraceNs` for it to adopt the share (1:1 audit #37,
+    /// owner, 2026-10-08).
+    private var awaitingAdoption = false
+    private var startNs: UInt64 = 0
+    private static let adoptGraceNs: UInt64 = 3_000_000_000
 
     // Video state, touched only on ReplayKit's sample callback.
     private static let minFrameInterval = 1.0 / 31.0
@@ -69,6 +75,19 @@ final class SampleHandler: RPBroadcastSampleHandler {
         audioRing.prepareWriter()
         lifeQueue.async { [weak self] in
             guard let self, !self.ended else { return }
+            // Wanted = the app cleared the stop flag and stamped alive for this share (picker
+            // path). Otherwise clear a stale flag and give the app its grace to adopt; a real
+            // stop it sends after "started" below still lands.
+            let now = ScreenShareIPC.nowNs()
+            let alive = self.control?.appAliveNs ?? 0
+            let wanted = self.control?.stopRequested == false
+                && alive != 0 && now &- alive <= ScreenShareIPC.appAliveTimeoutNs
+            if !wanted {
+                self.control?.stopRequested = false
+                self.awaitingAdoption = true
+                self.startNs = now
+                NSLog("[ScreenShare] extension: started outside a share, waiting for the app")
+            }
             self.running = true
             self.startKeepalive()
             self.stopObserver = ScreenShareIPC.DarwinObserver(name: ScreenShareIPC.Notify.stop) { [weak self] in
@@ -126,6 +145,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
         video?.touchKeepalive(now)
         if checkStop() { return }
         let alive = control?.appAliveNs ?? 0
+        if awaitingAdoption {
+            if alive > startNs {
+                awaitingAdoption = false   // the app took it: the normal rule from here
+            } else {
+                if now &- startNs > Self.adoptGraceNs {
+                    NSLog("[ScreenShare] extension: not adopted by the app, finishing")
+                    finish(message: NSLocalizedString("Start screen sharing from a Kulan call.", comment: "Broadcast error"))
+                }
+                return
+            }
+        }
         if alive == 0 || now &- alive > ScreenShareIPC.appAliveTimeoutNs {
             NSLog("[ScreenShare] extension: app not alive for 4 s, finishing")
             finish(message: NSLocalizedString("The call has ended", comment: "Broadcast error"))

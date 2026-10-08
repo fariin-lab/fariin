@@ -24,13 +24,18 @@ struct ScreenShareStageView: UIViewRepresentable {
             context.coordinator.track = track           // claim synchronously (no double-dispatch)
             // Attach/detach ASYNC, same rule as VideoRendererView: a synchronous attach inside a
             // SwiftUI update can race the decode thread and garble the first frames.
+            // 1:1 audit #41 (owner, 2026-10-08): a dismantle in the same turn already let go; binding
+            // after it pinned the dead stage to the track until the call ended. Detach only then.
+            let coordinator = context.coordinator
             DispatchQueue.main.async {
-                uiView.bind(old: old, new: track)
+                let live = !coordinator.dismantled && coordinator.track === track
+                uiView.bind(old: old, new: live ? track : nil)
             }
         }
     }
 
     static func dismantleUIView(_ uiView: ScreenShareStageUIView, coordinator: Coordinator) {
+        coordinator.dismantled = true
         uiView.bind(old: coordinator.track, new: nil)
         coordinator.track = nil
     }
@@ -38,6 +43,7 @@ struct ScreenShareStageView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator {
         var track: RTCVideoTrack?
+        var dismantled = false
         weak var stage: ScreenShareStageUIView?
     }
 }

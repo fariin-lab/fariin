@@ -348,23 +348,49 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
     }
 }
 
-// Converts decoded WebRTC frames (the CVPixelBuffer / hardware-decoded path) into CMSampleBuffers
-// and feeds them to the PiP display layer, carrying the frame's rotation across to the view.
-// (I420-only frames are skipped — most remote streams hardware-decode to a CVPixelBuffer.)
+// Converts decoded WebRTC frames into CMSampleBuffers and feeds them to the PiP display layer,
+// carrying the frame's rotation across to the view.
+// 1:1 audit #14 (owner, 2026-10-08): frames that are not a plain CVPixelBuffer (a software decode
+// gives I420) or that carry a crop are converted through I420 into an NV12 buffer instead of being
+// dropped, which left the PiP on the placeholder or a stale picture.
+// 1:1 audit #22 (owner, 2026-10-08): the format description is reused while the size and format stay
+// the same, and a frame is dropped while the previous one still waits for main, so a busy main
+// thread cannot queue up decoded buffers (and pin the decoder's pool).
 final class PiPFrameRenderer: NSObject, RTCVideoRenderer {
     private weak var view: PiPVideoView?
     init(view: PiPVideoView) { self.view = view; super.init() }
 
+    private let lock = NSLock()
+    // Under `lock`.
+    private var pending = false
+    private var formatDesc: CMVideoFormatDescription?
+    private var pool: CVPixelBufferPool?
+    private var poolSize = (w: 0, h: 0)
+
     func setSize(_ size: CGSize) {}
 
     func renderFrame(_ frame: RTCVideoFrame?) {
-        guard let frame,
-              let pixelBuffer = (frame.buffer as? RTCCVPixelBuffer)?.pixelBuffer,
-              let sample = Self.sampleBuffer(from: pixelBuffer) else { return }
+        guard let frame else { return }
+        lock.lock()
+        if pending { lock.unlock(); return }   // main has not taken the last one yet: drop this
+        pending = true
+        lock.unlock()
+        let pixelBuffer: CVPixelBuffer?
+        if let cv = frame.buffer as? RTCCVPixelBuffer, !cv.requiresCropping() {
+            pixelBuffer = cv.pixelBuffer
+        } else {
+            pixelBuffer = nv12(from: frame.buffer)
+        }
+        guard let pixelBuffer, let sample = sampleBuffer(from: pixelBuffer) else {
+            lock.lock(); pending = false; lock.unlock()
+            return
+        }
         // Normalise to 0/90/180/270 — the enum is bridged as its degree value.
         let degrees = ((frame.rotation.rawValue % 360) + 360) % 360
         DispatchQueue.main.async { [weak self] in
-            guard let view = self?.view else { return }
+            guard let self else { return }
+            self.lock.lock(); self.pending = false; self.lock.unlock()
+            guard let view = self.view else { return }
             view.apply(rotationDegrees: degrees)
             let layer = view.displayLayer
             if layer.status == .failed { layer.flush() }
@@ -372,11 +398,68 @@ final class PiPFrameRenderer: NSObject, RTCVideoRenderer {
         }
     }
 
-    private static func sampleBuffer(from pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
-        var formatDesc: CMVideoFormatDescription?
-        guard CMVideoFormatDescriptionCreateForImageBuffer(
-            allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer, formatDescriptionOut: &formatDesc
-        ) == noErr, let formatDesc else { return nil }
+    /// Any frame buffer (cropped CVPixelBuffer, I420) as a video-range NV12 CVPixelBuffer.
+    /// Runs on the frame's thread; `toI420` applies the crop.
+    private func nv12(from buffer: RTCVideoFrameBuffer) -> CVPixelBuffer? {
+        let i420 = buffer.toI420()
+        let w = Int(i420.width), h = Int(i420.height)
+        guard w > 0, h > 0 else { return nil }
+        lock.lock()
+        if pool == nil || poolSize.w != w || poolSize.h != h {
+            let attrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                kCVPixelBufferWidthKey as String: w,
+                kCVPixelBufferHeightKey as String: h,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+            ]
+            var newPool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attrs as CFDictionary, &newPool)
+            pool = newPool
+            poolSize = (w, h)
+        }
+        let currentPool = pool
+        lock.unlock()
+        guard let currentPool else { return nil }
+        var out: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, currentPool, &out) == kCVReturnSuccess,
+              let out else { return nil }
+        CVPixelBufferLockBaseAddress(out, [])
+        defer { CVPixelBufferUnlockBaseAddress(out, []) }
+        guard let yDst = CVPixelBufferGetBaseAddressOfPlane(out, 0)?.assumingMemoryBound(to: UInt8.self),
+              let uvDst = CVPixelBufferGetBaseAddressOfPlane(out, 1)?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let yDstStride = CVPixelBufferGetBytesPerRowOfPlane(out, 0)
+        let uvDstStride = CVPixelBufferGetBytesPerRowOfPlane(out, 1)
+        let ySrc = i420.dataY, uSrc = i420.dataU, vSrc = i420.dataV
+        let yStride = Int(i420.strideY), uStride = Int(i420.strideU), vStride = Int(i420.strideV)
+        for row in 0..<h {
+            (yDst + row * yDstStride).update(from: ySrc + row * yStride, count: w)
+        }
+        let cw = Int(i420.chromaWidth), ch = Int(i420.chromaHeight)
+        for row in 0..<ch {
+            let dst = uvDst + row * uvDstStride
+            let u = uSrc + row * uStride
+            let v = vSrc + row * vStride
+            for col in 0..<cw {
+                dst[2 * col] = u[col]
+                dst[2 * col + 1] = v[col]
+            }
+        }
+        return out
+    }
+
+    private func sampleBuffer(from pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
+        lock.lock()
+        var desc = formatDesc
+        lock.unlock()
+        if desc == nil || !CMVideoFormatDescriptionMatchesImageBuffer(desc!, imageBuffer: pixelBuffer) {
+            var fresh: CMVideoFormatDescription?
+            guard CMVideoFormatDescriptionCreateForImageBuffer(
+                allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer, formatDescriptionOut: &fresh
+            ) == noErr, let fresh else { return nil }
+            desc = fresh
+            lock.lock(); formatDesc = fresh; lock.unlock()
+        }
+        guard let formatDesc = desc else { return nil }
 
         var timing = CMSampleTimingInfo(duration: .invalid,
                                         presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),

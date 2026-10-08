@@ -60,8 +60,19 @@ final class ScreenShareSession {
     private var poolFullRange = false
     private var readerStopped = false
     private var readerSawFrame = false   // reader queue only
+    /// Polling slowly: no new frame for `idleAfterNs` (still screen, picker open). 1:1 audit #18,
+    /// owner, 2026-10-08. Starts idle: nothing can arrive until the extension starts.
+    private var idle = true
+    private var lastNewFrameNs: UInt64 = 0
+
+    /// Idle poll rate: keeps `appAliveNs` fresh and catches the next frame within ~80 ms.
+    private static let idlePollHz = 12
+    private static let idleAfterNs: UInt64 = 1_000_000_000
 
     // Main only.
+    /// Main's own handle for the stop flag, set in `start()`. Reading the reader queue's `control`
+    /// from main raced its setup block and could skip the flag (1:1 audit #40, owner, 2026-10-08).
+    private var mainControl: ScreenShareIPC.Control?
     private var observers: [ScreenShareIPC.DarwinObserver] = []
     private var finished = false
     private var started = false
@@ -82,6 +93,7 @@ final class ScreenShareSession {
         // Clears a stale stop from the last share and stamps alive BEFORE the picker shows, so the
         // extension never starts into "the call has ended".
         control.markShareWanted()
+        mainControl = control
         observers = [
             ScreenShareIPC.DarwinObserver(name: ScreenShareIPC.Notify.started) { [weak self] in
                 DispatchQueue.main.async { self?.extensionSaidStarted() }
@@ -101,6 +113,12 @@ final class ScreenShareSession {
         }
         NSLog("[ScreenShare] session: listening (seq %llu)", baseline)
         return true
+    }
+
+    /// Main. The broadcast was started outside the app (Control Center) and its "started" already
+    /// went by: treat it as said now (1:1 audit #37, owner, 2026-10-08). Call right after `start()`.
+    func adoptRunningBroadcast() {
+        extensionSaidStarted()
     }
 
     /// The quality tier's frame-rate ceiling: the poll rate. Any thread.
@@ -149,9 +167,12 @@ final class ScreenShareSession {
         // Twice the frame rate (check, 2026-10-08): polling at exactly the writer's 30 Hz beats
         // against it and drops or doubles frames (judder at an effective 20-25 fps). Only a NEW seq
         // is delivered, and the capturer still caps the rate, so the extra ticks cost one load each.
-        let interval = DispatchTimeInterval.nanoseconds(1_000_000_000 / (fps * 2))
-        let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
-        t.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(2))
+        // Idle (no new frame for 1 s, or not started yet) drops to 12 Hz and lets the system
+        // coalesce wakeups (1:1 audit #18, owner, 2026-10-08).
+        let hz = idle ? min(Self.idlePollHz, fps * 2) : fps * 2
+        let interval = DispatchTimeInterval.nanoseconds(1_000_000_000 / hz)
+        let t = DispatchSource.makeTimerSource(flags: idle ? [] : .strict, queue: queue)
+        t.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(idle ? 20 : 2))
         t.setEventHandler { [weak self] in self?.tick() }
         timer = t
         t.resume()
@@ -165,7 +186,16 @@ final class ScreenShareSession {
             lastAliveWriteNs = now
         }
         guard let frame = video.readFrame(newerThan: lastSeq, makeBuffer: { info in self.makeBuffer(info) }) else {
+            if !idle, now &- lastNewFrameNs >= Self.idleAfterNs {
+                idle = true
+                startTimer()
+            }
             return
+        }
+        lastNewFrameNs = now
+        if idle {
+            idle = false
+            startTimer()
         }
         lastSeq = frame.0.seq
         onFrame(frame.1, Self.degrees(orientation: frame.0.orientation))
@@ -269,7 +299,8 @@ final class ScreenShareSession {
         // The stop request goes out NOW, on main, not on the reader queue (check, 2026-10-08): queued,
         // it could land after a NEW session's markShareWanted (picker cancelled, Share tapped again)
         // and the new extension would start with the stop flag set and end at once.
-        if requestStop { control?.requestStop() }
+        if requestStop { mainControl?.requestStop() }
+        mainControl = nil
         // Strong on purpose: CallService drops the session right after stop().
         queue.async {
             self.readerStopped = true

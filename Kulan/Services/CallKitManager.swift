@@ -51,6 +51,13 @@ final class CallKitManager: NSObject {
         // WebRTC must not touch the audio session itself under CallKit.
         RTCAudioSession.sharedInstance().useManualAudio = true
         RTCAudioSession.sharedInstance().isAudioEnabled = false
+        // 1:1 audit #17 (owner, 2026-10-08): this runs at launch, so the call engine is built here
+        // off the main thread instead of on the first ring or dial.
+        CallService.warmUpEngine()
+        // 1:1 audit #37: a screen share started from Control Center during a live call is taken
+        // over by the call. Deferred a turn so this init never touches CallService.shared while one
+        // of the two singletons is still being created.
+        DispatchQueue.main.async { CallService.shared.installShareAdoption() }
     }
 
     /// Point the provider at whatever ringtone this chat is set to.
@@ -231,6 +238,10 @@ final class CallKitManager: NSObject {
         update.supportsDTMF = false
         update.supportsGrouping = false
         update.supportsUngrouping = false
+        // 1:1 audit #5 (owner, 2026-10-08): no hold, as in the reference app. Unhold relies on
+        // CallKit re-activating the session, which fails when calls are swapped on the system
+        // screen and leaves the call silent. iOS then offers "End & Accept" for a phone call.
+        update.supportsHolding = false
     }
 
     /// 2026-09-24 audit: a VoIP push that names no call. iOS still requires a report for every VoIP
@@ -450,7 +461,14 @@ extension CallKitManager: CXProviderDelegate {
         // answered in the instant it shows) used to answer whatever 1:1 call was current.
         guard let live = activeUUID, live == action.callUUID else { action.fail(); return }
         configureAudio()
-        CallService.shared.answer()
+        // 1:1 audit #23 (owner, 2026-10-08): the service has no call left to answer (it ended in
+        // the tone window, or never had one). Fulfilling left a "connected" system call with
+        // nothing behind it, so the action fails and the system call is closed.
+        guard CallService.shared.answer() else {
+            action.fail()
+            reportEnded(.failed)
+            return
+        }
         action.fulfill()
     }
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
@@ -533,13 +551,19 @@ extension CallKitManager: CXProviderDelegate {
         groupAudioSessionLive = false
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
-        // .videoChat when the camera is on: VPIO echo cancellation TUNED FOR LOUDSPEAKER (the echo-
+        // .videoChat on the loudspeaker: VPIO echo cancellation TUNED FOR LOUDSPEAKER (the echo-
         // on-speaker fix big apps use); .voiceChat (earpiece-tuned) otherwise. Bluetooth allowed.
+        // 1:1 audit #2 (owner, 2026-10-08): chosen by the speaker choice, not the camera. .videoChat
+        // routes to the loudspeaker by itself, so a video call moved to the earpiece came back on
+        // the speaker at every activation. Same rule as updateAudioRoute, one mode writer.
         try? s.setCategory(.playAndRecord,
-                           mode: CallService.shared.cameraOn ? .videoChat : .voiceChat,
+                           mode: CallService.shared.isSpeaker ? .videoChat : .voiceChat,
                            options: [.allowBluetooth, .allowBluetoothA2DP])
         s.audioSessionDidActivate(audioSession)
-        s.isAudioEnabled = true   // turn the WebRTC audio unit ON
+        // 1:1 audit #26 (owner, 2026-10-08): the WebRTC audio unit (and the mic indicator) stays
+        // off while the caller's call only rings; CallService turns it on at the accept. The
+        // callee and every re-activation turn it on here as before.
+        s.isAudioEnabled = CallService.shared.callAudioUnitMayStart
         s.unlockForConfiguration()
         // Re-assert the speaker route. Every session (re)activation — first connect, and after any
         // interruption (Siri, an incoming cellular call) — resets the output to the earpiece default,
@@ -563,6 +587,15 @@ extension CallKitManager: CXProviderDelegate {
         RTCAudioSession.sharedInstance().isAudioEnabled = false
     }
 
+    /// 1:1 audit #24 (owner, 2026-10-08): iOS gave up waiting on an action. CallKit's automatic
+    /// unmute of a call that already ended times out even when answered (known since iOS 13), so
+    /// that one is ignored, as the reference app does. Anything else is logged; iOS has already
+    /// treated the action as failed.
+    func provider(_ provider: CXProvider, timedOutPerforming action: CXAction) {
+        if action is CXSetMutedCallAction { return }
+        print("[Call] CallKit timed out performing \(type(of: action))")
+    }
+
     private func configureAudio() {
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
@@ -574,8 +607,9 @@ extension CallKitManager: CXProviderDelegate {
         // above later became video-aware and this leftover was never removed. Effect: video calls
         // answered through CallKit ran with EARPIECE-tuned echo cancellation on loudspeaker, which is
         // the hear-your-own-voice setup that didActivate (:152) was written to avoid.
+        // 1:1 audit #2 (owner, 2026-10-08): mode by the speaker choice, as in didActivate.
         try? s.setCategory(.playAndRecord,
-                           mode: CallService.shared.cameraOn ? .videoChat : .voiceChat,
+                           mode: CallService.shared.isSpeaker ? .videoChat : .voiceChat,
                            options: [.allowBluetooth, .allowBluetoothA2DP])
         s.unlockForConfiguration()
     }

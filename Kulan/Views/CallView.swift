@@ -13,20 +13,20 @@ import WebRTC
 // works per mode (no dead buttons): voice = mic·speaker·end, video = mic·camera·flip·speaker·end.
 struct CallView: View {
     private var call = CallService.shared
-    @State private var now = Date()
     /// ⛔ THE CALL WEARS THE PERSON'S OWN COLOUR (owner, 2026-08-20), reversing the flat black of
     /// 2026-07-11. The same extraction the profile page uses, from the same photograph, so a call and
     /// that person's profile read as one surface rather than two screens about one person. Nil until
     /// it resolves and nil for somebody with no photo — both fall back to the black this screen has
     /// always had, which is the right answer when there is nothing to extract from.
     @State private var peerPalette: ProfilePalette?
+    /// 1:1 audit #38: a minimize waiting for the turn back to portrait.
+    @State private var minimizeQueued = false
     // Layout state lives in CallService so minimize/restore keeps the SAME big/small choice and tile
     // position (the fullScreenCover destroys this view on minimize; @State here reset every time).
     private var isLocalExpanded: Bool { get { call.isLocalExpanded } nonmutating set { call.isLocalExpanded = newValue } }
     // Owner audit 2026-10-06 #18: the tile's CORNER, not an offset — see CallService.pipCornerLeft.
     private var pipCornerLeft: Bool { get { call.pipCornerLeft } nonmutating set { call.pipCornerLeft = newValue } }
     private var pipCornerTop: Bool { get { call.pipCornerTop } nonmutating set { call.pipCornerTop = newValue } }
-    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     // Front↔back switch, rebuilt on the reference implementation's mechanics (owner's order: no
     // blur, and never both feeds visible mid-switch). The OLD camera rotates the tile edge-on (or
     // dips fullscreen to black), HOLDS there through the capture restart — that hold is what hides
@@ -232,7 +232,7 @@ struct CallView: View {
     }
     private var durationText: String {
         guard let start = call.connectedDate else { return "Connecting…" }   // not truly connected until ICE is up (H1)
-        return CallDuration.clock(max(0, Int(now.timeIntervalSince(start))))
+        return CallDuration.clock(max(0, Int(Date().timeIntervalSince(start))))
     }
     private var bgImage: UIImage? {
         guard let url = call.otherPhotoUrl, !url.isEmpty else { return nil }
@@ -356,7 +356,6 @@ struct CallView: View {
                 .animation(.easeInOut(duration: 0.25), value: controlsVisible)
                 .zIndex(3)
             }
-            .onReceive(ticker) { now = $0 }
             .onAppear { armAutoHide() }
             // Screen share v3: landscape is allowed only while this screen shows their shared
             // screen. Their share ending, the call ending or a minimize brings portrait back.
@@ -459,7 +458,9 @@ struct CallView: View {
 
     // Their video shows only when their camera is actually on (the track object lingers even after
     // they turn the camera off, so gate on the signalled camera state, not just the track).
-    private var hasRemote: Bool { call.remoteCameraOn && call.remoteVideoTrack != nil }
+    // 1:1 audit #13 (owner, 2026-10-08): `remoteVideoLive` also drops a stream that stopped
+    // delivering frames, so a lost camera-off signal shows their photo, not a frozen face.
+    private var hasRemote: Bool { call.remoteVideoLive && call.remoteVideoTrack != nil }
     // Show MY camera full-screen while RINGING (self-preview) or when I tapped to swap. Once the
     // call is CONNECTED and their camera is off, THEY own the big view (avatar) and I go to the PiP —
     // my video never fills the screen just because they turned their camera off (they'd "vanish").
@@ -492,7 +493,8 @@ struct CallView: View {
     private var showAvatar: Bool {
         if stageShown { return false }
         if !call.isVideo { return true }
-        if showLocalFull { return !call.cameraOn }   // my feed owns the big view
+        // 1:1 audit #11: `localVideoLive`, not `cameraOn`: a paused camera is my photo, not a frozen frame.
+        if showLocalFull { return !call.localVideoLive }   // my feed owns the big view
         return !hasRemote
     }
 
@@ -504,7 +506,7 @@ struct CallView: View {
         // Only show a fullscreen feed that is ACTUALLY LIVE. Otherwise hide the renderer (opacity 0) so
         // the shared Metal view doesn't keep its last frame on screen — that stale frame was YOUR frozen
         // ringing-preview showing as the background behind the avatar when the other camera is off.
-        let canShow = full != nil && !stageShown && (showLocalFull ? call.cameraOn : hasRemote)
+        let canShow = full != nil && !stageShown && (showLocalFull ? call.localVideoLive : hasRemote)
         // STABILITY (LiveKit pattern): never swap view-tree branches. The gradient/avatar-blur is
         // a permanent base, and ONE Metal renderer stays mounted on top for the whole video call —
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
@@ -526,7 +528,8 @@ struct CallView: View {
                 // meanwhile (two renderers on one track would draw it twice).
                 VideoRendererView(track: stageShown ? nil : full,
                                   mirror: showLocalFull && call.usingFrontCamera && !myScreenOnCamera,
-                                  fit: !showLocalFull && theirScreenOnCamera)
+                                  fit: !showLocalFull && theirScreenOnCamera,
+                                  upright: !showLocalFull)   // 1:1 audit #35: their face stays upright sideways
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
                     // natural dimensions) that can exceed the screen and oversize the ZStack, which
@@ -559,8 +562,26 @@ struct CallView: View {
             // The ONLY way to minimize the call (swipe-to-minimize removed — screen is locked).
             // The reference app's 0.2s shrink into the card (`CallPipMorph`).
             Button {
+                // 1:1 audit #38 (owner, 2026-10-08): from landscape (their share on stage), turn back
+                // to portrait FIRST and fly after the turn. Snapshotting a landscape screen while the
+                // window rotates squashed the flight or fell back to a plain fade.
+                let sideways = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap { $0.windows }
+                    .first { $0.isKeyWindow }
+                    .map { $0.bounds.width > $0.bounds.height } ?? false
                 OrientationLock.allowLandscape(false)   // the card lives in portrait
-                CallPipMorph.minimize { call.minimized = true }
+                if sideways {
+                    guard !minimizeQueued else { return }
+                    minimizeQueued = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        minimizeQueued = false
+                        guard !call.minimized, call.state != .ended, call.state != .idle else { return }
+                        CallPipMorph.minimize { call.minimized = true }
+                    }
+                } else {
+                    CallPipMorph.minimize { call.minimized = true }
+                }
             } label: {
                 // The minimise glyph rather than a bare chevron: this button shrinks the call
                             // into the pill, it does not dismiss or scroll anything.
@@ -597,7 +618,11 @@ struct CallView: View {
                     .foregroundStyle(.white.opacity(0.75))
                     .transition(.opacity)
                 } else {
-                    Text(statusText).font(.system(size: 15)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
+                    // 1:1 audit #43 (owner, 2026-10-08): the 1s tick lives on this label only. It used
+                    // to be screen-wide state, so the whole call screen re-ran its body every second.
+                    TimelineView(.periodic(from: Date(), by: 1)) { _ in
+                        Text(statusText).font(.system(size: 15)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
+                    }
                 }
             }
             Spacer()
@@ -698,8 +723,9 @@ struct CallView: View {
         let feeds = call.pipFeeds
         // My tile carries my camera, or my screen only in a fallback share (in dual mode my track
         // stays my camera, live only while it is on).
-        let pipTrack: RTCVideoTrack? = dualWatch ? (call.remoteCameraOn ? call.remoteVideoTrack : nil)
-            : (pipIsLocal ? ((call.cameraOn || myScreenOnCamera) ? call.localVideoTrack : nil) : feeds.tile)
+        // 1:1 audit #11/#13: live video only; a paused or stalled camera shows the photo card.
+        let pipTrack: RTCVideoTrack? = dualWatch ? (call.remoteVideoLive ? call.remoteVideoTrack : nil)
+            : (pipIsLocal ? ((call.localVideoLive || myScreenOnCamera) ? call.localVideoTrack : nil) : feeds.tile)
         // THE TILE BREATHES WITH THE CHROME (owner's 2026-08-12 side-by-side reference, exact
         // numbers read from the reference implementation): menus up → the tile grows; menus away →
         // it shrinks toward the corner, so the tap that toggles the controls is FELT on the tile
@@ -715,7 +741,8 @@ struct CallView: View {
             : (landscape ? (controlsVisible ? 160 : 110) : (controlsVisible ? 240 : 140))
         // The Stop Sharing pill sits centred above the bar; lift the tile's home clear of it.
         // Landscape: the tile lives at the trailing edge beside the centred bar, nothing to clear.
-        let pillLift: CGFloat = (call.screenSharePhase == .off || landscape) ? 0
+        // No pill while the system sheet is up (1:1 audit #15), so nothing to clear then either.
+        let pillLift: CGFloat = (call.screenSharePhase == .off || call.screenSharePhase == .picking || landscape) ? 0
             : 54 + (call.screenSharePhase == .live && call.screenShareLink == .poor ? 22 : 0)
         // HOME IS THE BOTTOM CORNER (owner's report: ours landed on TOP after accept; the standard
         // is the bottom). Gutters are 12pt; with the chrome up the tile clears the control bar,
@@ -891,9 +918,11 @@ struct CallView: View {
     // "Starting…" while the share comes up, then one red Stop Sharing pill. Never part of the bar.
     @ViewBuilder private var sharePill: some View {
         switch call.screenSharePhase {
-        case .off:
+        // 1:1 audit #15 (owner, 2026-10-08): nothing while the system sheet is up. The sheet can be
+        // closed without a start and gives no callback, so a pill here read as a hung share.
+        case .off, .picking:
             EmptyView()
-        case .picking, .starting:
+        case .starting:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).tint(.white)
                 Text("Starting…").font(.system(size: 15, weight: .semibold))
@@ -2036,7 +2065,8 @@ struct TalkingWave: View {
         //
         // 20fps: the motion is a slow swell, not a spinner, and this can be on screen for the length
         // of a call. Nothing here is worth 60.
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
+        // 1:1 audit #43 (owner, 2026-10-08): the clock stops while silent; it drew nothing anyway.
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: level <= 0.02)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in
                 guard level > 0.02 else { return }   // silence draws nothing at all
@@ -2087,8 +2117,10 @@ struct TalkingWave: View {
 // while a bar is on screen. No C++ anywhere, which he asked about: the reference animates theirs
 // with ordinary UI code too; their C++ is the call audio, not the banner.
 struct LiveCallBarBackground: View {
+    // 1:1 audit #43 (owner, 2026-10-08): the wave rests while the app is not active (nobody sees it).
+    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: scenePhase != .active)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in
                 ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.green))

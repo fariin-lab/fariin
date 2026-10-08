@@ -24,10 +24,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     private var voipRegistry: PKPushRegistry?
 
     // Portrait everywhere, except the call screen showing the other person's shared screen
-    // (see OrientationLock).
+    // (see OrientationLock). Per window: only the call screen's window may turn (1:1 audit #39).
     func application(_ application: UIApplication,
                      supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        MainActor.assumeIsolated { OrientationLock.mask }
+        MainActor.assumeIsolated { OrientationLock.mask(for: window) }
     }
 
     func application(_ application: UIApplication,

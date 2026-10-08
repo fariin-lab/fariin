@@ -83,6 +83,8 @@ enum SessionRecovery {
     @MainActor private static var nextStallAt = Date.distantPast
     /// This stall episode already posted `recovered`; later resets in it stay quiet.
     @MainActor private static var stallEpisodeRecovered = false
+    /// 1:1 audit #10: a stall was seen during a call; the reset waits for the call to end.
+    @MainActor private static var stallDuringCall = false
 
     @MainActor private static var isActive: Bool {
         UIApplication.shared.applicationState == .active
@@ -101,11 +103,12 @@ enum SessionRecovery {
     @MainActor private static var answeringSince: Date?
 
     @MainActor static func noteServerAnswered() {
-        guard stallStep > 0 || stallEpisodeRecovered else { answeringSince = nil; return }
+        guard stallStep > 0 || stallEpisodeRecovered || stallDuringCall else { answeringSince = nil; return }
         let now = Date()
         guard let since = answeringSince else { answeringSince = now; return }
         guard now.timeIntervalSince(since) >= 60 else { return }
         print("[Recovery] server kept answering for 60s, stall episode over")
+        stallDuringCall = false   // 1:1 audit #10: no reset owed after the call
         stallStep = 0
         nextStallAt = .distantPast
         stallEpisodeRecovered = false
@@ -123,6 +126,7 @@ enum SessionRecovery {
         nextStallAt = .distantPast
         stallEpisodeRecovered = false
         answeringSince = nil
+        stallDuringCall = false
     }
 
     @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
@@ -174,6 +178,33 @@ enum SessionRecovery {
         // No route off the phone: an outage, not a stuck stream. Nothing to reset until it is back.
         guard ConnectionStatus.shared.routeUp else { return }
         answeringSince = nil   // a fresh stall restarts the "kept answering for 60s" clock
+        // 1:1 audit #10 (owner, 2026-10-08): IN A CALL, decide here, before the back-off moves. The
+        // reset was skipped inside `recoverStall`, but the step and the next-allowed time had already
+        // advanced, so after hang-up the stall was still there and the next reset was 60-300s away,
+        // and every call error walked the step up further. Now: one token refresh per call (as
+        // before, the connection is left alone), no step used, and the reset runs once the call ends
+        // if the server has not been answering since.
+        let callState = CallService.shared.state
+        if callState != .idle && callState != .ended {
+            guard !stallDuringCall else { return }
+            stallDuringCall = true
+            stallRunning = true
+            print("[Recovery] stall (\(from)) in a call, token only, reset after the call")
+            Task { @MainActor in
+                await recoverStall(announce: false)
+                stallRunning = false
+                let until = Date().addingTimeInterval(4 * 3600)
+                while Date() < until {
+                    let s = CallService.shared.state
+                    if s == .idle || s == .ended { break }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+                guard stallDuringCall else { return }   // the server kept answering meanwhile
+                stallDuringCall = false
+                noteStall("after call")
+            }
+            return
+        }
         let now = Date()
         guard now >= nextStallAt else { return }
         stallStep += 1

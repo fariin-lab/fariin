@@ -10,9 +10,50 @@ import UIKit
 enum OrientationLock {
     static var mask: UIInterfaceOrientationMask = .portrait
 
+    /// The controller that asked for landscape (the call screen's cover, top of its window then).
+    /// Landscape is given only while it is still the top controller of the window being asked
+    /// about; every other window, and the same window once something else is on top or the cover
+    /// is gone, stays portrait (1:1 audit #39, owner, 2026-10-08).
+    private static weak var landscapeOwner: UIViewController?
+    /// No owner could be found when landscape was turned on: fall back to the app-wide mask.
+    private static var ownerUnknown = false
+
+    /// What `application(_:supportedInterfaceOrientationsFor:)` returns for `window`.
+    static func mask(for window: UIWindow?) -> UIInterfaceOrientationMask {
+        guard mask != .portrait else { return .portrait }
+        if ownerUnknown { return mask }
+        guard let window, let owner = landscapeOwner, topController(in: window) === owner else {
+            return .portrait
+        }
+        return mask
+    }
+
+    private static func topController(in window: UIWindow) -> UIViewController? {
+        var vc = window.rootViewController
+        while let next = vc?.presentedViewController, !next.isBeingDismissed { vc = next }
+        return vc
+    }
+
+    /// The top controller of the key window (where the call screen is when it asks).
+    private static func currentTopController() -> UIViewController? {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        guard let window = windows.first(where: { $0.isKeyWindow })
+                ?? windows.first(where: { $0.rootViewController?.presentedViewController != nil }) else { return nil }
+        return topController(in: window)
+    }
+
     static func allowLandscape(_ on: Bool) {
         let wanted: UIInterfaceOrientationMask = on ? .allButUpsideDown : .portrait
         guard wanted != mask else { return }
+        if on {
+            landscapeOwner = currentTopController()
+            ownerUnknown = landscapeOwner == nil
+        } else {
+            landscapeOwner = nil
+            ownerUnknown = false
+        }
         mask = wanted
         print("[ScreenShare] orientation \(on ? "landscape allowed" : "portrait only")")
         for scene in UIApplication.shared.connectedScenes {
