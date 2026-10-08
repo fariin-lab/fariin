@@ -61,6 +61,7 @@ struct SettingsView: View {
     /// Settings > Group Call Demo (owner, 2026-10-07): the simulated group call, isolated from the
     /// real call system (Views/GroupCallDemo).
     @State private var showGroupCallDemo = false
+    @State private var showScreenShareDemo = false
     @State private var showEdit = false
     @State private var showQR = false
     @State private var showPhoto = false          // tap the avatar → full-screen photo morph
@@ -241,6 +242,10 @@ struct SettingsView: View {
                             Label("Group Call Demo", systemImage: "person.3.fill")
                         }
                         .tint(.orange)
+                        Button { showScreenShareDemo = true } label: {
+                            Label("Screen Share Demo", systemImage: "rectangle.on.rectangle")
+                        }
+                        .tint(.orange)
                     } footer: {
                         Text("Testers only. Adds seven local chats to your list and two people to the story row, for taking screenshots. They are made on this device, never uploaded, and nobody else can see them. Your own chats and your own story are not touched.")
                     }
@@ -251,6 +256,8 @@ struct SettingsView: View {
             // the demo's Scenarios or People sheet closed the whole call). A cover attached to a List
             // row is torn down when the row is rebuilt, and presenting a sheet over it redraws the row.
             .fullScreenCover(isPresented: $showGroupCallDemo) { DemoGroupCallView() }
+            // Same rule for the Screen Share Demo: its cover lives on the list too.
+            .fullScreenCover(isPresented: $showScreenShareDemo) { ScreenShareDemoView() }
             // The bar titles what you are looking at: the page while it is the page, the picture
             // while the picture is open over it.
             .navigationTitle(showPhoto ? "Profile photo" : "Settings")
