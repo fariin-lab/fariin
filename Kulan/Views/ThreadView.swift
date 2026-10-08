@@ -1231,7 +1231,18 @@ struct ThreadView: View {
                 ContactInfoView(cid: cid, name: title, photoUrl: photoUrl,
                                 posterUrl: conversation?.posterUrl(for: me), onSearch: {
                     showContactInfo = false   // pop back to the chat…
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
+                    // …then open search once the pop has LANDED — owner, 2026-10-08: the keyboard came
+                    // in from the left, cut off. A fixed 0.35s fired while the iOS 26 pop was still
+                    // sliding, and a keyboard raised mid-transition rides it sideways. Wait for the
+                    // navigation transition itself to end (checked every 50ms, at most 1.5s).
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 100_000_000)   // let the pop begin
+                        for _ in 0..<28 {
+                            guard WebLink.topViewController()?.transitionCoordinator != nil else { break }
+                            try? await Task.sleep(nanoseconds: 50_000_000)
+                        }
+                        activateSearch()
+                    }
                 })
             }
         }
