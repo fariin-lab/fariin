@@ -175,6 +175,12 @@ const cases = [
   ['OK      B, who already replied, marks the chat accepted',
     'DENY', 'ALLOW', B, convPath, 'update',
     { ...spent, lastSender: B, accepted: true }, { ...spent, lastSender: B }, [...userDoc(B), ...notAdmin(B)]],
+  // 1:1 audit r2 G1, 2026-10-08: a FRESH request (lastSender still empty) used to let A accept
+  // their own request before knocking, and pass every call gate as B's friend.
+  ['ATTACK  A accepts their own FRESH request (no message yet)',
+    'ALLOW', 'DENY', A, convPath, 'update', { ...fresh, accepted: true }, fresh, [...userDoc(A), ...notAdmin(A)]],
+  ['OK      A opens their fresh request again (accepted stays false)',
+    'ALLOW', 'ALLOW', A, convPath, 'update', { ...fresh, names: { [A]: 'A' } }, fresh, [...userDoc(A), ...notAdmin(A)]],
   ['ATTACK  A, still the last to speak, accepts with a second message\'s fields',
     'DENY', 'DENY', A, convPath, 'update',
     { ...spent, accepted: true, lastMessage: 'enc1:zzz' }, spent, [...userDoc(A), ...notAdmin(A)]],

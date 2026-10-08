@@ -1215,6 +1215,8 @@ struct PrivacySettingsView: View {
     // has to match it or this row shows "Everyone" while the gate behaves as "My Friends".
     @AppStorage("priv.calls") private var privCalls = "contacts"
     @AppStorage("priv.messages") private var privMessages = "everyone"
+    @AppStorage("calls.alwaysRelay") private var alwaysRelayCalls = false     // 1:1 audit r2 G3, 2026-10-08
+    @AppStorage("calls.showInRecents") private var showCallsInRecents = true  // 1:1 audit r2 G4, 2026-10-08
     @AppStorage("priv.groups") private var privGroups = "everyone"
     // Default "modern", and any value this build does not recognise falls back to modern too — the
     // new header is the app's layout, the circle is the opt-out.
@@ -1289,6 +1291,19 @@ struct PrivacySettingsView: View {
                         Text("\(blockedCount)").foregroundStyle(.secondary)
                     }
                 }
+            }
+
+            // 1:1 audit r2 G3 + G4, 2026-10-08. Read by CallService (`calls.alwaysRelay`) and
+            // CallKitManager (`calls.showInRecents`).
+            Section {
+                Toggle("Always Relay Calls", isOn: $alwaysRelayCalls).tint(.green)
+            } footer: {
+                Text("Send every call through Fariin's server so the people you call can't see your IP address. Call quality may be a little lower.")
+            }
+            Section {
+                Toggle("Show Calls in Recents", isOn: $showCallsInRecents).tint(.green)
+            } footer: {
+                Text("Show your Fariin calls in the iPhone Phone app's Recents. Calls with chats locked by a Chat PIN are never shown there.")
             }
 
             Section {

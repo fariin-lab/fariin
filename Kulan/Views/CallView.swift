@@ -56,6 +56,19 @@ struct CallView: View {
     @State private var topPill: String?
     @State private var topPillTask: DispatchWorkItem?
     @State private var topPillDone: (() -> Void)?
+    /// 1:1 audit r2 H10, 2026-10-08: name and status grow with the text size (capped so the header
+    /// still fits), and the decorative motions stand down under Reduce Motion.
+    @ScaledMetric(relativeTo: .title) private var nameScaled: CGFloat = 26
+    @ScaledMetric(relativeTo: .subheadline) private var statusScaled: CGFloat = 15
+    private var nameSize: CGFloat { min(nameScaled, 40) }
+    private var statusSize: CGFloat { min(statusScaled, 24) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// r2 H9d: one prepared generator for every button, swap and flip (the reference app keeps one).
+    @MainActor private static let haptic = UIImpactFeedbackGenerator(style: .medium)
+    private func buzz() {
+        Self.haptic.impactOccurred()
+        Self.haptic.prepare()
+    }
 
     // MARK: - Auto-hiding controls (the standard video-call behaviour)
 
@@ -72,7 +85,11 @@ struct CallView: View {
     // Owner audit 2026-10-06 #19: never under VoiceOver. Hidden controls are taken out of the
     // accessibility tree (below), and a VoiceOver user has no way to find the tap-anywhere surface to
     // bring them back, so for them the buttons simply stay.
-    private var autoHideEnabled: Bool { call.everVideo && connectedCall && !UIAccessibility.isVoiceOverRunning }
+    // 1:1 audit r2 H3, 2026-10-08: and only while there is a picture to clear the way for (their live
+    // video, or their shared screen). With their camera off the controls stay, as in the reference app.
+    private var autoHideEnabled: Bool {
+        call.everVideo && connectedCall && !UIAccessibility.isVoiceOverRunning && (hasRemote || stageShown)
+    }
 
     private func armAutoHide() {
         hideTask?.cancel()
@@ -156,6 +173,12 @@ struct CallView: View {
     private func flipCamera() {
         guard !flippingCamera else { return }
         showControls()
+        // 1:1 audit r2 H9c/H10, 2026-10-08: a paused camera sends no `cameraSwitchFlip` (the switch is
+        // only recorded), and Reduce Motion wants no turn: switch without the edge-on hold.
+        if !call.localVideoLive || reduceMotion {
+            call.switchCamera()
+            return
+        }
         flippingCamera = true
         if showLocalFull {
             withAnimation(.easeIn(duration: 0.1)) { flipDim = true }
@@ -234,6 +257,15 @@ struct CallView: View {
         guard let start = call.connectedDate else { return "Connecting…" }   // not truly connected until ICE is up (H1)
         return CallDuration.clock(max(0, Int(Date().timeIntervalSince(start))))
     }
+    /// 1:1 audit r2 H5, 2026-10-08: the status label's tick phase, 50ms after a whole second of the
+    /// call clock and never in the future, so no number is shown twice or skipped.
+    private var tickAnchor: Date {
+        let now = Date()
+        guard let start = call.connectedDate else { return now }
+        var anchor = start.addingTimeInterval(max(0, floor(now.timeIntervalSince(start))) + 0.05)
+        if anchor > now { anchor.addTimeInterval(-1) }
+        return anchor
+    }
     private var bgImage: UIImage? {
         guard let url = call.otherPhotoUrl, !url.isEmpty else { return nil }
         return DiskImageCache.shared.memoryImage(url)
@@ -242,9 +274,14 @@ struct CallView: View {
     // REAL device safe-area insets. GeometryReader sits under `.ignoresSafeArea()`, so its
     // proxy reports ZERO insets — padding with those shoved the top buttons under the clock
     // and battery (the reported overlap). Read the window's insets instead.
+    // 1:1 audit r2 H11, 2026-10-08: any window of the scene, not only the KEY one. Answered from the
+    // lock screen or a cold CallKit launch, no window is key yet on the first pass, the read gave
+    // zero, and nothing re-ran the body to correct it (buttons under the notch).
     private var winInsets: UIEdgeInsets {
         UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { scene in scene.keyWindow.map { [$0] } ?? scene.windows }
+            .map(\.safeAreaInsets)
             .max(by: { $0.top < $1.top }) ?? .zero
     }
 
@@ -260,7 +297,9 @@ struct CallView: View {
                     .opacity(0)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
-                if call.isVideo {
+                // 1:1 audit r2 I3, 2026-10-08: the same rule as the card and the tab (`isVideoCall`),
+                // so a video call with both cameras off still has a PiP source from this screen.
+                if call.isVideoCall {
                     // The whole layout, not one feed — see CallService.pipFeeds.
                     CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
                 }
@@ -284,11 +323,11 @@ struct CallView: View {
                         .padding(.leading, winInsets.left)
                         .padding(.trailing, winInsets.right)
                         .frame(maxWidth: .infinity)        // full-width header (centered name/status)
-                        .opacity(controlsVisible ? 1 : 0)
-                        .allowsHitTesting(controlsVisible) // hidden buttons must not eat the tap
-                        // Owner audit 2026-10-06 #19: opacity 0 left them in the accessibility
-                        // tree, so VoiceOver focused invisible buttons that did nothing.
-                        .accessibilityHidden(!controlsVisible)
+                        // 1:1 audit r2 H2, 2026-10-08: only the two buttons and the scrim leave with
+                        // the controls (inside topBar); the name, timer and "Reconnecting…" stay, as
+                        // in the reference app. Their shared screen still gets a clean view.
+                        .opacity(stageShown && !controlsVisible ? 0 : 1)
+                        .accessibilityHidden(stageShown && !controlsVisible)
                     Spacer()
                     if showAvatar {
                         // WHOSE photo follows who is on the big screen, not always theirs.
@@ -300,20 +339,33 @@ struct CallView: View {
                             .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
                             .frame(maxWidth: .infinity)    // guarantee horizontal centering
                             .allowsHitTesting(false)       // decoration: let the show/hide tap through
+                            .accessibilityElement(children: .ignore)   // r2 H7: say whose photo it is
+                            .accessibilityLabel(showLocalFull ? "Your photo" : call.otherName)
                         Spacer()
                     }
                     // Audit M-011, 2026-10-07: the camera was refused, so the camera button cannot do
                     // anything and the other side sees no video. Say where to fix it, just above the
                     // controls, in the status line's style. `cameraDenied` is set by CallService.
                     if call.cameraDenied {
-                        Text("Allow camera access in Settings")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .frame(maxWidth: .infinity)
-                            .padding(.bottom, 10)
-                            .opacity(controlsVisible ? 1 : 0)
-                            .accessibilityHidden(!controlsVisible)
-                            .allowsHitTesting(false)
+                        // 1:1 audit r2 E7/H9b, 2026-10-08: a tap opens this app's Settings page (the
+                        // reference app gives a way there too). Same look as before.
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Text("Allow camera access in Settings")
+                                .font(.system(size: statusSize))
+                                .foregroundStyle(.white.opacity(0.75))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens Settings")
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 10)
+                        .opacity(controlsVisible ? 1 : 0)
+                        .accessibilityHidden(!controlsVisible)
+                        .allowsHitTesting(controlsVisible)
                     }
                     controlBar
                         .frame(maxWidth: .infinity)        // centered control pill
@@ -356,7 +408,7 @@ struct CallView: View {
                 .animation(.easeInOut(duration: 0.25), value: controlsVisible)
                 .zIndex(3)
             }
-            .onAppear { armAutoHide() }
+            .onAppear { armAutoHide(); Self.haptic.prepare() }
             // Screen share v3: landscape is allowed only while this screen shows their shared
             // screen. Their share ending, the call ending or a minimize brings portrait back.
             .onChange(of: landscapeWanted, initial: true) { _, on in OrientationLock.allowLandscape(on) }
@@ -371,6 +423,10 @@ struct CallView: View {
             // on a light phone the system-coloured pieces among them came out light on black.
             // `\.colorScheme` rather than `preferredColorScheme`: this is the subtree, not the window.
             .environment(\.colorScheme, .dark)
+            // 1:1 audit r2 H1, 2026-10-08: the status bar follows the presented screen, not this
+            // environment, so it was black on black on a light phone. The reference app's call
+            // screen always uses light status bar content; this cover asks for the same.
+            .background(CallStatusBarProbe().allowsHitTesting(false).accessibilityHidden(true))
             // Their colour, the same way the profile page gets it: the warm cache answers on the
             // first frame for anybody seen before, and the full extraction follows for anybody else.
             .task(id: call.otherPhotoUrl ?? "") { await loadPeerPalette() }
@@ -379,9 +435,16 @@ struct CallView: View {
             .onChange(of: call.state) { _, state in
                 showControls()
                 if state == .outgoing, call.cameraOn { ringingPreviewShown = true }   // M-056
+                // 1:1 audit r2 H7, 2026-10-08: VoiceOver hears the stage change (Connected,
+                // Reconnecting, the end words), which the status label only showed.
+                if UIAccessibility.isVoiceOverRunning {
+                    let words = state == .active ? "Connected" : statusText
+                    if !words.isEmpty { UIAccessibility.post(notification: .announcement, argument: words) }
+                }
             }
             .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
             .onChange(of: call.isVideo) { _, _ in showControls() }
+            .onChange(of: hasRemote) { _, _ in showControls() }   // r2 H3: their camera on/off re-arms the clock
             // Screen share, 2026-10-08. My share going live: my feed leaves the big view (it would be
             // a picture of this very screen), so a swap I had made is undone.
             .onChange(of: call.screenSharing) { _, live in
@@ -529,7 +592,7 @@ struct CallView: View {
                 VideoRendererView(track: stageShown ? nil : full,
                                   mirror: showLocalFull && call.usingFrontCamera && !myScreenOnCamera,
                                   fit: !showLocalFull && theirScreenOnCamera,
-                                  upright: !showLocalFull)   // 1:1 audit #35: their face stays upright sideways
+                                  upright: true)   // #35 + r2 E3: their face and mine stay upright sideways
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
                     // natural dimensions) that can exceed the screen and oversize the ZStack, which
@@ -589,6 +652,11 @@ struct CallView: View {
             }
             .buttonStyle(CallControlStyle())
             .accessibilityLabel("Minimize call")   // owner audit 2026-10-06 #19
+            // r2 H2: the button leaves with the controls (hidden buttons must not eat the tap, and
+            // #19: nor stay in the accessibility tree).
+            .opacity(controlsVisible ? 1 : 0)
+            .allowsHitTesting(controlsVisible)
+            .accessibilityHidden(!controlsVisible)
 
             Spacer()
             // Big bold name over a smaller status (18pt read as a toolbar label).
@@ -596,35 +664,32 @@ struct CallView: View {
                 // The mark matters here as much as anywhere: an incoming call from a stranger is the
                 // one screen where somebody decides whether to trust a name in under three seconds.
                 HStack(spacing: 6) {
-                    Text(call.otherName).font(.system(size: 26, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                    Text(call.otherName).font(.system(size: nameSize, weight: .bold)).foregroundStyle(.white).lineLimit(1)
                         .minimumScaleFactor(0.6)
                     VerifiedMark(uid: call.otherUid, size: 20)
                 }
-                // THEIR mute, shown in place of the duration. Muting was never signalled at all, so the
-                // other person just heard silence and could not tell it apart from a broken connection.
-                if call.remoteMuted, call.state == .active {
-                    HStack(spacing: 5) {
+                // 1:1 audit r2 H4, 2026-10-08: THEIR mute is a small slashed mic BESIDE the status, and
+                // the timer stays (the reference app never replaces the duration with a mute label).
+                // The status line itself still says hold / weak signal / Reconnecting (#42, M-057).
+                HStack(spacing: 5) {
+                    if call.remoteMuted, call.state == .active {
                         Image(systemName: "mic.slash.fill").font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.75))
                             .accessibilityLabel("Muted")
-                        // Owner audit 2026-10-06 #42: "Muted" used to replace the weak-signal notice
-                        // outright, and that notice is the one thing that explains a frozen camera.
-                        // Both apply → the slashed mic still says muted, the words say why the video
-                        // stopped.
-                        // M-057: hold is named as hold, not as a weak signal.
-                        Text(call.isHeld ? "On hold"
-                             : (call.videoPausedForNetwork ? "Video paused, weak signal" : "Muted"))
-                            .font(.system(size: 15, weight: .medium))
+                            .transition(.opacity)
                     }
-                    .foregroundStyle(.white.opacity(0.75))
-                    .transition(.opacity)
-                } else {
                     // 1:1 audit #43 (owner, 2026-10-08): the 1s tick lives on this label only. It used
                     // to be screen-wide state, so the whole call screen re-ran its body every second.
-                    TimelineView(.periodic(from: Date(), by: 1)) { _ in
-                        Text(statusText).font(.system(size: 15)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
+                    // r2 H5: ticks land just after each second of the call's own clock, not at
+                    // whatever moment this bar was last rebuilt.
+                    TimelineView(.periodic(from: tickAnchor, by: 1)) { _ in
+                        Text(statusText).font(.system(size: statusSize)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
                     }
                 }
             }
+            // r2 H2: the name stays when the controls go; it is a label, so taps pass to the screen.
+            .shadow(color: .black.opacity(controlsVisible ? 0 : 0.5), radius: 4)
+            .allowsHitTesting(controlsVisible)
             Spacer()
 
             // No "Minimize" here: the chevron on the left already does it, and two controls for the
@@ -652,6 +717,9 @@ struct CallView: View {
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
             .accessibilityLabel("More options")   // #19
+            .opacity(controlsVisible ? 1 : 0)        // r2 H2, as the minimize button
+            .allowsHitTesting(controlsVisible)
+            .accessibilityHidden(!controlsVisible)
         }
         .padding(.horizontal, 16)
         .padding(.top, safeTop + 14)   // clear the iOS status-bar call indicator (green pill)
@@ -661,7 +729,7 @@ struct CallView: View {
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
                 // Never dim a shared screen (owner, 2026-10-08): it has to read exactly as sent.
-                .opacity(stageShown ? 0 : 1)
+                .opacity(stageShown || !controlsVisible ? 0 : 1)   // r2 H2: fades with the controls
         )
     }
 
@@ -751,7 +819,7 @@ struct CallView: View {
         let bottomPad = safeBottom + ((controlsVisible && !landscape) ? 132 : 12) + pillLift
         let trailingPad = 12 + winInsets.right
         let maxLeft = -(geo.size.width - tileW - 24 - winInsets.left - winInsets.right)
-        let maxUp = -max(0, geo.size.height - tileH - (landscape ? 76 : winInsets.top + 60) - bottomPad)
+        let maxUp = -max(0, geo.size.height - tileH - (landscape ? 76 : winInsets.top + 76) - bottomPad)   // r2 H8: the header is safeTop+76
         // The bounds move when the chrome toggles — the tile grows and its home rises (his 544
         // report: park the card at the top by hand, tap the screen, and the grown card slid off the
         // top edge). Owner audit 2026-10-06 #18: so the stored thing is the CORNER, and the offset is
@@ -763,6 +831,28 @@ struct CallView: View {
         // swap — took the only way back with it. Now it stays, holding that person's photo instead of
         // their video, exactly like FaceTime.
         let visible = dualWatch ? (feeds.showsTile && pipTrack != nil) : feeds.showsTile
+        // One path for the finger and for VoiceOver (1:1 audit r2 H7, 2026-10-08).
+        let tapTile: () -> Void = {
+            // SWAP IS ALWAYS ALLOWED while the tile is up, video or photo. It was once gated on
+            // two live feeds because a swap could strand you: the tile HID itself when its
+            // camera went off, taking the only way back with it. The tile never hides now, so
+            // any swap can always be undone by tapping it again.
+            guard feeds.showsTile else { toggleControls(); return }
+            // No swap while my screen is shared: my feed is the screen (see showLocalFull).
+            guard !myScreenOnCamera else { showControls(); return }
+            // Their camera beside their shared screen: the screen keeps the big view.
+            guard !dualWatch else { showControls(); return }
+            // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
+            // (chrome hidden) only grows it — same result as tapping the screen. Only a tap
+            // on the already-grown tile swaps fullscreen. Small → bigger → fullscreen.
+            guard controlsVisible else { showControls(); return }
+            showControls()
+            buzz()   // r2 H9d
+            // The swap's curve, matched to the reference: a quick ease, not a bouncy spring.
+            // r2 H10: no motion under Reduce Motion.
+            withAnimation(reduceMotion ? nil : Animation.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
+        }
+        let canSwap = !myScreenOnCamera && !dualWatch
         return Group {
             if visible {
                 ZStack(alignment: .topTrailing) {
@@ -781,15 +871,24 @@ struct CallView: View {
                         .clipShape(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous)
                             .stroke(.white.opacity(tileEntering ? 0 : 0.25), lineWidth: 1))
+                        // r2 H7: VoiceOver reads the tile and can swap it (it was an unlabeled image).
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(pipIsLocal ? "Your video" : call.otherName)
+                        .accessibilityAddTraits(canSwap ? .isButton : [])
+                        .accessibilityHint(canSwap ? "Swaps with the big view" : "")
+                        .accessibilityAction { tapTile() }
                     // The flip glyph belongs to a LIVE local camera only — and never to the hand-off.
                     if pipIsLocal, pipTrack != nil, !tileEntering, !myScreenOnCamera {
-                        Button { flipCamera() } label: {
+                        Button { buzz(); flipCamera() } label: {
                             Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
                                 .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                                 .padding(6).background(.black.opacity(0.45), in: Circle())
+                                // r2 H7: a 44pt target around the same 27pt glyph (drawn as before).
+                                .padding(6)
+                                .frame(minWidth: 44, minHeight: 44, alignment: .topTrailing)
+                                .contentShape(Rectangle())
                         }
                         .accessibilityLabel("Flip camera")   // owner audit 2026-10-06 #19
-                        .padding(6)
                     }
                 }
                 .shadow(color: .black.opacity(tileEntering ? 0 : 0.45), radius: 14, y: 5)
@@ -807,24 +906,7 @@ struct CallView: View {
                 // up to full screen while a live feed shrinks into the corner is worse in both
                 // directions, and it is how tapping once stranded the user full screen on their own
                 // face with the other person gone and no way back.
-                .onTapGesture {
-                    // SWAP IS ALWAYS ALLOWED while the tile is up, video or photo. It was once gated on
-                    // two live feeds because a swap could strand you: the tile HID itself when its
-                    // camera went off, taking the only way back with it. The tile never hides now, so
-                    // any swap can always be undone by tapping it again.
-                    guard feeds.showsTile else { toggleControls(); return }
-                    // No swap while my screen is shared: my feed is the screen (see showLocalFull).
-                    guard !myScreenOnCamera else { showControls(); return }
-                    // Their camera beside their shared screen: the screen keeps the big view.
-                    guard !dualWatch else { showControls(); return }
-                    // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
-                    // (chrome hidden) only grows it — same result as tapping the screen. Only a tap
-                    // on the already-grown tile swaps fullscreen. Small → bigger → fullscreen.
-                    guard controlsVisible else { showControls(); return }
-                    showControls()
-                    // The swap's curve, matched to the reference: a quick ease, not a bouncy spring.
-                    withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
-                }
+                .onTapGesture { tapTile() }
                 .padding(.bottom, tileEntering ? 0 : bottomPad)
                 .padding(.trailing, tileEntering ? 0 : trailingPad)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -851,7 +933,7 @@ struct CallView: View {
             // the first time my camera came on with the tile newly showing.
             guard ringingPreviewShown else { return }
             ringingPreviewShown = false
-            guard call.cameraOn, call.localVideoTrack != nil else { return }
+            guard call.cameraOn, call.localVideoTrack != nil, !reduceMotion else { return }   // r2 H10
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { tileEntering = true }
@@ -872,7 +954,8 @@ struct CallView: View {
         } else if let track {
             VideoRendererView(track: track,
                               mirror: isLocal && call.usingFrontCamera && !myScreenOnCamera,
-                              fit: !isLocal && theirScreenOnCamera)
+                              fit: !isLocal && theirScreenOnCamera,
+                              upright: true)   // 1:1 audit r2 E3, 2026-10-08
         } else {
             ZStack {
                 Color.black
@@ -936,7 +1019,7 @@ struct CallView: View {
         case .live:
             VStack(spacing: 6) {
                 Button {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    buzz()   // r2 H9d
                     call.stopScreenShareByUser()
                 } label: {
                     HStack(spacing: 7) {
@@ -1013,7 +1096,10 @@ struct CallView: View {
                     .liquidGlass(Circle(), interactive: true, enabled: call.audioRoute == .earpiece)
                     .accessibilityHidden(true)   // #19: the picker on top is the one control
                 // Invisible native picker on top — owns the tap, opens the system route sheet.
-                AudioRoutePicker().frame(width: 52, height: 52).clipShape(Circle())
+                AudioRoutePicker(onUse: { open in
+                    // r2 H9a: no hide clock while the route sheet is up (as Add people, #40).
+                    showControls(); if open { hideTask?.cancel() }
+                }).frame(width: 52, height: 52).clipShape(Circle())
                     .accessibilityLabel("Audio output")
             }
         } else {
@@ -1026,7 +1112,7 @@ struct CallView: View {
 
     private func callCircle(_ icon: String, active: Bool, label: String, _ action: @escaping () -> Void) -> some View {
         Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            buzz()   // r2 H9d
             showControls()          // using a button restarts the clock, never cuts it short
             action()
         } label: {
@@ -1046,7 +1132,7 @@ struct CallView: View {
 
     private var endCircle: some View {
         Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            buzz()   // r2 H9d
             CallKitManager.shared.end()
         } label: {
             Image(systemName: "phone.down.fill")
@@ -1118,14 +1204,54 @@ struct PipTileDrag: ViewModifier {   // also the two-person group call's tile (G
 // The system audio-route picker (the exact native one), rendered invisible so our own
 // glyph shows underneath; the view stays fully tappable and presents the native picker.
 struct AudioRoutePicker: UIViewRepresentable {
+    /// 1:1 audit r2 H9a, 2026-10-08: the picker takes the tap itself, so the call screen hears about
+    /// it here (sheet opening and closing) to restart its hide clock.
+    var onUse: ((_ open: Bool) -> Void)? = nil
+
     func makeUIView(context: Context) -> AVRoutePickerView {
         let v = AVRoutePickerView()
         v.prioritizesVideoDevices = false
         v.tintColor = .clear
         v.activeTintColor = .clear
+        v.delegate = context.coordinator
         return v
     }
-    func updateUIView(_ v: AVRoutePickerView, context: Context) {}
+    func updateUIView(_ v: AVRoutePickerView, context: Context) { context.coordinator.onUse = onUse }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator: NSObject, AVRoutePickerViewDelegate {
+        var onUse: ((_ open: Bool) -> Void)?
+        func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) { onUse?(true) }
+        func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) { onUse?(false) }
+    }
+}
+
+/// 1:1 audit r2 H1, 2026-10-08: light status bar content over the call screen. Finds the cover's
+/// presented controller (the one that owns the status bar) and makes ONLY that presentation dark,
+/// which iOS answers with light content. The app's own window keeps the user's appearance.
+struct CallStatusBarProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> ProbeView { ProbeView() }
+    func updateUIView(_ uiView: ProbeView, context: Context) {}
+
+    final class ProbeView: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in self?.claimStatusBar() }
+        }
+
+        private func claimStatusBar() {
+            var responder: UIResponder? = self
+            while let r = responder, !(r is UIViewController) { responder = r.next }
+            guard var vc = responder as? UIViewController else { return }
+            while let parent = vc.parent { vc = parent }
+            // Only a presented call screen; never the app's root controller.
+            guard vc.presentingViewController != nil else { return }
+            vc.modalPresentationCapturesStatusBarAppearance = true
+            if vc.overrideUserInterfaceStyle != .dark { vc.overrideUserInterfaceStyle = .dark }
+            vc.setNeedsStatusBarAppearanceUpdate()
+        }
+    }
 }
 
 // MARK: - CallContainer
@@ -1922,7 +2048,8 @@ struct FloatingCallWindow: View {
                 VideoRendererView(track: big,
                                   mirror: feeds.mirrorBig && !(call.screenSharing && !call.canUseCameraWhileSharing),
                                   fit: call.remoteScreenSharing && call.remoteScreenMode != "track"
-                                       && big === call.remoteVideoTrack)
+                                       && big === call.remoteVideoTrack,
+                                  upright: true)   // 1:1 audit r2 E3, 2026-10-08
                     .frame(width: w, height: h)
                     .clipped()
             } else {
@@ -1940,7 +2067,8 @@ struct FloatingCallWindow: View {
                         VideoRendererView(track: tile,
                                           mirror: feeds.mirrorTile && !(call.screenSharing && !call.canUseCameraWhileSharing),
                                           fit: call.remoteScreenSharing && call.remoteScreenMode != "track"
-                                               && tile === call.remoteVideoTrack)
+                                               && tile === call.remoteVideoTrack,
+                                          upright: true)   // r2 E3
                     } else {
                         ZStack {
                             Color.black

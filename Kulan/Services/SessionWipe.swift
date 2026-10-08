@@ -19,7 +19,7 @@ enum SessionWipe {
         let oneToOne = CallService.shared.state != .idle && CallService.shared.state != .ended
         let group = GroupCallService.shared
         let inGroup = group.isActive || group.connecting || group.waitingForApproval
-        if oneToOne { CallService.shared.hangUp() }
+        if oneToOne { CallService.shared.endLocally() }   // 1:1 audit r2 C6, 2026-10-08: my end, not a system end
         endGroupCall()
         guard oneToOne || inGroup else { return }
         // `hangUp` hands the record to a Task that reads the row before writing it, and the group
@@ -55,7 +55,7 @@ enum SessionWipe {
     static func wipeAccountData(keepingMediaFor keptUid: String? = nil) {
         // A live call does not survive its account (2026-09-24 audit): signing out mid-call left
         // the audio, the call record and CallKit running under nobody.
-        if CallService.shared.state != .idle { CallService.shared.hangUp() }
+        if CallService.shared.state != .idle { CallService.shared.endLocally() }   // 1:1 audit r2 C6, 2026-10-08
         // audit M-015, 2026-10-07: the group/link call too. Only the 1:1 was ended here, so a
         // group call kept its room connected with the mic (and camera) live under nobody, and the
         // next account on this phone was refused every call as "busy". `end()` also withdraws a

@@ -34,18 +34,47 @@ final class CallKitManager: NSObject {
     /// system sound id — which is why the Call Sound picker cannot list Reflection, Buoyant, Pond or
     /// any other iOS ringtone by name. Passing nil is the one route to those, and it hands the
     /// choice to the phone rather than making it here; see `NotificationSound.systemRingtone`.
-    private static func makeConfig(ringtone: String?) -> CXProviderConfiguration {
+    private static func makeConfig(ringtone: String?, inRecents: Bool = true) -> CXProviderConfiguration {
         let config = CXProviderConfiguration()
         config.supportsVideo = true
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
         // What the RECEIVER hears while their phone rings. CallKit loops it for the whole ring.
         config.ringtoneSound = ringtone
+        // 1:1 audit r2 G4, 2026-10-08: "Show Calls in Recents" (Privacy), per call; see `showsInRecents`.
+        config.includesCallsInRecents = inRecents
         return config
     }
 
+    /// 1:1 audit r2 G4, 2026-10-08: the setting's UserDefaults key (default on), as in the reference app.
+    static let showInRecentsKey = "calls.showInRecents"
+
+    /// 1:1 audit r2 G4: does a call with this person go to the Phone app's Recents? The setting, and
+    /// never for a chat opened with my Chat PIN (`acceptedVia == "pin"`). Read from the live chat
+    /// list, or the list saved on disk on a cold launch from a push. No peer (group ring): the setting.
+    private static func showsInRecents(peerUid: String?) -> Bool {
+        let on = UserDefaults.standard.object(forKey: showInRecentsKey) as? Bool ?? true
+        guard on else { return false }
+        guard let peerUid, !peerUid.isEmpty, let me = AuthService.shared.uid, !me.isEmpty else { return true }
+        let cid = ChatService.convId(me, peerUid)
+        var conv: Conversation? = Thread.isMainThread
+            ? ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) : nil
+        if conv == nil { conv = ConversationsDiskCache.shared.load(uid: me).first(where: { $0.id == cid }) }
+        return conv?.acceptedVia != "pin"
+    }
+
+    /// 1:1 audit r2 G4: swap the provider config only when something in it changes.
+    private func applyConfig(ringtone: String?, peerUid: String?) {
+        let recents = Self.showsInRecents(peerUid: peerUid)
+        let current = provider.configuration
+        guard current.ringtoneSound != ringtone || current.includesCallsInRecents != recents else { return }
+        provider.configuration = Self.makeConfig(ringtone: ringtone, inRecents: recents)
+    }
+
     private override init() {
-        provider = CXProvider(configuration: Self.makeConfig(ringtone: NotificationSound.defaultRingtone.bundleFile))
+        provider = CXProvider(configuration: Self.makeConfig(
+            ringtone: NotificationSound.defaultRingtone.bundleFile,
+            inRecents: UserDefaults.standard.object(forKey: Self.showInRecentsKey) as? Bool ?? true))
         super.init()
         provider.setDelegate(self, queue: nil)
         // WebRTC must not touch the audio session itself under CallKit.
@@ -73,16 +102,19 @@ final class CallKitManager: NSObject {
             return ChatService.convId(me, callerUid)
         }()
         let file = SoundStore.ringtoneFile(cid)
-        guard provider.configuration.ringtoneSound != file else { return }
-        provider.configuration = Self.makeConfig(ringtone: file)
+        applyConfig(ringtone: file, peerUid: callerUid)   // 1:1 audit r2 G4: Recents with it
     }
 
     // MARK: - Outgoing
+    /// `peerUid`: decides Recents (1:1 audit r2 G4). `onRefused`: iOS refused the start; the dial
+    /// that asked ends as failed (1:1 audit r2 B3), never a newer one.
     @discardableResult
-    func startOutgoing(name: String, video: Bool = false) -> UUID {
+    func startOutgoing(name: String, video: Bool = false, peerUid: String? = nil,
+                       onRefused: (() -> Void)? = nil) -> UUID {
         let uuid = UUID()
         activeUUID = uuid
         activeCallId = nil
+        applyConfig(ringtone: provider.configuration.ringtoneSound, peerUid: peerUid)   // r2 G4
         let action = CXStartCallAction(call: uuid, handle: CXHandle(type: .generic, value: name))
         // A video call shows as video in the system UI and Recents from the start, not only after
         // the camera is toggled (owner audit 2026-10-06 #32).
@@ -99,16 +131,32 @@ final class CallKitManager: NSObject {
                 // start, so `activeUUID` stayed set and every later 1:1 ring took the "a different
                 // call is live" branch: transient report, ended at once, never rang.
                 let me = CallKitManager.shared
-                if me.activeUUID == uuid { me.activeUUID = nil; me.activeCallId = nil }
-                CallService.shared.endFromCallKit()
+                // 1:1 audit r2 B3, 2026-10-08: only this start's own call is let go of and ended,
+                // and it ends as "Call failed" (the dial's own handler), as the reference app's
+                // failed-call path. A late refusal for an older dial no longer ends the new one.
+                guard me.activeUUID == uuid else { return }
+                me.activeUUID = nil; me.activeCallId = nil
+                if let onRefused { onRefused() } else { CallService.shared.endFromCallKit() }
             }
         }
         return uuid
+    }
+
+    /// 1:1 audit r2 G5, 2026-10-08: the pushed ring was reported with a cached name (the push
+    /// carries none); the caller's profile name replaces it on the system call screen.
+    func updateCallerName(callId: String, name: String) {
+        guard let uuid = activeUUID, activeCallId == callId, !name.isEmpty else { return }
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: name)
+        provider.reportCall(with: uuid, updated: update)
     }
     func reportConnecting() { if let u = activeUUID { provider.reportOutgoingCall(with: u, startedConnectingAt: nil) } }
 
     // Keep the SYSTEM call UI (lock screen/dynamic island) mute state in sync with the in-app toggle.
     func setMuted(_ muted: Bool) {
+        // 1:1 audit r2 D3, 2026-10-08: never while applying a mute CallKit itself asked for; the
+        // echo request queued opposite actions after a double tap and the mic flipped forever.
+        guard !applyingSystemMute else { return }
         guard let u = activeUUID else { return }
         controller.request(CXTransaction(action: CXSetMutedCallAction(call: u, muted: muted))) { _ in }
     }
@@ -212,9 +260,10 @@ final class CallKitManager: NSObject {
                 DispatchQueue.main.async {
                     guard self?.activeUUID == uuid else { return }
                     self?.activeUUID = nil; self?.activeCallId = nil
-                    let service = CallService.shared
-                    if service.callId == callId, service.state == .incoming { service.endReason = .missed }
-                    service.endFromCallKit()
+                    // 1:1 audit r2 A2, 2026-10-08: a refusal on THIS phone ends the ring here only.
+                    // It wrote `ended` onto the shared doc and killed the ring on my other devices;
+                    // the reference app marks only the refusing device's call.
+                    CallService.shared.endRingLocally(callId: callId)
                 }
             }
             completion?()
@@ -278,8 +327,10 @@ final class CallKitManager: NSObject {
         // then would pull it out from under the answer.
         guard service.callId == callId, service.state == .incoming, !service.wasAccepted else { return false }
         switch endReason {
-        case "declined": reportEnded(.declinedElsewhere)
-        case "busy":     reportEnded(.answeredElsewhere)
+        // 1:1 audit r2 C2/A1, 2026-10-08: busy or declined on my other device is declined
+        // elsewhere (the reference app); answered there (cancel push on `acceptedAt`) is answered.
+        case "declined", "busy": reportEnded(.declinedElsewhere)
+        case "answered":         reportEnded(.answeredElsewhere)
         default:         reportEnded(.unanswered)   // what CallService itself tells iOS for a cancelled ring
         }
         return true
@@ -520,9 +571,18 @@ extension CallKitManager: CXProviderDelegate {
             setMuted(true)
             return
         }
-        if CallService.shared.isMuted != action.isMuted { CallService.shared.toggleMute() }
+        // 1:1 audit r2 D3, 2026-10-08: SET to the action's value, as the reference app does, and
+        // without requesting another CallKit action (the toggle's own request is suppressed).
+        if CallService.shared.isMuted != action.isMuted {
+            applyingSystemMute = true
+            CallService.shared.toggleMute()
+            applyingSystemMute = false
+        }
         action.fulfill()
     }
+
+    /// 1:1 audit r2 D3: true while a CallKit mute action is being applied (main queue only).
+    private var applyingSystemMute = false
 
     // HOLD. There was no handler at all, so when a normal cellular call arrived mid-call iOS had no way
     // to put us on hold and the outcome was undefined — while the other side saw a running timer, silence
@@ -585,6 +645,7 @@ extension CallKitManager: CXProviderDelegate {
         }
         RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
         RTCAudioSession.sharedInstance().isAudioEnabled = false
+        CallService.shared.audioSessionDeactivated()   // 1:1 audit r2 C5 (K1), 2026-10-08
     }
 
     /// 1:1 audit #24 (owner, 2026-10-08): iOS gave up waiting on an action. CallKit's automatic

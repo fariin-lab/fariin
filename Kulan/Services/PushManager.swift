@@ -155,9 +155,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             CallKitManager.shared.reportAndDiscard(completion: completion)
             return
         }
-        let name = d["callerName"] as? String ?? "Call"
         let uid = d["callerUid"] as? String ?? ""
-        let photo = d["photo"] as? String
+        // 1:1 audit r2 G5, 2026-10-08: the push no longer carries a name or photo. The name comes
+        // from this phone's own copy by uid (an older server's `callerName` only as a fallback),
+        // then "Kulan"; CallService corrects it from the profile while it rings.
+        let pushedName = (d["callerName"] as? String).flatMap { $0.isEmpty || $0 == "Call" ? nil : $0 }
+        let name = CallService.cachedCallerName(uid) ?? pushedName ?? "Kulan"
+        let photo = (d["photo"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let video = (d["type"] as? String) == "video"   // M1: show the right CallKit UI for a video call
         // iOS 13+: MUST report to CallKit before completion or the app is terminated.
         CallService.shared.prepareIncoming(callId: callId, name: name, uid: uid, photo: photo, video: video)
@@ -172,7 +176,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
             MainActor.assumeIsolated { GroupCallRinging.shared.oneToOneTookOver() }
         }
         // M-001: `fromPush`, so a push for a call the listener already rang is still reported.
-        CallKitManager.shared.reportIncoming(callId: callId, name: name, video: video,
+        CallKitManager.shared.reportIncoming(callId: callId, name: CallService.displayName(for: uid, fallback: name), video: video,
                                             callerUid: uid, fromPush: true) { completion() }
     }
 

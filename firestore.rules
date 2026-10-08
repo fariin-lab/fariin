@@ -1603,6 +1603,15 @@ service cloud.firestore {
                    'accepted', 'startedBy'
                  ])
             )
+            // 1:1 audit r2 G1, 2026-10-08: the clause above lets the starter through while
+            // `lastSender` is still empty (a fresh request), so a stranger could accept their own
+            // request before sending anything and pass every call gate as a friend. Whatever
+            // `lastSender` says, the person who started a pending request never writes `accepted`.
+            && (
+              !isRequestPending()
+              || request.auth.uid != resource.data.get('startedBy', '')
+              || request.resource.data.get('accepted', false) == false
+            )
             // ACCEPTED IS A ONE-WAY DOOR, and `startedBy` never changes once written.
             //
             // `openConversation` decides whether a conversation is new by reading it first, and on a
@@ -2384,8 +2393,14 @@ service cloud.firestore {
         // 2026-09-24 decision D7: the callee's Calls setting and blocks are the server's to enforce,
         // not only the callee's phone (which a patched caller never reaches past the push). The
         // app's own gates (`CallPrivacyIndex` before dialling, `decideAllowed` on the callee) stay.
-        && !isBlockedByUser(request.resource.data.callee)
+        // 1:1 audit r2 G6, 2026-10-08: a BLOCK is no longer refused here. A refused create was a
+        // one-call block test (with Calls on Everyone nothing else refuses). The create goes
+        // through and onCallCreated sends no push and writes no `screenedAt`, so the callee never
+        // rings and the caller hears an ordinary no answer, as in the reference app.
         && callsAllowedBy(request.resource.data.callee)
+        // 1:1 audit r2 G8, 2026-10-08: `screenedAt` is the server's "checks passed, ring now"
+        // (onCallCreated). No client writes it, here or on update.
+        && !('screenedAt' in request.resource.data)
         // owner audit 2026-10-06 #26: the server's clock, never the caller's. A call created with
         // `createdAt` missing or in the future was never timed out by sweepCalls and slipped past
         // the phone's 60s stale-ring guard, so it rang on every app launch. The app writes
@@ -2404,7 +2419,8 @@ service cloud.firestore {
         // onCallCreated put back to the profile's, are written once. The app never updates them.
         && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
         && request.resource.data.get('callerName', null) == resource.data.get('callerName', null)
-        && request.resource.data.get('callerPhoto', null) == resource.data.get('callerPhoto', null);
+        && request.resource.data.get('callerPhoto', null) == resource.data.get('callerPhoto', null)
+        && request.resource.data.get('screenedAt', null) == resource.data.get('screenedAt', null);   // 1:1 audit r2 G8
       // NO delete. THIRD stray paste of the message-request decline rule, after the two removed from
       // /users and story views on 2026-08-04. A call document has `caller` and `callee`, not `users`
       // or `startedBy`, so it could only ever error. Nothing in the app deletes a call, so nothing

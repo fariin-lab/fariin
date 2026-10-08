@@ -32,6 +32,16 @@ final class CallPiPController: NSObject {
     private weak var wantedBig: RTCVideoTrack?
     private weak var wantedTile: RTCVideoTrack?
     private var framesLive = false
+    /// r2 I7: between willStart and didStart/failed.
+    private var pipStarting = false
+    /// r2 I2/I9: a host that appeared while a PiP window was up; it becomes the source once it is down.
+    private weak var pendingSource: UIView?
+    /// r2 I4: re-reads the call's feeds while the window is up (SwiftUI may not update in the background).
+    private var refreshTimer: Timer?
+    /// r2 I8: a controller asked to stop at teardown, kept alive until its window is really gone.
+    private var retiring: AVPictureInPictureController?
+    /// r2 I1: the stop came from the app itself (its return to the foreground), not the expand button.
+    private var stopAskedByApp = false
 
     override init() {
         super.init()
@@ -42,6 +52,12 @@ final class CallPiPController: NSObject {
         }
         nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.detachFramesIfIdle()
+        }
+        // 1:1 audit r2 I7/J6, 2026-10-08: in the background with no PiP window up or starting (screen
+        // locked, PiP off in Settings), nobody can see these frames; stop converting them.
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, !self.isSystemPiPActive, !self.pipStarting else { return }
+            self.detachFrames()
         }
     }
 
@@ -56,8 +72,10 @@ final class CallPiPController: NSObject {
         // 2026-10-06, CallKit/PiP section).
         let state = CallService.shared.state
         guard state != .ended, state != .idle else { return }
-        if controller == nil || self.sourceView !== sourceView {
+        if controller == nil {
             buildController(sourceView: sourceView)
+        } else if self.sourceView !== sourceView {
+            rebindSource(sourceView)
         }
         bigView.mirrored = feeds.mirrorBig
         tileView.mirrored = feeds.mirrorTile
@@ -87,9 +105,48 @@ final class CallPiPController: NSObject {
     private func detachFramesIfIdle() {
         guard framesLive, !isSystemPiPActive,
               UIApplication.shared.applicationState == .active else { return }
+        detachFrames()
+    }
+
+    /// r2 I7/J6: stop feeding the window now, whatever the app state (the caller has checked that no
+    /// window is up). Frames come back at the next resign-active or willStart.
+    private func detachFrames() {
+        guard framesLive else { return }
         framesLive = false
         bind(nil, to: bigView, renderer: &bigRenderer, attached: &bigTrack)
         bind(nil, to: tileView, renderer: &tileRenderer, attached: &tileTrack)
+    }
+
+    /// 1:1 audit r2 I2/I9, 2026-10-08: ONE controller for the call. A new host (card, tab, call
+    /// screen) only becomes its source view; the controller is never rebuilt, and a PiP window that
+    /// is up is never stopped for it (that closed the window the user was watching). While a window
+    /// is up the new host waits and takes over when it is gone.
+    private func rebindSource(_ view: UIView) {
+        guard let controller, let callVC else { buildController(sourceView: view); return }
+        if controller.isPictureInPictureActive {
+            pendingSource = view
+            return
+        }
+        pendingSource = nil
+        controller.contentSource = AVPictureInPictureController.ContentSource(
+            activeVideoCallSourceView: view,
+            contentViewController: callVC
+        )
+        sourceView = view
+    }
+
+    /// r2 I4: while the window is up, read the feeds from the call itself once a second.
+    private func startRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, let source = self.sourceView else { return }
+            self.configure(sourceView: source, feeds: CallService.shared.pipFeeds)
+        }
+    }
+
+    private func stopRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
 
     private func buildController(sourceView: UIView) {
@@ -151,6 +208,7 @@ final class CallPiPController: NSObject {
     /// Idempotent, and safe to call when no PiP is up.
     func stopSystemPiP() {
         guard let controller, controller.isPictureInPictureActive else { return }
+        stopAskedByApp = true   // r2 I1
         controller.stopPictureInPicture()
     }
 
@@ -158,7 +216,19 @@ final class CallPiPController: NSObject {
         // Stop BEFORE dropping the controller. Releasing it while its window is still up (stashed or not)
         // orphans an Apple-owned window with nothing left to close it — the same two-window state, only
         // now with no way back because our reference is gone.
-        stopSystemPiP()
+        stopRefresh()   // r2 I4
+        // 1:1 audit r2 I8, 2026-10-08: the stop is asynchronous, so the controller is kept until its
+        // window has really gone (didStop), with a 2s fallback, instead of being dropped mid-close.
+        if let c = controller, c.isPictureInPictureActive {
+            retiring = c
+            stopSystemPiP()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak c] in
+                guard let self, let c, self.retiring === c else { return }
+                self.retiring = nil
+            }
+        }
+        pendingSource = nil
+        pipStarting = false
         if let t = bigTrack, let r = bigRenderer { t.remove(r) }
         if let t = tileTrack, let r = tileRenderer { t.remove(r) }
         bigRenderer = nil; tileRenderer = nil
@@ -251,7 +321,28 @@ final class PiPVideoView: UIView {
         placeholderView.isHidden = !visible
         sampleView.isHidden = visible
         guard visible else { return }
-        let image = photoUrl.flatMap { $0.isEmpty ? nil : DiskImageCache.shared.memoryImage($0) }
+        // 1:1 audit r2 I5, 2026-10-08: the same loader as the avatar on the card and the call screen
+        // (memory, then disk), and a download when neither has it, drawn when it lands. A memory-only
+        // peek showed the silhouette after a memory warning or a cold launch from a call.
+        let url = photoUrl.flatMap { $0.isEmpty ? nil : $0 }
+        if placeholderReady, url == placeholderUrl { return }   // drawn, or its photo is on the way
+        placeholderReady = true
+        placeholderUrl = url
+        let image = url.flatMap { ProfilePhotoLoader.shared.cachedAvatar($0) }
+        showPlaceholderPhoto(image)
+        if image == nil, let url {
+            Task { @MainActor [weak self] in
+                let loaded = await ProfilePhotoLoader.shared.avatar(url)
+                guard let self, let loaded, self.placeholderUrl == url, !self.placeholderView.isHidden else { return }
+                self.showPlaceholderPhoto(loaded)
+            }
+        }
+    }
+
+    private var placeholderUrl: String?
+    private var placeholderReady = false
+
+    private func showPlaceholderPhoto(_ image: UIImage?) {
         photoView.image = image
         photoView.isHidden = image == nil
         // ⛔ ONE SILHOUETTE, NOT A COLOURED INITIAL — owner, 2026-09-16, "make one type".
@@ -316,12 +407,22 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
     /// M-054: the window is about to open; make sure its frames are flowing (normally already done at
     /// resign-active, this covers a start that comes some other way).
     func pictureInPictureControllerWillStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        pipStarting = true   // r2 I7
+        stopAskedByApp = false
         attachFrames()
+    }
+
+    func pictureInPictureControllerDidStartPictureInPicture(_ controller: AVPictureInPictureController) {
+        pipStarting = false
+        startRefresh()   // r2 I4
     }
 
     func pictureInPictureController(_ controller: AVPictureInPictureController,
                                     failedToStartPictureInPictureWithError error: Error) {
         print("[PiP] failed to start: \(error.localizedDescription)")
+        // 1:1 audit r2 I7, 2026-10-08: no window will show these frames; stop converting them.
+        pipStarting = false
+        detachFrames()
     }
 
     /// Apple's designated hook for "the user is coming back to your app". It was never implemented, which
@@ -336,15 +437,31 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
         // The call UI is a root-level container that never went anywhere, so there is nothing to rebuild:
         // returning to the app IS the restore. Answer immediately rather than deferring to an animation —
         // a late or missed completion is what leaves Apple's window on screen.
+        // 1:1 audit r2 I1, 2026-10-08: the expand button means "back to the call", so a minimized call
+        // comes back full screen (the reference app's in-app window restores the call on tap). A stop
+        // the app asked for itself (coming back by its icon) leaves the card as it was.
+        let call = CallService.shared
+        if !stopAskedByApp, call.minimized,
+           call.state == .active || call.state == .reconnecting || call.state == .outgoing {
+            call.minimized = false
+        }
         completionHandler(true)
     }
 
     /// Only now is the system window genuinely gone. Ours is the single floating window from here.
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
+        stopAskedByApp = false
+        if controller === retiring { retiring = nil; return }   // r2 I8: the ended call's window is gone
+        stopRefresh()   // r2 I4
         // Audit M-054, 2026-10-07: this used to keep the renderers bound for the life of the call so a
         // re-background could start PiP instantly. They are re-attached at resign-active now, which
-        // comes before any automatic start, so with the app back in front they are let go here.
-        detachFramesIfIdle()
+        // comes before any automatic start, so they are let go here.
+        // 1:1 audit r2 J6/I7, 2026-10-08: in the background too (the window closed with its X from
+        // another app), not only once the app is back in front.
+        detachFrames()
+        // r2 I2/I9: a host that appeared while the window was up becomes the source now.
+        if let next = pendingSource, next !== sourceView { rebindSource(next) }
+        pendingSource = nil
     }
 }
 
