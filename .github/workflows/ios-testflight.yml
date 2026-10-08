@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: 1:1 CALLS, 43 FIXES + SCREEN SHARE DEMO.
+            THIS BUILD: CALLS, TWO MORE AUDIT ROUNDS (139 FIXES) + SMOOTHER MEDIA.
+            CALLS: sound always comes on when you answer from the lock screen; answering on one phone can never be ended by your other phone; strangers cannot get around "My Chats" to call you; blocked callers learn nothing; call setup is never sent unencrypted; your mic is off until the call is answered; AirPods and USB-C earphones work while it is still ringing; calls survive a relay outage and slow relays; a ring is never lost to a slow check; no false "Missed call"; the timer and name stay on screen in video calls; messages like "Can't call right now" stay until you read them; picture-in-picture survives the other camera turning on; Reduce Motion and larger text respected. NEW in Privacy: Always Relay Calls, Show Calls in Recents.
+            MEDIA: photo and video buttons fade in smoothly instead of popping. The pinned bar slides to the next pin.
+            PLEASE TEST: answer from the lock screen; a call with two phones signed in; a call on weak Wi-Fi; tap the pinned bar with several pins; open a photo and a video.
+
+            EARLIER (build 845): 1:1 CALLS, 43 FIXES + SCREEN SHARE DEMO.
             NEW: Settings > Screen Share Demo. Start it, pick Kulan, and see your own screen exactly as the other person would (real 30 fps sharing through a real call connection on your own phone). Turn the phone, zoom, and try the quality menu to see a bad network.
             CALLS: a ring you never answered ends quietly (no beep, call audio off); the earpiece you choose on a video call stays; ringing tone of a video call on the speaker; your mic is off while it is only "Calling..."; sound comes back after Siri or an alarm; "Reconnecting" no longer flashes at tiny blips; calls on slow long-distance links get more time to recover; Use Less Data follows Wi-Fi/mobile changes; a quick redial always rings; your own paused camera shows your photo, not a frozen picture; a frozen video from the other person shows their photo; their video stays upright when you turn the phone; the first call after opening the app no longer stutters; hanging up is faster.
             SCREEN SHARE: closing the share sheet without starting no longer leaves "Starting..."; starting from Control Center during a call works; less battery on a still screen; landscape only on the call screen.
