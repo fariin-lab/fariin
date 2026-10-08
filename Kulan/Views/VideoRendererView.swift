@@ -13,6 +13,10 @@ struct VideoRendererView: UIViewRepresentable {
     var mirror: Bool = false
     var fit: Bool = false
     var upright: Bool = false
+    /// 1:1 audit r3 D1, 2026-10-08: the caller shows this view (its own opacity rule). On a false ->
+    /// true edge with the same track, the Metal view's last frame is from before the pause, so the
+    /// view stays hidden until a new frame is drawn.
+    var live: Bool = true
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let v = RTCMTLVideoView()
@@ -28,7 +32,16 @@ struct VideoRendererView: UIViewRepresentable {
         let forwarder = context.coordinator.forwarder
         // 1:1 audit r2 H6, 2026-10-08: while a new track is being bound, the mirror waits for the
         // rebind (below), so the old picture is never shown with the new picture's mirror.
-        if !context.coordinator.rebindPending { forwarder?.mirror = mirror }
+        // r3 D3, 2026-10-08: that includes the update that carries the track change itself.
+        let trackChanges = context.coordinator.track !== track
+        if !context.coordinator.rebindPending, !trackChanges { forwarder?.mirror = mirror }
+        // r3 D1, 2026-10-08: shown again on the same track (my camera back after a pause): hide the
+        // stale frame until the camera draws a new one.
+        let wasLive = context.coordinator.live
+        context.coordinator.live = live
+        if live, !wasLive, !trackChanges, track != nil, forwarder?.hasSeenFrame == true {
+            forwarder?.beginRebind(fallback: nil)
+        }
         forwarder?.fit = fit
         forwarder?.setUpright(upright)
         forwarder?.refresh()   // r2 E2: the view's shape is part of the fill/fit rule
@@ -36,7 +49,7 @@ struct VideoRendererView: UIViewRepresentable {
         let mode: UIView.ContentMode = (fit || forwarder?.forcesFit == true) ? .scaleAspectFit : .scaleAspectFill
         if uiView.videoContentMode != mode { uiView.videoContentMode = mode }
         // Re-bind only when the track actually changes (attaching twice double-renders).
-        if context.coordinator.track !== track {
+        if trackChanges {
             let old = context.coordinator.track
             context.coordinator.track = track           // claim synchronously (no double-dispatch)
             context.coordinator.rebindPending = true
@@ -53,7 +66,13 @@ struct VideoRendererView: UIViewRepresentable {
                       let renderer = coordinator.forwarder else { return }
                 coordinator.rebindPending = false
                 // r2 H6: the old track's last frame stays hidden until the new one draws.
-                if track != nil, old != nil { renderer.beginRebind() }
+                // r3 D1, 2026-10-08: also after a detach (nil -> track): the Metal view still holds
+                // the frame drawn before it, and a camera that comes back needs a keyframe first.
+                if track != nil, old != nil {
+                    renderer.beginRebind()
+                } else if track != nil, renderer.hasSeenFrame {
+                    renderer.beginRebind(fallback: nil)
+                }
                 renderer.mirror = wantedMirror
                 track?.add(renderer)
             }
@@ -71,6 +90,7 @@ struct VideoRendererView: UIViewRepresentable {
         var track: RTCVideoTrack?
         var dismantled = false
         var rebindPending = false
+        var live = true   // r3 D1
         var forwarder: UprightVideoForwarder?
     }
 }
@@ -137,6 +157,12 @@ final class UprightVideoForwarder: NSObject, RTCVideoRenderer {
         if changed { apply(rotation: r) }
     }
 
+    /// r3 D1: this view has drawn at least one frame (so it may hold a stale one).
+    var hasSeenFrame: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return seenFrame
+    }
+
     func setSize(_ size: CGSize) {
         view?.setSize(size)   // RTCMTLVideoView hops to main itself
     }
@@ -144,10 +170,13 @@ final class UprightVideoForwarder: NSObject, RTCVideoRenderer {
     /// Main only. 1:1 audit r2 H6, 2026-10-08: the view is being moved to another track. Its Metal
     /// view still holds the old track's last frame, so it stays hidden until the new track's first
     /// frame is drawn (0.5s fallback, so a track that sends nothing cannot leave it hidden).
-    func beginRebind() {
+    /// r3 D1, 2026-10-08: `fallback` nil waits for a real frame. Used when the view's last frame is
+    /// from before a pause: hidden (the black or the photo behind) beats a frozen face shown as live.
+    func beginRebind(fallback: TimeInterval? = 0.5) {
         lock.lock(); awaitingFrame = true; rebindGeneration &+= 1; let generation = rebindGeneration; lock.unlock()
         view?.alpha = 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        guard let fallback else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + fallback) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             let reveal = self.awaitingFrame && self.rebindGeneration == generation

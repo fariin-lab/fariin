@@ -83,6 +83,20 @@ final class ConversationsDiskCache {
         }
     }
 
+    /// 1:1 audit r3 A5, 2026-10-08: one saved chat by id, building only that one (a pushed ring
+    /// needs one name before it reports to CallKit, not the whole list).
+    func load(uid: String, id: String) -> Conversation? {
+        guard let url = fileURL(uid: uid),
+              let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let raw = plist as? [[String: Any]],
+              let entry = raw.first(where: { ($0["__id"] as? String) == id }),
+              let body = entry["__doc"] as? [String: Any],
+              let doc = restore(body) as? [String: Any]
+        else { return nil }
+        return Conversation(id: id, data: doc)
+    }
+
     // MARK: - Write
 
     /// Called with the documents exactly as the listener received them, so the cache and the live

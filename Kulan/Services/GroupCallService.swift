@@ -369,13 +369,23 @@ final class GroupCallService: ObservableObject {
     /// some of them sheets, and a SwiftUI alert cannot present from a covered view; so this is a UIKit
     /// alert on whatever is on top. Waits out a presentation still moving (a menu or sheet closing
     /// on the same tap) and never stacks on another alert.
-    static func presentOverTop(_ n: Notice, tries: Int = 4) {
-        guard let top = WebLink.topViewController(), !(top is UIAlertController) else { return }
+    static func presentOverTop(_ n: Notice, tries: Int = 10, alertWaits: Int = 75) {   // r3 G8: 3 s for a moving top
+        guard let top = WebLink.topViewController() else { return }
+        // 1:1 audit r3 G8, 2026-10-08: another alert up no longer drops the notice silently. It waits
+        // for that alert to go (up to 30 s); the same notice already showing is not shown twice.
+        if let shown = top as? UIAlertController {
+            guard shown.title != n.title || shown.message != n.message, alertWaits > 0 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                GroupCallService.presentOverTop(n, tries: tries, alertWaits: alertWaits - 1)
+            }
+            return
+        }
         if top.isBeingPresented || top.isBeingDismissed {
             guard tries > 0 else { return }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                GroupCallService.presentOverTop(n, tries: tries - 1)
+                GroupCallService.presentOverTop(n, tries: tries - 1, alertWaits: alertWaits)
             }
             return
         }

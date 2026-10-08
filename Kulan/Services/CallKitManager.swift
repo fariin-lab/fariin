@@ -451,6 +451,18 @@ final class CallKitManager: NSObject {
         activeUUID = nil; activeCallId = nil
     }
 
+    /// 1:1 audit r3 B3, 2026-10-08: an end this phone decided (sign-out, glare, move to group) goes to
+    /// iOS as a local End action, not "remote ended". The handles are let go first, so the End action
+    /// finds no live call and is only acknowledged (the service has already torn down).
+    func endFromHere() {
+        guard let uuid = activeUUID else { return }
+        activeUUID = nil; activeCallId = nil
+        controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { [provider] error in
+            guard error != nil else { return }
+            DispatchQueue.main.async { provider.reportCall(with: uuid, endedAt: nil, reason: .remoteEnded) }
+        }
+    }
+
     /// 1:1 audit r2 D3: true while a CallKit mute action is being applied (main queue only). In the
     /// class body: an extension cannot hold stored properties.
     private var applyingSystemMute = false

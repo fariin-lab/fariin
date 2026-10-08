@@ -53,6 +53,11 @@ final class CallService: NSObject {
             if let self, self.remoteCameraOn, self.state != .idle, self.state != .ended {
                 self.startRemoteFreezeWatchIfNeeded()
             }
+            // 1:1 audit r3 G9, 2026-10-08: back from Settings with the camera allowed, the "Allow
+            // camera access" line goes (the camera button turns it on as usual).
+            if let self, self.cameraDenied, AVCaptureDevice.authorizationStatus(for: .video) == .authorized {
+                self.cameraDenied = false
+            }
         }
         // 1:1 audit r2 J3, 2026-10-08: nobody sees the talking badge in the background or with the
         // screen locked, so the 0.3 s stats poll stops there (the reference app polls no levels at all
@@ -61,8 +66,9 @@ final class CallService: NSObject {
                                                object: nil, queue: .main) { [weak self] _ in
             self?.pauseVoiceMonitor()
             // 1:1 audit r2 check, 2026-10-08: no 1 Hz stats poll for frames nobody sees, unless
-            // the system PiP window is showing them.
-            if !CallPiPController.shared.isSystemPiPActive { self?.stopRemoteFreezeWatch() }
+            // the system PiP window is showing them. 1:1 audit r3 I1/H2, 2026-10-08: or is still
+            // opening (auto PiP is usually "starting" here, not active yet).
+            if !CallPiPController.shared.isPiPStartingOrActive { self?.stopRemoteFreezeWatch() }
         }
         // The camera is driven by what the CAPTURE SESSION actually does, not by the app lifecycle.
         // See the "Background camera" section below for why.
@@ -88,6 +94,9 @@ final class CallService: NSObject {
             if state == .outgoing || state == .incoming { tearingDown = false }
             // 1:1 audit r2 C4/D5, 2026-10-08: the ring screen reads the live route, not the last call's.
             if (state == .outgoing || state == .incoming) && oldValue != state { refreshRouteForRing() }
+            // 1:1 audit r3 C1, 2026-10-08: the route is followed while it rings, not only from .active.
+            if state == .outgoing || state == .incoming { startRingRouteObservation() }
+            else { stopRingRouteObservation() }
             // connectedDate is set on ACTUAL media connect (iceConnectionState .connected), NOT here —
             // state flips to .active at signaling time, which would inflate the call duration (H1).
             // Audit M-049, 2026-10-07: not with AirPods, a headset or a car connected. The override
@@ -417,7 +426,9 @@ final class CallService: NSObject {
     // Video (1:1). Each side controls its OWN camera independently: no
     // permission — turning your camera on just sends your video and the other side sees it. The
     // video layout shows whenever EITHER camera is on.
-    var cameraOn = false            // is MY camera sending
+    var cameraOn = false {          // is MY camera sending
+        didSet { if cameraOn != oldValue { syncLinkMonitor() } }   // 1:1 audit r3 I8
+    }
     var remoteCameraOn = false {    // is THEIR camera sending (from the `cams` signal)
         didSet {
             // 1:1 audit r2 J4, 2026-10-08: the frozen-video watch runs only while their camera is
@@ -431,7 +442,9 @@ final class CallService: NSObject {
     /// `cameraOn`: that stays the camera INTENT through the share, so stopping restores exactly the
     /// camera the user had, and every camera-only rule (speaker default, CallKit hasVideo, capture
     /// interruptions) keeps reading the camera and nothing else.
-    private(set) var screenSharing = false
+    private(set) var screenSharing = false {
+        didSet { if screenSharing != oldValue { syncLinkMonitor() } }   // 1:1 audit r3 I8
+    }
     /// Where MY share is, for the call screen. `screenSharing` is true for `.starting` and `.live`
     /// (unchanged meaning: the share has begun and owns the video source).
     ///   picking  - the system picker was asked for; nothing in the call has changed yet.
@@ -544,8 +557,24 @@ final class CallService: NSObject {
     /// Started with the call's video plumbing (prepareLocalVideo); stops itself at idle.
     private func startRemoteFreezeWatchIfNeeded() {
         guard remoteFreezeWatch == nil else { return }
+        // 1:1 audit r3 I2, 2026-10-08: not in the background with no PiP window showing their video
+        // (locked phone, another app): a 1 Hz stats sweep nobody sees. didBecomeActive and the PiP
+        // window starting (`pipWindowChanged`) bring it back.
+        if Thread.isMainThread, UIApplication.shared.applicationState == .background,
+           !CallPiPController.shared.isPiPStartingOrActive { return }
         remoteFreezeWatch = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.sampleRemoteFrames()
+        }
+    }
+
+    /// 1:1 audit r3 I1/H2, 2026-10-08: the system PiP window opened or closed. Open, their video is
+    /// on screen again, so the freeze watch runs (its stop at didEnterBackground may have come while
+    /// the window was still opening). Closed in the background, nobody sees it, so it stops. Main only.
+    func pipWindowChanged() {
+        if CallPiPController.shared.isPiPStartingOrActive {
+            if remoteCameraOn, state != .idle, state != .ended { startRemoteFreezeWatchIfNeeded() }
+        } else if UIApplication.shared.applicationState == .background {
+            stopRemoteFreezeWatch()
         }
     }
 
@@ -573,7 +602,8 @@ final class CallService: NSObject {
         // and "Reconnecting" (which has its own screen) are left alone.
         guard state == .active, remoteCameraOn, !remoteScreenSharing,
               let trackId = remoteVideoTrack?.trackId else { resetRemoteFrameWatch(); return }
-        pc.statistics { [weak self] report in
+        // 1:1 audit r3 I9: maxAge under the 1 s tick, or the same report twice reads as a freeze.
+        sharedStatistics(pc, maxAge: 0.6) { [weak self] report in
             let video = report.statistics.values.filter {
                 $0.type == "inbound-rtp" && (($0.values["kind"] as? String) ?? ($0.values["mediaType"] as? String)) == "video"
             }
@@ -820,12 +850,12 @@ final class CallService: NSObject {
     private var signalCid: String { ChatService.convId(me, otherUid) }
 
     /// Seal one signalling payload for this call, or nil when this call is not sealed. A seal that
-    /// fails on a sealed call (key dropped from the cache mid-call) is logged and the caller sends
-    /// plaintext, so a reconnect is late rather than lost.
+    /// fails on a sealed call (key dropped from the cache mid-call) also returns nil; 1:1 audit r3
+    /// E6, 2026-10-08: callers check `sealSignalling` and retry, never sending plaintext.
     private func sealSignal(_ text: String) -> String? {
         guard sealSignalling, !otherUid.isEmpty else { return nil }
         let s = Crypto.shared.encryptForConversationIfCached(signalCid, text)
-        if s == nil { print("call: #27 seal failed on a sealed call, sending this one unsealed") }
+        if s == nil { print("call: #27 seal failed on a sealed call, held for a retry") }
         return s
     }
 
@@ -872,16 +902,19 @@ final class CallService: NSObject {
                   self.state != .idle, self.state != .ended else { return }
             print("call: G2 unsealed offer refused")
             self.endReason = .failed
+            self.recordWritten = true   // 1:1 audit r3 B1, 2026-10-08: no "Missed call" row for it
             self.endLocally()
         }
     }
 
     /// 1:1 audit r2 G2, 2026-10-08: the callee's key in memory before the offer is made, read fresh
     /// from the server (a key from before a reinstall seals an offer their phone cannot open).
-    /// false = no key after that read: the dial fails, never goes out unsealed.
-    private func ensureSignalKey(_ peer: String) async -> Bool {
-        guard !peer.isEmpty else { return false }
-        try? await Crypto.shared.ensureReady()
+    /// Not `.ready` = no key after that read: the dial fails, never goes out unsealed.
+    /// 1:1 audit r3 A6, 2026-10-08: `.noKey` (their phone never finished setup) is told apart from a
+    /// key this phone could not get, and the whole check has one deadline (3 s + at most 2 s).
+    enum SignalKeyCheck { case ready, noKey, unavailable }
+    private func ensureSignalKey(_ peer: String) async -> SignalKeyCheck {
+        guard !peer.isEmpty else { return .unavailable }
         // 1:1 audit r2 check, 2026-10-08: the fresh read gets 3 s, then the cached key is used
         // (a poor link left "Calling..." hanging). 0 = key, 1 = no key, 2 = unreachable, nil = slow.
         // Not a task group: that waits for every child, and the server read does not cancel.
@@ -893,6 +926,7 @@ final class CallService: NSObject {
         let fresh: Int? = await withCheckedContinuation { (cont: CheckedContinuation<Int?, Never>) in
             let once = Once()
             Task.detached {
+                try? await Crypto.shared.ensureReady()   // r3 A6: inside the 3 s cap
                 let r: Int
                 switch await Crypto.shared.fetchFreshKey(peer) {
                 case .key: r = 0
@@ -905,9 +939,22 @@ final class CallService: NSObject {
                 if once.claim() { cont.resume(returning: nil) }
             }
         }
-        if fresh == 1 { return false }
-        if fresh != 0 { _ = await Crypto.shared.preloadKey(peer) }   // offline or slow: the cached key
+        if fresh == 1 { return .noKey }
+        // Offline or slow: the stored key, waited for at most 2 s more (r3 A6).
+        if fresh != 0, !Crypto.shared.hasCachedKey(peer) {
+            _ = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                let once = Once()
+                Task.detached {
+                    _ = await Crypto.shared.preloadKey(peer)
+                    if once.claim() { cont.resume(returning: true) }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    if once.claim() { cont.resume(returning: false) }
+                }
+            }
+        }
         return Crypto.shared.encryptForConversationIfCached(ChatService.convId(me, peer), "k") != nil
+            ? .ready : .unavailable
     }
 
     /// 1:1 audit r2 G3, 2026-10-08: Settings > Privacy > "Always Relay Calls".
@@ -923,6 +970,21 @@ final class CallService: NSObject {
             try? await Crypto.shared.ensureReady()
             if fresh, case .key = await Crypto.shared.fetchFreshKey(peer) { return }
             _ = await Crypto.shared.preloadKey(peer)
+        }
+    }
+
+    /// 1:1 audit r3 E7, 2026-10-08: warm the peer's key and run `then` on main once that read has
+    /// finished (landed or timed out, at most ~10 s), at least a second from now. The seal and open
+    /// retries wait on this instead of a fixed count of 1 s ticks that ended before the read did.
+    private func afterSignalKeyWarm(_ then: @escaping () -> Void) {
+        let peer = otherUid
+        guard !peer.isEmpty else { return }
+        let started = Date()
+        Task {
+            try? await Crypto.shared.ensureReady()
+            _ = await Crypto.shared.preloadKey(peer)   // joins a read already running for this peer
+            let wait = max(0, 1 - Date().timeIntervalSince(started))
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { then() }
         }
     }
 
@@ -1018,7 +1080,8 @@ final class CallService: NSObject {
     private var peerTrustPending = false
 
     /// Wait (bounded) for the contact check above before anything reads `config`.
-    private func awaitPeerTrust(timeout: Double = 1.5) async {
+    /// 1:1 audit r3 I3, 2026-10-08: on main, where `peerTrustPending` is written.
+    @MainActor private func awaitPeerTrust(timeout: Double = 1.5) async {
         let deadline = Date().addingTimeInterval(timeout)
         while peerTrustPending, Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
@@ -1109,15 +1172,19 @@ final class CallService: NSObject {
     /// launch), so this costs nothing except on a genuinely cold start. On timeout we proceed with the
     /// STUN fallback rather than fail the call — a call that might not traverse beats no call at all — and
     /// the in-flight fetch is left running so the NEXT call is warm either way.
-    private func awaitIceServers(timeout: Double = 2.0) async {
+    /// 1:1 audit r3 I3, 2026-10-08: on main, where the list is written (r2 J5).
+    @MainActor private func awaitIceServers(timeout: Double = 2.0) async {
         if fetchedIceServers != nil {
             // Audit M-009, 2026-10-07: a list still inside its 90 minutes can be 89 minutes old, which
             // leaves a call started on it about half an hour before the relay refuses its credentials.
             // Past 30 minutes, ask for a fresh one and wait a short, bounded moment for it; on timeout
             // the old list (still valid) is used and the fetch keeps running for the restart path
             // (`applyNewerIceServers`).
+            // 1:1 audit r3 E1, 2026-10-08: a relay-less list (often the server's reply to a passing
+            // provider error) is never trusted as fresh; ask again.
             guard let at = iceServersFetchedAt,
-                  Date().timeIntervalSince(at) > Self.iceServersRefreshAge else { return }
+                  Date().timeIntervalSince(at) > Self.iceServersRefreshAge
+                    || !Self.hasRelay(iceServersCache ?? []) else { return }
             let refresh = Task { await self.refreshIceServers() }
             let until = Date().addingTimeInterval(min(timeout, 1.0))
             while iceServersFetchedAt == at, Date() < until {
@@ -1142,15 +1209,20 @@ final class CallService: NSObject {
     /// restart on carrier NAT failed the same way. Compared with `iceServersFetchedAt` to tell when a
     /// newer list is in hand.
     private var pcIceServersFetchedAt: Date?
+    /// 1:1 audit r3 E3, 2026-10-08: the live connection's list carries a `turn:`/`turns:` server.
+    @ObservationIgnored private var pcHasRelay = false
 
     /// Audit M-009, 2026-10-07: hand the live connection a newer TURN list than the one it was built
     /// with, if one is cached. Called right before an ICE restart (both sides), because only the
     /// gathering a restart starts uses the new servers. Everything else in `config` is unchanged, so
     /// libwebrtc accepts the change mid-call.
     private func applyNewerIceServers(to connection: RTCPeerConnection) {
-        guard fetchedIceServers != nil, let at = iceServersFetchedAt, at != pcIceServersFetchedAt else { return }
+        guard let list = fetchedIceServers, let at = iceServersFetchedAt, at != pcIceServersFetchedAt else { return }
+        // 1:1 audit r3 E3, 2026-10-08: never swap a relay the connection holds for a list without one.
+        if pcHasRelay, !Self.hasRelay(list) { return }
         if connection.setConfiguration(config) {
             pcIceServersFetchedAt = at
+            pcHasRelay = Self.hasRelay(list)
         } else {
             print("call: M-009 setConfiguration refused the newer ICE servers")
         }
@@ -1162,8 +1234,18 @@ final class CallService: NSObject {
         // No list at all (the fallback call whose fetch failed) reads as stale too. A fresh list that
         // simply landed after the connection was built needs no fetch: the restart picks it up.
         let stale = iceServersFetchedAt.map { Date().timeIntervalSince($0) > Self.iceServersRefreshAge } ?? true
-        guard stale else { return }
+        // 1:1 audit r3 E1, 2026-10-08: a relay-less list is stale too.
+        guard stale || !Self.hasRelay(iceServersCache ?? []) else { return }
         Task { await self.refreshIceServers() }
+    }
+
+    /// 1:1 audit r3 I4, 2026-10-08: the launch / listener re-attach warm calls the relay function
+    /// only when no list is held, it is past the refresh age, or it lacks a relay and is over a
+    /// minute old (E1). A dead listener retrying every 60 s no longer mints credentials each time.
+    private var iceServersNeedWarm: Bool {
+        guard let at = iceServersFetchedAt, let list = iceServersCache else { return true }
+        let age = Date().timeIntervalSince(at)
+        return age > Self.iceServersRefreshAge || (!Self.hasRelay(list) && age > 60)
     }
 
     /// 2026-09-24 audit: true when this call must be relayed (the peer is not an established
@@ -1179,10 +1261,18 @@ final class CallService: NSObject {
     }
 
     /// For a stranger, give the relay fetch one more, longer chance before refusing the call.
-    private func awaitRelayForStranger() async {
-        // A list that arrived without TURN will not grow one on a retry; only a missing list waits.
-        guard strangerWithoutRelay, fetchedIceServers == nil else { return }
-        await awaitIceServers(timeout: 6.0)
+    @MainActor private func awaitRelayForStranger() async {   // 1:1 audit r3 I3: on main
+        // 1:1 audit r3 E1, 2026-10-08: a relay-less list is usually the server's reply to a passing
+        // provider error, so it is asked for again too (it used to be trusted for 30 minutes).
+        guard strangerWithoutRelay else { return }
+        guard fetchedIceServers != nil else { await awaitIceServers(timeout: 6.0); return }
+        let at = iceServersFetchedAt
+        let fetch = Task { await self.refreshIceServers() }
+        let deadline = Date().addingTimeInterval(6.0)
+        while iceServersFetchedAt == at, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        _ = fetch
     }
 
     // Audio session is owned by CallKit (manual mode) — see CallKitManager.
@@ -1191,6 +1281,7 @@ final class CallService: NSObject {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         // Audit M-009: remember which list this connection carries (nil = STUN fallback).
         pcIceServersFetchedAt = fetchedIceServers == nil ? nil : iceServersFetchedAt
+        pcHasRelay = Self.hasRelay(fetchedIceServers ?? [])   // 1:1 audit r3 E3
         let connection = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
         // Local mic track.
         let audioSource = Self.factory.audioSource(with: nil)
@@ -1241,6 +1332,7 @@ final class CallService: NSObject {
     /// (audio cap, half resolution), or a call that started on cellular stayed small on Wi-Fi.
     private func applyDataSaver(to connection: RTCPeerConnection?, onWifi: Bool? = nil) {
         guard let connection else { return }
+        saverAppliedOnWifi = onWifi ?? NetworkState.shared.isWifi   // 1:1 audit r3 E5
         let saverOn: Bool
         if let onWifi, UserDefaults.standard.string(forKey: "calls.lessData") == "cellular" {
             saverOn = !onWifi
@@ -1615,8 +1707,18 @@ final class CallService: NSObject {
         // (owner audit 2026-10-06 #14).
         // 1:1 audit r2 check, 2026-10-08: and clear `cameraStarting`, which no start will now clear.
         let giveUp = { DispatchQueue.main.async { [weak self] in
-            self?.cameraStarting = false
-            self?.resolvePendingSwitch()
+            guard let self else { return }
+            self.cameraStarting = false
+            self.resolvePendingSwitch()
+            // 1:1 audit r3 D4, 2026-10-08: a live call whose camera could not start is a paused
+            // camera, not a running one: say so (cams false, photo on their side) and let the paused
+            // retry try again, the same path as a session that did not come up.
+            if self.cameraShouldRun, self.videoCapturer != nil, !self.cameraPausedByBackground {
+                self.cameraPausedByBackground = true
+                self.localVideoTrack?.isEnabled = false
+                self.broadcastCameraState()
+                self.startPausedCameraRetry()
+            }
         } }
         guard let capturer = videoCapturer else { giveUp(); return }
         let position: AVCaptureDevice.Position = front ? .front : .back
@@ -1834,10 +1936,17 @@ final class CallService: NSObject {
     /// starts. Same port list as `updateAudioRoute`.
     private var externalOutputAround: Bool {
         let session = AVAudioSession.sharedInstance()
-        let ports: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
-                                               .headphones, .headsetMic, .carAudio]
-        return session.currentRoute.outputs.contains { ports.contains($0.portType) }
-            || (session.availableInputs ?? []).contains { ports.contains($0.portType) }
+        return Self.externalOutputInUse(session) || Self.externalInputAvailable(session)
+    }
+
+    /// 1:1 audit r3 C2, 2026-10-08: a device is anything that is not the phone's own speaker,
+    /// earpiece or mic (the reference app's test), so USB-C earphones count. Was an allow-list
+    /// that missed `.usbAudio`.
+    private static func externalOutputInUse(_ session: AVAudioSession) -> Bool {
+        session.currentRoute.outputs.contains { $0.portType != .builtInSpeaker && $0.portType != .builtInReceiver }
+    }
+    private static func externalInputAvailable(_ session: AVAudioSession) -> Bool {
+        (session.availableInputs ?? []).contains { $0.portType != .builtInMic }
     }
 
     // Tell the other side whether my camera is on — drives their show/hide of MY video.
@@ -1872,6 +1981,14 @@ final class CallService: NSObject {
     /// until startCapture's completion sees the session running, so the other side never shows a
     /// black or stale frame as live video. Cleared there, on a turn-off, a denial and at .idle.
     private var cameraStarting = false
+
+    /// 1:1 audit r3 D2, 2026-10-08: answering a video call is a turn-on too. Unless the camera warmed
+    /// during the ring is already running, the answer says cams=false and startCapture's completion
+    /// announces it (after the accept, so no camera write lands before it). Main only.
+    private func markCameraStartingForAnswer() {
+        guard cameraOn, !shareOwnsCamera, videoCapturer?.captureSession.isRunning != true else { return }
+        cameraStarting = true
+    }
 
     // MARK: - Screen share (1:1)
     //
@@ -2096,7 +2213,9 @@ final class CallService: NSObject {
         // re-enables the track once the session is really running.
         let restoreCamera = signal && cameraShouldRun
         localVideoTrack?.isEnabled = restoreCamera && !cameraPausedByBackground
-        if restoreCamera { startCameraCapture() }
+        // 1:1 audit r3 D2, 2026-10-08: as a turn-on (r2 E1), `cams` waits for the running session;
+        // startCapture's completion announces it. The write below sends cams=false meanwhile.
+        if restoreCamera { cameraStarting = true; startCameraCapture() }
         // My own feed was fullscreen and there is no camera to show in it now: normal layout.
         if !cameraOn, isLocalExpanded { isLocalExpanded = false }
         if signal { broadcastScreenState() }
@@ -2383,6 +2502,7 @@ final class CallService: NSObject {
         stopPausedCameraRetry()
         guard cameraPausedByBackground || localVideoTrack?.isEnabled == false else { return }
         cameraPausedByBackground = false
+        cameraStarting = false   // 1:1 audit r3 D2: the session runs, so a pending turn-on is done
         localVideoTrack?.isEnabled = true
         broadcastCameraState()   // they see my video come back
     }
@@ -2459,6 +2579,40 @@ final class CallService: NSObject {
     var remoteLevel: Double = 0
     var localLevel: Double = 0
     private var voiceMonitor: Timer?
+
+    /// 1:1 audit r3 I9, 2026-10-08: ONE stats read shared by the voice, freeze and link monitors.
+    /// Each used to build the whole report on its own tick (4+ a second, minimized). A report
+    /// requested under `maxAge` ago on this connection is reused, a read in flight is joined.
+    /// `maxAge` stays under each monitor's own tick, so no monitor gets the same report twice.
+    /// Main only; `use` runs off main, as the old completions did.
+    @ObservationIgnored private var statsCache: (pc: ObjectIdentifier, at: Date, report: RTCStatisticsReport)?
+    @ObservationIgnored private var statsFetch: (pc: ObjectIdentifier, at: Date)?
+    @ObservationIgnored private var statsWaiters: [(pc: ObjectIdentifier, use: (RTCStatisticsReport) -> Void)] = []
+
+    private func sharedStatistics(_ pc: RTCPeerConnection, maxAge: TimeInterval,
+                                  _ use: @escaping (RTCStatisticsReport) -> Void) {
+        let key = ObjectIdentifier(pc)
+        let now = Date()
+        if let c = statsCache, c.pc == key, now.timeIntervalSince(c.at) < maxAge {
+            let report = c.report
+            DispatchQueue.global(qos: .utility).async { use(report) }
+            return
+        }
+        statsWaiters.removeAll { $0.pc != key }   // a previous call's connection
+        statsWaiters.append((key, use))
+        if let f = statsFetch, f.pc == key, now.timeIntervalSince(f.at) < 3 { return }
+        statsFetch = (key, now)
+        pc.statistics { [weak self] report in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let f = self.statsFetch, f.pc == key, f.at == now { self.statsFetch = nil }
+                self.statsCache = (key, now, report)
+                let ready = self.statsWaiters.filter { $0.pc == key }.map { $0.use }
+                self.statsWaiters.removeAll { $0.pc == key }
+                DispatchQueue.global(qos: .utility).async { ready.forEach { $0(report) } }
+            }
+        }
+    }
     private var remoteQuietSince: Date?
     private var localQuietSince: Date?
     /// ⛔ A FIXED THRESHOLD CALLED A FRIDGE A VOICE. It was a flat 0.02, and `audioLevel` is raw
@@ -2489,7 +2643,8 @@ final class CallService: NSObject {
         guard voiceMonitor == nil, state == .active, minimized else { return }
         // 1:1 audit r2 J3, 2026-10-08: not in the background; didBecomeActive starts it again.
         guard UIApplication.shared.applicationState != .background else { return }
-        voiceMonitor = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+        // 1:1 audit r3 I9, 2026-10-08: every 0.5 s (was 0.3), on the shared stats read.
+        voiceMonitor = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.sampleVoiceLevels()
         }
     }
@@ -2514,7 +2669,7 @@ final class CallService: NSObject {
 
     private func sampleVoiceLevels() {
         guard state == .active, minimized, let pc else { stopVoiceMonitor(); return }
-        pc.statistics { [weak self] report in
+        sharedStatistics(pc, maxAge: 0.4) { [weak self] report in   // 1:1 audit r3 I9
             var remote = 0.0
             var local = 0.0
             for s in report.statistics.values {
@@ -2600,8 +2755,27 @@ final class CallService: NSObject {
 
     private func startLinkMonitor() {
         guard linkMonitor == nil else { return }
+        // 1:1 audit r3 I8, 2026-10-08: only while there is video to send. On a voice call the 2 s
+        // tick did no work and only woke the CPU; `syncLinkMonitor` starts it with the camera or a share.
+        guard cameraOn || screenSharing else { return }
         linkMonitor = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.sampleLinkQuality()
+        }
+    }
+
+    /// 1:1 audit r3 I8, 2026-10-08: the camera or a share came on or went off. On: start the monitor
+    /// in a live call. Off: only its timer stops (with fresh windows); a weak-link pause and its
+    /// clocks stay for the camera's return, as when the tick returned early. Main only.
+    private func syncLinkMonitor() {
+        guard Thread.isMainThread else {   // the timer needs the main run loop
+            DispatchQueue.main.async { [weak self] in self?.syncLinkMonitor() }
+            return
+        }
+        if cameraOn || screenSharing {
+            if state == .active || state == .reconnecting { startLinkMonitor() }
+        } else if linkMonitor != nil {
+            linkMonitor?.invalidate(); linkMonitor = nil
+            linkPolicy.reset()
         }
     }
 
@@ -2625,7 +2799,7 @@ final class CallService: NSObject {
         // (owner, 2026-10-08: sampleShareQuality).
         guard cameraOn || screenSharing else { linkPolicy.reset(); return }
         if screenSharing { linkPolicy.reset(); sampleShareQuality(pc); return }
-        pc.statistics { [weak self, weak pc] report in
+        sharedStatistics(pc, maxAge: 1.5) { [weak self, weak pc] report in   // 1:1 audit r3 I9
             // The ACTIVE pair's estimate. This is what WebRTC's own congestion controller concluded, so
             // it already folds in loss and round-trip time; a separate packet-loss rule bolted on top
             // would only add noise and a second thing to tune.
@@ -2690,7 +2864,7 @@ final class CallService: NSObject {
         // Dual mode: only the screen's outbound stream counts (the capped camera runs beside it).
         let dual = shareUsesTrack
         let screenMid: String? = dual ? screenTransceiver(in: pc)?.mid : nil
-        pc.statistics { [weak self] report in
+        sharedStatistics(pc, maxAge: 1.5) { [weak self] report in   // 1:1 audit r3 I9
             var available: Double?
             var bytesSent: Double?
             var loss: Double?
@@ -3249,6 +3423,34 @@ final class CallService: NSObject {
 
     /// 1:1 audit r2 C4/D5, 2026-10-08: route and device-around for the ring screen, read live,
     /// with none of updateAudioRoute's re-asserts (no route observer runs before .active).
+    @ObservationIgnored private var ringRouteObserver: NSObjectProtocol?
+
+    /// 1:1 audit r3 C1, 2026-10-08: the route followed during "Calling..." / the ring too (the
+    /// reference app observes it for the whole call). A device coming in takes the sound, so
+    /// `isSpeaker` follows it and no later re-assert pulls it back to the loudspeaker; a device
+    /// leaving a video dial puts the loudspeaker default back (as the `.outgoing` rule does).
+    private func startRingRouteObservation() {
+        guard ringRouteObserver == nil else { return }
+        ringRouteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+                guard let self, self.state == .outgoing || self.state == .incoming else { return }
+                let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                let reason = raw.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
+                if reason == .newDeviceAvailable, self.externalOutputAround {
+                    self.isSpeaker = false; self.wantsSpeaker = false
+                } else if reason == .oldDeviceUnavailable, self.state == .outgoing, self.cameraOn,
+                          !self.externalOutputAround, !self.isSpeaker {
+                    self.isSpeaker = true; self.wantsSpeaker = true
+                    try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+                }
+                self.refreshRouteForRing()
+        }
+    }
+
+    private func stopRingRouteObservation() {
+        if let o = ringRouteObserver { NotificationCenter.default.removeObserver(o); ringRouteObserver = nil }
+    }
+
     private func refreshRouteForRing() {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
         if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
@@ -3267,9 +3469,7 @@ final class CallService: NSObject {
         updateInCallScreenBehavior()
         // Any external playback device around? Bluetooth headsets surface as available INPUTS
         // during a playAndRecord call; a currently-external route obviously counts too.
-        let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
-                                                  .headphones, .headsetMic, .carAudio]
-        let hasExternalInput = (session.availableInputs ?? []).contains { external.contains($0.portType) }
+        let hasExternalInput = Self.externalInputAvailable(session)   // 1:1 audit r3 C2: any non-built-in input
         // Audit round 2 (V1 new bug 1, from M-049), 2026-10-07: a video call that STARTED with AirPods
         // never got its speaker default (the device was connected), so when they came out the call
         // landed on the earpiece: a video call held at arm's length with the sound at the ear. The
@@ -3810,8 +4010,10 @@ final class CallService: NSObject {
     /// now would throw those checks away with new credentials.
     private var restartIsWorking: Bool {
         let answered = !isCaller || restartInFlightAt == nil
-        guard answered, let c = iceCheckingSince else { return false }
-        let since = max(c, restartAppliedAt ?? c)
+        // 1:1 audit r3 E2, 2026-10-08: counted from the answer too, not only from `.checking`. A
+        // relay-only restart has no pairs (so no `.checking`) until its TURN allocation finishes,
+        // and a slow relay was re-restarted every 8 s before it ever could.
+        guard answered, let since = [iceCheckingSince, restartAppliedAt].compactMap({ $0 }).max() else { return false }
         return Date().timeIntervalSince(since) < 12
     }
 
@@ -3829,7 +4031,7 @@ final class CallService: NSObject {
             let elapsed = self.reconnectStartedAt.map { now.timeIntervalSince($0) } ?? 60
             let peerAlive = self.lastPeerBeatAt.map { now.timeIntervalSince($0) < 12 } == true   // 1:1 audit check, 2026-10-08: calm beat is 10 s
                 && self.lastPeerBeatValue != 0
-            let checking = self.iceCheckingSince != nil
+            let checking = self.iceCheckingSince != nil || self.restartIsWorking   // 1:1 audit r3 E2
             // 1:1 audit r2 F5, 2026-10-08: a failed DTLS transport never comes back; no extension.
             if elapsed < 60, peerAlive || checking, !self.transportFailed {
                 print("[Call] reconnect: still trying at \(Int(elapsed))s (peerAlive \(peerAlive), checking \(checking))")
@@ -3912,6 +4114,13 @@ final class CallService: NSObject {
                     self.lastPathKey = key
                     if self.lastPathWasWifi == nil, key != "none" { self.lastPathWasWifi = onWifi }
                 }
+                // 1:1 audit r3 E5, 2026-10-08: the first reading is compared with the network Use
+                // Less Data was applied for when the connection was built (during the ring).
+                if self.lastPathWasWifi == nil, key != "none", let built = self.saverAppliedOnWifi,
+                   built != onWifi, self.state == .active || self.state == .reconnecting {
+                    self.lastPathWasWifi = onWifi
+                    self.applyDataSaver(to: self.pc, onWifi: onWifi)
+                }
                 guard let last = self.lastPathKey, last != key, key != "none",
                       self.state == .active || self.state == .reconnecting else { return }
                 // 1:1 audit #8: Use Less Data and the video ceiling follow the network the call is
@@ -3922,6 +4131,7 @@ final class CallService: NSObject {
                 }
                 self.linkTransitionAt = Date()   // #29
                 self.linkMovedAt = Date()        // 1:1 audit r2 F2: a real network move
+                self.lastPathKey = key   // 1:1 audit r3 E4: the restart below records the new network
                 if self.isCaller { self.restartIce() } else { self.requestIceRestart() }
             }
         }
@@ -3937,6 +4147,12 @@ final class CallService: NSObject {
 
     /// 1:1 audit #8 (owner, 2026-10-08): whether the call's route was Wi-Fi at the last path update.
     private var lastPathWasWifi: Bool?
+    /// 1:1 audit r3 E5, 2026-10-08: the network Use Less Data was last applied for (Wi-Fi or not).
+    @ObservationIgnored private var saverAppliedOnWifi: Bool?
+    /// 1:1 audit r3 E4, 2026-10-08: the path key the latest ICE restart was gathered on.
+    @ObservationIgnored private var restartPathKey: String?
+    /// 1:1 audit r3 E4: a callee request declined over a working restart, looked at again later.
+    @ObservationIgnored private var restartRequestRecheck: DispatchWorkItem?
 
     /// 1:1 audit #19 (owner, 2026-10-08): the IPv4 address(es) on one interface, for the path key.
     /// 1:1 audit check, 2026-10-08: IPv6 is left out. Temporary (privacy) IPv6 addresses rotate
@@ -3982,16 +4198,43 @@ final class CallService: NSObject {
             guard let self else { return }
             self.restartDeferWork = nil
             guard self.callId == id, self.state == .active || self.state == .reconnecting else { return }
-            if let c = self.lastIceConnectedAt, c > asked { return }   // healed since: nothing to redo
-            // 1:1 audit r2 F1, 2026-10-08: never over a restart that is working, and not when an
-            // answer landed since and the call is healthy (ICE stayed connected through a move).
-            if self.restartIsWorking { return }
-            if let a = self.restartAppliedAt, a > asked, self.state == .active, self.mediaReady { return }
+            // 1:1 audit r3 E4, 2026-10-08: the restart in flight was gathered on an older network
+            // than the one the phone is on now: this one runs whatever that one is doing.
+            let moved = self.lastPathKey != nil && self.restartPathKey != self.lastPathKey
+            if !moved {
+                if let c = self.lastIceConnectedAt, c > asked { return }   // healed since: nothing to redo
+                // 1:1 audit r2 F1, 2026-10-08: never over a restart that is working, and not when an
+                // answer landed since and the call is healthy (ICE stayed connected through a move).
+                if self.restartIsWorking { return }
+                if let a = self.restartAppliedAt, a > asked, self.state == .active, self.mediaReady { return }
+            }
             print("[Call] restart: running the one held back by the in-flight window")
             self.restartIce()
         }
         restartDeferWork = w
         let wait = max(0, 6 - Date().timeIntervalSince(t)) + 0.2
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
+    }
+
+    /// 1:1 audit r3 E4, 2026-10-08: a callee request that arrived while a restart was working is
+    /// looked at again when that restart's 12 s are up, instead of being dropped. It runs unless
+    /// ICE came up since, or a newer restart served it (`restartIce` cancels this).
+    private func recheckRestartRequestLater() {
+        guard restartRequestRecheck == nil else { return }
+        let asked = Date()
+        let id = callId
+        let since = [iceCheckingSince, restartAppliedAt].compactMap { $0 }.max() ?? asked
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.restartRequestRecheck = nil
+            guard self.callId == id, self.state == .active || self.state == .reconnecting else { return }
+            if let c = self.lastIceConnectedAt, c > asked, self.state == .active { return }
+            if self.restartIsWorking { self.recheckRestartRequestLater(); return }
+            print("[Call] restart: serving the callee's request held over a working restart")
+            self.restartIce()
+        }
+        restartRequestRecheck = w
+        let wait = max(0, 12 - Date().timeIntervalSince(since)) + 0.2
         DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: w)
     }
 
@@ -4015,7 +4258,9 @@ final class CallService: NSObject {
                 return
             }
             restartDeferWork?.cancel(); restartDeferWork = nil
+            restartRequestRecheck?.cancel(); restartRequestRecheck = nil   // 1:1 audit r3 E4: served
             restartInFlightAt = Date()
+            restartPathKey = lastPathKey   // 1:1 audit r3 E4
             applyNewerIceServers(to: pc)   // audit M-009: a relay that arrived after the call started
         }
         negotiationVersion += 1
@@ -4045,8 +4290,8 @@ final class CallService: NSObject {
     }
 
     /// 1:1 audit r2 G9, 2026-10-08: write a restart offer/answer. On a sealed call a seal that fails
-    /// (key dropped from memory) re-warms the key and tries again a second later, up to 5 times,
-    /// while `current()` holds; the other phone refuses a plaintext SDP on a sealed call, so the
+    /// (key dropped from memory) re-warms the key and tries again once that read ends, up to 4
+    /// reads (r3 E7), while `current()` holds; the other phone refuses a plaintext SDP on a sealed call, so the
     /// old plaintext fallback only lost the reconnect. Unsealed calls write plaintext as before.
     private func writeSignalSdp(_ sdp: String, version v: Int, field: String, ref: DocumentReference,
                                 attempt: Int = 1, current: @escaping () -> Bool) {
@@ -4059,10 +4304,11 @@ final class CallService: NSObject {
         }
         if let enc = sealSignal(sdp) { ref.updateData([field: ["enc": enc, "version": v] as [String: Any]]); return }
         guard sealSignalling else { ref.updateData([field: ["sdp": sdp, "version": v] as [String: Any]]); return }
-        guard attempt < 5 else { print("[Call] G9: \(field) could not be sealed, not sent"); return }
-        warmSignalKey()
+        // 1:1 audit r3 E7, 2026-10-08: each retry waits for the key read it started (up to ~10 s),
+        // 4 reads in all, instead of 1 s ticks that gave up before a slow read could land.
+        guard attempt <= 4 else { print("[Call] G9: \(field) could not be sealed, not sent"); return }
         let id = callId
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        afterSignalKeyWarm { [weak self] in
             guard let self, self.callId == id, id == ref.documentID, current() else { return }
             self.writeSignalSdp(sdp, version: v, field: field, ref: ref, attempt: attempt + 1, current: current)
         }
@@ -4198,6 +4444,9 @@ final class CallService: NSObject {
             minimized = false
             return
         }
+        // 1:1 audit r3 A4, 2026-10-08: they are ringing me right now. The system ring is up to
+        // answer; no "already in a call" notice.
+        if otherUid == uid, state == .incoming { return }
         guard state == .idle else {
             MainActor.assumeIsolated { GroupCallService.presentOverTop(GroupCallService.busyNotice) }
             return
@@ -4260,12 +4509,13 @@ final class CallService: NSObject {
         }
         // 1:1 audit r2 B1/B2, 2026-10-08: microphone (and camera for video) settled BEFORE any
         // CallKit call or call doc exists, as the reference app does. A prompt re-enters startCall.
-        guard callPermissionsReady(uid: uid, name: name, photo: photo, video: video, fromProfile: fromProfile) else { return }
         // 1:1 audit r2 B5, 2026-10-08: an account known to be deleted is not rung at all.
+        // r3 A6, 2026-10-08: checked before the permission prompts, not after them.
         guard !Self.isGoneAccount(uid) else {
             MainActor.assumeIsolated { GroupCallService.presentOverTop(Self.goneNotice) }
             return
         }
+        guard callPermissionsReady(uid: uid, name: name, photo: photo, video: video, fromProfile: fromProfile) else { return }
         cameraOn = video   // a video call = my camera on from the start (the callee's is independent)
         startedAsVideo = video
         noteVideo()
@@ -4308,10 +4558,13 @@ final class CallService: NSObject {
                 // 2026-09-24 audit: no relay for a stranger → fail, never go direct.
                 if self.strangerWithoutRelay { self.endReason = .failed; self.hangUp(); return }
                 // 1:1 audit r2 G2, 2026-10-08: no key for them = no call, never unsealed signalling.
-                if !keyOk {
+                if keyOk != .ready {
                     self.endReason = .failed; self.hangUp()
-                    GroupCallService.presentOverTop(GroupCallService.Notice(
-                        title: "Can't call right now.", message: "Try again."))
+                    // r3 A6, 2026-10-08: "Try again" cannot help when their phone has no key yet.
+                    GroupCallService.presentOverTop(keyOk == .noKey
+                        ? GroupCallService.Notice(title: "Can't call right now.",
+                                                  message: "Their app hasn't finished setting up. Ask them to open Kulan.")
+                        : GroupCallService.Notice(title: "Can't call right now.", message: "Try again."))
                     return
                 }
                 self.beginOutgoingMedia(to: uid, attempt: attempt)
@@ -4563,17 +4816,28 @@ final class CallService: NSObject {
 
     /// 1:1 audit r2 B1/B2: "access is off" with a Settings button (and "Voice Call" for a refused
     /// camera). A UIKit alert on whatever is on top, the `offerUnblock` pattern.
-    private static func presentPermissionAlert(camera: Bool, voiceInstead: (() -> Void)?, tries: Int = 4) {
+    private static func presentPermissionAlert(camera: Bool, voiceInstead: (() -> Void)?, tries: Int = 10,
+                                               alertWaits: Int = 75) {
         guard Thread.isMainThread else {
-            DispatchQueue.main.async { presentPermissionAlert(camera: camera, voiceInstead: voiceInstead, tries: tries) }
+            DispatchQueue.main.async { presentPermissionAlert(camera: camera, voiceInstead: voiceInstead, tries: tries, alertWaits: alertWaits) }
             return
         }
         MainActor.assumeIsolated {
-            guard let top = WebLink.topViewController(), !(top is UIAlertController) else { return }
+            guard let top = WebLink.topViewController() else { return }
+            // 1:1 audit r3 G8, 2026-10-08: another alert up no longer drops this silently; it waits
+            // for that alert to go (up to 30 s), unless it is this same alert.
+            if let shown = top as? UIAlertController {
+                let title = camera ? "Camera Access Is Off" : "Microphone Access Is Off"
+                guard shown.title != title, alertWaits > 0 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    presentPermissionAlert(camera: camera, voiceInstead: voiceInstead, tries: tries, alertWaits: alertWaits - 1)
+                }
+                return
+            }
             if top.isBeingPresented || top.isBeingDismissed {
                 guard tries > 0 else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    presentPermissionAlert(camera: camera, voiceInstead: voiceInstead, tries: tries - 1)
+                    presentPermissionAlert(camera: camera, voiceInstead: voiceInstead, tries: tries - 1, alertWaits: alertWaits)
                 }
                 return
             }
@@ -4766,7 +5030,8 @@ final class CallService: NSObject {
         incomingHeardServer = false
         incomingAttach += 1
         let attach = incomingAttach
-        Task { await refreshIceServers() }   // warm the TURN list at launch so the first call has it
+        // Warm the TURN list at launch so the first call has it; 1:1 audit r3 I4: not on every re-attach.
+        if iceServersNeedWarm { Task { await refreshIceServers() } }
 
         incomingListener = db.collection("calls")
             .whereField("callee", isEqualTo: me)
@@ -5146,12 +5411,20 @@ final class CallService: NSObject {
            let created = (d["createdAt"] as? Timestamp)?.dateValue(), Self.ringAge(created) < 4 {
             let id = doc.documentID
             if screenWaiting.insert(id).inserted {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                // 1:1 audit r3 A2, 2026-10-08: 3 s, so a cold server still screens before the ring.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                     guard let self, self.screenWaiting.remove(id) != nil, self.callId != id,
                           !self.finishedCallIds.contains(id) else { return }
                     self.db.collection("calls").document(id).getDocument(source: .server) { [weak self] snap, _ in
-                        guard let self, let fresh = snap?.data(), (fresh["status"] as? String) == "ringing",
-                              fresh["acceptedAt"] == nil, self.callId != id else { return }
+                        guard let self, self.callId != id else { return }
+                        // 1:1 audit r3 A1, 2026-10-08: a read that FAILED no longer drops the ring
+                        // for good: it goes on to the phone's own gate (fail open, as callAllowed).
+                        // Only a read that says the call is over or answered stops it.
+                        if let snap {
+                            guard let fresh = snap.data(), (fresh["status"] as? String) == "ringing",
+                                  fresh["acceptedAt"] == nil,
+                                  !Self.answeredOnOtherDevice(fresh) else { return }
+                        }
                         self.screenWaitDone.insert(id)
                         self.handleRingingDoc(doc)
                     }
@@ -5173,7 +5446,18 @@ final class CallService: NSObject {
         // call (a refusal heard as presence, which unmasks the silent block) and my phone wrote a
         // "Missed call" into the chat with them. A refused caller now gets the same silent decline
         // whether I am free or not.
-        self.callAllowed(from: caller) { gate in
+        // 1:1 audit r3 F2, 2026-10-08: the server's verdict for me (`users/{me}/callScreens/{id}`,
+        // only I can read it) is read next to the phone's gate. `allowed == false` = server refused
+        // (block): dropped like a phone-side block. No doc (older server) = the phone's gate alone.
+        final class GateBox { var serverRefused = false; var gate: CallGate = .allowed }
+        let box = GateBox()
+        let both = DispatchGroup()
+        both.enter()
+        self.screenVerdict(callId: doc.documentID) { refused in box.serverRefused = refused; both.leave() }
+        both.enter()
+        self.callAllowed(from: caller) { gate in box.gate = gate; both.leave() }
+        both.notify(queue: .main) {
+            let gate: CallGate = box.serverRefused ? .blocked : box.gate
             // 1:1 audit r2 check, 2026-10-08 (G6): a blocked caller gets no signal at all. No write,
             // no ring; the call is only marked finished here and the caller's ring-out ends it.
             if gate == .blocked {
@@ -5183,9 +5467,20 @@ final class CallService: NSObject {
             }
             guard gate == .allowed else {
                 self.gatingIncoming.remove(doc.documentID)
-                self.db.collection("calls").document(doc.documentID)
-                    .updateData(["status": "ended", "endReason": EndReason.declined.rawValue,
-                                 "refused": true])   // audit M-013: the caller writes no row for it
+                // audit M-013: the caller writes no row for it. r3 A7: only if no device answered.
+                self.endRingIfUnclaimed(doc.documentID,
+                                        fields: ["status": "ended", "endReason": EndReason.declined.rawValue,
+                                                 "refused": true])
+                return
+            }
+            // 1:1 audit r3 B1, 2026-10-08: an unsealed offer (older caller build) is refused BEFORE
+            // anything rings: no ring flash, no "Missed call" row, the doc ends as failed.
+            if d["offerEnc"] == nil, d["offer"] != nil {
+                print("call: G2 unsealed offer refused before the ring")
+                self.gatingIncoming.remove(doc.documentID)
+                self.rememberFinished(doc.documentID)
+                self.endRingIfUnclaimed(doc.documentID,
+                                        fields: ["status": "ended", "endReason": EndReason.failed.rawValue])
                 return
             }
             // WHO IS CALLING, FROM THEIR PROFILE, NOT FROM THE DOC (audit M-058, 2026-10-07). The
@@ -5297,7 +5592,7 @@ final class CallService: NSObject {
         let cid = ChatService.convId(me, uid)
         var conv: Conversation? = Thread.isMainThread
             ? ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) : nil
-        if conv == nil { conv = ConversationsDiskCache.shared.load(uid: me).first(where: { $0.id == cid }) }
+        if conv == nil { conv = ConversationsDiskCache.shared.load(uid: me, id: cid) }   // r3 A5
         guard let n = conv?.names[uid], !n.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         return n
     }
@@ -5419,7 +5714,10 @@ final class CallService: NSObject {
                     // 1:1 audit r2 check, 2026-10-08 (G6): blocked = no write, not even busy.
                     if gate == .blocked { self.rememberFinished(callId); return }
                     guard gate == .allowed else {
-                        ref.updateData(["status": "ended", "endReason": EndReason.declined.rawValue, "refused": true])
+                        // 1:1 audit r3 A7, 2026-10-08: only if no device of mine answered it.
+                        self.endRingIfUnclaimed(callId, fields: ["status": "ended",
+                                                                 "endReason": EndReason.declined.rawValue,
+                                                                 "refused": true])
                         return
                     }
                     if self.state == .idle || self.state == .ended, let back = self.adhocRoomIncluding(uid) {
@@ -5480,10 +5778,15 @@ final class CallService: NSObject {
             guard gate == .allowed else {
                 // Refuse WITHOUT ever having marked it ringing: from the caller's side this is the
                 // same silent non-answer the foreground listener path produces.
-                self.db.collection("calls").document(callId)
-                    .updateData(["status": "ended", "endReason": EndReason.declined.rawValue,
-                                 "refused": true])   // audit M-013: the caller writes no row for it
                 self.recordWritten = true   // a blocked call leaves no trace, same as the listener path
+                // 1:1 audit r3 A7, 2026-10-08: answered HERE inside the read: a normal end of my own
+                // call. Still ringing: refused only if no other device of mine answered it.
+                if self.state != .incoming {
+                    self.finishCall(updateRemote: true, clearCallKit: true, localUser: true)
+                    return
+                }
+                self.endRingIfUnclaimed(callId, fields: ["status": "ended", "endReason": EndReason.declined.rawValue,
+                                                         "refused": true])   // audit M-013: no row on the caller
                 self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
                 return
             }
@@ -5673,9 +5976,11 @@ final class CallService: NSObject {
                 if let cached, cached.exists {
                     let ok = self.decideAllowed(cached)
                     DispatchQueue.main.async { finish(ok) }
-                } else if !BlockList.snapshot.contains(caller) {
+                } else if !BlockList.snapshot.contains(caller), PrivacyPrefs.mine("calls") == .everyone {
                     // Nothing cached and not on my block list: ring now rather than wait for a
                     // slow radio; the live read can no longer change a call already ringing.
+                    // 1:1 audit r3 A3, 2026-10-08: only when Calls is "Everyone". No cached chat is
+                    // the stranger case, so "My Chats" waits for the live read.
                     DispatchQueue.main.async { finish(.allowed) }
                 }
             }
@@ -5720,6 +6025,47 @@ final class CallService: NSObject {
         return (audience == .everyone || (audience == .contacts && isContact)) ? .allowed : .privacy
     }
 
+    /// 1:1 audit r3 F2, 2026-10-08: true only when the server's screening doc for this call says
+    /// `allowed: false`. Missing doc (older server), failed read or no answer in 1.5 s: false, and the
+    /// phone's own gate decides. Completion on the main queue, once.
+    private func screenVerdict(callId: String, completion: @escaping (Bool) -> Void) {
+        guard !me.isEmpty, !callId.isEmpty else { completion(false); return }
+        final class Once { var done = false }
+        let once = Once()
+        let finish: (Bool) -> Void = { refused in
+            guard !once.done else { return }
+            once.done = true
+            completion(refused)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { finish(false) }
+        db.collection("users").document(me).collection("callScreens").document(callId)
+            .getDocument { snap, _ in
+                let refused = snap?.exists == true && (snap?.data()?["allowed"] as? Bool) == false
+                DispatchQueue.main.async { finish(refused) }
+            }
+    }
+
+    /// 1:1 audit r3 A7, 2026-10-08: a refusal of a ring this device never answered, written only if
+    /// no device has answered it (same guard as finishCall's callee ring-end). No blind fallback.
+    private func endRingIfUnclaimed(_ id: String, fields: [String: Any]) {
+        let ref = db.collection("calls").document(id)
+        let claim = Self.deviceClaim
+        db.runTransaction({ txn, errPtr -> Any? in
+            let snap: DocumentSnapshot
+            do { snap = try txn.getDocument(ref) } catch {
+                errPtr?.pointee = error as NSError
+                return nil
+            }
+            let d = snap.data() ?? [:]
+            if (d["status"] as? String) == "ended" || d["acceptedAt"] != nil { return nil }
+            if let owner = d["answeredDevice"] as? String, !owner.isEmpty, owner != claim { return nil }
+            txn.updateData(fields, forDocument: ref)
+            return nil
+        }) { _, err in
+            if let err { Self.reportToRecovery(err, "call refuse") }
+        }
+    }
+
     /// Build the answering connection DURING THE RING, so the accept has nothing left to do.
     ///
     /// Everything `buildAnswer` does, minus the one thing that must wait for a person: the
@@ -5757,6 +6103,7 @@ final class CallService: NSObject {
         if preNegotiated, pc != nil {
             state = .active
             wasAccepted = true
+            markCameraStartingForAnswer()   // 1:1 audit r3 D2
             db.collection("calls").document(id).updateData(acceptFields())
             claimAnswer(db.collection("calls").document(id))   // 2026-09-24 audit: one device wins
             // 2026-09-24 fix-all #230: the answer built during the ring goes out now, from the
@@ -5766,7 +6113,7 @@ final class CallService: NSObject {
                 heldPreAnswer = nil
                 var data = held
                 data["status"] = "active"
-                data["cams.\(me)"] = cameraOn
+                data["cams.\(me)"] = camsSignal   // r3 D2: what is really going out
                 writeAnswerWithRetry(ref: db.collection("calls").document(id), data: data, attempt: 1)
             }
             ringingWatcher?.remove(); ringingWatcher = nil
@@ -5803,6 +6150,7 @@ final class CallService: NSObject {
         db.collection("calls").document(id).updateData(acceptFields())
         claimAnswer(db.collection("calls").document(id))   // 2026-09-24 audit: one device wins
         wasAccepted = true
+        markCameraStartingForAnswer()   // 1:1 audit r3 D2
         startAcceptedMediaTimeout()   // audit M-008
         // Video call: warm the camera NOW, in parallel with permissions/TURN/SDP (the reference apps' order),
         // so the local video is live the moment the connection comes up.
@@ -5920,14 +6268,17 @@ final class CallService: NSObject {
                     // the published candidates are all still ready.
                     DispatchQueue.main.async {
                         guard stillOurs() else { return }   // audit M-038
-                        // #27: sealed when the offer was (`readOffer` decided), else the old field.
-                        var data: [String: Any] = self.sealSignal(local.sdp).map { enc -> [String: Any] in ["answerEnc": enc] }
-                            ?? ["answer": ["sdp": local.sdp, "type": "answer"]]
-                        data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
-                        data["caps.\(self.me)"] = [Self.screenCap]   // screen share v3 capability
-                        guard self.wasAccepted else { self.heldPreAnswer = data; return }
-                        data["status"] = "active"
-                        self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
+                        // #27: sealed. 1:1 audit r3, 2026-10-08: never a plaintext `answer` any more;
+                        // a seal that fails waits for the key and retries (`sealedAnswer`).
+                        self.sealedAnswer(local.sdp, current: stillOurs) { enc in
+                            guard stillOurs() else { return }
+                            var data: [String: Any] = ["answerEnc": enc]
+                            data["cams.\(self.me)"] = self.camsSignal   // my camera state (per-side); r3 D2: what really goes out
+                            data["caps.\(self.me)"] = [Self.screenCap]   // screen share v3 capability
+                            guard self.wasAccepted else { self.heldPreAnswer = data; return }
+                            data["status"] = "active"
+                            self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
+                        }
                     }
                     // NOT ENDED — deliberately no longer "== ringing" (his 3:48 AM two-phone
                     // report: he accepted, sat on Connecting… forever, and the CALLER kept
@@ -5948,6 +6299,24 @@ final class CallService: NSObject {
         if state == .active { ringingWatcher?.remove(); ringingWatcher = nil }
         observeCallDoc(ref)
         observeRemoteCandidates(ref.collection("callerCandidates"))
+    }
+
+    /// 1:1 audit r3, 2026-10-08: the first answer is only ever sent sealed. A seal that fails (key
+    /// dropped from memory) waits for the key read and tries again, 4 reads as `writeSignalSdp`;
+    /// still no seal, or a call that is not sealed, fails the call. Main queue.
+    private func sealedAnswer(_ sdp: String, attempt: Int = 1, current: @escaping () -> Bool,
+                              then: @escaping (String) -> Void) {
+        if let enc = sealSignal(sdp) { then(enc); return }
+        guard sealSignalling, attempt <= 4 else {
+            print("[Call] answer could not be sealed, not sent")
+            guard current() else { return }
+            endReason = .failed; hangUp()
+            return
+        }
+        afterSignalKeyWarm { [weak self] in
+            guard let self, current() else { return }
+            self.sealedAnswer(sdp, attempt: attempt + 1, current: current, then: then)
+        }
     }
 
     /// 2026-09-24 audit: TWO OF MY OWN DEVICES ANSWERING IN THE SAME INSTANT. Each running app gets
@@ -6285,6 +6654,8 @@ final class CallService: NSObject {
                 // by that restart (an 840-843 callee re-asks every 8 s whatever happens).
                 if !self.restartIsWorking {
                     self.restartIce()   // #20: inside the in-flight window it now runs when that closes
+                } else {
+                    self.recheckRestartRequestLater()   // 1:1 audit r3 E4: not consumed
                 }
             }
             // Caller applies the ICE-restart ANSWER.
@@ -6424,10 +6795,11 @@ final class CallService: NSObject {
     }
 
     /// 1:1 audit r2 G9, 2026-10-08: a sealed candidate that could not be opened yet is tried again
-    /// every second (5 tries) for the same call, once the key warm has landed.
+    /// for the same call. 1:1 audit r3 E7: each try waits for the key read to end (up to ~10 s),
+    /// 4 reads in all; fixed 1 s ticks gave up before a slow read could land.
     private func retrySealedCandidate(_ enc: String, callId id: String?, attempt: Int) {
-        guard attempt <= 5 else { print("call: #27 sealed candidate could not be opened, skipped"); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        guard attempt <= 4 else { print("call: #27 sealed candidate could not be opened, skipped"); return }
+        afterSignalKeyWarm { [weak self] in
             guard let self, id != nil, self.callId == id else { return }
             guard let c = self.openSealedCandidate(enc) else {
                 self.retrySealedCandidate(enc, callId: id, attempt: attempt + 1)
@@ -6464,10 +6836,26 @@ final class CallService: NSObject {
     /// found) was lost without a trace, and with it maybe the only route that would have worked.
     /// The reference engine queues every signalling message and re-sends what failed. Up to three
     /// tries a second apart, and only while it is still the same call.
-    private func writeCandidate(_ data: [String: Any], to col: CollectionReference, attempt: Int = 1) {
+    private func writeCandidate(_ data: [String: Any], to col: CollectionReference, attempt: Int = 1,
+                                sealTry: Int = 1) {
         let id = callId
         // #27: sealed once, on the first try; the retries resend the same sealed document.
-        let payload = attempt == 1 ? sealedCandidate(data) : data
+        let payload: [String: Any]
+        if attempt == 1 {
+            guard let sealed = sealedCandidate(data) else {
+                // 1:1 audit r3 E6, 2026-10-08: never written in plaintext on a sealed call. Held
+                // until the key read ends, then sealed again (4 reads, as `writeSignalSdp`).
+                guard sealTry < 4 else { print("call: #27 candidate could not be sealed, not sent"); return }
+                afterSignalKeyWarm { [weak self] in
+                    guard let self, self.callId == id, id != nil else { return }
+                    self.writeCandidate(data, to: col, sealTry: sealTry + 1)
+                }
+                return
+            }
+            payload = sealed
+        } else {
+            payload = data
+        }
         col.addDocument(data: payload) { [weak self] err in
             guard err != nil, attempt < 3 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -6479,14 +6867,15 @@ final class CallService: NSObject {
 
     /// Owner audit 2026-10-06 #27: on a sealed call a candidate (the IP addresses) leaves this phone
     /// as one `enc` field holding the three fields as JSON. Unsealed calls write it as before.
-    private func sealedCandidate(_ data: [String: Any]) -> [String: Any] {
+    /// 1:1 audit r3 E6, 2026-10-08: nil = a sealed call whose seal failed (the caller retries).
+    private func sealedCandidate(_ data: [String: Any]) -> [String: Any]? {
         guard sealSignalling, let sdp = data["candidate"] as? String else { return data }
         var inner: [String: Any] = ["candidate": sdp,
                                     "sdpMLineIndex": Int((data["sdpMLineIndex"] as? Int32) ?? 0)]
         if let mid = data["sdpMid"] as? String { inner["sdpMid"] = mid }
         guard let json = try? JSONSerialization.data(withJSONObject: inner),
               let text = String(data: json, encoding: .utf8),
-              let enc = sealSignal(text) else { return data }   // sealSignal logs the fallback
+              let enc = sealSignal(text) else { return nil }   // sealSignal logs it
         return ["enc": enc]
     }
 
@@ -6676,7 +7065,9 @@ final class CallService: NSObject {
             // offer, any internal failure while ringing — told the caller "Declined", and the
             // callee could honestly swear they never declined (his 1:40 AM report, exactly that
             // shape). A failure is a failure; only a finger gets to be a refusal.
-            endReason = connectedDate != nil ? .hangup
+            // 1:1 audit r3 B2, 2026-10-08: an ACCEPTED call ended while still connecting is a
+            // hang-up, never a miss or a decline.
+            endReason = (connectedDate != nil || wasAccepted) ? .hangup
                       : (isCaller ? .missed : (localUser ? .declined : .failed))
         }
         // THE END WRITES GET BACKGROUND TIME (audit M-099, 2026-10-07). Ending from the lock screen
@@ -6909,7 +7300,7 @@ final class CallService: NSObject {
             declinedElsewhere ? .declinedElsewhere
             : endedElsewhere ? .answeredElsewhere
             : reason == .failed ? .failed
-            : (connectedDate == nil && !localUser) ? .unanswered
+            : (connectedDate == nil && !wasAccepted && !localUser) ? .unanswered   // r3 B2
             : .remote
         endedElsewhere = false
         declinedElsewhere = false
@@ -6935,7 +7326,9 @@ final class CallService: NSObject {
                 }
             }
         } else if clearCallKit {
-            CallKitManager.shared.reportEnded(kitEnd)
+            // 1:1 audit r3 B3, 2026-10-08: my own end is a local End action for iOS Recents.
+            if localUser, kitEnd == .remote { CallKitManager.shared.endFromHere() }
+            else { CallKitManager.shared.reportEnded(kitEnd) }
         }
 
         // I pressed End myself: close at once, no end label (owner's order 2026-10-04, the
