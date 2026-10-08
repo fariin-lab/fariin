@@ -4165,46 +4165,18 @@ struct ThreadView: View {
 
     private func flashAndScroll(_ id: String) {
         nativeScrollTarget = repo.items.first { $0.id == id }?.rowId ?? id   // native list keys by rowId (clientId ?? id)
-        // An older flash ends now; this one lights only when the row has LANDED (below).
-        if highlightId != nil { highlightId = nil }
-        // the reference app's found-result emphasis: the mark BRIEFLY draws the eye, then fades quickly and smoothly
-        // (the bubble's own 0.4s ease drives the fade). The old 2.2s hold felt sluggish across every
-        // jump-to flow (pinned / media "go to chat" / search); ~0.6s hold + 0.4s fade ≈ the reference app's timing.
-        //
-        // owner audit 2026-10-06 chat #49: the 0.6s hold starts when the row is ON SCREEN, not at the
-        // tap. A long glide, or a jump the list parks behind its land gate, arrived after the timer
-        // had already cleared the mark, so the row landed with no flash. Waits at most 3s for the
-        // row; `flashSeq` stops an older flash's timer from ending a newer one early.
+        // ⛔ THE FLASH ITSELF BELONGS TO THE LIST NOW — owner, 2026-10-08: "make it exactly how it
+        // works" in the reference messenger. Its bubble dimmer fires when the list's scroll animation
+        // ends (NativeMessageList `.message` → `performJumpHighlightIfNeeded`), so nothing here
+        // guesses when the row has landed. `highlightId` is kept only for the in-chat search, which
+        // marks the found word in the jumped-to row while the search is open.
+        highlightId = id
         flashSeq += 1
         let seq = flashSeq
         Task { @MainActor in
-            var waited = 0
-            while !visibleRows.ids.contains(id), waited < 60 {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                guard seq == flashSeq else { return }
-                waited += 1
-            }
-            // ⛔ AND THE GLIDE HAS STOPPED — owner, 2026-10-08, pinned message: the mark "takes too
-            // long to appear or stay visible". `onVisible` fires as the row PEEKS in at the edge,
-            // mid-glide, so the hold ran out while the list was still moving and the row landed
-            // already fading. The list has landed when the set of rows on screen stops changing
-            // for 150ms (at most 1.5s more). Only then does the mark go on, at once, like the
-            // reference app, and it holds 1s before its 0.4s fade.
-            var last = visibleRows.ids
-            var still = 0
-            var settle = 0
-            while still < 3, settle < 30 {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                guard seq == flashSeq else { return }
-                let now = visibleRows.ids
-                still = now == last ? still + 1 : 0
-                last = now
-                settle += 1
-            }
-            highlightId = id
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard seq == flashSeq, highlightId == id else { return }
-            withAnimation { highlightId = nil }
+            highlightId = nil
         }
     }
 

@@ -2056,6 +2056,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             pendingNewestJump = nil
             guard let ip = dataSource.indexPath(for: id),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
+            // The reference messenger's jump: the flash fires when the scroll animation ENDS, or at
+            // once when no scroll is needed (owner, 2026-10-08). Held here until then.
+            pendingJumpHighlight = id
+            defer { if !programmaticScrollAnimating { performJumpHighlightIfNeeded() } }
             // Centre-if-not-entirely-on-screen: when the target row is already fully visible, don't move
             // at all â€” repeated next/prev taps between two on-screen results then feel stable instead of
             // re-centering the list on every tap.
@@ -2321,11 +2325,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollAnimationWatchdog = watchdog
     }
 
+    /// The row a jump is heading to; flashed once the jump has landed. See `.message` in `perform`.
+    private var pendingJumpHighlight: String?
+
+    private func performJumpHighlightIfNeeded() {
+        guard let id = pendingJumpHighlight else { return }
+        pendingJumpHighlight = nil
+        guard let ip = dataSource.indexPath(for: id),
+              let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return }
+        cell.performJumpHighlight()
+    }
+
     private func scrollingAnimationDidComplete() {
         scrollAnimationWatchdog?.invalidate()
         scrollAnimationWatchdog = nil
         programmaticScrollAnimating = false
         glideTarget = nil
+        defer { performJumpHighlightIfNeeded() }   // after the landing is corrected below
         // ⛔ THE GLIDE WAS AIMED BEFORE THE COMPOSER SHRANK — the other half of the long-message gap.
         // `perform(.newest(animated:))` captures `maxContentOffsetY` when it starts, and on a long
         // send the composer collapses WHILE it is flying, which moves that bound. Landing on the old
@@ -5693,6 +5709,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // owner audit 2026-10-06 chat #6: a pan ends a programmatic glide, and UIKit sends no end
         // callback for that, so the glide is closed here rather than by the 5s watchdog.
         guard !ignoringScrollEvents else { return }
+        pendingJumpHighlight = nil   // the reader took over: no flash on a row they scrolled away from
         glideInterruptedByReader()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {

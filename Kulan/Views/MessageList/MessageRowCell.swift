@@ -68,6 +68,9 @@ final class MessageRowCell: UICollectionViewCell {
     /// uses it to move the rest of the conversation along with the bubble.
     func takeReactionGrowth() -> CGFloat { rowView.takeReactionGrowth() }
 
+    /// The jump-to flash on this row's bubble (see `MessageRowView.performJumpHighlight`).
+    func performJumpHighlight() { rowView.performJumpHighlight() }
+
     /// Which way a reaction resize grows this row, set by the owning list before it configures.
     var reactionGrowsFromBottom: Bool {
         get { rowView.growsFromBottom }

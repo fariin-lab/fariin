@@ -513,6 +513,7 @@ final class MessageRowView: UIView {
     private let fill = BubbleFillView()
     private let rim = BubbleShapeView()
     private let highlight = BubbleShapeView()
+    private var bubbleDark = false   // the bubble's last palette, for the jump flash's tint
     private let bodyLabel = UILabel()
     private let metaLabel = UILabel()
 
@@ -811,7 +812,10 @@ final class MessageRowView: UIView {
         // the bubble with no generic-rounded-rect overhang.
         highlight.frame = local
         highlight.shape.path = path.cgPath
-        highlight.shape.fillColor = UIColor.label.withAlphaComponent(m.highlighted ? 0.18 : 0).cgColor
+        // The jump flash is a one-shot animation on this view now (`performJumpHighlight`), not a
+        // model state, so the resting fill is always clear (owner, 2026-10-08).
+        highlight.shape.fillColor = UIColor.clear.cgColor
+        bubbleDark = dark
         CATransaction.commit()
         bubbleBox.bringSubviewToFront(rim)
         bubbleBox.bringSubviewToFront(highlight)
@@ -1674,14 +1678,46 @@ final class MessageRowView: UIView {
         if let box = checkbox, m.selected != fromSelected {
             box.refreshSelected(m.selected)
         }
-        // The mark goes ON at once (it lights only after the jump has landed) and fades OFF smoothly.
-        if case .bubble = plan?.body, m.highlighted != fromHighlighted, fromHighlighted {
-            let a = CABasicAnimation(keyPath: "fillColor")
-            a.fromValue = UIColor.label.withAlphaComponent(fromHighlighted ? 0.18 : 0).cgColor
-            a.toValue = highlight.shape.fillColor
-            a.duration = 0.4                  // the smooth found-result fade
-            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            highlight.shape.add(a, forKey: "flash")
+        // The jump flash no longer rides `highlighted`: see `performJumpHighlight`.
+        _ = fromHighlighted
+    }
+
+    /// ⛔ THE JUMP FLASH IS THE REFERENCE MESSENGER'S, EXACTLY — owner, 2026-10-08: "when I tap a
+    /// pinned message the highlight works wrong, make it exactly how it works there". Read from its
+    /// source (`performMessageBubbleHighlightAnimation` + `CVDimmableView.performDimmingAnimation`):
+    /// a dimmer layer the shape of the bubble, white 25% on dark and black 25% on light, fades in
+    /// over 0.4s, starts fading out 0.8s after the start, over 0.4s, then removes itself. It is
+    /// fired by the LIST the moment its scroll animation ends (or at once when the row was already
+    /// fully on screen), never by a timer and never by re-rendering the row.
+    func performJumpHighlight() {
+        guard case .bubble = plan?.body, let path = highlight.shape.path else { return }
+        let dimmer = CAShapeLayer()
+        dimmer.path = path
+        dimmer.frame = highlight.bounds
+        dimmer.fillColor = (bubbleDark ? UIColor.white : UIColor.black).withAlphaComponent(0.25).cgColor
+        dimmer.opacity = 0
+        highlight.layer.addSublayer(dimmer)
+
+        let fadeIn = CABasicAnimation(keyPath: "opacity")
+        fadeIn.fromValue = 0
+        fadeIn.toValue = 1
+        fadeIn.duration = 0.4
+        fadeIn.fillMode = .forwards
+        fadeIn.isRemovedOnCompletion = false
+        dimmer.add(fadeIn, forKey: "fadeIn")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak dimmer] in
+            guard let dimmer else { return }
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { dimmer.removeFromSuperlayer() }
+            let fadeOut = CABasicAnimation(keyPath: "opacity")
+            fadeOut.fromValue = 1
+            fadeOut.toValue = 0
+            fadeOut.duration = 0.4
+            fadeOut.fillMode = .forwards
+            fadeOut.isRemovedOnCompletion = false
+            dimmer.add(fadeOut, forKey: "fadeOut")
+            CATransaction.commit()
         }
     }
 
@@ -1713,6 +1749,7 @@ final class MessageRowView: UIView {
         bubbleBox.transform = .identity
         bubbleBox.layer.removeAllAnimations()
         highlight.shape.removeAllAnimations()
+        highlight.layer.sublayers?.forEach { $0.removeFromSuperlayer() }   // a jump flash still on it
         // Owner audit 2026-10-06 chat #79: a notice or call row is the box a swipe translates
         // (`liftTarget`), so its transform is put back here as well, not only the bubble box's.
         noticeView?.transform = .identity
