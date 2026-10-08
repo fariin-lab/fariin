@@ -26,6 +26,8 @@ import VideoToolbox
 /// session, one output pixel buffer pool (recreated only when the size changes), reused audio
 /// buffers. The two mapped slots touch ~2.6 MB each for a typical phone screen.
 final class SampleHandler: RPBroadcastSampleHandler {
+    /// Off until the app can mix app audio into a call (see the `.audioApp` case below).
+    private static let appAudioEnabled = false
     private let video = ScreenShareIPC.VideoChannel()
     private let audioRing = ScreenShareIPC.AudioRing()
     private let control = ScreenShareIPC.Control()
@@ -97,7 +99,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
         case .video:
             handleVideo(sampleBuffer)
         case .audioApp:
-            handleAudio(sampleBuffer)
+            // App audio is captured into the ring only once the app can send it. The 1:1 WebRTC
+            // build has no hook to mix it into the call yet (see ScreenShareAudioMixer), so until
+            // then converting it would only spend CPU and memory in this 50 MB process.
+            if Self.appAudioEnabled { handleAudio(sampleBuffer) }
         case .audioMic:
             break
         @unknown default:

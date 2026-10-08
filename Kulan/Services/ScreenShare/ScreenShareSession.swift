@@ -59,6 +59,7 @@ final class ScreenShareSession {
     private var poolHeight = 0
     private var poolFullRange = false
     private var readerStopped = false
+    private var readerSawFrame = false   // reader queue only
 
     // Main only.
     private var observers: [ScreenShareIPC.DarwinObserver] = []
@@ -145,7 +146,10 @@ final class ScreenShareSession {
 
     private func startTimer() {
         timer?.cancel()
-        let interval = DispatchTimeInterval.nanoseconds(1_000_000_000 / fps)
+        // Twice the frame rate (check, 2026-10-08): polling at exactly the writer's 30 Hz beats
+        // against it and drops or doubles frames (judder at an effective 20-25 fps). Only a NEW seq
+        // is delivered, and the capturer still caps the rate, so the extra ticks cost one load each.
+        let interval = DispatchTimeInterval.nanoseconds(1_000_000_000 / (fps * 2))
         let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
         t.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(2))
         t.setEventHandler { [weak self] in self?.tick() }
@@ -165,7 +169,11 @@ final class ScreenShareSession {
         }
         lastSeq = frame.0.seq
         onFrame(frame.1, Self.degrees(orientation: frame.0.orientation))
-        DispatchQueue.main.async { [weak self] in self?.frameArrived() }
+        // Main only learns about the FIRST frame; a hop per frame was 30 main-thread wakeups a second.
+        if !readerSawFrame {
+            readerSawFrame = true
+            DispatchQueue.main.async { [weak self] in self?.frameArrived() }
+        }
     }
 
     /// A fresh NV12 buffer of the frame's size and range, from a pool rebuilt when either changes.
@@ -185,7 +193,7 @@ final class ScreenShareSession {
             guard CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary,
                                           attrs as CFDictionary, &created) == kCVReturnSuccess,
                   let created else {
-                NSLog("[ScreenShare] session: pool create failed %dx%d", info.width, info.height)
+                NSLog("[ScreenShare] session: pool create failed %ldx%ld", info.width, info.height)
                 return nil
             }
             pool = created
@@ -258,12 +266,14 @@ final class ScreenShareSession {
     private func tearDown(requestStop: Bool) {
         livenessTimer?.invalidate(); livenessTimer = nil
         observers.removeAll()
-        // Strong on purpose: CallService drops the session right after stop(), and the stop request
-        // to the extension must still go out.
+        // The stop request goes out NOW, on main, not on the reader queue (check, 2026-10-08): queued,
+        // it could land after a NEW session's markShareWanted (picker cancelled, Share tapped again)
+        // and the new extension would start with the stop flag set and end at once.
+        if requestStop { control?.requestStop() }
+        // Strong on purpose: CallService drops the session right after stop().
         queue.async {
             self.readerStopped = true
             self.timer?.cancel(); self.timer = nil
-            if requestStop { self.control?.requestStop() }
             self.control = nil
             self.video = nil
             self.pool = nil

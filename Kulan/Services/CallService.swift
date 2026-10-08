@@ -177,6 +177,7 @@ final class CallService: NSObject {
                 shareUsesTrack = false; screenSource = nil; screenTrack = nil
                 remoteScreenTrack = nil; remoteScreenMode = "camera"; peerHasScreen2 = false
                 screenUpgradeOfferAt = nil; screenUpgradeAttempts = 0
+                screenUpgradeInFlightVersion = nil; cameraPausedForShareTier = false
                 videoSource = nil
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
@@ -591,6 +592,12 @@ final class CallService: NSObject {
     /// The caller's one-time re-offer that turns the screen m-line to sendrecv (bounded retries).
     @ObservationIgnored private var screenUpgradeOfferAt: Date?
     @ObservationIgnored private var screenUpgradeAttempts = 0
+    /// The upgrade re-offer's negotiation version while its answer is outstanding. Kept apart from
+    /// `restartInFlightAt` so a real ICE restart is never held back by it.
+    @ObservationIgnored private var screenUpgradeInFlightVersion: Int?
+    /// Dual mode, ladder's bottom tier: the camera was paused by the share (through the weak-link
+    /// pause), so the share, not the link monitor, brings it back.
+    @ObservationIgnored private var cameraPausedForShareTier = false
 
     private var videoCapturer: RTCCameraVideoCapturer?
     /// The ONE video source behind `localVideoTrack`. The camera capturer feeds it normally; during a
@@ -1218,6 +1225,8 @@ final class CallService: NSObject {
         if t.currentDirection(&current), current == .sendRecv { return }
         guard screenUpgradeAttempts < 3 else { return }
         if let at = screenUpgradeOfferAt, Date().timeIntervalSince(at) < 8 { return }
+        // An ICE restart still waiting for its answer goes first (its offer carries the m-line too).
+        if let t = restartInFlightAt, Date().timeIntervalSince(t) < 6 { return }
         if t.direction != .sendRecv { t.setDirection(.sendRecv, error: nil) }
         screenUpgradeAttempts += 1
         screenUpgradeOfferAt = Date()
@@ -1703,7 +1712,9 @@ final class CallService: NSObject {
         applyScreenShareEncoding(false, track: wasTrack)
         shareUsesTrack = false
         if wasTrack {
-            // Dual mode never touched the camera: nothing to bring back.
+            // Dual mode only touched the camera on the ladder's bottom tier: bring that back, unless
+            // the call is ending (signal false: the state is not .ended yet, see above).
+            if signal { applyCameraShareTierPause() } else { cameraPausedForShareTier = false }
             if signal { broadcastScreenState() }
             updateInCallScreenBehavior()
             return
@@ -1760,6 +1771,7 @@ final class CallService: NSObject {
     /// decoding frames the encoder will drop), and on `screenShareLink` for the call screen.
     private func applyShareTier() {
         applyScreenShareEncoding(true)
+        applyCameraShareTierPause()
         screenCapturer?.setMaxFramerate(shareFramerate)
         screenShareSession?.setMaxFramerate(shareFramerate)
         let link: ScreenShareLink
@@ -1769,6 +1781,23 @@ final class CallService: NSObject {
         default: link = .poor
         }
         if screenShareLink != link { screenShareLink = link }
+    }
+
+    /// Dual mode: on the ladder's bottom tier the camera stops (track disabled, capture stopped, the
+    /// peer told through broadcastCameraState so they see the avatar, not a frozen face), using the
+    /// weak-link pause. Back when the tier rises or the share ends. A camera the link monitor had
+    /// already paused is left to it.
+    private func applyCameraShareTierPause() {
+        let wantPaused = screenSharing && shareUsesTrack
+            && shareQuality.index >= ScreenShareQuality.tiers.count - 1
+        if wantPaused {
+            guard !cameraPausedForShareTier, !videoPausedForNetwork, !isHeld else { return }
+            pauseVideoForWeakLink()
+            if videoPausedForNetwork { cameraPausedForShareTier = true }
+        } else if cameraPausedForShareTier {
+            cameraPausedForShareTier = false
+            resumeVideoAfterWeakLink()
+        }
     }
 
     /// Audit M-106, 2026-10-07: for 60s after a pending share was abandoned, a "broadcast started"
@@ -1784,6 +1813,9 @@ final class CallService: NSObject {
                     guard let self, self.lateShareStop != nil, self.screenShareSession == nil,
                           !self.inGroupCall else { return }
                     KSDarwinNotificationCenter.shared.postNotification(.broadcastRequestStop)
+                    // Also the shared stop flag, as ScreenShareSession.stop() sets it: an extension
+                    // that missed the notification still reads the flag and finishes.
+                    ScreenShareIPC.Control()?.requestStop()
                 }
             }
         let expiry = DispatchWorkItem { [weak self] in self?.disarmLateShareStop() }
@@ -1801,22 +1833,29 @@ final class CallService: NSObject {
     /// (ScreenShareQuality: 2.5 Mbps / 30 fps at best). Use Less Data never scales it down; only the
     /// ladder's last tier does. Stopping returns the camera's own settings.
     /// Dual mode (`track`, default `shareUsesTrack`): the tier goes on the SCREEN sender only, and the
-    /// camera sender, which keeps running, is held to 300 kbps / 15 fps / half size so the screen
-    /// gets the link first (the reference app's priority). Both are put back on stop.
+    /// camera sender, which keeps running, follows the screen's tier so the screen gets the link
+    /// first (the reference app's priority): T0/T1 300 kbps / 15 fps / half size, T2 150 kbps /
+    /// 10 fps / third size, T3 paused (applyCameraShareTierPause). The screen also wins the
+    /// encoder's bitrate split (priority 4.0 against the camera's 0.5). Both are put back on stop.
     private func applyScreenShareEncoding(_ on: Bool, track: Bool? = nil) {
         guard let pc else { return }
         if track ?? shareUsesTrack {
-            if let screen = screenTransceiver(in: pc)?.sender { setShareEncoding(on, to: screen) }
+            if let screen = screenTransceiver(in: pc)?.sender {
+                setShareEncoding(on, to: screen, priority: on ? 4.0 : 1.0)
+            }
             if let camera = cameraTransceiver(in: pc)?.sender {
+                let low = shareQuality.index >= 2
                 let params = camera.parameters
                 for enc in params.encodings {
                     if on {
-                        enc.maxBitrateBps = NSNumber(value: 300_000)
-                        enc.maxFramerate = NSNumber(value: 15)
-                        enc.scaleResolutionDownBy = NSNumber(value: 2.0)
+                        enc.maxBitrateBps = NSNumber(value: low ? 150_000 : 300_000)
+                        enc.maxFramerate = NSNumber(value: low ? 10 : 15)
+                        enc.scaleResolutionDownBy = NSNumber(value: low ? 3.0 : 2.0)
+                        enc.bitratePriority = 0.5
                     } else {
                         enc.maxFramerate = nil
                         enc.scaleResolutionDownBy = nil
+                        enc.bitratePriority = 1.0
                     }
                 }
                 camera.parameters = params
@@ -1828,12 +1867,14 @@ final class CallService: NSObject {
     }
 
     /// The ladder's tier on one sender (on), or the plain camera settings back (off).
-    private func setShareEncoding(_ on: Bool, to sender: RTCRtpSender) {
+    /// `priority`: the encoding's bitratePriority (dual mode only; nil leaves it as it is).
+    private func setShareEncoding(_ on: Bool, to sender: RTCRtpSender, priority: Double? = nil) {
         let tier = shareQuality.tier
         let params = sender.parameters
         let preference: RTCDegradationPreference = on ? .maintainResolution : .balanced
         params.degradationPreference = NSNumber(value: preference.rawValue)
         for enc in params.encodings {
+            if let priority { enc.bitratePriority = priority }
             if on {
                 enc.maxBitrateBps = NSNumber(value: tier.maxBitrate)
                 enc.maxFramerate = NSNumber(value: shareFramerate)
@@ -2228,13 +2269,36 @@ final class CallService: NSObject {
     /// bad link still shows the screen, at a lower frame rate first.
     private func sampleShareQuality(_ pc: RTCPeerConnection) {
         // Dual mode: only the screen's outbound stream counts (the capped camera runs beside it).
-        let screenMid: String? = shareUsesTrack ? screenTransceiver(in: pc)?.mid : nil
+        let dual = shareUsesTrack
+        let screenMid: String? = dual ? screenTransceiver(in: pc)?.mid : nil
         pc.statistics { [weak self] report in
             var available: Double?
             var bytesSent: Double?
             var loss: Double?
             var rtt: Double?
             var limited = false
+            // Dual mode: the screen's own outbound-rtp ids (by mid, else by its media source's
+            // track id "screen0"), so the far side's loss/RTT is read for the screen stream, not
+            // the camera's. Nothing matched: every video report counts, as before.
+            var screenOutboundIds = Set<String>()
+            var screenMatched = false
+            var anyLoss: Double?
+            var anyRtt: Double?
+            if dual {
+                let screenSourceIds = Set(report.statistics.values
+                    .filter { $0.type == "media-source" && ($0.values["trackIdentifier"] as? String) == "screen0" }
+                    .map { $0.id })
+                for stat in report.statistics.values where stat.type == "outbound-rtp" {
+                    let v = stat.values
+                    if let want = screenMid, !want.isEmpty, let mid = v["mid"] as? String {
+                        if mid == want { screenOutboundIds.insert(stat.id) }
+                    } else if let src = v["mediaSourceId"] as? String, screenSourceIds.contains(src) {
+                        screenOutboundIds.insert(stat.id)
+                    } else if (v["trackIdentifier"] as? String) == "screen0" {
+                        screenOutboundIds.insert(stat.id)
+                    }
+                }
+            }
             for stat in report.statistics.values {
                 let v = stat.values
                 let kind = (v["kind"] as? String) ?? (v["mediaType"] as? String)
@@ -2244,16 +2308,26 @@ final class CallService: NSObject {
                           let b = (v["availableOutgoingBitrate"] as? NSNumber)?.doubleValue else { continue }
                     available = max(available ?? 0, b)
                 case "outbound-rtp" where kind == "video":
-                    if let want = screenMid, !want.isEmpty, let mid = v["mid"] as? String, mid != want { continue }
+                    if !screenOutboundIds.isEmpty {
+                        if !screenOutboundIds.contains(stat.id) { continue }
+                    } else if let want = screenMid, !want.isEmpty, let mid = v["mid"] as? String, mid != want { continue }
                     if let b = (v["bytesSent"] as? NSNumber)?.doubleValue { bytesSent = (bytesSent ?? 0) + b }
                     if (v["qualityLimitationReason"] as? String) == "bandwidth" { limited = true }
                 case "remote-inbound-rtp" where kind == "video":
-                    if let f = (v["fractionLost"] as? NSNumber)?.doubleValue { loss = max(loss ?? 0, f) }
-                    if let r = (v["roundTripTime"] as? NSNumber)?.doubleValue { rtt = max(rtt ?? 0, r) }
+                    let f = (v["fractionLost"] as? NSNumber)?.doubleValue
+                    let r = (v["roundTripTime"] as? NSNumber)?.doubleValue
+                    if let f { anyLoss = max(anyLoss ?? 0, f) }
+                    if let r { anyRtt = max(anyRtt ?? 0, r) }
+                    if let local = v["localId"] as? String, screenOutboundIds.contains(local) {
+                        screenMatched = true
+                        if let f { loss = max(loss ?? 0, f) }
+                        if let r { rtt = max(rtt ?? 0, r) }
+                    }
                 default:
                     break
                 }
             }
+            if !screenMatched { loss = anyLoss; rtt = anyRtt }   // no screen report found: as before
             let sample = ScreenShareQuality.Sample(availableBitrate: available, sendBitrate: nil,
                                                    fractionLost: loss, roundTripTime: rtt,
                                                    bandwidthLimited: limited)
@@ -2278,9 +2352,10 @@ final class CallService: NSObject {
     private func pauseVideoForWeakLink() {
         // A camera already down for a capture interruption is not ours to take over; that path owns
         // its own resume and would fight us for it.
-        // Never under a screen share: that would disable the track carrying the screen. (Hold stops
-        // the share BEFORE calling in here, so a held call still pauses the camera as before.)
-        guard cameraOn, !cameraPausedByBackground, !screenSharing else { return }
+        // Never under a share that owns the camera (fallback): that would disable the track carrying
+        // the screen. A dual-mode share has its own track, so the camera pauses here as usual. (Hold
+        // stops the share BEFORE calling in here, so a held call still pauses the camera as before.)
+        guard cameraOn, !cameraPausedByBackground, !shareOwnsCamera else { return }
         videoPausedForNetwork = true
         localVideoTrack?.isEnabled = false
         videoCapturer?.stopCapture()   // stop paying for frames the link cannot carry
@@ -2295,7 +2370,7 @@ final class CallService: NSObject {
         videoPausedForNetwork = false
         // Re-check intent rather than blindly restoring: the user may have hung up, or turned the
         // camera off themselves, during the ten seconds we spent deciding the link was healthy.
-        guard inLiveCall, cameraOn, !cameraPausedByBackground, !screenSharing else { return }
+        guard inLiveCall, cameraOn, !cameraPausedByBackground, !shareOwnsCamera else { return }
         localVideoTrack?.isEnabled = true
         startCameraCapture()
         broadcastCameraState()
@@ -3197,20 +3272,31 @@ final class CallService: NSObject {
         // fire within a second, and each new offer invalidates the answer the last one is waiting
         // for, so the restarts kept cancelling each other. One at a time: a restart whose answer has
         // not landed and that is under 6s old covers the others. The 8s retry is outside the window.
-        if let t = restartInFlightAt, Date().timeIntervalSince(t) < 6 { return }
-        restartInFlightAt = Date()
-        if iceRestart { applyNewerIceServers(to: pc) }   // audit M-009: a relay that arrived after the call started
+        // Only ICE restarts take this slot. The screen m-line upgrade (iceRestart false) is tracked
+        // in `screenUpgradeInFlightVersion` and never blocks a restart: a restart sent over it gets
+        // a newer version, so the upgrade's late answer fails the `v == negotiationVersion` check
+        // and is dropped, and the restart's offer already carries the sendrecv screen m-line.
+        if iceRestart {
+            if let t = restartInFlightAt, Date().timeIntervalSince(t) < 6 { return }
+            restartInFlightAt = Date()
+            applyNewerIceServers(to: pc)   // audit M-009: a relay that arrived after the call started
+        }
         negotiationVersion += 1
         let v = negotiationVersion
+        screenUpgradeInFlightVersion = iceRestart ? nil : v
         let constraints = RTCMediaConstraints(mandatoryConstraints: iceRestart ? ["IceRestart": "true"] : nil,
                                               optionalConstraints: nil)
         pc.offer(for: constraints) { [weak self] sdp, _ in
             guard let self, let sdp, let pc = self.pc else { return }
+            // A newer offer (an ICE restart sent over the screen upgrade) replaced this one: drop it,
+            // so a stale version can never overwrite the newer `restartOffer` on the call doc.
+            guard v == self.negotiationVersion else { return }
             // createOffer rebuilds the codec list from scratch, so a restart offer that skipped this
             // would flip the order back to opus-first and drop RED for the rest of the call, right at
             // the moment the network is already bad enough to need a reconnect.
             let local = self.withOpusDtxAndRed(sdp)
             pc.setLocalDescription(local) { _ in
+                guard v == self.negotiationVersion else { return }   // superseded, see above
                 // #27: sealed on a sealed call; the version stays readable (ordering, not secret).
                 let payload: [String: Any] = self.sealSignal(local.sdp).map { enc -> [String: Any] in ["enc": enc, "version": v] }
                     ?? ["sdp": local.sdp, "version": v]
@@ -5074,7 +5160,13 @@ final class CallService: NSObject {
                v == self.negotiationVersion, v > self.appliedRemoteRestart, let pc = self.pc,
                let sdp = self.signalSdp(sealed: ra["enc"], plain: ra["sdp"]) {   // #27
                 self.appliedRemoteRestart = v
-                self.restartInFlightAt = nil   // audit M-117: this restart is answered
+                // Audit M-117: the latest offer is answered, whichever kind it was. An upgrade's
+                // version never matches here once an ICE restart has gone out over it.
+                if v == self.screenUpgradeInFlightVersion {
+                    self.screenUpgradeInFlightVersion = nil
+                } else {
+                    self.restartInFlightAt = nil
+                }
                 pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in self.flushPendingCandidates() }
             }
             // The other side's camera on/off (per-side, no permission).
