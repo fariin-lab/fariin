@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import SwiftUI
 import Network
 import Observation
@@ -84,6 +85,29 @@ final class ConnectionStatus {
     private var probeUid: String?
     private var authHandle: AuthStateDidChangeListenerHandle?
 
+    // ⛔ THE STALL WATCHDOG — owner, 2026-10-08 investigation, bug 8: this header showed
+    // "Connecting" forever and never asked for a recovery, so a stuck connection looked like a slow
+    // one until a restart. Every `tickEvery` it checks, while the app is active and the network path
+    // is up, whether the server has gone `stallAfter` without answering AND something is actually
+    // waiting on it (the header already says "Connecting", the probe read is hanging, or writes are
+    // still unconfirmed). A quiet, healthy app has none of those, so it costs nothing there.
+    // `SessionRecovery.noteStall` rate-limits, so calling it every tick is safe.
+    private static let stallAfter: TimeInterval = 20
+    private static let tickEvery: TimeInterval = 5
+    private var watchdog: Task<Void, Never>?
+    private var observers: [NSObjectProtocol] = []
+    private var routeUpSince = Date()
+    private var activeSince = Date()
+    private var recoveredAt = Date.distantPast
+    /// Each listener attached gets a number, so a late error from a replaced one is ignored.
+    private var probeGen = 0
+    /// The server read in `settleExpired`, while it is in flight. One at a time.
+    private var probeReadStarted: Date?
+    private var probeReadGen = 0
+    /// `waitForPendingWrites` in flight. It returns at once when nothing is waiting.
+    private var writesWaitStarted: Date?
+    private var writesWaitGen = 0
+
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             let up = path.status == .satisfied
@@ -95,6 +119,71 @@ final class ConnectionStatus {
         authHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in self?.watch(uid: user?.uid) }
         }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.afterRecovery() }
+            })
+        observers.append(center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.becameActive() }
+            })
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.tickEvery))
+                guard let self else { return }
+                self.watchdogTick()
+            }
+        }
+    }
+
+    /// 2026-10-08: after any recovery the probe is attached again whether or not it looked dead
+    /// (cheap: cache first, then the server), and the watchdog gives the new connection its 20s.
+    /// The first server snapshot of the new listener puts the header back to `.online` through
+    /// `noteSnapshot`.
+    private func afterRecovery() {
+        recoveredAt = Date()
+        probeReadStarted = nil
+        probeReadGen += 1
+        guard let uid = probeUid else { return }
+        watch(uid: uid, force: true)
+    }
+
+    /// Back on screen: a probe that died in the background is attached again, and a server that has
+    /// been quiet for a minute is asked once, so a stall that began off screen is noticed.
+    private func becameActive() {
+        activeSince = Date()
+        if let uid = probeUid, probe == nil { watch(uid: uid, force: true) }
+        if Date().timeIntervalSince(lastServerAnswer) > 60 { armSettle() }
+    }
+
+    private func watchdogTick() {
+        guard hasRoute, probeUid != nil, Auth.auth().currentUser != nil,
+              UIApplication.shared.applicationState == .active else { return }
+        checkPendingWrites()
+        let now = Date()
+        let since = max(lastServerAnswer, routeUpSince, activeSince, recoveredAt)
+        guard now.timeIntervalSince(since) >= Self.stallAfter else { return }
+        let readHung = probeReadStarted.map { now.timeIntervalSince($0) >= Self.stallAfter } ?? false
+        let writesHung = writesWaitStarted.map {
+            now.timeIntervalSince(max($0, routeUpSince, recoveredAt)) >= Self.stallAfter
+        } ?? false
+        guard state == .connecting || readHung || writesHung else { return }
+        SessionRecovery.noteStall("connection watchdog")
+    }
+
+    /// Writes that sit unconfirmed while the path is up are the clearest sign of a stuck stream: the
+    /// message "looks sent" from the phone's copy and the server never hears of it.
+    private func checkPendingWrites() {
+        guard writesWaitStarted == nil else { return }
+        writesWaitGen += 1
+        let gen = writesWaitGen
+        writesWaitStarted = Date()
+        Task { [weak self] in
+            try? await Firestore.firestore().waitForPendingWrites()
+            guard let self, self.writesWaitGen == gen else { return }
+            self.writesWaitStarted = nil
+        }
     }
 
     /// ⛔ THE ONE LISTENER THAT CAN ACTUALLY ANSWER THE QUESTION. `includeMetadataChanges: true` is
@@ -104,17 +193,35 @@ final class ConnectionStatus {
     ///
     /// ⚠️ THE DOCUMENT IS THE USER'S OWN, so it needs no rule of its own and costs one listener on
     /// something the app is already entitled to read.
-    private func watch(uid: String?) {
-        guard uid != probeUid else { return }
+    ///
+    /// ⛔ IT USED TO DIE SILENTLY — owner, 2026-10-08. An error ended the listener, the handle was
+    /// kept, and the same-uid guard below returned early forever, so the one signal this header
+    /// trusts was gone until a restart. An error now drops the handle and reports it; `recovered` and
+    /// coming back to the app attach it again (`force`, or no live handle).
+    private func watch(uid: String?, force: Bool = false) {
+        guard force || uid != probeUid || (uid != nil && probe == nil) else { return }
         probe?.remove()
         probe = nil
         probeUid = uid
+        probeGen += 1
         guard let uid else { return }
+        let gen = probeGen
         probe = Firestore.firestore().collection("users").document(uid)
-            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, _ in
-                guard let snap else { return }
-                Task { @MainActor in self?.noteSnapshot(fromCache: snap.metadata.isFromCache) }
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
+                if let snap {
+                    Task { @MainActor in self?.noteSnapshot(fromCache: snap.metadata.isFromCache) }
+                    return
+                }
+                Task { @MainActor in self?.probeDied(error, gen: gen) }
             }
+    }
+
+    private func probeDied(_ error: Error?, gen: Int) {
+        guard gen == probeGen else { return }   // a listener already replaced
+        probe?.remove()
+        probe = nil
+        print("[Recovery] connection probe listener ended:", error.map { "\($0)" } ?? "no error")
+        SessionRecovery.noteRefusal(error, "connection probe")
     }
 
     /// Called by the snapshot listeners the app already runs — one line each, where they already read
@@ -142,6 +249,7 @@ final class ConnectionStatus {
         }
         // The route came back. Whether the SERVER is reachable is a separate question, and the next
         // snapshot answers it; until then this is exactly the "connecting" case.
+        routeUpSince = Date()   // the watchdog gives a new path its 20s before judging it
         if state == .waitingForNetwork { state = .connecting }
         armSettle()
     }
@@ -190,14 +298,27 @@ final class ConnectionStatus {
         // No probe means no account signed in yet, and nothing to ask. Say nothing rather than
         // announcing a connection problem that is really just a launch in progress.
         guard let uid = probeUid else { return }
+        // One read in flight at a time. A read that hangs is the watchdog's to notice.
+        guard probeReadStarted == nil else { return }
+        probeReadGen += 1
+        let gen = probeReadGen
+        probeReadStarted = Date()
         do {
             _ = try await Firestore.firestore().collection("users").document(uid)
                 .getDocument(source: .server)
+            if gen == probeReadGen { probeReadStarted = nil }
             lastServerAnswer = Date()
             retryDelay = Self.settle   // 2026-09-24 fix-all #216
             if hasRoute { state = .online }
         } catch {
-            if hasRoute { state = .connecting; scheduleRetry() }
+            if gen == probeReadGen { probeReadStarted = nil }
+            if hasRoute {
+                state = .connecting
+                scheduleRetry()
+                // 2026-10-08 investigation, bug 8: a refusal or "unavailable" here used to show
+                // "Connecting" and nothing else. SessionRecovery ignores every other code.
+                SessionRecovery.noteRefusal(error, "connection probe read")
+            }
         }
     }
 

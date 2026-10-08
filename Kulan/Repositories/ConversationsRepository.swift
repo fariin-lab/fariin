@@ -32,6 +32,9 @@ final class ConversationsRepository {
             MainActor.assumeIsolated {
                 let repo = ConversationsRepository.shared
                 if repo.loadFailed { repo.start() }
+                // Owner, 2026-10-08: pinned chats kept below the window had their listener dropped by an
+                // error; bring them back now that the server answers.
+                repo.retryPinnedExtras()
             }
         }
     }
@@ -203,6 +206,22 @@ final class ConversationsRepository {
 
     /// 2026-09-24 fix-all #6: the listener itself, split out of `start()` so `loadOlder` can widen
     /// the window without re-running the launch-only work above.
+    @ObservationIgnored private var listRetries = 0
+    @ObservationIgnored private var listRetryWork: DispatchWorkItem?
+    private func scheduleListRetry() {
+        let steps: [Double] = [5, 15, 30, 60]
+        let delay = steps[min(listRetries, steps.count - 1)]
+        listRetries += 1
+        listRetryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.loadFailed else { return }
+            print("[Recovery] chat list re-attach after back-off")
+            self.attach()
+        }
+        listRetryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     private func attach() {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         stop()
@@ -226,9 +245,13 @@ final class ConversationsRepository {
                         self?.hasLoaded = true
                         self?.loadingOlder = false
                         self?.loadingWholeList = false   // 2026-09-24 feature-audit: no page is coming now
+                        // Owner, 2026-10-08: ANY error ends the listener, not only the refusal codes, so
+                        // it always re-attaches after a back-off (5s, 15s, 30s, 60s) as well as on `recovered`.
+                        self?.scheduleListRetry()
                     }
                     return
                 }
+                self.listRetries = 0
                 if self.loadFailed { self.loadFailed = false }
                 // 2026-09-24 fix-all #6: a full window means there may be more behind it. Only a
                 // server answer settles a page request; the cache can hand back fewer than exist.
@@ -552,18 +575,19 @@ final class ConversationsRepository {
                     // attaches a fresh one. A window snapshot only arrives while the chat list itself
                     // is being answered, so a SECOND refusal with the list healthy is about this chat
                     // alone (I was removed from it), and that one forgets, as before.
+                    // Owner, 2026-10-08: and no number of errors forgets the pin any more. Only a server
+                    // snapshot that lacks the chat may remove it (below). An error drops the handle,
+                    // reports, and retries after a back-off and on `recovered`.
                     if snap == nil {
                         self.pinnedExtraListeners.removeValue(forKey: id)?.remove()
-                        if self.pinnedRefusedOnce.contains(id), !self.loadFailed {
-                            self.pinnedRefusedOnce.remove(id)
-                            self.forgetPinnedExtra(id, uid: uid)
-                            return
-                        }
                         self.pinnedRefusedOnce.insert(id)
+                        print("[Recovery] pinned chat listener ended: \(error?.localizedDescription ?? "?")")
                         Task { @MainActor in SessionRecovery.noteRefusal(error, "pinned chat") }
+                        self.schedulePinnedRetry()
                         return
                     }
                     self.pinnedRefusedOnce.remove(id)
+                    self.pinnedRetries = 0
                     // Offline and not cached yet says nothing about the chat; wait for the server.
                     if let snap, snap.metadata.isFromCache, !snap.exists { return }
                     guard let snap, snap.exists, let data = snap.data(with: .estimate),
@@ -583,6 +607,25 @@ final class ConversationsRepository {
                     self.blockListChanged()   // re-publish the window with this chat merged in
                 }
         }
+    }
+
+    @ObservationIgnored private var pinnedRetries = 0
+    @ObservationIgnored private var pinnedRetryWork: DispatchWorkItem?
+    private func schedulePinnedRetry() {
+        let steps: [Double] = [5, 15, 30, 60]
+        let delay = steps[min(pinnedRetries, steps.count - 1)]
+        pinnedRetries += 1
+        pinnedRetryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.retryPinnedExtras() }
+        pinnedRetryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Re-attach the listener of every remembered pinned chat whose handle was dropped by an error.
+    func retryPinnedExtras() {
+        guard let uid = Auth.auth().currentUser?.uid, listenerUid == uid, !pinnedRefusedOnce.isEmpty else { return }
+        let window = conversations.filter { pinnedExtraDocs[$0.id] == nil }
+        syncPinnedExtras(window, uid: uid, fromServer: false)
     }
 
     private func forgetPinnedExtra(_ id: String, uid: String) {

@@ -1,6 +1,7 @@
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 
 /// ⛔ THE SERVER REFUSED THIS PHONE, SO GET BACK IN AND RECONNECT — owner, 2026-09-27 and 09-28:
 /// "every account looks deleted, I can't send, can't archive, can't react". Fine with the internet
@@ -21,9 +22,22 @@ import FirebaseFirestore
 ///  - a refresh Firebase refuses because the session is over (revoked, the account disabled or
 ///    deleted) posts `sessionEnded`: the teardown of a sign-out from another device.
 ///
-/// Retries back off (1s, 3s, 10s, 30s, 60s, 60s) and then stop; coming back to the app starts them
-/// again. The back-off only resets after five quiet minutes, so a refusal that survives a fresh
-/// token cannot turn into a loop that re-attaches every second.
+/// Retries back off (1s, 3s, 10s, 30s, 60s) and then keep going every 60s for as long as the app is
+/// on screen; in the background they pause, and coming back to the app starts them again from 1s.
+/// The back-off only resets after five quiet minutes, so a refusal that survives a fresh token
+/// cannot turn into a loop that re-attaches every second; it settles at one try a minute instead.
+///
+/// ⛔ IT USED TO STOP FOR GOOD AFTER ABOUT THREE MINUTES — owner, 2026-10-08 investigation, bug 1.
+/// Six tries and then nothing until the app went to the background and back, so anyone who stayed
+/// in the app stayed broken. It never gives up while the app is active now.
+///
+/// ⛔ A STALL IS THE OTHER HALF — owner, 2026-10-08. The connection can stop answering without any
+/// refusal at all: writes wait forever, reads come only from the phone's copy. Firestore's codes 14
+/// (unavailable) and 4 (deadline exceeded), and the connection watchdog in `ConnectionStatus`, come
+/// in through `noteStall`. What a mature messenger does when its socket goes quiet is drop it and
+/// dial again, so this does the same: a fresh token (10s at most), then Firestore's network switched
+/// off and on, which drops the stuck stream and reconnects. Pending writes are kept and sent again.
+/// Stall recoveries are spaced 20s, 40s, then every 60s while the stall lasts.
 ///
 /// ⚠️ ONLY READS A SIGNED-IN MEMBER IS ALWAYS ALLOWED REPORT HERE: my chat list, my own documents, an
 /// open chat's messages, anyone's profile document (`allow get: if signedIn()`). Presence and the
@@ -37,34 +51,89 @@ enum SessionRecovery {
     static let needsTwoStep = Notification.Name("SessionRecovery.needsTwoStep")
     static let sessionEnded = Notification.Name("SessionRecovery.sessionEnded")
 
-    private static let delays: [Double] = [1, 3, 10, 30, 60, 60]
+    /// Refusal back-off; after the last one, every `steadyDelay` while the app is active.
+    private static let delays: [Double] = [1, 3, 10, 30, 60]
+    private static let steadyDelay: Double = 60
+    /// Stall recoveries: the gap before the 2nd, the 3rd, and every later one while the stall lasts.
+    private static let stallGaps: [Double] = [20, 40, 60]
+    /// Three minutes with no stall recovery and the spacing starts again from the beginning.
+    private static let stallQuiet: Double = 180
+    private static let tokenTimeout: Double = 10
+
     @MainActor private static var attempt = 0
     @MainActor private static var scheduled = false
     @MainActor private static var unrecovered = false
     @MainActor private static var lastRecoveredAt = Date.distantPast
     @MainActor private static var foregroundObserver: NSObjectProtocol?
+    @MainActor private static var stallRunning = false
+    @MainActor private static var stallStep = 0
+    @MainActor private static var lastStallAt = Date.distantPast
+
+    @MainActor private static var isActive: Bool {
+        UIApplication.shared.applicationState == .active
+    }
 
     @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
         guard let error else { return }
         let ns = error as NSError
+        // Callable functions use the same code numbers (7 permission denied, 16 unauthenticated,
+        // 14 unavailable, 4 deadline exceeded), so a refused or unanswered callable counts too.
+        guard ns.domain == FirestoreErrorDomain || ns.domain == FunctionsErrorDomain else { return }
+        // 14 = unavailable, 4 = deadline exceeded: the server did not refuse, it did not answer.
+        // That is a stall, and a fresh token alone would not unstick it.
+        if ns.code == 14 || ns.code == 4 {
+            print("[Recovery] no answer (\(from)), code \(ns.code)")   // console only, never on screen
+            noteStall(from)
+            return
+        }
         // 7 = permission denied, 16 = unauthenticated (the numbers SendQueue and PushManager test too).
-        guard ns.domain == FirestoreErrorDomain, ns.code == 7 || ns.code == 16 else { return }
-        print("server refused (\(from)):", error)   // developer console only, never on screen
+        guard ns.code == 7 || ns.code == 16 else { return }
         // Signed out: there is no session to get back into, and sign-out tears the listeners down.
         guard Auth.auth().currentUser != nil else { return }
-        if Date().timeIntervalSince(lastRecoveredAt) > 300 { attempt = 0 }
+        if Date().timeIntervalSince(lastRecoveredAt) > 300 {
+            attempt = 0
+        } else if !unrecovered {
+            // Refused again within five minutes of a fresh token that passed: the token is not the
+            // whole story. Keep trying at the steady pace and say so.
+            print("[Recovery] refusal survived a fresh token (\(from)), retrying every \(Int(steadyDelay))s")
+        }
+        // One line per new episode, not one per caller: many listeners fail at the same moment.
+        if !unrecovered {
+            print("[Recovery] server refused (\(from)), code \(ns.code), attempt \(attempt + 1):", error)
+        }
         unrecovered = true
         watchForeground()
         schedule()
     }
 
+    /// The connection looks stuck without a refusal: no server answer for a long time while the
+    /// network path is up, or Firestore's 14 / 4. Safe to call from many places at once: one stall
+    /// recovery runs at a time, and they are spaced 20s, 40s, then 60s apart.
+    @MainActor static func noteStall(_ from: String) {
+        guard Auth.auth().currentUser != nil, isActive, !stallRunning else { return }
+        let since = Date().timeIntervalSince(lastStallAt)
+        if since > stallQuiet { stallStep = 0 }
+        let gap = stallStep == 0 ? 0 : stallGaps[min(stallStep - 1, stallGaps.count - 1)]
+        guard since >= gap else { return }
+        stallStep += 1
+        stallRunning = true
+        lastStallAt = Date()
+        print("[Recovery] stall (\(from)), recovery \(stallStep)")
+        Task { @MainActor in
+            await recoverStall()
+            stallRunning = false
+        }
+    }
+
     @MainActor private static func schedule() {
-        guard !scheduled, attempt < delays.count else { return }
+        // In the background nothing is retried; `didBecomeActive` starts it again.
+        guard !scheduled, isActive else { return }
         scheduled = true
-        let delay = delays[attempt]
+        let delay = attempt < delays.count ? delays[attempt] : steadyDelay
         attempt += 1
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard isActive else { scheduled = false; return }   // paused; foreground resumes it
             await recover()
         }
     }
@@ -73,28 +142,108 @@ enum SessionRecovery {
         scheduled = false
         guard unrecovered, let user = Auth.auth().currentUser else { return }
         let uid = user.uid
-        do {
-            let token = try await user.getIDTokenResult(forcingRefresh: true)
+        switch await freshToken(user) {
+        case .token(let token):
             // Another account signed in during the refresh: its own sign-in starts its own listeners.
             guard Auth.auth().currentUser?.uid == uid else { return }
             unrecovered = false
             lastRecoveredAt = Date()
-            NotificationCenter.default.post(
-                name: TwoStepGate.sessionPassed(token) ? recovered : needsTwoStep, object: nil)
-        } catch {
-            // ⚠️ FIREBASE'S OWN WORD THAT THE SESSION IS OVER (revoked, disabled, deleted), not
-            // merely "no user". A Sign Out tapped while this refresh was in flight also leaves no
-            // user, and that sign-out has already run its own teardown, keeping the media it chose
-            // to keep; a second, keep-nothing wipe on top would delete it.
-            let code = (error as NSError).code
-            let over = [AuthErrorCode.userTokenExpired, .userDisabled, .userNotFound, .invalidUserToken]
-                .map(\.rawValue).contains(code)
-            if over {
+            let passed = TwoStepGate.sessionPassed(token)
+            print("[Recovery] fresh token, \(passed ? "recovered" : "needs two-step")")
+            NotificationCenter.default.post(name: passed ? recovered : needsTwoStep, object: nil)
+        case .failed(let error):
+            if endSessionIfOver(error) { return }
+            print("[Recovery] token refresh failed, trying again later:", error)
+            schedule()   // offline, or a passing failure: again, later
+        case .timedOut:
+            print("[Recovery] token refresh timed out, trying again later")
+            schedule()
+        }
+    }
+
+    /// A fresh token, then Firestore's network off and on. Ends in `recovered`, or in `needsTwoStep`
+    /// / `sessionEnded` exactly as a refusal recovery would.
+    @MainActor private static func recoverStall() async {
+        guard isActive, let user = Auth.auth().currentUser else { return }
+        let uid = user.uid
+        var passedToken = false
+        switch await freshToken(user) {
+        case .token(let token):
+            guard Auth.auth().currentUser?.uid == uid else { return }
+            guard TwoStepGate.sessionPassed(token) else {
+                print("[Recovery] stall: fresh token needs two-step")
                 unrecovered = false
-                attempt = 0
-                NotificationCenter.default.post(name: sessionEnded, object: nil)
-            } else {
-                schedule()   // offline, or a passing failure: again, later
+                lastRecoveredAt = Date()
+                NotificationCenter.default.post(name: needsTwoStep, object: nil)
+                return
+            }
+            passedToken = true
+        case .failed(let error):
+            if endSessionIfOver(error) { return }
+            // Offline or a passing failure: the token in hand may still be good, so reset anyway.
+            print("[Recovery] stall: token refresh failed, resetting the connection anyway:", error)
+        case .timedOut:
+            print("[Recovery] stall: token refresh timed out, resetting the connection anyway")
+        }
+        guard isActive, Auth.auth().currentUser?.uid == uid else { return }
+        // ⚠️ BOTH CALLS, ALWAYS: a network left switched off would be far worse than the stall.
+        let db = Firestore.firestore()
+        do { try await db.disableNetwork() } catch { print("[Recovery] disableNetwork failed:", error) }
+        do { try await db.enableNetwork() } catch { print("[Recovery] enableNetwork failed:", error) }
+        guard Auth.auth().currentUser?.uid == uid else { return }
+        if passedToken {
+            unrecovered = false
+            lastRecoveredAt = Date()
+        }
+        print("[Recovery] stall: connection reset, posting recovered")
+        NotificationCenter.default.post(name: recovered, object: nil)
+    }
+
+    /// ⚠️ FIREBASE'S OWN WORD THAT THE SESSION IS OVER (revoked, disabled, deleted), not merely
+    /// "no user". A Sign Out tapped while this refresh was in flight also leaves no user, and that
+    /// sign-out has already run its own teardown, keeping the media it chose to keep; a second,
+    /// keep-nothing wipe on top would delete it.
+    @MainActor private static func endSessionIfOver(_ error: Error) -> Bool {
+        let code = (error as NSError).code
+        let over = [AuthErrorCode.userTokenExpired, .userDisabled, .userNotFound, .invalidUserToken]
+            .map(\.rawValue).contains(code)
+        guard over else { return false }
+        print("[Recovery] session is over:", error)
+        unrecovered = false
+        attempt = 0
+        NotificationCenter.default.post(name: sessionEnded, object: nil)
+        return true
+    }
+
+    private enum TokenOutcome {
+        case token(AuthTokenResult)
+        case failed(Error)
+        case timedOut
+    }
+
+    /// Resumes its continuation once, whichever of the token and the timer answers first. Both
+    /// callers run on the main actor, so the two never race.
+    private final class Once {
+        private var continuation: CheckedContinuation<TokenOutcome, Never>?
+        init(_ c: CheckedContinuation<TokenOutcome, Never>) { continuation = c }
+        func finish(_ outcome: TokenOutcome) {
+            continuation?.resume(returning: outcome)
+            continuation = nil
+        }
+    }
+
+    /// A forced token refresh that gives up after `tokenTimeout`. A task group would not do here: it
+    /// waits for every child on the way out, and Firebase's refresh does not stop when cancelled.
+    @MainActor private static func freshToken(_ user: User) async -> TokenOutcome {
+        await withCheckedContinuation { (continuation: CheckedContinuation<TokenOutcome, Never>) in
+            let once = Once(continuation)
+            Task { @MainActor in
+                do { once.finish(.token(try await user.getIDTokenResult(forcingRefresh: true))) }
+                catch { once.finish(.failed(error)) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(tokenTimeout * 1_000_000_000))
+                once.finish(.timedOut)
             }
         }
     }

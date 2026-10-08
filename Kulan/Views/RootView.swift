@@ -280,8 +280,19 @@ struct RootView: View {
         // this sign-in has not entered the two-step password. The same door a new sign-in stops at,
         // instead of an app whose every read is refused.
         .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.needsTwoStep)) { _ in
-            if phase == .main || phase == .notifications { phase = .twoStep }
+            // Owner, 2026-10-08: a phone that re-confirmed who it is and whose server renew failed
+            // has a pending renew; finishing it lets this phone back in without the password page.
+            // Only when that is not possible does the password page come up.
+            Task { @MainActor in
+                if await TwoStepGate.retryPendingRenew() {
+                    // The token was refreshed inside the renew; every listener owner re-attaches.
+                    NotificationCenter.default.post(name: SessionRecovery.recovered, object: nil)
+                    return
+                }
+                if phase == .main || phase == .notifications { phase = .twoStep }
+            }
         }
+        .task { TwoStepGate.startPendingRenewWatch() }   // once; the watch guards itself
         // …and when there is no session left at all (Firebase signs out by itself when it was
         // revoked or the account disabled): the teardown of a sign-out from another device, then
         // the front door, instead of a signed-in-looking app that can do nothing.

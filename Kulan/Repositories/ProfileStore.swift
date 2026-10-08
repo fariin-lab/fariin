@@ -15,6 +15,7 @@ final class ProfileStore {
         // listener is alive; attaches a fresh one if the refusal killed it.
         NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
             ProfileStore.shared.startPrivacySync()
+            Task { await ProfileStore.shared.refetchFailed() }   // 2026-10-08
         }
     }
 
@@ -184,16 +185,89 @@ final class ProfileStore {
         return Self.indexed(UserProfile(id: uid, data: data))
     }
 
+    // MARK: - Last good copy + re-fetch after recovery (owner, 2026-10-08)
+
+    /// Posted (object: the uid) when a profile that failed to load has now loaded, so a screen that
+    /// drew the blank fallback can read it again.
+    static let profileRefreshed = Notification.Name("ProfileStore.profileRefreshed")
+
+    @ObservationIgnored private let memLock = NSLock()
+    @ObservationIgnored private var lastGood: [String: UserProfile] = [:]
+    @ObservationIgnored private var failedUids: Set<String> = []
+
+    private func remember(_ p: UserProfile) {
+        memLock.lock(); defer { memLock.unlock() }
+        if lastGood.count > 3000 { lastGood.removeAll() }
+        lastGood[p.id] = p
+    }
+    private func lastGoodCopy(_ uid: String) -> UserProfile? {
+        memLock.lock(); defer { memLock.unlock() }
+        return lastGood[uid]
+    }
+    private func markFetch(_ uid: String, failed: Bool) {
+        memLock.lock(); defer { memLock.unlock() }
+        if failed { failedUids.insert(uid) } else { failedUids.remove(uid) }
+    }
+    private func isFailed(_ uid: String) -> Bool {
+        memLock.lock(); defer { memLock.unlock() }
+        return failedUids.contains(uid)
+    }
+    private func takeFailed() -> [String] {
+        memLock.lock(); defer { memLock.unlock() }
+        return Array(failedUids)
+    }
+    private func forget(_ uid: String) {
+        memLock.lock(); defer { memLock.unlock() }
+        lastGood[uid] = nil
+    }
+
+    /// On `SessionRecovery.recovered`: read again every profile whose read failed, four at a time,
+    /// and tell screens. My own profile goes through `loadMine` (it also restarts the privacy sync).
+    func refetchFailed() async {
+        let uids = takeFailed()
+        guard !uids.isEmpty else { return }
+        print("[Recovery] re-fetching \(uids.count) profile(s) that failed")
+        let mine = Auth.auth().currentUser?.uid
+        for start in stride(from: 0, to: uids.count, by: 4) {
+            let chunk = Array(uids[start..<min(start + 4, uids.count)])
+            await withTaskGroup(of: Void.self) { g in
+                for uid in chunk {
+                    g.addTask { [self] in
+                        if uid == mine { await loadMine() } else { _ = await fetch(uid) }
+                        // Only announce a uid that no longer sits in the failed set.
+                        if !isFailed(uid) {
+                            await MainActor.run {
+                                NotificationCenter.default.post(name: Self.profileRefreshed, object: uid)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func fetch(_ uid: String) async -> UserProfile? {
         // A uid with a "/" is a collection path, and `document(_:)` raises an uncatchable exception
         // on one rather than failing (audit, 2026-09-24). Uids arrive here from other people's data.
         guard !uid.isEmpty, !uid.contains("/") else { return nil }
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
-            guard let data = snap.data() else { return nil }
+            guard let data = snap.data() else {
+                // owner, 2026-10-08: "no such document" only means deleted when the SERVER said so.
+                // Answered from the on-disk cache with nothing in it, it means "unknown".
+                if snap.metadata.isFromCache {
+                    markFetch(uid, failed: true)
+                    return lastGoodCopy(uid)
+                }
+                markFetch(uid, failed: false)
+                forget(uid)
+                return nil
+            }
+            markFetch(uid, failed: false)
             return Self.indexed(UserProfile(id: uid, data: data))
         } catch {
             print("profile fetch failed:", error)
+            markFetch(uid, failed: true)
             await MainActor.run { SessionRecovery.noteRefusal(error, "profile read") }
             // ⛔ A FAILED READ IS NOT A MISSING PERSON — 2026-09-28, owner: "every account looks like
             // a deleted account". This returned nil for an error exactly as it does for a document
@@ -201,7 +275,9 @@ final class ProfileStore {
             // lost its @username, bio and links. The last copy this phone saw is the honest answer
             // to "who is this" when the server will not say; a real deletion still comes back as a
             // snapshot with no data above, which is the only thing that means gone.
-            return await cachedPeer(uid)
+            // 2026-10-08: and when this phone never cached them, the copy from earlier in this run.
+            if let c = await cachedPeer(uid) { return c }
+            return lastGoodCopy(uid)
         }
     }
 
@@ -218,6 +294,7 @@ final class ProfileStore {
     static func indexed(_ p: UserProfile) -> UserProfile {
         ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
                                  thumb: p.photoThumb, privacy: p.privacy)
+        shared.remember(p)   // 2026-10-08: the in-memory last-good copy `fetch` falls back on
         // The same one hook feeds the call-privacy answer, so pressing the call button has something
         // to read on the frame it is pressed. See CallPrivacyIndex.
         CallPrivacyIndex.record(uid: p.id, privacy: p.privacy)

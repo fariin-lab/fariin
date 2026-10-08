@@ -905,7 +905,13 @@ enum ChatService {
             convSeed["startedBy"] = uid
             convSeed["accepted"] = false
         }
-        try await convRef.setData(convSeed, merge: true)
+        do {
+            try await convRef.setData(convSeed, merge: true)
+        } catch {
+            // Owner, 2026-10-08: a refused seed write is a refused send; wake the recovery net.
+            await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
+            throw error
+        }
         // ...and that first message is a knock, which the check above could not see (no document yet).
         if isNewConv && knocking == nil { await MessageRequests.countKnock(clientId: clientId) }
 
@@ -1124,12 +1130,39 @@ enum ChatService {
             }
             if cancelled { turn.finish(); return }   // deleted before it went: nothing is written
         }
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            batch.commit { error in
-                if let error { c.resume(throwing: error) } else { c.resume() }
+        // Owner, 2026-10-08: a send the server never answers looked sent forever and woke nothing.
+        // After 15s with no answer, while the app is in front, tell the recovery net once. The local
+        // write stays queued in the SDK and goes out by itself after recovery: nothing is dropped
+        // and nothing is sent twice.
+        let answered = StallFlag()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            if !answered.isSet, UIApplication.shared.applicationState == .active {
+                print("[Recovery] send unanswered for 15s")
+                SessionRecovery.noteStall("send")
             }
-            turn.finish()   // the SDK holds the write now, in order
         }
+        do {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                batch.commit { error in
+                    if let error { c.resume(throwing: error) } else { c.resume() }
+                }
+                turn.finish()   // the SDK holds the write now, in order
+            }
+            answered.set()
+        } catch {
+            answered.set()
+            await MainActor.run { SessionRecovery.noteRefusal(error, "send") }
+            throw error
+        }
+    }
+
+    /// Set once a send's server answer (or error) has arrived; read by the 15s stall watch.
+    private final class StallFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var isSet: Bool { lock.withLock { value } }
+        func set() { lock.withLock { value = true } }
     }
 
     /// Encrypt + send a photo. The JPEG bytes are sealed with Crypto.encryptBytes
@@ -3413,10 +3446,24 @@ enum ChatService {
     // routed here rather than at every call site. Doing it at the call sites would have meant an
     // `if official` in the chat list, the archive screen, the context menu, the swipe actions and the
     // mute sheet — five chances to miss one and leave a button that looks alive and does nothing.
-    static func setPinned(_ cid: String, _ value: Bool) async {
-        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return }
-        try? await db.collection("conversations").document(cid)
-            .setData(["pinnedBy": [uid: value]], merge: true)
+    /// Owner, 2026-10-08: archive / mute / pin used `try?`, so a refused write snapped back with no
+    /// word and never woke the recovery. Now the error is logged, handed to SessionRecovery, and the
+    /// caller gets false. Callers that ignore the result behave as before.
+    private static func settingWrite(_ what: String, _ cid: String, _ data: [String: Any]) async -> Bool {
+        do {
+            try await db.collection("conversations").document(cid).setData(data, merge: true)
+            return true
+        } catch {
+            print("[Recovery] \(what) write failed: \(error)")
+            await MainActor.run { SessionRecovery.noteRefusal(error, what) }
+            return false
+        }
+    }
+
+    @discardableResult
+    static func setPinned(_ cid: String, _ value: Bool) async -> Bool {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setPinned(value); return true }
+        return await settingWrite("pin", cid, ["pinnedBy": [uid: value]])
     }
 
     /// Per-user manual order value for a pinned chat (fractional indexing).
@@ -3440,31 +3487,31 @@ enum ChatService {
             .setData(["pinnedMessageIds": FieldValue.arrayRemove([messageId])], merge: true)
     }
 
-    static func setArchived(_ cid: String, _ value: Bool) async {
-        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setArchived(value); return }
-        try? await db.collection("conversations").document(cid)
-            .setData(["archivedBy": [uid: value]], merge: true)
+    @discardableResult
+    static func setArchived(_ cid: String, _ value: Bool) async -> Bool {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setArchived(value); return true }
+        return await settingWrite("archive", cid, ["archivedBy": [uid: value]])
     }
 
-    static func setMuted(_ cid: String, _ value: Bool) async {
-        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setMuted(value); return }
+    @discardableResult
+    static func setMuted(_ cid: String, _ value: Bool) async -> Bool {
+        if OfficialChannel.isOfficial(cid) { OfficialChannelStore.shared.setMuted(value); return true }
         let until: Double = value ? 9_999_999_999_999 : 0
-        try? await db.collection("conversations").document(cid)
-            .setData(["mutedBy": [uid: until]], merge: true)
+        return await settingWrite("mute", cid, ["mutedBy": [uid: until]])
     }
 
     /// Mute until a specific epoch-ms time (0 = unmute, far-future = always).
-    static func setMute(_ cid: String, until: Double) async {
+    @discardableResult
+    static func setMute(_ cid: String, until: Double) async -> Bool {
         if OfficialChannel.isOfficial(cid) {
             // ⛔ TIMED NOW — owner, 2026-09-29: the channel's Mute offers the same 1 hour … Always as
             // any chat. It used to be a plain on/off. The channel still STARTS muted (Always); only
             // a mute its reader chose with an end runs out.
             let on = until > Date().timeIntervalSince1970 * 1000
             await MainActor.run { OfficialChannelStore.shared.setMuted(on, until: on ? until : nil) }
-            return
+            return true
         }
-        try? await db.collection("conversations").document(cid)
-            .setData(["mutedBy": [uid: until]], merge: true)
+        return await settingWrite("mute", cid, ["mutedBy": [uid: until]])
     }
 
     /// Shared mute-duration options. Pass nil for "Always".

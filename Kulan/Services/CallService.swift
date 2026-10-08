@@ -583,6 +583,27 @@ final class CallService: NSObject {
     private var incomingListener: ListenerRegistration?
     private var ringingWatcher: ListenerRegistration?   // while .incoming: detect caller-cancel before answer
 
+    // LISTENERS THAT COME BACK (owner, 2026-10-08). A Firestore listener that ends in an error is
+    // dead for good, and every one in this file threw its error away: after one refused token or
+    // stalled connection the phone stopped ringing for the rest of the session, and a live call
+    // went deaf to the answer, the hang-up and the other side's routes. Each one now reports to
+    // SessionRecovery and is attached again on `SessionRecovery.recovered`, or after a back-off
+    // when the error was not a refusal. Incoming also re-attaches on foreground.
+    private var incomingWanted = false        // observeIncoming has been asked for (signed in, shell up)
+    private var incomingDead = false          // the incoming listener ended in an error
+    private var incomingHeardServer = false   // a server (non-cache) snapshot arrived since it attached
+    private var incomingAttach = 0            // which attach is current; an older one's error or retry does nothing
+    private var incomingRetryStep = 0         // back-off position (5s, 15s, 30s, then 60s), reset by a server snapshot
+    private var recoveryObserved = false
+    private var callDocWatch: DocumentReference?       // the live call's doc, for re-attaching observeCallDoc
+    private var callDocListener: ListenerRegistration?
+    private var candidatesWatch: CollectionReference?  // the other side's candidates, for observeRemoteCandidates
+    private var candidatesListener: ListenerRegistration?
+    private var ringingWatchId: String?                // the call watchRingingCancel is watching
+    /// Candidate docs already handed to WebRTC this call. A re-attached listener's first snapshot
+    /// lists every candidate again as "added"; these are skipped. Cleared in finishCall.
+    private var appliedCandidateIds: Set<String> = []
+
     private var me: String { Auth.auth().currentUser?.uid ?? "" }
 
     // MARK: - Sealed signalling (owner audit 2026-10-06 #27)
@@ -786,9 +807,15 @@ final class CallService: NSObject {
     /// after sign-in and again when starting/answering a call so credentials are always fresh.
     /// Never throws — on any failure we keep whatever we had (or the STUN fallback).
     func refreshIceServers() async {
-        guard let res = try? await Functions.functions(region: "me-central1")
-            .httpsCallable("iceServers").call(),
-              let arr = (res.data as? [String: Any])?["iceServers"] as? [[String: Any]] else { return }
+        // A failure is reported to SessionRecovery now (owner, 2026-10-08); still never throws.
+        let reply: Any
+        do {
+            reply = try await Functions.functions(region: "me-central1").httpsCallable("iceServers").call().data
+        } catch {
+            Self.reportToRecovery(error, "call relay list")
+            return
+        }
+        guard let arr = (reply as? [String: Any])?["iceServers"] as? [[String: Any]] else { return }
         // ONE RTCIceServer PER URL (the reference app does the same): a server entry carrying both
         // the UDP route and the TLS-on-443 route is otherwise one unit, and each route should be
         // gathered, and fail, on its own.
@@ -3226,6 +3253,9 @@ final class CallService: NSObject {
                         guard let self else { return }
                         // write failed -> don't leave the caller ringing into the void, and say Failed
                         if let err {
+                            // Reported first (owner, 2026-10-08): a refused session starts recovery.
+                            // A block refuses with the same code; recovery then finds nothing wrong.
+                            Self.reportToRecovery(err, "call create")
                             // ⛔ EXCEPT A RULE REFUSAL. The rules refuse this create when the callee
                             // blocked me, and a block must stay indistinguishable from a call nobody
                             // took (block rebuild 2026-09-26). "Call failed" there would name it, so a
@@ -3306,6 +3336,7 @@ final class CallService: NSObject {
     private func watchRingingCancel(_ id: String) {
         ringingWatcher?.remove()
         let attachedAs = me
+        ringingWatchId = id
         ringingWatcher = db.collection("calls").document(id).addSnapshotListener { [weak self] snap, err in
             guard let self else { return }
             // NOT THIS ACCOUNT'S CALL (audit M-157, 2026-10-07). The rules let only the caller and the
@@ -3319,6 +3350,16 @@ final class CallService: NSObject {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
                 self.recordWritten = true
                 self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
+                return
+            }
+            // Any other error leaves this watcher dead (owner, 2026-10-08). The registration is kept,
+            // not cleared: non-nil still means "this ring is still wanted", and every end clears it.
+            if let err {
+                guard self.ringingWatcher != nil, self.ringingWatchId == id else { return }
+                self.callListenerFailed(err, "call ring watch", callId: id) { [weak self] in
+                    guard let self, self.ringingWatcher != nil, self.ringingWatchId == id else { return }
+                    self.watchRingingCancel(id)
+                }
                 return
             }
             guard let d = snap?.data() else { return }
@@ -3420,20 +3461,35 @@ final class CallService: NSObject {
 
     /// App-wide listener: ring when someone calls me.
     func observeIncoming() {
-        incomingListener?.remove()
+        incomingListener?.remove(); incomingListener = nil
+        observeRecoveryIfNeeded()
         guard !me.isEmpty else { return }
+        incomingWanted = true
+        incomingDead = false
+        incomingHeardServer = false
+        incomingAttach += 1
+        let attach = incomingAttach
         Task { await refreshIceServers() }   // warm the TURN list at launch so the first call has it
 
         incomingListener = db.collection("calls")
             .whereField("callee", isEqualTo: me)
             .whereField("status", isEqualTo: "ringing")
-            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, _ in
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, err in
+                guard let self else { return }
+                // ENDED IN AN ERROR (owner, 2026-10-08): the listener is dead and this phone would
+                // never ring again this session. Dropped, reported, and attached again.
+                if let err { self.incomingFailed(err, attach: attach); return }
                 // NOT FROM THE CACHE (audit M-113, 2026-10-07). After a spell offline the first
                 // snapshot is this phone's cached copy, and a doc that was "ringing" when the phone
                 // went offline rang CallKit for a call long over. Wait for the server to confirm; the
                 // metadata changes are included so that confirmation arrives even when nothing in the
                 // docs changed.
-                guard let self, let snap, !snap.metadata.isFromCache else { return }
+                // Owner, 2026-10-08: skipping the cache copy is safe after a reconnect only because
+                // the server's own snapshot follows on this same listener, and that one is always
+                // processed. A listener that never hears the server (stalled, or died) is the real
+                // danger, so `incomingHeardServer` records it and foreground / recovery attach anew.
+                guard let snap, !snap.metadata.isFromCache else { return }
+                if attach == self.incomingAttach { self.incomingHeardServer = true; self.incomingRetryStep = 0 }
                 let docs = snap.documents
                 guard !docs.isEmpty else { return }
                 // EVERY RINGING DOC, NOT `documents.first` (owner audit 2026-10-06 #11). The query has
@@ -3471,6 +3527,92 @@ final class CallService: NSObject {
                     self.handleRingingDoc(doc)
                 }
             }
+    }
+
+    // MARK: - Listener recovery (owner, 2026-10-08)
+
+    /// The incoming listener ended in an error. Drop it, tell SessionRecovery, and attach again:
+    /// a refusal waits for `recovered` (or foreground); anything else retries after 5s, 15s, 30s,
+    /// then every 60s while the app is open.
+    private func incomingFailed(_ err: Error, attach: Int) {
+        guard attach == incomingAttach else { return }   // an older listener, already replaced
+        incomingListener?.remove(); incomingListener = nil
+        incomingDead = true
+        Self.reportToRecovery(err, "incoming calls")
+        guard !Self.isRefusal(err) else { return }
+        let delays: [Double] = [5, 15, 30, 60]
+        let delay = delays[min(incomingRetryStep, delays.count - 1)]
+        incomingRetryStep += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.incomingWanted, self.incomingDead, attach == self.incomingAttach else { return }
+            print("[Recovery] incoming calls: attached again after \(Int(delay))s")
+            self.observeIncoming()
+        }
+    }
+
+    /// A live call's listener (ring watch, call doc, candidates) ended in an error. Report it; a
+    /// refusal is attached again by `recovered`, anything else after 3s, while the same call lives.
+    private func callListenerFailed(_ err: Error, _ what: String, callId id: String?, reattach: @escaping () -> Void) {
+        Self.reportToRecovery(err, what)
+        guard !Self.isRefusal(err) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.callId == id, self.state != .idle, self.state != .ended else { return }
+            print("[Recovery] \(what): attached again after 3s")
+            reattach()
+        }
+    }
+
+    /// Recovery observers, registered once from observeIncoming (the shell calls it at launch).
+    private func observeRecoveryIfNeeded() {
+        guard !recoveryObserved else { return }
+        recoveryObserved = true
+        NotificationCenter.default.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            // Every listener comes back, healthy or not: removing and re-adding one is cheap and
+            // the contract says re-attach when unsure.
+            if self.incomingWanted {
+                print("[Recovery] incoming calls: attached again after recovery")
+                self.observeIncoming()
+            }
+            self.reattachCallListeners("recovery")
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.incomingWanted, self.incomingDead || !self.incomingHeardServer else { return }
+            print("[Recovery] incoming calls: attached again on foreground")
+            self.observeIncoming()
+        }
+    }
+
+    /// Attach the live call's listeners again. Safe on a healthy one: the doc handler's steps are
+    /// each latched (calleeAccepted, remoteDescription, appliedRemoteRestart, restartRequestsSeen,
+    /// state), and candidates already applied are skipped by `appliedCandidateIds`.
+    private func reattachCallListeners(_ why: String) {
+        guard state != .idle, state != .ended, let id = callId else { return }
+        if ringingWatcher != nil, ringingWatchId == id {
+            print("[Recovery] call ring watch: attached again after \(why)")
+            watchRingingCancel(id)
+        }
+        if let ref = callDocWatch, ref.documentID == id {
+            print("[Recovery] call signalling: attached again after \(why)")
+            observeCallDoc(ref)
+        }
+        if let col = candidatesWatch, col.parent?.documentID == id {
+            print("[Recovery] call routes: attached again after \(why)")
+            observeRemoteCandidates(col)
+        }
+    }
+
+    /// 7 = permission denied, 16 = unauthenticated, by wire number as elsewhere in this file.
+    private static func isRefusal(_ err: Error) -> Bool {
+        let ns = err as NSError
+        return ns.domain == FirestoreErrorDomain && (ns.code == 7 || ns.code == 16)
+    }
+
+    /// Console only, never on screen. SessionRecovery decides whether the error is one it acts on.
+    private static func reportToRecovery(_ err: Error, _ from: String) {
+        print("[Recovery] \(from) failed:", err)
+        Task { @MainActor in SessionRecovery.noteRefusal(err, from) }
     }
 
     /// A ring older than this is over: the caller's own no-answer timeout (45s) has already ended
@@ -4383,7 +4525,8 @@ final class CallService: NSObject {
             }
             txn.updateData(["answeredDevice": Self.deviceClaim], forDocument: ref)
             return nil
-        }, completion: { [weak self] result, _ in
+        }, completion: { [weak self] result, error in
+            if let error { Self.reportToRecovery(error, "call answer claim") }   // owner, 2026-10-08
             if (result as? String) == "taken" { self?.standDownAnsweredElsewhere(ref.documentID) }
             if (result as? String) == "cancelled" {
                 self?.acceptLostToCancel(ref.documentID, peer: peer, video: video)
@@ -4483,7 +4626,8 @@ final class CallService: NSObject {
                 return
             }
             if (result as? String) == "taken" { self.standDownAnsweredElsewhere(ref.documentID); return }
-            guard error != nil else { return }             // landed
+            guard let error else { return }                // landed
+            Self.reportToRecovery(error, "call answer")    // owner, 2026-10-08
             // Call already over, or a newer call is up (audit M-038, 2026-10-07): nothing to save,
             // and a failure here must never end a call it does not belong to.
             let sameCall: () -> Bool = { [weak self] in
@@ -4500,6 +4644,7 @@ final class CallService: NSObject {
                     guard let self, sameCall() else { return }
                     if let d = snap?.data(), (d["status"] as? String) != "ended" {
                         ref.updateData(data) { [weak self] err in
+                            if let err { Self.reportToRecovery(err, "call answer") }
                             guard let self, err != nil, sameCall() else { return }
                             self.endReason = .failed; self.hangUp()
                         }
@@ -4521,8 +4666,18 @@ final class CallService: NSObject {
     // MARK: - Signalling observers
 
     private func observeCallDoc(_ ref: DocumentReference) {
-        let l = ref.addSnapshotListener { [weak self] snap, _ in
-            guard let self, let d = snap?.data() else { return }
+        callDocListener?.remove()   // a re-attach (owner, 2026-10-08) replaces the old one
+        callDocWatch = ref
+        let l = ref.addSnapshotListener { [weak self] snap, err in
+            guard let self else { return }
+            if let err {
+                self.callListenerFailed(err, "call signalling", callId: ref.documentID) { [weak self] in
+                    guard let self, self.callDocWatch?.documentID == ref.documentID else { return }
+                    self.observeCallDoc(ref)
+                }
+                return
+            }
+            guard let d = snap?.data() else { return }
 
             // MOVED ONTO A MULTI-PERSON CALL ("Add people" on the other side). Read before the
             // "ended" branch below: the same write carries `status: ended`, and taken as an end it
@@ -4658,6 +4813,7 @@ final class CallService: NSObject {
             // The other side's camera on/off (per-side, no permission).
             self.handleRemoteCallState(d)
         }
+        callDocListener = l
         listeners.append(l)
     }
 
@@ -4709,10 +4865,22 @@ final class CallService: NSObject {
     }
 
     private func observeRemoteCandidates(_ col: CollectionReference) {
-        let l = col.addSnapshotListener { [weak self] snap, _ in
+        candidatesListener?.remove()   // a re-attach (owner, 2026-10-08) replaces the old one
+        candidatesWatch = col
+        let l = col.addSnapshotListener { [weak self] snap, err in
             guard let self else { return }
+            if let err {
+                let id = col.parent?.documentID
+                self.callListenerFailed(err, "call routes", callId: id) { [weak self] in
+                    guard let self, self.candidatesWatch?.path == col.path else { return }
+                    self.observeRemoteCandidates(col)
+                }
+                return
+            }
             snap?.documentChanges.forEach { change in
                 guard change.type == .added else { return }
+                // Once per candidate doc: a re-attached listener lists them all again.
+                guard self.appliedCandidateIds.insert(change.document.reference.path).inserted else { return }
                 var c = change.document.data()
                 // #27: a sealed candidate carries only `enc` (JSON of the three fields inside).
                 // Plaintext ones (older build, unsealed call) are still taken: their route is
@@ -4745,6 +4913,7 @@ final class CallService: NSObject {
                 self.addOrBuffer(candidate)   // buffer until remote SDP is set, then flush
             }
         }
+        candidatesListener = l
         listeners.append(l)
     }
 
@@ -5059,8 +5228,12 @@ final class CallService: NSObject {
                                     "cancelledAt": FieldValue.serverTimestamp()], forDocument: ref)
                     return "cancelled"
                 }) { result, err in
-                    if err != nil {
-                        ref.updateData(["status": "ended", "endReason": reason.rawValue]) { _ in endWrites.leave() }
+                    if let err {
+                        Self.reportToRecovery(err, "call end")   // owner, 2026-10-08
+                        ref.updateData(["status": "ended", "endReason": reason.rawValue]) { e in
+                            if let e { Self.reportToRecovery(e, "call end") }
+                            endWrites.leave()
+                        }
                         return
                     }
                     if (result as? String) == "accepted", fixRow, !peer.isEmpty, !myUid.isEmpty {
@@ -5076,7 +5249,10 @@ final class CallService: NSObject {
                 }
             } else {
                 endWrites.enter()
-                ref.updateData(["status": "ended", "endReason": reason.rawValue]) { _ in endWrites.leave() }
+                ref.updateData(["status": "ended", "endReason": reason.rawValue]) { err in
+                    if let err { Self.reportToRecovery(err, "call end") }   // owner, 2026-10-08
+                    endWrites.leave()
+                }
             }
         }
         endWrites.notify(queue: .main) { endTask.end() }
@@ -5088,6 +5264,11 @@ final class CallService: NSObject {
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil
+        // Nothing of this call is attached again after this (owner, 2026-10-08).
+        callDocListener = nil; callDocWatch = nil
+        candidatesListener = nil; candidatesWatch = nil
+        ringingWatchId = nil
+        appliedCandidateIds = []
         // The "sharing video" note must never outlive its call.
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["call-video-sharing"])
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["call-video-sharing"])

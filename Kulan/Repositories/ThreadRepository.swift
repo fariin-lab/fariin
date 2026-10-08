@@ -594,6 +594,8 @@ final class ThreadRepository {
             foregroundObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                     self?.sweepExpired()
+                    // Owner, 2026-10-08: back in the foreground, bring back any listener that died.
+                    self?.reattachIfDead(includePresence: false)
                 }
         }
         // And a forward can ARRIVE while its chat is open — forwarding back into the chat you are
@@ -630,9 +632,9 @@ final class ThreadRepository {
         if recoveredObserver == nil {
             recoveredObserver = NotificationCenter.default.addObserver(
                 forName: SessionRecovery.recovered, object: nil, queue: .main) { [weak self] _ in
-                    guard let self, self.listenerFailed else { return }
-                    self.listenerRetries = 0
-                    self.start()
+                    // Owner, 2026-10-08: every listener of this chat that is dead comes back, not only
+                    // the message one. A refused header or user listener used to stay dead for good.
+                    self?.reattachIfDead(includePresence: true)
                 }
         }
         // Owner audit 2026-10-06 chat #68: an older page that failed, or came only from the local
@@ -654,8 +656,17 @@ final class ThreadRepository {
         // Conversation doc: the other person's typing flag + their read timestamp.
         convListener?.remove()   // same re-entry rule as the message listener above
         convListener = db.collection("conversations").document(cid)
-            .addSnapshotListener { [weak self] snap, _ in
+            .addSnapshotListener { [weak self] snap, error in
                 guard let self else { return }
+                if snap == nil, error != nil {
+                    // Owner, 2026-10-08: this error used to be ignored, leaving the header, typing and
+                    // read ticks dead for the rest of the visit. Drop the handle so `recovered` or the
+                    // foreground re-attaches it, and let SessionRecovery know the server refused.
+                    print("[Recovery] chat conv listener ended: \(error!.localizedDescription)")
+                    self.convListener = nil
+                    Task { @MainActor in SessionRecovery.noteRefusal(error, "chat-conv") }
+                    return
+                }
                 self.convLoaded = true
                 let d = snap?.data()
                 // Typing + lastRead are hot fields (fire on every keystroke / incoming
@@ -751,8 +762,17 @@ final class ThreadRepository {
         if isOneToOne, !other.isEmpty {
             userListener?.remove()   // same re-entry rule as the message listener above
         userListener = db.collection("users").document(other)
-                .addSnapshotListener { [weak self] snap, _ in
-                    let privacy = (snap?.data()?["privacy"] as? [String: String]) ?? [:]
+                .addSnapshotListener { [weak self] snap, error in
+                    // Owner, 2026-10-08: an error is not "no privacy settings". It used to reset the
+                    // map and record an empty one for calls. Keep what is known, drop the handle so
+                    // it re-attaches, and report the refusal.
+                    guard let snap else {
+                        print("[Recovery] chat user listener ended: \(error?.localizedDescription ?? "?")")
+                        self?.userListener = nil
+                        Task { @MainActor in SessionRecovery.noteRefusal(error, "chat-user") }
+                        return
+                    }
+                    let privacy = (snap.data()?["privacy"] as? [String: String]) ?? [:]
                     self?.otherPrivacy = privacy
                     // 2026-09-24 decision D15: gone or hidden-for-deletion is a deleted account.
                     // A missing doc counts only when the server said so: a cold cache also reports
@@ -773,8 +793,16 @@ final class ThreadRepository {
             presenceListener?.remove()   // same re-entry rule as the message listener above
         presenceListener = db.collection("users").document(other)
                 .collection("presence").document("state")
-                .addSnapshotListener { [weak self] snap, _ in
-                    let d = snap?.data()
+                .addSnapshotListener { [weak self] snap, error in
+                    // Owner, 2026-10-08: a denied presence read is a normal privacy outcome, so it is
+                    // not reported and not retried in a loop. Keep the last known value; the handle is
+                    // dropped so a recovery or a reopen can try again.
+                    guard let snap else {
+                        print("[Recovery] chat presence listener ended (privacy or network): \(error?.localizedDescription ?? "?")")
+                        self?.presenceListener = nil
+                        return
+                    }
+                    let d = snap.data()
                     self?.otherOnline = d?["online"] as? Bool ?? false
                     if let ts = d?["lastActive"] as? Timestamp { self?.otherLastActive = ts.dateValue() }
                 }
@@ -810,6 +838,11 @@ final class ThreadRepository {
                     // the (empty) chat and re-attach after a beat.
                     self.didInitialLoad = true
                     self.listenerFailed = true
+                    // Owner, 2026-10-08: never blank a chat because the server is refusing. Rows already
+                    // in memory stay; if there are none, take the warm cache.
+                    if self.messages.isEmpty, let c = ThreadMessageCache.shared.memoryMessages(for: self.cid), !c.isEmpty {
+                        self.seed(c)
+                    }
                     // 2026-09-28: and if it was the SERVER refusing, the backoff retries below
                     // will be refused too. `SessionRecovery` gets back in and posts `recovered`,
                     // which re-attaches this chat at once instead of waiting out the backoff.
@@ -966,6 +999,19 @@ final class ThreadRepository {
     /// backoff (up to a minute), and the retry re-attached all four listeners to a closed chat with
     /// nothing left to stop them while anything still held the repository.
     @ObservationIgnored private var retryWork: DispatchWorkItem?
+    /// Owner, 2026-10-08: re-attach when any of this chat's listeners is dead. `start()` re-attaches all
+    /// of them together. Presence is left out of the foreground check because a denied presence read
+    /// is normal and would otherwise restart the chat every time the app comes forward.
+    private func reattachIfDead(includePresence: Bool) {
+        guard !cid.isEmpty, !DemoMode.isDemoConversation(cid), listener != nil || listenerFailed else { return }
+        let oneToOne = !otherUid.isEmpty
+        let dead = listenerFailed || listener == nil || convListener == nil
+            || (oneToOne && (userListener == nil || (includePresence && presenceListener == nil)))
+        guard dead else { return }
+        listenerRetries = 0
+        start()
+    }
+
     private func retryStartSoon() {
         listenerRetries += 1
         let delay = min(pow(2.0, Double(listenerRetries)), 60)

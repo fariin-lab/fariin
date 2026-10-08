@@ -315,9 +315,39 @@ final class Crypto {
             keyFetches[uid] = t
             return t
         }
-        let result = await task.value
+        // Owner, 2026-10-08: a hung key read used to hold every send and call that needed this key
+        // for ever. Wait at most 10s; on a timeout this caller gets nil (the send/call fails and can be
+        // retried), the fetch entry is cleared so the next caller starts a fresh read, and the
+        // recovery net hears about the stall. The hung read, if it ever lands, still fills the cache.
+        let result = await Self.raceTimeout(10, task)
         lock.withLock { _ = keyFetches.removeValue(forKey: uid) }
         return result
+    }
+
+    /// First of "the fetch finished" and "`seconds` passed". A continuation, not a task group: a group
+    /// would wait for the hung child on exit and defeat the point.
+    private static func raceTimeout(_ seconds: Double, _ task: Task<Bytes?, Never>) async -> Bytes? {
+        await withCheckedContinuation { (c: CheckedContinuation<Bytes?, Never>) in
+            let once = OnceFlag()
+            Task {
+                let v = await task.value
+                if once.claim() { c.resume(returning: v) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if once.claim() {
+                    print("[Recovery] key fetch timed out after \(Int(seconds))s")
+                    await MainActor.run { SessionRecovery.noteStall("key") }
+                    c.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    private final class OnceFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var taken = false
+        func claim() -> Bool { lock.withLock { if taken { return false }; taken = true; return true } }
     }
 
     /// 2026-09-24 fix-all #118: every member's key for a group seal, looked up in parallel with at
@@ -376,14 +406,25 @@ final class Crypto {
         }
         guard start else { return }
         Task {
-            lock.withLock { pubCache.removeValue(forKey: uid) }
-            // Drop the DISK copy too (same shared dictionary persistPubKey writes), or the next cold
-            // launch would warm the dead key straight back into memory.
-            var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
-            if dict.removeValue(forKey: uid) != nil {
-                UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+            // Owner, 2026-10-08: FETCH FIRST, replace after. This used to delete the good key (memory
+            // and disk) before asking the server, so a refused or offline fetch left the person with
+            // no key at all: their messages showed "..." and sends and calls to them failed until a
+            // later fetch worked. Now the old key stays until the server answers: a key replaces it,
+            // a clear "no key" removes it, an error keeps it.
+            switch await fetchKeyResult(uid, source: .server) {
+            case .key(let b):
+                _ = b   // adoptKey already replaced memory and disk
+            case .noKey:
+                lock.withLock { _ = pubCache.removeValue(forKey: uid) }
+                // The DISK copy too (same shared dictionary persistPubKey writes), or the next cold
+                // launch would warm the dead key straight back into memory.
+                var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
+                if dict.removeValue(forKey: uid) != nil {
+                    UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
+                }
+            case .failed:
+                break   // keep the old key; fetchKeyResult already told the recovery net
             }
-            _ = await fetchKey(uid)
             lock.withLock { _ = keyRefreshInFlight.remove(uid) }
         }
     }
@@ -405,16 +446,27 @@ final class Crypto {
         }
     }
 
-    private func fetchKey(_ uid: String) async -> Bytes? {
+    private enum KeyFetch { case key(Bytes), noKey, failed }
+
+    /// One read of `users/{uid}` told apart three ways. "No key" is only believed when it came from
+    /// the server; an empty answer from the local copy counts as failed so it can never remove a key.
+    private func fetchKeyResult(_ uid: String, source: FirestoreSource = .default) async -> KeyFetch {
         do {
-            let snap = try await db.collection("users").document(uid).getDocument()
+            let snap = try await db.collection("users").document(uid).getDocument(source: source)
             if let b64 = snap.data()?["publicKey"] as? String,
                let data = Data(base64Encoded: b64) {
-                return adoptKey(uid, data)
+                return .key(adoptKey(uid, data))
             }
+            return snap.metadata.isFromCache ? .failed : .noKey
         } catch {
-            print("crypto: preloadKey failed:", error)
+            print("[Recovery] crypto: key fetch failed:", error)
+            await MainActor.run { SessionRecovery.noteRefusal(error, "key") }
+            return .failed
         }
+    }
+
+    private func fetchKey(_ uid: String) async -> Bytes? {
+        if case .key(let b) = await fetchKeyResult(uid) { return b }
         return nil
     }
 

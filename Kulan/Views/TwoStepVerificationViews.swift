@@ -400,11 +400,97 @@ enum TwoStepGate {
               let c = previous.claims["twoStep"] as? [String: Any],
               (c["required"] as? Bool) == true,
               sessionPassed(previous) else { return }
+        // owner, 2026-10-08: a failed renew used to only print, and the phone locked itself out at the
+        // next token refresh (its new auth_time was never added to the server's list). The previous
+        // token stays valid for a while, so: one try now, three more at 2s, 5s, 15s, then a marker on
+        // disk that the next foreground / recovery picks up until that token has expired.
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        if await attemptRenew(token: previous.token) { return }
+        for delay in [2.0, 5.0, 15.0] {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard Auth.auth().currentUser?.uid == uid else { return }
+            if previous.expirationDate <= Date() { break }
+            if await attemptRenew(token: previous.token) { return }
+        }
+        guard Auth.auth().currentUser?.uid == uid else { return }
+        let expiry = previous.expirationDate
+        UserDefaults.standard.set(["uid": uid, "token": previous.token, "expiry": expiry.timeIntervalSince1970] as [String: Any],
+                                  forKey: pendingKey)
+        print("[Recovery] two-step renew failed 4 times; saved to retry until \(expiry)")
+    }
+
+    // MARK: - Pending renew (owner, 2026-10-08)
+
+    private static let pendingKey = "twoStep.pendingRenew"
+    private static let watchLock = NSLock()
+    private static var watching = false
+    private static var renewing = false
+
+    /// Sync helpers so the lock is never held across an await. false when already in that state.
+    private static func setFlag(renewing on: Bool) -> Bool {
+        watchLock.lock(); defer { watchLock.unlock() }
+        if on && renewing { return false }
+        renewing = on
+        return true
+    }
+    private static func markWatching() -> Bool {
+        watchLock.lock(); defer { watchLock.unlock() }
+        if watching { return false }
+        watching = true
+        return true
+    }
+
+    /// One call to the server plus a forced token refresh. true when the server accepted it.
+    private static func attemptRenew(token: String) async -> Bool {
         do {
-            try await AccountCall.run("renewTwoStepSession", ["idToken": previous.token])
+            _ = try await AccountCall.run("renewTwoStepSession", ["idToken": token])
             _ = try? await Auth.auth().currentUser?.getIDTokenResult(forcingRefresh: true)
+            return true
         } catch {
-            print("[twoStep] renew after reauth failed: \(error.localizedDescription)")
+            print("[Recovery] two-step renew failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// A saved renew for the signed-in account whose previous token is still valid, or nil.
+    /// A stale one (other account, or the token has expired) is dropped here.
+    private static func pendingRenew() -> String? {
+        guard let d = UserDefaults.standard.dictionary(forKey: pendingKey),
+              let uid = d["uid"] as? String, let token = d["token"] as? String,
+              let expiry = d["expiry"] as? Double else { return nil }
+        guard Auth.auth().currentUser?.uid == uid, Date().timeIntervalSince1970 < expiry - 5 else {
+            UserDefaults.standard.removeObject(forKey: pendingKey)
+            return nil
+        }
+        return token
+    }
+
+    /// Tries the saved renew once. true when there was one and it went through.
+    @discardableResult
+    static func retryPendingRenew() async -> Bool {
+        guard setFlag(renewing: true) else { return false }
+        defer { _ = setFlag(renewing: false) }
+        guard let token = pendingRenew() else { return false }
+        if await attemptRenew(token: token) {
+            UserDefaults.standard.removeObject(forKey: pendingKey)
+            print("[Recovery] pending two-step renew went through")
+            return true
+        }
+        return false
+    }
+
+    /// Call ONCE at launch. Retries a saved renew on app foreground and on `SessionRecovery.recovered`.
+    /// `needsTwoStep` is handled by RootView, which tries the renew FIRST and shows the password page
+    /// only if it fails: one caller, so a second attempt cannot lose the `renewing` flag race and
+    /// raise the page while the first one is about to succeed.
+    static func startPendingRenewWatch() {
+        guard markWatching() else { return }
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
+            Task { await retryPendingRenew() }
+        }
+        nc.addObserver(forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
+            Task { await retryPendingRenew() }
         }
     }
 

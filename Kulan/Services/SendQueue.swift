@@ -212,6 +212,10 @@ enum SendQueue {
                 // Still offline: leave it queued for the next launch. 2026-09-24 decision
                 // D-composer-2: a rule refusal is flagged instead, so it stops being retried for ever
                 // and the chat shows it as failed.
+                // Owner, 2026-10-08: and either way tell the recovery net. A refused (or unreachable)
+                // send used to fail on its own and never woke it. The entry stays queued/flagged as
+                // before, so nothing is dropped or sent twice.
+                SessionRecovery.noteRefusal(error, "send")
                 if isPermanentRefusal(error) { markRefused(clientId: e.clientId) }
             }
         }
