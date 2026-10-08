@@ -234,6 +234,9 @@ final class ConnectionStatus {
     private func heartbeat() {
         guard hasRoute, let uid = probeUid, Auth.auth().currentUser != nil,
               UIApplication.shared.applicationState == .active, heartbeatStarted == nil else { return }
+        // The server answered something in the last 30s (a listener snapshot, a read): the stream is
+        // alive, and a keepalive read would only cost money.
+        guard Date().timeIntervalSince(lastServerAnswer) >= 30 else { return }
         heartbeatGen += 1
         let gen = heartbeatGen
         heartbeatStarted = Date()
@@ -256,6 +259,9 @@ final class ConnectionStatus {
             guard let self, self.heartbeatGen == gen, self.heartbeatStarted != nil else { return }
             self.heartbeatStarted = nil
             self.heartbeatGen += 1   // the late answer, if it ever comes, is ignored
+            // A slow read on a line whose listeners are still answering is not a stall (check,
+            // 2026-10-08: this reset the network every ~45s on a slow but working connection).
+            guard Date().timeIntervalSince(self.lastServerAnswer) >= Self.stallAfter else { return }
             print("[Recovery] heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
             SessionRecovery.noteStall("heartbeat")
         }

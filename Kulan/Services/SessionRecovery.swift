@@ -95,12 +95,21 @@ enum SessionRecovery {
 
     /// `ConnectionStatus` heard the server (a server snapshot, or a server read that answered): the
     /// stall episode is over, and the next stall starts from a fresh reset that posts `recovered`.
+    /// One answer does not end an episode: a slow line answers now and then. The episode ends after
+    /// the server has kept answering for 60s (check, 2026-10-08: ending it on the first snapshot
+    /// let a slow but working line start a fresh, un-spaced reset + `recovered` every ~45s).
+    @MainActor private static var answeringSince: Date?
+
     @MainActor static func noteServerAnswered() {
-        guard stallStep > 0 || stallEpisodeRecovered else { return }
-        print("[Recovery] server answered, stall episode over")
+        guard stallStep > 0 || stallEpisodeRecovered else { answeringSince = nil; return }
+        let now = Date()
+        guard let since = answeringSince else { answeringSince = now; return }
+        guard now.timeIntervalSince(since) >= 60 else { return }
+        print("[Recovery] server kept answering for 60s, stall episode over")
         stallStep = 0
         nextStallAt = .distantPast
         stallEpisodeRecovered = false
+        answeringSince = nil
     }
 
     /// Signed out: nothing carries over to the next account.
@@ -113,6 +122,7 @@ enum SessionRecovery {
         stallStep = 0
         nextStallAt = .distantPast
         stallEpisodeRecovered = false
+        answeringSince = nil
     }
 
     @MainActor static func noteRefusal(_ error: Error?, _ from: String) {
@@ -163,6 +173,7 @@ enum SessionRecovery {
         guard Auth.auth().currentUser != nil, isActive, !stallRunning else { return }
         // No route off the phone: an outage, not a stuck stream. Nothing to reset until it is back.
         guard ConnectionStatus.shared.routeUp else { return }
+        answeringSince = nil   // a fresh stall restarts the "kept answering for 60s" clock
         let now = Date()
         guard now >= nextStallAt else { return }
         stallStep += 1

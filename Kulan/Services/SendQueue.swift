@@ -97,10 +97,14 @@ enum SendQueue {
     private static let recoveryObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
         forName: SessionRecovery.recovered, object: nil, queue: .main) { _ in
         let cutoff = Date().timeIntervalSince1970 - 30 * 60
+        // The chat on screen is not drained here (ThreadView owns it), so its refused bubble keeps
+        // its Resend/Delete instead of sitting "pending" until the chat is left (check, 2026-10-08).
+        let open = MainActor.assumeIsolated { AppRouter.shared.activeChatId }
         lock.lock()
         var map = load()
         var cleared = 0
-        for (k, e) in map where e.refused == true && (e.refusedCount ?? 1) < 2 && (e.refusedAt ?? 0) >= cutoff {
+        for (k, e) in map where e.refused == true && e.cid != open
+            && (e.refusedCount ?? 1) < 2 && (e.refusedAt ?? 0) >= cutoff {
             map[k]?.refused = nil
             cleared += 1
         }
