@@ -369,7 +369,7 @@ struct SettingsView: View {
                     if let uid = profile.me?.id { VerifiedMark(uid: uid, size: 18, explains: true) }
                 }
                 if let h = profile.me?.handle, !h.isEmpty {
-                    Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
+                    Text("@\(h)").font(.body).foregroundStyle(.secondary)   // owner 2026-10-10: one size, as My Profile
                 }
             }
             .contentShape(Rectangle())
@@ -432,7 +432,7 @@ struct MyProfileView: View {
             AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 96)
             Text(profile.me?.name ?? "You").font(.title.weight(.bold))
             if let h = profile.me?.handle, !h.isEmpty {
-                Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
+                Text("@\(h)").font(.body).foregroundStyle(.secondary)   // owner 2026-10-10: one size, as My Profile
             }
         }
         .frame(maxWidth: .infinity)

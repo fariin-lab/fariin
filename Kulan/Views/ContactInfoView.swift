@@ -394,7 +394,15 @@ struct ContactInfoView: View {
     private func tapMessage() {
         let audience = Audience(rawValue: targetPrivacy["messages"] ?? "") ?? .everyone
         if audience == .contacts && !isFriend {
-            showPinPrompt = true
+            // Owner decision 2026-10-10: the Chat Key prompt only for someone who HAS a key; with
+            // none, the chat opens on its "can't message" notice (no key button there either).
+            if let known = ChatPin.cachedKeyExists(uid: otherUid) {
+                if known { showPinPrompt = true } else { openChat = true }
+            } else {
+                Task { @MainActor in
+                    if await ChatPin.keyExists(uid: otherUid) == true { showPinPrompt = true } else { openChat = true }
+                }
+            }
         } else {
             openChat = true
         }
@@ -1836,8 +1844,8 @@ struct ContactInfoView: View {
             // height change was the up/down "jump" when opening a profile from Calls (cold
             // data) vs from a chat (warm). Reserving the row makes both equally smooth.
             Text(handle.isEmpty ? " " : "@\(handle)")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .frame(minHeight: 20)
+                .font(.body).foregroundStyle(.secondary)   // owner 2026-10-10: one size, as My Profile
+                .frame(minHeight: 22)
             // Bio shown as centered text under the handle (like a group's description under the member
             // count) — not a labeled "bio" card.
             if !gatedAbout.isEmpty {
@@ -1937,8 +1945,8 @@ struct ContactInfoView: View {
                 VerifiedMark(uid: otherUid, size: 20, explains: true)
             }
             Text(handle.isEmpty ? " " : "@\(handle)")
-                .font(.subheadline).foregroundStyle(text.opacity(0.82))
-                .frame(minHeight: 20)
+                .font(.body).foregroundStyle(text.opacity(0.82))   // owner 2026-10-10: one size
+                .frame(minHeight: 22)
             if !gatedAbout.isEmpty {
                 Text(gatedAbout)
                     .font(.subheadline).foregroundStyle(text.opacity(0.82))

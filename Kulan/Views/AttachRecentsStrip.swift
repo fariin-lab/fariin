@@ -293,6 +293,10 @@ struct AttachRecentsStrip: View {
         }
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
         .task {
+            // Owner, 2026-10-10: "make it automatic when user clicks +". Never asked yet = ask now,
+            // as the sheet opens, instead of waiting for a tap on an "Allow Photos" tile. A refusal
+            // cannot be asked again (iOS shows its prompt once); that case keeps the Settings tile.
+            if status == .notDetermined { request(); return }
             guard status == .authorized || status == .limited else { return }
             // Access may have been granted since the chat opened, in which case nothing has
             // registered yet. Idempotent — see `RecentsCache.startWatching`.
@@ -555,7 +559,7 @@ struct AttachRecentsStrip: View {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { s in
             DispatchQueue.main.async {
                 status = s
-                if s == .authorized || s == .limited { load() }
+                if s == .authorized || s == .limited { RecentsCache.startWatching(); load(); loadAlbums() }
             }
         }
     }

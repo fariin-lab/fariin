@@ -167,23 +167,29 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private func checkStop() -> Bool {
         guard running, !ended, control?.stopRequested == true else { return false }
         NSLog("[ScreenShare] extension: stop requested by the app")
-        finish(message: NSLocalizedString("Screen sharing has stopped", comment: "Broadcast error"))
+        // Owner, 2026-10-10: Stop Sharing (and a call that ended) ends quietly, with no
+        // "Live Broadcast ... has stopped" alert, as the reference app does.
+        finish(message: nil)
         return true
     }
 
-    /// Ends the broadcast with a readable message (ReplayKit always shows it in an alert; there is
-    /// no silent way for an extension to end its own broadcast).
-    private func finish(message: String) {
+    /// Ends the broadcast. With a message, ReplayKit shows it in an alert (a real failure the user
+    /// should hear about). With nil the broadcast ends with NO alert: ReplayKit only alerts when it is
+    /// handed an error. Swift types the parameter non-optional, so the nil goes through the
+    /// Objective-C runtime (`perform`), the same call an Objective-C caller makes with `nil`.
+    private func finish(message: String?) {
         // May be called on lifeQueue or (before start) on ReplayKit's thread.
-        let error = NSError(domain: "com.kulan.screenshare", code: 1,
-                            userInfo: [NSLocalizedDescriptionKey: message])
         let alreadyEnded = onLifeQueue { () -> Bool in
             let was = self.ended
             self.teardown()
             return was
         }
-        if !alreadyEnded {
-            finishBroadcastWithError(error)
+        guard !alreadyEnded else { return }
+        if let message {
+            finishBroadcastWithError(NSError(domain: "com.kulan.screenshare", code: 1,
+                                             userInfo: [NSLocalizedDescriptionKey: message]))
+        } else {
+            perform(#selector(RPBroadcastSampleHandler.finishBroadcastWithError(_:)), with: nil)
         }
     }
 

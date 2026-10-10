@@ -220,6 +220,7 @@ final class CallService: NSObject {
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 cameraStarting = false   // 1:1 audit r2 E1, 2026-10-08
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
+                autoExpandedForVideo = false
                 isLocalExpanded = false; pipCornerLeft = false; pipCornerTop = false
                 cardOffset = .zero; cardBase = .zero; cardStashed = false; cardFrame = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
@@ -503,6 +504,10 @@ final class CallService: NSObject {
     /// person who ANSWERED — their tap-to-hide-the-controls did nothing while the caller's worked, which
     /// is exactly what two phones showed.
     private func noteVideo() { if cameraOn || remoteCameraOn { everVideo = true } }
+    /// Owner, 2026-10-10: their camera coming on brings a minimized call back fullscreen ONCE per
+    /// call (the voice-to-video moment). After that, their camera going off and on again shows in
+    /// the mini window and the call stays minimized until I open it. Cleared when the call ends.
+    private var autoExpandedForVideo = false
     /// Whatever is on the BIG screen right now — which is what the floating PiP window must show when you
     /// leave the app. The PiP was hard-wired to the remote feed, so after tapping the tile to swap
     /// yourself fullscreen, leaving the app put the OTHER person in the floating window: the big screen
@@ -742,6 +747,10 @@ final class CallService: NSObject {
     private var shareOwnsCamera: Bool { screenSharing && !shareUsesTrack }
     /// The camera button stays usable while sharing (dual mode). Before a share: whether one would be.
     var canUseCameraWhileSharing: Bool { screenSharing ? shareUsesTrack : dualModeAvailable }
+    /// Owner, 2026-10-10: my screen share and my camera never run together, in either mode. While a
+    /// share runs or is being started the camera cannot come on (setMyCamera refuses, the button is
+    /// dimmed); the share turns a running camera off as it begins (beginScreenShare).
+    var shareBlocksCamera: Bool { screenSharing || screenSharePhase != .off }
     /// Dual-mode source and track ("screen0"), alive only for a dual-mode share.
     @ObservationIgnored private var screenSource: RTCVideoSource?
     @ObservationIgnored private var screenTrack: RTCVideoTrack?
@@ -1854,6 +1863,7 @@ final class CallService: NSObject {
         // The doc seeds `cams` from `cameraOn` when it is created, and broadcastCameraState covers
         // a doc that already exists.
         guard state == .active || state == .reconnecting || (state == .outgoing && !on) else { return }
+        if on, shareBlocksCamera { return }   // owner 2026-10-10: stop sharing first
         if on { cameraDenied = false }   // audit M-011: a new try; a refusal sets it again
         // A FALLBACK share owns the track while it runs (the camera button is disabled then; a
         // dual-mode share leaves the camera to the user). Toggling here
@@ -2007,6 +2017,8 @@ final class CallService: NSObject {
     func toggleScreenShare() {
         if screenSharing { stopScreenShareByUser(); return }
         guard state == .active, connectedDate != nil else { return }
+        // Owner, 2026-10-10: one sharer at a time (the menu item is dimmed too).
+        guard !remoteScreenSharing else { return }
         // A group call's LiveKit room listens on the same socket path while it shares.
         guard !inGroupCall else { return }
         guard openShareSession() else { return }
@@ -2129,6 +2141,16 @@ final class CallService: NSObject {
         guard state == .active || state == .reconnecting, !isHeld else { stopScreenShare(); return }
         screenSharePendingTimeout?.cancel(); screenSharePendingTimeout = nil
         clearPickerReturn()
+        // Owner, 2026-10-10: one sharer at a time. They began first (or a simultaneous start went
+        // their way, see handleRemoteCallState): this start ends here, before anything is sent.
+        if remoteScreenSharing {
+            stopScreenShare(notice: "\(otherName) is sharing their screen")
+            return
+        }
+        // Owner, 2026-10-10: the camera goes OFF as the share begins, in both modes, and stays off
+        // after it (he turns it back on himself). Done while `screenSharing` is still false, so
+        // setMyCamera is not refused by `shareOwnsCamera` and `cams` false is announced.
+        if cameraOn { setMyCamera(on: false) }
         // Dual mode: the screen track goes onto the screen transceiver's sender. A track swap, no
         // renegotiation: the m-line was negotiated at setup.
         var screenSender: RTCRtpSender?
@@ -3033,6 +3055,17 @@ final class CallService: NSObject {
             if on != remoteScreenSharing {
                 remoteScreenSharing = on
                 screenChanged = true
+                // Owner, 2026-10-10: one sharer at a time. Their share arriving while mine is only
+                // being picked cancels mine. Both live (a start on each phone at the same moment,
+                // before either saw the other): the same rule on both phones keeps exactly one, the
+                // share of the lower uid, so the two can never disagree.
+                if on, screenShareSession != nil || screenSharing {
+                    if !screenSharing {
+                        stopScreenShare(signal: false)
+                    } else if me > otherUid {
+                        stopScreenShare(notice: "\(otherName) is sharing their screen")
+                    }
+                }
                 // Their screen goes BIG: un-swap if I had my own feed fullscreen.
                 if on, isLocalExpanded { isLocalExpanded = false }
                 // Dual mode: no `cams` flip comes with it, so do here what that flip does in fallback
@@ -3056,9 +3089,15 @@ final class CallService: NSObject {
             // (minimized cleared NOW so the foregrounding presents it without another step).
             // 1:1 audit r2 I2, 2026-10-08: not while the system PiP window is up. It already shows
             // their video; un-minimizing tore down its source view and closed the window.
-            if on, state == .active || state == .reconnecting, !CallPiPController.shared.isSystemPiPActive {
-                minimized = false
-                if UIApplication.shared.applicationState != .active { postVideoSharingNote() }
+            // Owner, 2026-10-10: only the FIRST time in a call (`autoExpandedForVideo`), and not for a
+            // call that started as video (it never went voice-to-video).
+            if on, !autoExpandedForVideo, state == .active || state == .reconnecting,
+               !CallPiPController.shared.isSystemPiPActive {
+                autoExpandedForVideo = true
+                if !startedAsVideo {
+                    minimized = false
+                    if UIApplication.shared.applicationState != .active { postVideoSharingNote() }
+                }
             }
             // Their video is what the swapped layout is BUILT ON: expanded means my feed is fullscreen
             // and theirs is in the tile. If they kill their camera while we are swapped, that tile has

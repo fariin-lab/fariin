@@ -223,6 +223,25 @@ enum ChatPin {
         return "Too many attempts. Try again in \(mins) minute\(mins == 1 ? "" : "s")."
     }
 
+    /// Owner decision 2026-10-10: "Use Chat Key" is offered only for people who HAVE a key. True /
+    /// false from the server (`chatKeyExists`); nil when it could not answer (offline, old server),
+    /// which callers treat as "no key", so the option never shows on a guess. Cached per person for
+    /// this launch; a later true is never downgraded by a failed refresh.
+    @MainActor private static var keyExistsCache: [String: Bool] = [:]
+
+    @MainActor
+    static func cachedKeyExists(uid: String) -> Bool? { keyExistsCache[uid] }
+
+    @MainActor
+    @discardableResult
+    static func keyExists(uid: String) async -> Bool? {
+        guard !uid.isEmpty else { return nil }
+        guard let r = try? await call("chatKeyExists", ["uid": uid], timeout: 8),
+              let exists = r["exists"] as? Bool else { return keyExistsCache[uid] }
+        keyExistsCache[uid] = exists
+        return exists
+    }
+
     /// `onFailure` is the sentence for everything the server did not word itself: the verify
     /// sentence by default (it must give nothing away), a plain "couldn't save" for my own pin.
     private static func call(_ name: String, _ data: [String: Any],

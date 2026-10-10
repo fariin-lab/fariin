@@ -91,8 +91,13 @@ struct CallView: View {
     // bring them back, so for them the buttons simply stay.
     // 1:1 audit r2 H3, 2026-10-08: and only while there is a picture to clear the way for (their live
     // video, or their shared screen). With their camera off the controls stay, as in the reference app.
+    // Owner, 2026-10-10: "both users must be able to tap to hide, regardless of whether their own
+    // camera is on". Any camera on either side (or a shared screen) lets the controls go; it used to
+    // need THEIR live frames, so the side whose own camera was the only one on could never hide them.
+    // Both cameras off = nothing to clear the way for, the controls stay.
     private var autoHideEnabled: Bool {
-        call.everVideo && connectedCall && !UIAccessibility.isVoiceOverRunning && (hasRemote || stageShown)
+        connectedCall && !UIAccessibility.isVoiceOverRunning
+            && (call.cameraOn || call.remoteCameraOn || hasRemote || stageShown)
     }
 
     private func armAutoHide() {
@@ -420,6 +425,9 @@ struct CallView: View {
                 .zIndex(3)
             }
             .onAppear { armAutoHide(); Self.haptic.prepare() }
+            // A camera coming on (either side) or the call connecting starts the hide clock; the
+            // last camera going off brings the controls back for good (armAutoHide's voice branch).
+            .onChange(of: autoHideEnabled) { _, _ in armAutoHide() }
             // Screen share v3: landscape is allowed only while this screen shows their shared
             // screen. Their share ending, the call ending or a minimize brings portrait back.
             .onChange(of: landscapeWanted, initial: true) { _, on in OrientationLock.allowLandscape(on) }
@@ -716,9 +724,11 @@ struct CallView: View {
                     }
                 }
             }
-            // r2 H2: the name stays when the controls go; it is a label, so taps pass to the screen.
-            .shadow(color: .black.opacity(controlsVisible ? 0 : 0.5), radius: 4)
+            // Owner, 2026-10-10 (reverses r2 H2): the name and the timer leave WITH the controls, so a
+            // hidden screen is the video alone; a tap brings all of it back together.
+            .opacity(controlsVisible ? 1 : 0)
             .allowsHitTesting(controlsVisible)
+            .accessibilityHidden(!controlsVisible)
             Spacer()
 
             // No "Minimize" here: the chevron on the left already does it, and two controls for the
@@ -741,7 +751,9 @@ struct CallView: View {
                 }
                 // Audit M-165, 2026-10-07: STOPPING is never disabled. During "Reconnecting…" the
                 // rule above greyed out Stop Sharing too, and the share could not be ended from here.
-                .disabled(!sharingOn && !(call.state == .active && call.connectedDate != nil))
+                // Owner, 2026-10-10: one sharer at a time, so dimmed while THEY share.
+                .disabled(!sharingOn && (!(call.state == .active && call.connectedDate != nil)
+                                         || call.remoteScreenSharing))
                 Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
             } label: { topCircle("ellipsis") }
             .buttonStyle(CallControlStyle())
@@ -1014,7 +1026,9 @@ struct CallView: View {
     /// same rule in `setMyCamera`. Dimmed while my screen is shared only in a fallback share (the
     /// share owns my one video track); in dual mode the camera works beside the share.
     private var cameraButtonEnabled: Bool {
-        guard !call.screenSharing || call.canUseCameraWhileSharing else { return false }
+        // Owner, 2026-10-10: dimmed during ANY share of mine (and while one is being started), in
+        // both modes. Turning the camera OFF is never needed then: the share turned it off.
+        guard !call.shareBlocksCamera else { return false }
         switch call.state {
         case .active, .reconnecting: return true
         case .outgoing:              return call.cameraOn
@@ -1968,8 +1982,12 @@ struct FloatingCallWindow: View {
     }
 
     private var window: some View {
+        // Owner, 2026-10-10: the layout follows what is LIVE (`isVideo`: a camera or a share on
+        // either side), not the sticky "was ever video". A voice call whose video screen was opened
+        // and closed again kept the video card, which with both cameras off shows ONE face; the
+        // voice card shows both people.
         Group {
-            if call.isVideoCall { videoWindow } else { voiceWindow }
+            if call.isVideo { videoWindow } else { voiceWindow }
         }
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1987,7 +2005,7 @@ struct FloatingCallWindow: View {
         // it; the voice card puts the same words under the face instead. Either way a minimized call
         // that has not been answered yet says so.
         .overlay(alignment: .bottom) {
-            if call.isVideoCall, let stage = stageLabel {
+            if call.isVideo, let stage = stageLabel {
                 Text(stage)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.white)

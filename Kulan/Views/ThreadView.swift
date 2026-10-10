@@ -1952,6 +1952,13 @@ struct ThreadView: View {
         // ⚠️ ASKED WHETHER OR NOT THEY HAVE A KEY. His words were "if I have a Chat Key enabled",
         // but who has one is private by his own earlier spec (§34), and the app cannot know without
         // publishing that fact on every profile. One question with a Not Now costs less than that.
+        // Owner decision 2026-10-10: ask the server once per chat whether they have a Chat Key (a
+        // cached answer paints at once). 1:1 only; a group has no key.
+        .task(id: cid) {
+            guard !isGroup, !otherUid.isEmpty else { otherHasKey = false; return }
+            otherHasKey = ChatPin.cachedKeyExists(uid: otherUid) ?? false
+            otherHasKey = await ChatPin.keyExists(uid: otherUid) ?? false
+        }
         .onChange(of: requestStance) { old, new in
             // ⛔ THE KEYBOARD GOES WITH THE COMPOSER — owner, 2026-09-25: after the first message the
             // box became the "Message request sent" card, but the hidden field kept the keyboard,
@@ -1960,6 +1967,9 @@ struct ThreadView: View {
             guard old == .firstMessage, new == .awaitingReply else { return }
             let asked = "chatKeyAsked.\(cid)"
             guard !UserDefaults.standard.bool(forKey: asked) else { return }
+            // Owner decision 2026-10-10: only asked when they HAVE a key. Not remembered as asked
+            // otherwise, so a key they set later is still offered here.
+            guard otherHasKey else { return }
             UserDefaults.standard.set(true, forKey: asked)
             showKeyAsk = true
         }
@@ -2699,6 +2709,9 @@ struct ThreadView: View {
     /// A correct key has just been accepted — see the sheet's success handler (audit U4). Clears
     /// itself; the composer still waits on the conversation's own `accepted`.
     @State private var keyAccepted = false
+    /// Owner decision 2026-10-10: they HAVE a Chat Key (server `chatKeyExists`). Only then is "Use
+    /// Chat Key" offered anywhere in this chat; false until the server says yes.
+    @State private var otherHasKey = false
     @State private var cachedConv: Conversation?
     private var conversation: Conversation? { cachedConv }
     private var isGroup: Bool { conversation?.isGroup ?? false }
@@ -7274,9 +7287,11 @@ struct ThreadView: View {
                     .multilineTextAlignment(.center)
                 // The pin goes past the wait too (owner's spec, 2026-09-11 §5): a friend who told
                 // you their number should not have to notice your request first.
-                Button("Use Chat Key") { showPinEntry = true }
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.top, 4)
+                if otherHasKey {
+                    Button("Use Chat Key") { showPinEntry = true }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.top, 4)
+                }
             }
         }
     }
@@ -7303,10 +7318,13 @@ struct ThreadView: View {
                     // ⛔ AND THE WAY IN — owner's spec, 2026-09-11, with the reference app's
                     // "doesn't follow you. If you know their X Number you can message them now"
                     // screenshot. The sentence names the one door that is still open.
-                    Text("They only accept messages from people who know their Chat Key. If you know it, you can message them now.")
+                    Text(otherHasKey
+                         ? "They only accept messages from people who know their Chat Key. If you know it, you can message them now."
+                         : "They only accept messages from people in their chats.")
                         .font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
+                if otherHasKey {
                 Button { showPinEntry = true } label: {
                     Text("Use Chat Key").font(.body.weight(.semibold))
                         .frame(maxWidth: .infinity).frame(height: ChatNoticeButton.height)
@@ -7330,6 +7348,7 @@ struct ThreadView: View {
                 // — white-on-black or black-on-white — and neither can be right on its own.
                 .foregroundStyle(Theme.onAccent(dark))
                 .liquidGlass(ChatNoticeButton.shape, interactive: true, tint: Theme.accent(dark))
+                }
             }
         }
     }

@@ -736,7 +736,10 @@ enum MessageRowModelBuilder {
                              tapTargetId: m.isRestrictRequest ? Self.restrictRequestTarget : nil,
                              onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
         }
-        let who = ctx.nameFor(m.authorId)
+        // Owner, 2026-10-10: always "You" for my own change. `nameFor` returns MY NAME for my uid in
+        // one of the chat's two contexts (it is also used for sender labels), so the line flipped
+        // between "You" and "adnan abdi". Same rule as the Restricted Chat notices above.
+        let who = m.authorId == ctx.me ? "You" : ctx.nameFor(m.authorId)
         let line = secs > 0
             ? " \(who) set disappearing message time to \(ChatService.disappearLabel(secs))."
             : " \(who) turned off disappearing messages."
