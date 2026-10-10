@@ -372,6 +372,7 @@ final class CallService: NSObject {
         acceptedMediaWork?.cancel(); acceptedMediaWork = nil   // audit M-008: media came up in time
         mark("mediaUp")          // still the moment the user stops waiting, which is what we measure
         writeTimeline()
+        if let id = callId { recordAudioFlow(callId: id) }   // 2026-10-10: audio evidence
         CallKitManager.shared.reportConnected()
         // Screen share v3: open the screen m-line now if the callee is v3 (caps already read). A
         // beat later so the answer's own work settles first; call-doc snapshots retry it anyway.
@@ -3744,6 +3745,37 @@ final class CallService: NSObject {
         guard inLiveCall, !isHeld, !tearingDown, callAudioUnitMayStart else { return }
         let rtc = RTCAudioSession.sharedInstance()
         if !rtc.isAudioEnabled { rtc.isAudioEnabled = true }
+        mark("audioUnitOn")   // 2026-10-10: audio evidence in callTiming
+    }
+
+    /// 2026-10-10 (owner: "connected but we did not hear each other"): 5 s into a connected call,
+    /// how much AUDIO actually went out and came in, and whether the audio unit and the system call
+    /// audio are up, written into this call's callTiming next to the connection steps. A silent call
+    /// then says which phone's audio failed. Read-only stats; nothing about the call changes.
+    private func recordAudioFlow(callId id: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, self.callId == id, let pc = self.pc,
+                  self.state == .active || self.state == .reconnecting else { return }
+            let role = self.isCaller ? "caller" : "callee"
+            let unitOn = RTCAudioSession.sharedInstance().isAudioEnabled
+            let sessionUp = self.callAudioLive
+            self.sharedStatistics(pc, maxAge: 1) { [weak self] report in
+                var tx = 0.0, rx = 0.0
+                for s in report.statistics.values {
+                    let kind = (s.values["kind"] as? String) ?? (s.values["mediaType"] as? String)
+                    guard kind == "audio" else { continue }
+                    if s.type == "outbound-rtp" { tx += (s.values["bytesSent"] as? NSNumber)?.doubleValue ?? 0 }
+                    if s.type == "inbound-rtp" { rx += (s.values["bytesReceived"] as? NSNumber)?.doubleValue ?? 0 }
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.db.collection("callTiming").document(id).setData([role: [
+                        "audio5s": ["txBytes": tx, "rxBytes": rx, "unitOn": unitOn, "sessionUp": sessionUp,
+                                    "muted": self.isMuted],
+                    ]], merge: true)
+                }
+            }
+        }
     }
 
     /// The call's own session setup: the category and Bluetooth options CallKit's didActivate sets,
@@ -6512,6 +6544,14 @@ final class CallService: NSObject {
             if self.callId == id, self.state != .ended, self.state != .idle {
                 self.wasAccepted = false
                 self.recordWritten = true
+                // Owner, 2026-10-10 (call 46A94 at 15:01 UTC: answered 7 s after the caller hung up,
+                // then held "Connecting..." with the call audio up for 13 s): the call is over, so it
+                // ends now, locally, the same clean way as answered-elsewhere: the system call is
+                // closed, which deactivates the call audio, and no write fights the ended doc.
+                self.mark("acceptLostToCancel")
+                self.ringingWatcher?.remove(); self.ringingWatcher = nil
+                self.endReason = .missed
+                self.finishCall(updateRemote: false, clearCallKit: true, localUser: true)
             }
             let cid = [self.me, peer].sorted().joined(separator: "_")
             Task {
