@@ -1327,6 +1327,9 @@ struct CallView: View {
                 // solid white pop, where glass would just mute the contrast.
                 .background(active ? AnyShapeStyle(.white) : AnyShapeStyle(.clear), in: Circle())
                 .liquidGlass(Circle(), interactive: true, enabled: !active)
+                // Owner, 2026-10-10: the WHOLE circle is the target. Only the glyph took the tap:
+                // a clear fill is not hit-testable, so the ring around the icon did nothing.
+                .contentShape(Circle())
         }
         .buttonStyle(CallControlStyle())
         .accessibilityLabel(label)
@@ -1342,6 +1345,7 @@ struct CallView: View {
                 .frame(width: 52, height: 52)
                 // Red Liquid Glass (still unmistakably the hang-up button, but native glass).
                 .liquidGlass(Circle(), interactive: true, tint: Color(.systemRed))
+                .contentShape(Circle())   // 2026-10-10: the whole circle, as the other buttons
         }
         .buttonStyle(CallControlStyle())
         .accessibilityLabel("End call")   // #19
