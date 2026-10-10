@@ -1033,8 +1033,11 @@ struct CallView: View {
     /// The card under the header and the two people under it. Fixed geometry: the header and the
     /// call buttons fade over their own space, so nothing jumps when the controls hide.
     private func shareLayoutView(_ geo: GeometryProxy) -> some View {
-        let top = max(headerHeight, winInsets.top + 76) + 4
-        let bottom = winInsets.bottom + 22 + 76 + 14
+        // Owner, 2026-10-10 ("too much empty space top and bottom, zoom in"): with the controls
+        // away, the card rises to just under the status bar and the tiles sink to the bottom edge;
+        // with them up, the layout clears the header and the call buttons as before.
+        let top = controlsVisible ? max(headerHeight, winInsets.top + 76) + 4 : winInsets.top + 8
+        let bottom = controlsVisible ? winInsets.bottom + 22 + 76 + 14 : max(winInsets.bottom, 12) + 4
         let tileH: CGFloat = min(150, max(96, geo.size.height * 0.17))
         return VStack(alignment: .leading, spacing: 12) {
             shareCard
@@ -1048,10 +1051,12 @@ struct CallView: View {
                           mirror: call.usingFrontCamera, name: call.myName, photo: call.myPhotoUrl, height: tileH)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 8)
         .padding(.top, top)
         .padding(.bottom, bottom)
         .frame(width: geo.size.width, height: geo.size.height)
+        .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.9),
+                   value: controlsVisible)
         .transition(.opacity)
     }
 
