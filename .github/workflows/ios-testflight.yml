@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: YOUR 10-10 REPORTS.
+            THIS BUILD: CALLING EACH OTHER, DECLINE, SCREEN SHARE LAYOUT.
+            CALLS: when you both call each other at the same moment you are connected into one call (no dropped call, no silent ring). Pressing Call on someone who is ringing you answers them. A declined call never rings a second time. A call that was busy, ended or lost the tie never shows as a ring.
+            SCREEN SHARE: while you share, "You're sharing your screen" fills the screen and the other person floats in the small window (their video, or their photo with the camera off). While you watch their share, the small window shows their camera, or yours when theirs is off.
+            CALL SCREEN: when they mute, "Muted" shows between their name and the timer.
+            PLEASE TEST: both call each other at the same second; decline a call and wait 10 seconds; share your screen with the other camera on and off; watch their share with your camera on; mute and unmute.
+
+            EARLIER (build 9e5c3d4d): YOUR 10-10 REPORTS.
             CALLS ARRIVE AGAIN (server fix, already live): a phone with the app closed, in the background or locked rings again.
             CALL SCREEN: tap the screen to hide the buttons works on both phones when either camera is on; the name and timer hide with the buttons. A minimized call opens full screen by itself only the first time their camera comes on while minimized. The mini window shows both people after the video screen was opened and closed.
             SCREEN SHARE: your camera turns off when you share and cannot come on until you stop; only one person can share at a time; Stop Sharing no longer shows the "Live Broadcast has stopped" message.
