@@ -1381,30 +1381,24 @@ enum ChatService {
                 : (try? await Crypto.shared.encryptForConversation(cid, tiny))
         }
 
-        // ⛔ THE MESSAGE IS WRITTEN NOW, BEFORE THE UPLOAD IS COLLECTED.
-        //
-        // It used to be written after `try await uploadedURL`, which meant the person being sent a
-        // photo had NOTHING until the sender's entire upload had finished — no bubble, no blurred
-        // preview, no progress, and then suddenly a picture. On a slow connection with a large photo
-        // that is many seconds of them not knowing anything was sent (owner, 2026-08-16).
-        //
-        // Everything the recipient needs to draw a real bubble already existed by this line: the
-        // blurhash, the caption, the reply, and the exact pixel size. It was simply being held back
-        // behind the bytes. So the message goes out here carrying all of it and `uploading: true`,
-        // and the media is attached below when the upload lands.
-        //
-        // ⚠️ THIS REQUIRES THE MATCHING firestore.rules BRANCH TO BE DEPLOYED FIRST. The message
-        // update rule is a `hasOnly` allow-list, and without the new branch the second write is
-        // refused by the database — every photo would stay a permanent blur.
+        // ⛔ THE MESSAGE IS WRITTEN ONLY AFTER THE UPLOAD HAS FINISHED — owner, 2026-10-10,
+        // reversing 2026-08-16: "do not deliver the image while the upload is in progress; the moment
+        // it reaches 100%, deliver it". The reference messengers do the same: the sender sees their
+        // photo with its progress ring (the optimistic bubble, unchanged), the recipient gets nothing
+        // until the bytes are there, and a Cancel before that point sends nothing at all. The old
+        // order put a blurred bubble with a spinner on the recipient's phone during the whole upload.
         try await ensureConv?.value
+        let url = try await uploadedURL
+        if let clientId { await MediaSend.shared.markItemDone(clientId) }
+        // Seed the cache with the plaintext image under its URL so when the optimistic bubble
+        // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
+        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
 
-        // The LAST moment Cancel can win, as in sendAlbum and sendMixedAlbum (2026-10-04 audit).
-        // Without it a Cancel during the sealing above still committed a document with no media,
-        // a blurred bubble with a spinner on both phones that nothing would ever finish.
+        // The LAST moment Cancel can win: after this the message is committed whole.
         try Task.checkCancellation()
         let batch = db.batch()
         var imgMsg: [String: Any] = [
-            "type": "image", "enc": meta.asDict, "text": captionCipher, "uploading": true,
+            "type": "image", "enc": meta.asDict, "text": captionCipher, "imageUrl": url,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         if let replyEnc { imgMsg["replyTo"] = replyEnc }
@@ -1414,23 +1408,17 @@ enum ChatService {
         if let ui = sized {                                 // natural aspect ratio
             imgMsg["width"] = Double(ui.size.width); imgMsg["height"] = Double(ui.size.height)
         }
-        // Sealed above, while the upload was in flight.
         if let blurSealed, !blurSealed.isEmpty { imgMsg["blurhash"] = blurSealed }
         if let thumbSealed, !thumbSealed.isEmpty { imgMsg["thumb"] = thumbSealed }
         batch.setData(imgMsg, forDocument: msgRef)
         // A VIEW-ONCE photo publishes NO thumbnail to the conversation doc (audit): lastImageUrl +
-        // lastImageEnc are a decryptable copy both sides keep forever, and the chat list rendered it
-        // as the row thumbnail before the recipient ever opened it and long after the single view was
-        // spent — which is the whole promise of view-once, broken. The blurhash on the line above was
-        // already exempt for exactly this reason; this path was missed.
+        // lastImageEnc are a decryptable copy both sides keep forever.
         var convUpdate: [String: Any] = [
             "lastMessage": viewOnce ? "View-once photo" : "📷 Photo",
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
-        // The chat-list thumbnail needs the URL, which does not exist yet — it is attached in the
-        // same update as the message's own, below. The row shows "📷 Photo" until then, which is
-        // what it showed for the whole upload before this change anyway.
+        if !viewOnce { convUpdate["lastImageUrl"] = url; convUpdate["lastImageEnc"] = meta.asDict }
         if let members {
             for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) }
         } else {
@@ -1439,34 +1427,6 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
-        // The bubble now exists on both phones, so Cancel has something to take back down. Its id
-        // is an auto-id the cancel site cannot derive — see MediaSend.announcedIds.
-        if let clientId { await MediaSend.shared.noteAnnounced(clientId, messageId: msgRef.documentID) }
-
-        // NOW the bytes. Everything above is already on the recipient's screen.
-        let url = try await uploadedURL
-        // ⛔ THIS TRANSFER IS DONE, AND THE RING COMES OFF NOW — not when the message commits.
-        //
-        // `sendState` stays `.sending` until the attach write below has landed and come back
-        // through the listener, and by then `UploadProgress` has already dropped this id. The ring
-        // draws a filling arc only while it has a fraction, so in that gap it fell back to its
-        // indeterminate half circle and sat there spinning on a photo that had finished uploading
-        // — the owner's screenshot, gone as soon as he left the chat and came back, because that
-        // rebuilds the row from the repository.
-        //
-        // Exactly the fix the album tiles already carry, and for exactly the same reason; the
-        // single-media paths never got it. Per-item truth, not per-message.
-        if let clientId { await MediaSend.shared.markItemDone(clientId) }
-        // Seed the cache with the plaintext image under its URL so when the optimistic bubble
-        // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
-        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
-
-        // Attaching the media also CLEARS `uploading`, and the rules branch requires both in the
-        // same write — that pairing is what makes this a one-way door rather than a way to edit a
-        // delivered photo.
-        try await attachMedia(["imageUrl": url], to: msgRef,
-                              conv: viewOnce ? nil : ["lastImageUrl": url, "lastImageEnc": meta.asDict],
-                              convRef: convRef)
     }
 
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
@@ -1512,10 +1472,6 @@ enum ChatService {
         //
         // Aspects are read off the source images first (header only, no decode) so the placeholder
         // grid is solved by the SAME layout, with the SAME ratios, as the album that replaces it.
-        let earlySizes: [[Double]] = images.map {
-            guard let sz = pixelSize($0) else { return [1, 1] }
-            return [Double(sz.width), Double(sz.height)]
-        }
 
         let tileWork: Task<[AlbumTile], Error> = Task { try await withThrowingTaskGroup(of: AlbumTile?.self) { group in
             // BOUNDED. Start at most `maxAlbumUploadsInFlight`, then add one more each time a tile
@@ -1576,9 +1532,17 @@ enum ChatService {
             else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmed)) ?? "" }
         }
 
+        // Owner, 2026-10-10: the album reaches the recipient only once EVERY photo has uploaded
+        // (see sendImage). Cancelled tiles drop out; all cancelled = nothing is sent at all.
+        let tiles = try await tileWork.value
+        let items: [[String: Any]] = tiles.map {
+            ["imageUrl": $0.imageUrl, "enc": $0.imageEnc.asDict, "width": $0.width, "height": $0.height]
+        }
+        guard !items.isEmpty else { throw CancellationError() }
+
         let batch = db.batch()
         var msg: [String: Any] = [
-            "type": "album", "albumSizes": earlySizes, "text": captionCipher, "uploading": true,
+            "type": "album", "albumSizes": tiles.map { [$0.width, $0.height] }, "text": captionCipher, "album": items,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         // The album's FIRST tile, blurred, for the same reason a photo and now a video carry one:
@@ -1604,9 +1568,16 @@ enum ChatService {
         try Task.checkCancellation()
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
-            "lastMessage": "📷 \(images.count) Photos", "lastSender": uid,
+            "lastMessage": items.count == 1 ? "📷 Photo" : "📷 \(items.count) Photos", "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
+        if let first = items.first, let u = first["imageUrl"], let e = first["enc"] {
+            convUpdate["lastImageUrl"] = u
+            convUpdate["lastImageEnc"] = e
+        }
+        if items.count > 1 {
+            convUpdate["lastImages"] = items.prefix(3).map { ["imageUrl": $0["imageUrl"] as Any, "enc": $0["enc"] as Any] }
+        }
         if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
         else {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -1614,44 +1585,6 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
-
-        // NO "kind" KEY, deliberately. This path predates mixed albums and the reader treats a tile
-        // without one as a photo; adding it here would be a silent format change.
-        let tiles = try await tileWork.value
-        let items: [[String: Any]] = tiles.map {
-            ["imageUrl": $0.imageUrl, "enc": $0.imageEnc.asDict, "width": $0.width, "height": $0.height]
-        }
-        // ⚠️ EVERY TILE WAS X'd, so there is no album left — and unlike before, one has already been
-        // written. The per-tile Cancel is a real feature of this screen, so the message that was
-        // sent to make the send visible has to be taken back rather than left as an empty grid.
-        guard !items.isEmpty else {
-            try? await msgRef.delete()
-            throw CancellationError()
-        }
-        // Refresh the chat-list thumbnail (photo parity with sendImage) — without this the list
-        // kept showing a PREVIOUS photo's thumb next to "N Photos".
-        var convThumb: [String: Any] = [:]
-        if let first = items.first, let u = first["imageUrl"], let e = first["enc"] {
-            convThumb["lastImageUrl"] = u
-            convThumb["lastImageEnc"] = e
-        }
-        // The list's overlapped stack (owner, 2026-10-04): the album's first 3 pictures, the
-        // first being `lastImageUrl`, which is how the list knows the stack is still current.
-        if items.count > 1 {
-            convThumb["lastImages"] = items.prefix(3).map { ["imageUrl": $0["imageUrl"] as Any, "enc": $0["enc"] as Any] }
-        }
-        // ⛔ ONE SURVIVOR IS A PHOTO, NOT AN ALBUM OF ONE — his report, 2026-08-28 and again
-        // 2026-09-26: send two, cancel one, and you get the remaining picture plus an empty tile
-        // (the mosaic is built for two and up; a lone tile leaves its partner blank).
-        //
-        // ⚠️ THE 08-28 ANSWER REWROTE THE DOCUMENT INTO A PHOTO HERE (`type`, `width`, `height`,
-        // `albumSizes`), and the rules' finish-an-upload door allows none of those keys, so that
-        // write was refused. The conversion lives in the READER now: `Message.init(data:)` takes a
-        // one-item album as the photo or video it is, on every phone and for every send path (the
-        // mixed album never had this branch at all). This path writes only what the door allows;
-        // the chat list's line says what survived.
-        convThumb["lastMessage"] = items.count == 1 ? "📷 Photo" : "📷 \(items.count) Photos"
-        try await attachMedia(["album": items], to: msgRef, conv: convThumb, convRef: convRef)
     }
 
     // One item to send inside a MIXED album (photos + videos in ONE message group).
