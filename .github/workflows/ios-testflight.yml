@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CALLS, TWO MORE AUDIT ROUNDS (139 FIXES) + SMOOTHER MEDIA.
+            THIS BUILD: YOUR 10-10 REPORTS.
+            CALLS ARRIVE AGAIN (server fix, already live): a phone with the app closed, in the background or locked rings again.
+            CALL SCREEN: tap the screen to hide the buttons works on both phones when either camera is on; the name and timer hide with the buttons. A minimized call opens full screen by itself only the first time their camera comes on while minimized. The mini window shows both people after the video screen was opened and closed.
+            SCREEN SHARE: your camera turns off when you share and cannot come on until you stop; only one person can share at a time; Stop Sharing no longer shows the "Live Broadcast has stopped" message.
+            ALSO: "Use Chat Key" only for people who have a Chat Key; "You turned off disappearing messages" always says You for your own change; @username bigger and the same size in profile, My Profile and Settings; the attach sheet asks for photo access as it opens.
+            PLEASE TEST: call a phone with the app closed; a video call (tell me the time if it shows as voice or "answered" comes late); minimize, then camera off and on; share screen and press Stop.
+
+            EARLIER (build after 845): CALLS, TWO MORE AUDIT ROUNDS (139 FIXES) + SMOOTHER MEDIA.
             CALLS: sound always comes on when you answer from the lock screen; answering on one phone can never be ended by your other phone; strangers cannot get around "My Chats" to call you; blocked callers learn nothing; call setup is never sent unencrypted; your mic is off until the call is answered; AirPods and USB-C earphones work while it is still ringing; calls survive a relay outage and slow relays; a ring is never lost to a slow check; no false "Missed call"; the timer and name stay on screen in video calls; messages like "Can't call right now" stay until you read them; picture-in-picture survives the other camera turning on; Reduce Motion and larger text respected. NEW in Privacy: Always Relay Calls, Show Calls in Recents.
             MEDIA: photo and video buttons fade in smoothly instead of popping. The pinned bar slides to the next pin.
             PLEASE TEST: answer from the lock screen; a call with two phones signed in; a call on weak Wi-Fi; tap the pinned bar with several pins; open a photo and a video.
