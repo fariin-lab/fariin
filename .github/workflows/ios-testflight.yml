@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (852): PHOTOS ARRIVE COMPLETE + CALL CUES.
+            THIS BUILD (853): CALLS UNDER FOCUS / DO NOT DISTURB, THE SAME WAY AS THE MOST RELIABLE CALL APPS.
+            When the other phone's Focus or Do Not Disturb blocks your call, you now see "Calling..." and then "No answer", never a false "Ringing...". They get a missed call so they know you called. Nothing else about calls changed.
+            PLEASE TEST: call a phone with Focus on (app open, in the background, closed): you should see Calling..., then No answer, and they get a missed call. Then with Focus off: Ringing... as normal.
+
+            EARLIER (852): PHOTOS ARRIVE COMPLETE + CALL CUES.
             PHOTOS: a photo or album reaches the other person only once your upload is 100% done; they never see a blurred photo waiting for your upload, and a cancelled photo is never sent.
             CALLS: a light tap and a short soft sound when the other person turns their camera on. "Ringing..." means the call reached their phone (also when their Focus keeps it silent). Each call now records its camera steps so a video that does not show can be traced.
             PLEASE TEST: send a photo on slow internet and cancel one; turn your camera on during a voice call; make one video call and tell me the time.
