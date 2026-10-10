@@ -844,7 +844,9 @@ struct CallView: View {
         // Watching their share in dual mode, the tile is THEIR camera (mine is hidden: minimal).
         let dualWatch = watchingDual
         // While I share the tile is them too (owner 2026-10-10), whatever was swapped before.
-        let remoteTile = dualWatch || iAmSharing
+        // Watching THEIR share (2026-10-10, his screenshots of the reference app): the tile is their camera when
+        // it is live, otherwise MY camera (it was hidden in dual mode), and no tile when neither is.
+        let remoteTile = iAmSharing || (dualWatch && call.remoteVideoLive)
         let pipIsLocal = !isLocalExpanded && !remoteTile                    // small window = the OTHER feed
         let feeds = call.pipFeeds
         // My tile carries my camera, or my screen only in a fallback share (in dual mode my track
@@ -893,7 +895,8 @@ struct CallView: View {
         // went off, which left an empty corner and — because the tile is also the tap target for the
         // swap — took the only way back with it. Now it stays, holding that person's photo instead of
         // their video, exactly like FaceTime.
-        let visible = dualWatch ? (feeds.showsTile && pipTrack != nil) : feeds.showsTile
+        // Watching a share (either mode), only a LIVE camera gets a tile: no photo card over the screen.
+        let visible = stageShown ? (feeds.showsTile && pipTrack != nil) : feeds.showsTile
         // One path for the finger and for VoiceOver (1:1 audit r2 H7, 2026-10-08).
         let tapTile: () -> Void = {
             // SWAP IS ALWAYS ALLOWED while the tile is up, video or photo. It was once gated on
@@ -903,8 +906,8 @@ struct CallView: View {
             guard feeds.showsTile else { toggleControls(); return }
             // No swap while my screen is shared: my feed is the screen (see showLocalFull).
             guard !myScreenOnCamera, !iAmSharing else { showControls(); return }
-            // Their camera beside their shared screen: the screen keeps the big view.
-            guard !dualWatch else { showControls(); return }
+            // Their shared screen keeps the big view (either mode): no swap over it.
+            guard !stageShown else { showControls(); return }
             // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
             // (chrome hidden) only grows it — same result as tapping the screen. Only a tap
             // on the already-grown tile swaps fullscreen. Small → bigger → fullscreen.
@@ -915,7 +918,7 @@ struct CallView: View {
             // r2 H10: no motion under Reduce Motion.
             withAnimation(reduceMotion ? nil : Animation.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
         }
-        let canSwap = !myScreenOnCamera && !dualWatch && !iAmSharing
+        let canSwap = !myScreenOnCamera && !stageShown && !iAmSharing
         return Group {
             if visible {
                 ZStack(alignment: .topTrailing) {
