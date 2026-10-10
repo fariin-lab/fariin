@@ -151,7 +151,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // Audit M-157, 2026-10-07: nobody signed in here (a sign-out whose token cleanup did not
         // land). The ghost-call guard reads the call doc, which a signed-out phone cannot do, so it
         // rang anyway. Reported, as iOS requires, and ended at once.
-        guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId) else {
+        // Owner, 2026-10-10: "I tap Decline and a few seconds later the same call rings again, then
+        // goes away". The ring push came in after the in-app ring was already declined (the server's
+        // push can trail the call doc by seconds). It was still reported as a NEW ring, and only the
+        // ghost check ended it seconds later. A call this phone already finished is reported and
+        // ended in one step now, as iOS requires, and never shows.
+        guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId),
+              !CallService.shared.hasFinished(callId) else {
             CallKitManager.shared.reportAndDiscard(completion: completion)
             return
         }

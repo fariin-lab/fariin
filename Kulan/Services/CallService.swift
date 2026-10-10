@@ -5262,6 +5262,9 @@ final class CallService: NSObject {
     /// a doc whose end write was lost, used to ring a call this phone had already finished and then
     /// log it "missed" over the real row. A ring for one of these never rings and never records.
     private var finishedCallIds: [String] = []
+    /// This phone already finished `id` (declined, ended, missed, refused). PushManager asks before
+    /// reporting a ring push, so a push APNs delivered late never rings again. Main queue.
+    func hasFinished(_ id: String) -> Bool { finishedCallIds.contains(id) }
     private func rememberFinished(_ id: String) {
         finishedCallIds.removeAll { $0 == id }
         finishedCallIds.append(id)
