@@ -66,6 +66,8 @@ struct CallView: View {
     /// 1:1 audit r3 G4, 2026-10-08: the header's and the camera-access line's real heights, so the
     /// tile's travel bounds follow large text instead of fixed numbers. Zero until measured.
     @State private var headerHeight: CGFloat = 0
+    /// Owner, 2026-10-10: their shared screen opened full screen from the share card's expand button.
+    @State private var shareFullscreen = false
     @State private var cameraLineHeight: CGFloat = 0
     /// r2 H9d: one prepared generator for every button, swap and flip (the reference app keeps one).
     @MainActor private static let haptic = UIImpactFeedbackGenerator(style: .medium)
@@ -324,12 +326,14 @@ struct CallView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { toggleControls() }
-                    .allowsHitTesting(!stageShown)
+                    .allowsHitTesting(!(stageShown && shareFullscreen))
                 // zIndex: the video card is the TOP layer, always (owner's side-by-side reference,
                 // 2026-08-12: on a voice call that turns on a camera, ours slid UNDER the avatar
                 // circle; the standard is avatar behind, card in front). The card's drag bounds
                 // keep it clear of the header and control bar, so nothing interactive is covered.
-                if call.isVideo { pipLayer(geo).zIndex(2) }
+                if shareLayout { shareLayoutView(geo).zIndex(1) }
+                if call.isVideo, !shareLayout { pipLayer(geo).zIndex(2) }
+                if stageShown, shareFullscreen { shareCollapseButton.zIndex(3) }
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
@@ -415,7 +419,7 @@ struct CallView: View {
                 // The sharer's one control, centred just above the bar and not part of it.
                 VStack(spacing: 6) {
                     Spacer()
-                    sharePill
+                    if !shareLayout { sharePill }
                 }
                 .padding(.bottom, sharePillBottom)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -428,6 +432,7 @@ struct CallView: View {
             // A camera coming on (either side) or the call connecting starts the hide clock; the
             // last camera going off brings the controls back for good (armAutoHide's voice branch).
             .onChange(of: autoHideEnabled) { _, _ in armAutoHide() }
+            .onChange(of: stageShown) { _, on in if !on { shareFullscreen = false } }
             // Screen share v3: landscape is allowed only while this screen shows their shared
             // screen. Their share ending, the call ending or a minimize brings portrait back.
             .onChange(of: landscapeWanted, initial: true) { _, on in OrientationLock.allowLandscape(on) }
@@ -575,12 +580,17 @@ struct CallView: View {
     /// or their photo with the camera off). Their face no longer fills the screen behind my share,
     /// and the tile is never used up by my own share, so they never disappear.
     private var iAmSharing: Bool { call.screenSharing }
+    /// Owner, 2026-10-10 (his reference screenshots): while a share is on, the call is a rounded CARD
+    /// under the header (their screen, or "You're sharing your screen" with Stop inside it) and the two
+    /// people as TILES under the card, above the unchanged call buttons. Their screen can still be
+    /// opened full screen (`shareFullscreen`), which is the old full-screen stage.
+    private var shareLayout: Bool { iAmSharing || (stageShown && !shareFullscreen) }
     /// Fallback share from them: their camera track carries their screen (draw it whole, never cropped).
     private var theirScreenOnCamera: Bool { call.remoteScreenSharing && call.remoteScreenMode != "track" }
     /// Watching their share in dual mode: the corner tile is THEIR camera, mine is hidden.
     private var watchingDual: Bool { stageShown && call.remoteScreenMode == "track" }
     /// Landscape only while this screen shows their shared screen.
-    private var landscapeWanted: Bool { stageShown && !call.minimized && call.state != .ended }
+    private var landscapeWanted: Bool { stageShown && shareFullscreen && !call.minimized && call.state != .ended }
     // Avatar fills the big view whenever there is no remote video to show (voice call, or their
     // camera is off mid-call) and I haven't swapped my own feed fullscreen.
     // The photo fills the big view whenever whoever is BIG has no live camera — including MYSELF, now
@@ -640,13 +650,7 @@ struct CallView: View {
             }
             // Screen share viewer, 2026-10-08: their screen whole, with pinch/pan/double-tap zoom, and
             // nothing over it but the chrome. A single tap sends the chrome away and back.
-            if iAmSharing, !stageShown {
-                ScreenSharingCard(full: true)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .allowsHitTesting(false)   // taps reach the show/hide surface
-                    .transition(.opacity)
-            }
-            if stageShown {
+            if stageShown, shareFullscreen {
                 ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleChrome() })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
@@ -1057,6 +1061,121 @@ struct CallView: View {
         case .outgoing:              return call.cameraOn
         default:                     return false
         }
+    }
+
+    // MARK: - Share layout (owner, 2026-10-10)
+
+    /// The card under the header and the two people under it. Fixed geometry: the header and the
+    /// call buttons fade over their own space, so nothing jumps when the controls hide.
+    private func shareLayoutView(_ geo: GeometryProxy) -> some View {
+        let top = max(headerHeight, winInsets.top + 76) + 4
+        let bottom = winInsets.bottom + 22 + 76 + 14
+        let tileH: CGFloat = min(150, max(96, geo.size.height * 0.17))
+        return VStack(alignment: .leading, spacing: 12) {
+            shareCard
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack(spacing: 10) {
+                // Them: their camera (never their screen in the older mode, which rides on it).
+                shareTile(track: (call.remoteVideoLive && !theirScreenOnCamera) ? call.remoteVideoTrack : nil,
+                          mirror: false, name: call.otherName, photo: call.otherPhotoUrl, height: tileH)
+                // Me: my camera when it is live (never my own screen).
+                shareTile(track: (call.localPreviewLive && !myScreenOnCamera) ? call.localVideoTrack : nil,
+                          mirror: call.usingFrontCamera, name: call.myName, photo: call.myPhotoUrl, height: tileH)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, top)
+        .padding(.bottom, bottom)
+        .frame(width: geo.size.width, height: geo.size.height)
+        .transition(.opacity)
+    }
+
+    @ViewBuilder private var shareCard: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Color(white: 0.12)
+            if iAmSharing {
+                VStack(spacing: 20) {
+                    if call.screenSharePhase == .starting {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small).tint(.white)
+                            Text("Starting…").font(.system(size: 17, weight: .semibold))
+                        }
+                    } else {
+                        Image(systemName: "rectangle.on.rectangle").font(.system(size: 40, weight: .semibold))
+                        Text("You're sharing your screen").font(.system(size: 20, weight: .semibold))
+                            .multilineTextAlignment(.center)
+                        Button {
+                            buzz()
+                            call.stopScreenShareByUser()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "xmark").font(.system(size: 14, weight: .bold))
+                                Text("Stop Sharing").font(.system(size: 17, weight: .semibold))
+                            }
+                            .padding(.horizontal, 22)
+                            .frame(height: 48)
+                            .background(Color.white.opacity(0.14), in: Capsule())
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleControls() })
+                Button {
+                    buzz()
+                    withAnimation(.easeInOut(duration: 0.25)) { shareFullscreen = true }
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(Color.black.opacity(0.45), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(12)
+                .accessibilityLabel("Full screen")
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+
+    private func shareTile(track: RTCVideoTrack?, mirror: Bool, name: String, photo: String?,
+                           height: CGFloat) -> some View {
+        ZStack {
+            Color(white: 0.18)
+            if let track {
+                VideoRendererView(track: track, mirror: mirror, upright: true)
+            } else {
+                AvatarView(name: name, photoUrl: photo, size: min(64, height * 0.42))
+            }
+        }
+        .frame(width: height * 0.74, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(name)
+    }
+
+    /// Back from their full-screen share to the card.
+    private var shareCollapseButton: some View {
+        Button {
+            buzz()
+            withAnimation(.easeInOut(duration: 0.25)) { shareFullscreen = false }
+        } label: {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 48, height: 48)
+                .background(Color.black.opacity(0.45), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Exit full screen")
+        .padding(.trailing, 16 + winInsets.right)
+        .padding(.bottom, winInsets.bottom + 22 + 76 + 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .opacity(controlsVisible ? 1 : 0)
+        .allowsHitTesting(controlsVisible)
     }
 
     // MARK: - Screen share pill (2026-10-08)
