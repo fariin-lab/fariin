@@ -78,7 +78,7 @@ jobs:
             The minimize and ... buttons no longer drop down when "Muted" appears. Watching a shared screen: with the buttons hidden, the screen and the two tiles now fill the whole phone (no empty space at top and bottom).
             PLEASE TEST: mute on the other phone and watch the top buttons; watch a share and tap to hide the buttons.
 
-            EARLIER (850):             THIS BUILD: CALL RECEIVING BACK TO BUILD 848 + NEW SCREEN SHARE LAYOUT.
+            EARLIER (850): CALL RECEIVING BACK TO BUILD 848 + NEW SCREEN SHARE LAYOUT.
             CALLS: how a phone receives a call is exactly as in build 848 again (849 changed it and calls broke). The server no longer stops calls when you make many in a row (the test limit is gone). When you both call each other at the same moment, one call goes through and rings; nobody is answered automatically. The mute, camera, speaker and end buttons now work when you tap anywhere on the circle.
             SCREEN SHARE: their screen sits in a rounded card under the name, with a button to open it full screen; you and the other person show as two tiles under it; your call buttons stay. While you share, the card says "You're sharing your screen" with Stop Sharing inside it.
             PLEASE TEST: call with the other app closed, in the background and open (voice and video) and watch Calling... turn into Ringing...; both call at the same second; share your screen and watch theirs; open full screen and come back.
