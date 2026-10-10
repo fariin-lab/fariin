@@ -4633,6 +4633,11 @@ final class CallService: NSObject {
         otherName = Self.displayName(for: uid, fallback: name)
         otherRawName = name   // audit M-151: never the nickname
         otherPhotoUrl = photo
+        // Owner, 2026-10-10 ("sometimes the profile picture is missing on the call screen"): the
+        // button that started the call passes whatever photo its screen had, which can be none (a
+        // Calls-list entry, a chat whose photo had not loaded). Then the call ran photo-less to the
+        // end. This phone's own copy now, the profile from the server right after.
+        if (photo ?? "").isEmpty { otherPhotoUrl = peerPhoto(uid); fillPeerPhoto(uid) }
         dialAttempt &+= 1
         let attempt = dialAttempt
         dialStartedAt = Date()   // audit M-155
@@ -5630,6 +5635,7 @@ final class CallService: NSObject {
             self.otherRawName = publishedName
             self.otherName = Self.displayName(for: caller, fallback: publishedName)
             self.otherPhotoUrl = self.peerPhoto(caller)
+            if (self.otherPhotoUrl ?? "").isEmpty, profile != nil { self.fillPeerPhoto(caller) }   // 2026-10-10
             if profile == nil { self.refreshCallerProfile(caller, callId: doc.documentID) }
             self.isCaller = false
             let isVideoCall = (d["type"] as? String == "video")
@@ -5680,6 +5686,20 @@ final class CallService: NSObject {
                                  iAmContact: PrivacyPrefs.isContact(uid)).photoUrl
     }
 
+    /// 2026-10-10: the other person's photo from the server's copy of their profile, put on the call
+    /// once it arrives, for a call that started or rang without one. Same privacy rule as
+    /// `peerPhoto` (it reads the index the fetch updates). Only while it is still this person's call.
+    private func fillPeerPhoto(_ uid: String) {
+        guard !uid.isEmpty else { return }
+        Task { @MainActor in
+            _ = await ProfileStore.shared.fetch(uid)
+            guard self.otherUid == uid, self.state != .idle, self.state != .ended,
+                  (self.otherPhotoUrl ?? "").isEmpty,
+                  let url = self.peerPhoto(uid), !url.isEmpty else { return }
+            self.otherPhotoUrl = url
+        }
+    }
+
     /// A caller this phone had never loaded: read their profile from the server during the ring and
     /// put their real name and picture on the call (audit M-058, 2026-10-07). Only while it is still
     /// the same call. The system ring keeps the name it was reported with.
@@ -5716,7 +5736,8 @@ final class CallService: NSObject {
             guard let p, self.callId == callId, self.otherUid == uid else { return }
             let shown = Self.displayName(for: uid, fallback: p.name)
             self.otherRawName = p.name
-            if self.otherPhotoUrl == nil { self.otherPhotoUrl = self.peerPhoto(uid) }
+            if (self.otherPhotoUrl ?? "").isEmpty { self.otherPhotoUrl = self.peerPhoto(uid) }
+            if (self.otherPhotoUrl ?? "").isEmpty { self.fillPeerPhoto(uid) }   // 2026-10-10: server copy
             guard shown != self.otherName, !shown.isEmpty else { return }
             self.otherName = shown
             CallKitManager.shared.updateCallerName(callId: callId, name: shown)
