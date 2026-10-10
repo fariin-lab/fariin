@@ -79,7 +79,7 @@ jobs:
             CALLS: a light tap and a short soft sound when the other person turns their camera on. "Ringing..." means the call reached their phone (also when their Focus keeps it silent). Each call now records its camera steps so a video that does not show can be traced.
             PLEASE TEST: send a photo on slow internet and cancel one; turn your camera on during a voice call; make one video call and tell me the time.
 
-            EARLIER (851):             THIS BUILD (851): SMALL CALL SCREEN FIXES ON TOP OF 850.
+            EARLIER (851): SMALL CALL SCREEN FIXES ON TOP OF 850.
             The minimize and ... buttons no longer drop down when "Muted" appears. Watching a shared screen: with the buttons hidden, the screen and the two tiles now fill the whole phone (no empty space at top and bottom).
             PLEASE TEST: mute on the other phone and watch the top buttons; watch a share and tap to hide the buttons.
 
