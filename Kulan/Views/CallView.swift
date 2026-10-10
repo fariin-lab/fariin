@@ -570,6 +570,11 @@ struct CallView: View {
     /// Fallback share: my screen replaced my camera on my one video track, so my local feed IS the
     /// screen. In dual mode (`canUseCameraWhileSharing`) my camera track stays my camera.
     private var myScreenOnCamera: Bool { call.screenSharing && !call.canUseCameraWhileSharing }
+    /// Owner, 2026-10-10 (the reference messengers' layout): WHILE I SHARE, in either mode, the big
+    /// view is the "You're sharing your screen" card and the floating tile is THEM (their live video,
+    /// or their photo with the camera off). Their face no longer fills the screen behind my share,
+    /// and the tile is never used up by my own share, so they never disappear.
+    private var iAmSharing: Bool { call.screenSharing }
     /// Fallback share from them: their camera track carries their screen (draw it whole, never cropped).
     private var theirScreenOnCamera: Bool { call.remoteScreenSharing && call.remoteScreenMode != "track" }
     /// Watching their share in dual mode: the corner tile is THEIR camera, mine is hidden.
@@ -582,7 +587,7 @@ struct CallView: View {
     // that you can swap your own switched-off camera up there. It used to hard-return false for
     // `isLocalExpanded`, which left that case as a black screen.
     private var showAvatar: Bool {
-        if stageShown { return false }
+        if stageShown || iAmSharing { return false }
         if !call.isVideo { return true }
         // 1:1 audit #11: not `cameraOn`: a paused camera is my photo, not a frozen frame. r2 check,
         // 2026-10-08: `localPreviewLive`, so my tile shows the camera while it starts.
@@ -598,7 +603,7 @@ struct CallView: View {
         // Only show a fullscreen feed that is ACTUALLY LIVE. Otherwise hide the renderer (opacity 0) so
         // the shared Metal view doesn't keep its last frame on screen — that stale frame was YOUR frozen
         // ringing-preview showing as the background behind the avatar when the other camera is off.
-        let canShow = full != nil && !stageShown && (showLocalFull ? call.localPreviewLive : hasRemote)
+        let canShow = full != nil && !stageShown && !iAmSharing && (showLocalFull ? call.localPreviewLive : hasRemote)
         // STABILITY (LiveKit pattern): never swap view-tree branches. The gradient/avatar-blur is
         // a permanent base, and ONE Metal renderer stays mounted on top for the whole video call —
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
@@ -635,6 +640,12 @@ struct CallView: View {
             }
             // Screen share viewer, 2026-10-08: their screen whole, with pinch/pan/double-tap zoom, and
             // nothing over it but the chrome. A single tap sends the chrome away and back.
+            if iAmSharing, !stageShown {
+                ScreenSharingCard(full: true)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .allowsHitTesting(false)   // taps reach the show/hide surface
+                    .transition(.opacity)
+            }
             if stageShown {
                 ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleChrome() })
                     .frame(width: geo.size.width, height: geo.size.height)
@@ -643,6 +654,7 @@ struct CallView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: stageShown)
+        .animation(.easeInOut(duration: 0.2), value: iAmSharing)
         .frame(width: geo.size.width, height: geo.size.height)
         .clipped()
         .ignoresSafeArea()
@@ -828,12 +840,14 @@ struct CallView: View {
         let landscape = geo.size.width > geo.size.height
         // Watching their share in dual mode, the tile is THEIR camera (mine is hidden: minimal).
         let dualWatch = watchingDual
-        let pipIsLocal = !isLocalExpanded && !dualWatch                     // small window = the OTHER feed
+        // While I share the tile is them too (owner 2026-10-10), whatever was swapped before.
+        let remoteTile = dualWatch || iAmSharing
+        let pipIsLocal = !isLocalExpanded && !remoteTile                    // small window = the OTHER feed
         let feeds = call.pipFeeds
         // My tile carries my camera, or my screen only in a fallback share (in dual mode my track
         // stays my camera, live only while it is on).
         // 1:1 audit #11/#13: live video only; a paused or stalled camera shows the photo card.
-        let pipTrack: RTCVideoTrack? = dualWatch ? (call.remoteVideoLive ? call.remoteVideoTrack : nil)
+        let pipTrack: RTCVideoTrack? = remoteTile ? (call.remoteVideoLive ? call.remoteVideoTrack : nil)
             : (pipIsLocal ? ((call.localPreviewLive || myScreenOnCamera) ? call.localVideoTrack : nil) : feeds.tile)
         // THE TILE BREATHES WITH THE CHROME (owner's 2026-08-12 side-by-side reference, exact
         // numbers read from the reference implementation): menus up → the tile grows; menus away →
@@ -885,7 +899,7 @@ struct CallView: View {
             // any swap can always be undone by tapping it again.
             guard feeds.showsTile else { toggleControls(); return }
             // No swap while my screen is shared: my feed is the screen (see showLocalFull).
-            guard !myScreenOnCamera else { showControls(); return }
+            guard !myScreenOnCamera, !iAmSharing else { showControls(); return }
             // Their camera beside their shared screen: the screen keeps the big view.
             guard !dualWatch else { showControls(); return }
             // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
@@ -898,7 +912,7 @@ struct CallView: View {
             // r2 H10: no motion under Reduce Motion.
             withAnimation(reduceMotion ? nil : Animation.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
         }
-        let canSwap = !myScreenOnCamera && !dualWatch
+        let canSwap = !myScreenOnCamera && !dualWatch && !iAmSharing
         return Group {
             if visible {
                 ZStack(alignment: .topTrailing) {
@@ -1008,7 +1022,10 @@ struct CallView: View {
         } else {
             ZStack {
                 Color.black
-                AvatarView(name: feeds.tileName, photoUrl: feeds.tilePhotoUrl, size: 54)
+                // The person IN the tile (2026-10-10): `feeds.tile*` names whoever the swap put there,
+                // which is me when the tile is them for a share (theirs or mine).
+                AvatarView(name: isLocal ? call.myName : call.otherName,
+                           photoUrl: isLocal ? call.myPhotoUrl : call.otherPhotoUrl, size: 54)
                 VStack {
                     Spacer()
                     Image(systemName: "video.slash.fill")
@@ -2382,15 +2399,20 @@ struct CallControlStyle: ButtonStyle {
 /// draws the sharer's screen back to them either; drawing it was a picture of the call inside itself.
 struct ScreenSharingCard: View {
     var compact = false
+    /// Owner, 2026-10-10: the BIG view while I share (the reference messenger's layout: the share
+    /// owns the screen, the other person floats in the tile). Same card, larger words.
+    var full = false
 
     var body: some View {
         ZStack {
             Color.black
             VStack(spacing: compact ? 4 : 6) {
                 Image(systemName: "rectangle.on.rectangle")
-                    .font(.system(size: compact ? 16 : 22, weight: .semibold))
-                Text("Sharing")
-                    .font(.system(size: compact ? 11 : 13, weight: .semibold))
+                    .font(.system(size: full ? 44 : (compact ? 16 : 22), weight: .semibold))
+                    .padding(.bottom, full ? 8 : 0)
+                Text(full ? "You're sharing your screen" : "Sharing")
+                    .font(.system(size: full ? 20 : (compact ? 11 : 13), weight: .semibold))
+                    .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }

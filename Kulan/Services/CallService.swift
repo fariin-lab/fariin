@@ -2151,6 +2151,8 @@ final class CallService: NSObject {
         // after it (he turns it back on himself). Done while `screenSharing` is still false, so
         // setMyCamera is not refused by `shareOwnsCamera` and `cams` false is announced.
         if cameraOn { setMyCamera(on: false) }
+        // The share owns the big view and they own the tile (CallView.iAmSharing): undo a swap.
+        if isLocalExpanded { isLocalExpanded = false }
         // Dual mode: the screen track goes onto the screen transceiver's sender. A track swap, no
         // renegotiation: the m-line was negotiated at setup.
         var screenSender: RTCRtpSender?
