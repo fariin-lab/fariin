@@ -488,7 +488,10 @@ struct CallView: View {
     // MARK: - Top bar
 
     private func topBar(safeTop: CGFloat) -> some View {
-        HStack {
+        // Owner, 2026-10-10: the two buttons must not drop when "Muted" adds a line. They line up on
+        // `headerButtons`, which the NAME row fixes at the middle of name + timer (where the centre
+        // was before "Muted" existed), so a third line grows downward without moving them.
+        HStack(alignment: .headerButtons) {
             // The ONLY way to minimize the call (swipe-to-minimize removed — screen is locked).
             // The reference app's 0.2s shrink into the card (`CallPipMorph`).
             Button {
@@ -535,6 +538,8 @@ struct CallView: View {
                         .minimumScaleFactor(0.6)
                     VerifiedMark(uid: call.otherUid, size: 20)
                 }
+                // Half of name + 3pt gap + the timer line, measured from the name's top.
+                .alignmentGuide(.headerButtons) { d in (d.height + 3 + statusSize * 1.2) / 2 }
                 // Owner, 2026-10-10: THEIR mute is the word "Muted" on its own line between the name
                 // and the timer (the reference messenger's placement). The slashed-mic badge that hung
                 // off the timer is gone: it landed on the digits. Fades with `remoteMuted` (see the
@@ -2581,4 +2586,13 @@ extension CallView {
             // 1:1 audit r3 G2, 2026-10-08: the ones that move or resize the layout stand down under
             // Reduce Motion (an implicit animation overrides a `withAnimation(nil)`).
     }
+}
+
+/// The call header's button line (see `topBar`). Default: a view's own centre, which is what the two
+/// round buttons use.
+private extension VerticalAlignment {
+    struct HeaderButtons: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+    static let headerButtons = VerticalAlignment(HeaderButtons.self)
 }
