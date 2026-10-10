@@ -303,129 +303,7 @@ struct CallView: View {
 
     var body: some View {
         GeometryReader { geo in
-            ZStack {
-                background(geo)
-                // The system broadcast picker, invisible: "..." › Share Screen presses its button
-                // (CallService.toggleScreenShare -> ScreenSharePicker.show). It has to be in the window
-                // for its sheet to present, so it is mounted, 1pt and transparent, not left out.
-                ScreenSharePickerView()
-                    .frame(width: 1, height: 1)
-                    .opacity(0)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                // 1:1 audit r2 I3, 2026-10-08: the same rule as the card and the tab (`isVideoCall`),
-                // so a video call with both cameras off still has a PiP source from this screen.
-                if call.isVideoCall {
-                    // The whole layout, not one feed — see CallService.pipFeeds.
-                    CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
-                }
-                // Tap anywhere that is not a button or the tile to show/hide the controls. It sits
-                // ABOVE the video and BELOW everything interactive, so the buttons and the corner tile
-                // keep their own taps.
-                // Off while their screen is on stage: the stage takes its own taps, pinches and pans.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { toggleControls() }
-                    .allowsHitTesting(!(stageShown && shareFullscreen))
-                // zIndex: the video card is the TOP layer, always (owner's side-by-side reference,
-                // 2026-08-12: on a voice call that turns on a camera, ours slid UNDER the avatar
-                // circle; the standard is avatar behind, card in front). The card's drag bounds
-                // keep it clear of the header and control bar, so nothing interactive is covered.
-                callLayers(geo).zIndex(2)
-
-                VStack(spacing: 0) {
-                    topBar(safeTop: winInsets.top)
-                        // Landscape: clear the notch side and the far side (both zero in portrait).
-                        .padding(.leading, winInsets.left)
-                        .padding(.trailing, winInsets.right)
-                        .frame(maxWidth: .infinity)        // full-width header (centered name/status)
-                        // 1:1 audit r2 H2, 2026-10-08: only the two buttons and the scrim leave with
-                        // the controls (inside topBar); the name, timer and "Reconnecting…" stay, as
-                        // in the reference app. Their shared screen still gets a clean view.
-                        // 1:1 audit r3 G6, 2026-10-08: on their shared screen too (the header as a
-                        // whole used to leave there, taking "Video paused" and "On hold" with it).
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }   // r3 G4
-                    Spacer()
-                    if showAvatar {
-                        // WHOSE photo follows who is on the big screen, not always theirs.
-                        AvatarView(name: showLocalFull ? call.myName : call.otherName,
-                                   photoUrl: showLocalFull ? call.myPhotoUrl : call.otherPhotoUrl,
-                                   size: 180)
-                            .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
-                            // No pulsing rings while Calling: the owner had them removed 2026-10-04.
-                            .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
-                            .frame(maxWidth: .infinity)    // guarantee horizontal centering
-                            .allowsHitTesting(false)       // decoration: let the show/hide tap through
-                            .accessibilityElement(children: .ignore)   // r2 H7: say whose photo it is
-                            .accessibilityLabel(showLocalFull ? "Your photo" : call.otherName)
-                        Spacer()
-                    }
-                    // Audit M-011, 2026-10-07: the camera was refused, so the camera button cannot do
-                    // anything and the other side sees no video. Say where to fix it, just above the
-                    // controls, in the status line's style. `cameraDenied` is set by CallService.
-                    if call.cameraDenied {
-                        // 1:1 audit r2 E7/H9b, 2026-10-08: a tap opens this app's Settings page (the
-                        // reference app gives a way there too). Same look as before.
-                        Button {
-                            if let url = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(url)
-                            }
-                        } label: {
-                            Text("Allow camera access in Settings")
-                                .font(.system(size: statusSize))
-                                .foregroundStyle(.white.opacity(0.75))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Opens Settings")
-                        .frame(maxWidth: .infinity)
-                        .padding(.bottom, 10)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraLineHeight = $0 }   // r3 G4
-                        .opacity(controlsVisible ? 1 : 0)
-                        .accessibilityHidden(!controlsVisible)
-                        .allowsHitTesting(controlsVisible)
-                    }
-                    controlBar
-                        .frame(maxWidth: .infinity)        // centered control pill
-                        .padding(.bottom, winInsets.bottom + 22)
-                        .opacity(controlsVisible ? 1 : 0)
-                        .allowsHitTesting(controlsVisible)
-                        .accessibilityHidden(!controlsVisible)   // #19, as the top bar
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the screen (never collapse/offset)
-
-                // Screen share, 2026-10-08: the small pill under the header. Its own layer, so it
-                // never pushes the avatar or the bar around, and it stays when the chrome is away.
-                VStack {
-                    if let topPill {
-                        Text(topPill)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .padding(.horizontal, 14)
-                            .frame(height: 32)
-                            .liquidGlass(Capsule(), interactive: false)
-                            .transition(.opacity)
-                    }
-                    Spacer()
-                }
-                .padding(.top, winInsets.top + 96)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-                .zIndex(3)
-
-                // The sharer's one control, centred just above the bar and not part of it.
-                VStack(spacing: 6) {
-                    Spacer()
-                    if !shareLayout { sharePill }
-                }
-                .padding(.bottom, sharePillBottom)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.85), value: call.screenSharePhase)   // r3 G2
-                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.85), value: call.screenShareLink)
-                .animation(.easeInOut(duration: 0.25), value: controlsVisible)
-                .zIndex(3)
-            }
+            screenLayers(geo)
             .onAppear { armAutoHide(); Self.haptic.prepare() }
             // A camera coming on (either side) or the call connecting starts the hide clock; the
             // last camera going off brings the controls back for good (armAutoHide's voice branch).
@@ -454,62 +332,7 @@ struct CallView: View {
             .task(id: call.otherPhotoUrl ?? "") { await loadPeerPalette() }
             // Connecting, and a voice call turning into a video call, both restart the clock: show the
             // controls for the moment something changes, then get out of the way again.
-            .onChange(of: call.state) { _, state in
-                showControls()
-                if state == .outgoing, call.cameraOn { ringingPreviewShown = true }   // M-056
-                // 1:1 audit r2 H7, 2026-10-08: VoiceOver hears the stage change (Connected,
-                // Reconnecting, the end words), which the status label only showed.
-                if UIAccessibility.isVoiceOverRunning {
-                    let words = state == .active ? "Connected" : statusText
-                    if !words.isEmpty { UIAccessibility.post(notification: .announcement, argument: words) }
-                }
-            }
-            .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
-            .onChange(of: call.isVideo) { _, _ in showControls() }
-            // r2 H3: their camera on/off re-arms the clock. 1:1 audit r3 G5, 2026-10-08: their real
-            // camera signal only, not `hasRemote`, whose frame-stall half flips on a weak link and
-            // made the controls and the tile jump every few seconds.
-            .onChange(of: call.remoteCameraOn) { _, _ in showControls() }
-            // r3 G3: the stage leaving with the chrome away brings it back.
-            .onChange(of: stageShown) { _, _ in showControls() }
-            // Screen share, 2026-10-08. My share going live: my feed leaves the big view (it would be
-            // a picture of this very screen), so a swap I had made is undone.
-            .onChange(of: call.screenSharing) { _, live in
-                if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
-                showControls()
-            }
-            // Their share starting or ending brings the chrome back; it never stays hidden after.
-            // A swap to my own camera is undone when their share starts, so the share is what shows.
-            .onChange(of: call.remoteScreenSharing) { _, live in
-                if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
-                showControls()
-            }
-            // A NEW share from them: say who it is, once, then get off the picture.
-            .onChange(of: call.remoteScreenSharingSince) { _, since in
-                guard since != nil else { return }
-                showTopPill("\(otherFirstName) is sharing their screen", for: 3)
-            }
-            .onChange(of: call.screenShareNotice) { _, notice in showShareNotice(notice) }
-            .onAppear { showShareNotice(call.screenShareNotice) }
-            // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
-            // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
-            .onChange(of: showAddPeople) { _, up in
-                if up { hideTask?.cancel() } else { showControls() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)) { _ in
-                showControls()
-            }
-            // The switch's RETURN half: the new camera is live, mirror already changed while the
-            // view was edge-on/black. Come back from the FAR side — the jump across is invisible.
-            .onChange(of: call.cameraSwitchFlip) { _, _ in
-                guard flippingCamera else { return }
-                var t = Transaction(); t.disablesAnimations = true
-                withTransaction(t) { flipAngle = -flipAngle }
-                withAnimation(.easeOut(duration: 0.1)) { flipAngle = 0; flipDim = false }
-                flippingCamera = false
-            }
-            // 1:1 audit r3 G2, 2026-10-08: the ones that move or resize the layout stand down under
-            // Reduce Motion (an implicit animation overrides a `withAnimation(nil)`).
+            .modifier(CallObservers(view: self))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: call.state)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: call.cameraOn)
             .animation(.easeInOut(duration: 0.2), value: call.isMuted)
@@ -1058,6 +881,134 @@ struct CallView: View {
         case .active, .reconnecting: return true
         case .outgoing:              return call.cameraOn
         default:                     return false
+        }
+    }
+
+    /// 2026-10-10: the screen's layers, out of `body` (the type checker gave up on it inline).
+    /// Verbatim from the body's ZStack, same order.
+    @ViewBuilder private func screenLayers(_ geo: GeometryProxy) -> some View {
+        ZStack {
+                background(geo)
+                // The system broadcast picker, invisible: "..." › Share Screen presses its button
+                // (CallService.toggleScreenShare -> ScreenSharePicker.show). It has to be in the window
+                // for its sheet to present, so it is mounted, 1pt and transparent, not left out.
+                ScreenSharePickerView()
+                    .frame(width: 1, height: 1)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                // 1:1 audit r2 I3, 2026-10-08: the same rule as the card and the tab (`isVideoCall`),
+                // so a video call with both cameras off still has a PiP source from this screen.
+                if call.isVideoCall {
+                    // The whole layout, not one feed — see CallService.pipFeeds.
+                    CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
+                }
+                // Tap anywhere that is not a button or the tile to show/hide the controls. It sits
+                // ABOVE the video and BELOW everything interactive, so the buttons and the corner tile
+                // keep their own taps.
+                // Off while their screen is on stage: the stage takes its own taps, pinches and pans.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleControls() }
+                    .allowsHitTesting(!(stageShown && shareFullscreen))
+                // zIndex: the video card is the TOP layer, always (owner's side-by-side reference,
+                // 2026-08-12: on a voice call that turns on a camera, ours slid UNDER the avatar
+                // circle; the standard is avatar behind, card in front). The card's drag bounds
+                // keep it clear of the header and control bar, so nothing interactive is covered.
+                callLayers(geo).zIndex(2)
+
+                VStack(spacing: 0) {
+                    topBar(safeTop: winInsets.top)
+                        // Landscape: clear the notch side and the far side (both zero in portrait).
+                        .padding(.leading, winInsets.left)
+                        .padding(.trailing, winInsets.right)
+                        .frame(maxWidth: .infinity)        // full-width header (centered name/status)
+                        // 1:1 audit r2 H2, 2026-10-08: only the two buttons and the scrim leave with
+                        // the controls (inside topBar); the name, timer and "Reconnecting…" stay, as
+                        // in the reference app. Their shared screen still gets a clean view.
+                        // 1:1 audit r3 G6, 2026-10-08: on their shared screen too (the header as a
+                        // whole used to leave there, taking "Video paused" and "On hold" with it).
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }   // r3 G4
+                    Spacer()
+                    if showAvatar {
+                        // WHOSE photo follows who is on the big screen, not always theirs.
+                        AvatarView(name: showLocalFull ? call.myName : call.otherName,
+                                   photoUrl: showLocalFull ? call.myPhotoUrl : call.otherPhotoUrl,
+                                   size: 180)
+                            .overlay(Circle().stroke(.white.opacity(0.12), lineWidth: 1))
+                            // No pulsing rings while Calling: the owner had them removed 2026-10-04.
+                            .shadow(color: .black.opacity(0.45), radius: 26, y: 10)
+                            .frame(maxWidth: .infinity)    // guarantee horizontal centering
+                            .allowsHitTesting(false)       // decoration: let the show/hide tap through
+                            .accessibilityElement(children: .ignore)   // r2 H7: say whose photo it is
+                            .accessibilityLabel(showLocalFull ? "Your photo" : call.otherName)
+                        Spacer()
+                    }
+                    // Audit M-011, 2026-10-07: the camera was refused, so the camera button cannot do
+                    // anything and the other side sees no video. Say where to fix it, just above the
+                    // controls, in the status line's style. `cameraDenied` is set by CallService.
+                    if call.cameraDenied {
+                        // 1:1 audit r2 E7/H9b, 2026-10-08: a tap opens this app's Settings page (the
+                        // reference app gives a way there too). Same look as before.
+                        Button {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        } label: {
+                            Text("Allow camera access in Settings")
+                                .font(.system(size: statusSize))
+                                .foregroundStyle(.white.opacity(0.75))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens Settings")
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, 10)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraLineHeight = $0 }   // r3 G4
+                        .opacity(controlsVisible ? 1 : 0)
+                        .accessibilityHidden(!controlsVisible)
+                        .allowsHitTesting(controlsVisible)
+                    }
+                    controlBar
+                        .frame(maxWidth: .infinity)        // centered control pill
+                        .padding(.bottom, winInsets.bottom + 22)
+                        .opacity(controlsVisible ? 1 : 0)
+                        .allowsHitTesting(controlsVisible)
+                        .accessibilityHidden(!controlsVisible)   // #19, as the top bar
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the screen (never collapse/offset)
+
+                // Screen share, 2026-10-08: the small pill under the header. Its own layer, so it
+                // never pushes the avatar or the bar around, and it stays when the chrome is away.
+                VStack {
+                    if let topPill {
+                        Text(topPill)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .padding(.horizontal, 14)
+                            .frame(height: 32)
+                            .liquidGlass(Capsule(), interactive: false)
+                            .transition(.opacity)
+                    }
+                    Spacer()
+                }
+                .padding(.top, winInsets.top + 96)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+                .zIndex(3)
+
+                // The sharer's one control, centred just above the bar and not part of it.
+                VStack(spacing: 6) {
+                    Spacer()
+                    if !shareLayout { sharePill }
+                }
+                .padding(.bottom, sharePillBottom)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.85), value: call.screenSharePhase)   // r3 G2
+                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.85), value: call.screenShareLink)
+                .animation(.easeInOut(duration: 0.25), value: controlsVisible)
+                .zIndex(3)
         }
     }
 
@@ -2558,5 +2509,76 @@ struct ScreenSharingCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Sharing your screen")
+    }
+}
+
+/// 2026-10-10: CallView's state watchers, out of `body` for the type checker. Verbatim; they run
+/// against the same view value (`view.`), exactly as they did inline.
+private struct CallObservers: ViewModifier {
+    let view: CallView
+    func body(content: Content) -> some View {
+        view.observe(content)
+    }
+}
+
+extension CallView {
+    fileprivate func observe(_ content: some View) -> some View {
+        content
+            .onChange(of: call.state) { _, state in
+                showControls()
+                if state == .outgoing, call.cameraOn { ringingPreviewShown = true }   // M-056
+                // 1:1 audit r2 H7, 2026-10-08: VoiceOver hears the stage change (Connected,
+                // Reconnecting, the end words), which the status label only showed.
+                if UIAccessibility.isVoiceOverRunning {
+                    let words = state == .active ? "Connected" : statusText
+                    if !words.isEmpty { UIAccessibility.post(notification: .announcement, argument: words) }
+                }
+            }
+                .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
+                .onChange(of: call.isVideo) { _, _ in showControls() }
+            // r2 H3: their camera on/off re-arms the clock. 1:1 audit r3 G5, 2026-10-08: their real
+            // camera signal only, not `hasRemote`, whose frame-stall half flips on a weak link and
+            // made the controls and the tile jump every few seconds.
+                .onChange(of: call.remoteCameraOn) { _, _ in showControls() }
+            // r3 G3: the stage leaving with the chrome away brings it back.
+                .onChange(of: stageShown) { _, _ in showControls() }
+            // Screen share, 2026-10-08. My share going live: my feed leaves the big view (it would be
+            // a picture of this very screen), so a swap I had made is undone.
+                .onChange(of: call.screenSharing) { _, live in
+                if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
+                showControls()
+            }
+            // Their share starting or ending brings the chrome back; it never stays hidden after.
+            // A swap to my own camera is undone when their share starts, so the share is what shows.
+                .onChange(of: call.remoteScreenSharing) { _, live in
+                if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
+                showControls()
+            }
+            // A NEW share from them: say who it is, once, then get off the picture.
+                .onChange(of: call.remoteScreenSharingSince) { _, since in
+                guard since != nil else { return }
+                showTopPill("\(otherFirstName) is sharing their screen", for: 3)
+            }
+                .onChange(of: call.screenShareNotice) { _, notice in showShareNotice(notice) }
+                .onAppear { showShareNotice(call.screenShareNotice) }
+            // #40: the sheet pauses the clock (see armAutoHide); closing it brings the controls
+            // back and starts it again. #19: VoiceOver turned on mid-call brings hidden controls back.
+                .onChange(of: showAddPeople) { _, up in
+                if up { hideTask?.cancel() } else { showControls() }
+            }
+                .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)) { _ in
+                showControls()
+            }
+            // The switch's RETURN half: the new camera is live, mirror already changed while the
+            // view was edge-on/black. Come back from the FAR side — the jump across is invisible.
+                .onChange(of: call.cameraSwitchFlip) { _, _ in
+                guard flippingCamera else { return }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { flipAngle = -flipAngle }
+                withAnimation(.easeOut(duration: 0.1)) { flipAngle = 0; flipDim = false }
+                flippingCamera = false
+            }
+            // 1:1 audit r3 G2, 2026-10-08: the ones that move or resize the layout stand down under
+            // Reduce Motion (an implicit animation overrides a `withAnimation(nil)`).
     }
 }
