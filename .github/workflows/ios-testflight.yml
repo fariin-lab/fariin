@@ -74,8 +74,8 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CALLS CONNECT RELIABLY + NEW SCREEN SHARE LAYOUT.
-            CALLS: the server no longer stops calls when you make many in a row (the test limit is gone). "Ringing..." now shows the moment the other phone really rings, also when their app is closed. When you both call each other at the same moment, one call goes through and rings normally; nobody is answered automatically.
+            THIS BUILD: CALL RECEIVING BACK TO BUILD 848 + NEW SCREEN SHARE LAYOUT.
+            CALLS: how a phone receives a call is exactly as in build 848 again (849 changed it and calls broke). The server no longer stops calls when you make many in a row (the test limit is gone). When you both call each other at the same moment, one call goes through and rings; nobody is answered automatically. The mute, camera, speaker and end buttons now work when you tap anywhere on the circle.
             SCREEN SHARE: their screen sits in a rounded card under the name, with a button to open it full screen; you and the other person show as two tiles under it; your call buttons stay. While you share, the card says "You're sharing your screen" with Stop Sharing inside it.
             PLEASE TEST: call with the other app closed, in the background and open (voice and video) and watch Calling... turn into Ringing...; both call at the same second; share your screen and watch theirs; open full screen and come back.
 

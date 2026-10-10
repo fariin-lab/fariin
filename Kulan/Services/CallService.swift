@@ -5672,8 +5672,9 @@ final class CallService: NSObject {
     /// "Calling..." while the phone rang. The server ran the same block and privacy checks before it
     /// pushed; the phone's gate still ends the ring if it refuses.
     func ringShown(callId id: String) {
-        guard state == .incoming, callId == id, !wasAccepted else { return }
-        markRinging()
+        // 2026-10-10: back to build 848's receiving path (he: "848 calls 100%, 849 broken");
+        // ringing is told after the phone's gate again, as in 848. Kept as the hook.
+        _ = id
     }
 
     private func standDownForGlare(rearmListener: Bool) {
@@ -5724,7 +5725,14 @@ final class CallService: NSObject {
         // back, or a repeat. Never rung, never recorded. PushManager still reports it right after
         // this returns, as iOS requires; with no system call up that report is a real ring, so it is
         // ended on the next turn of the main queue, the same way the group-busy case below does it.
-        if finishedCallIds.contains(callId) { return false }
+        if finishedCallIds.contains(callId) {
+            if state == .idle {
+                DispatchQueue.main.async {
+                    if CallKitManager.shared.activeCallId == callId { CallKitManager.shared.reportEnded() }
+                }
+            }
+            return false
+        }
         // M-112 (2026-10-07): the tiebreak applies only once my own dial has been sent; see
         // settleAgainstCurrentCall.
         if state == .outgoing, !uid.isEmpty, uid == otherUid, callId != self.callId {

@@ -151,13 +151,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // Audit M-157, 2026-10-07: nobody signed in here (a sign-out whose token cleanup did not
         // land). The ghost-call guard reads the call doc, which a signed-out phone cannot do, so it
         // rang anyway. Reported, as iOS requires, and ended at once.
-        // Owner, 2026-10-10: "I tap Decline and a few seconds later the same call rings again, then
-        // goes away". The ring push came in after the in-app ring was already declined (the server's
-        // push can trail the call doc by seconds). It was still reported as a NEW ring, and only the
-        // ghost check ended it seconds later. A call this phone already finished is reported and
-        // ended in one step now, as iOS requires, and never shows.
-        guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId),
-              !CallService.shared.hasFinished(callId) else {
+        guard Auth.auth().currentUser != nil, !Self.wasCancelled(callId) else {
             CallKitManager.shared.reportAndDiscard(completion: completion)
             return
         }
@@ -170,14 +164,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         let photo = (d["photo"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let video = (d["type"] as? String) == "video"   // M1: show the right CallKit UI for a video call
         // iOS 13+: MUST report to CallKit before completion or the app is terminated.
-        // Owner, 2026-10-10: only a push that really rings is reported as a ring. A glare loser's
-        // call, a busied call, a late push for a finished call, or a redial still being checked
-        // (it reports itself if it wins) is reported and ended in one step: what iOS requires,
-        // and nothing the person sees or can answer into silence.
-        guard CallService.shared.prepareIncoming(callId: callId, name: name, uid: uid, photo: photo, video: video) else {
-            CallKitManager.shared.reportAndDiscard(completion: completion)
-            return
-        }
+        CallService.shared.prepareIncoming(callId: callId, name: name, uid: uid, photo: photo, video: video)
         // owner, 2026-10-06: one ring at a time. A group ring still up stops for the 1:1 call;
         // nothing below changes.
         // Audit M-046, 2026-10-07: only once this push really became the ringing call. It ran
