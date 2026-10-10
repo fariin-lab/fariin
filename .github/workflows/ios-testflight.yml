@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (856): UPLOADS, REQUEST ACCEPTED, SMALL FIXES.
+            THIS BUILD (857): NEW SHARE SCREEN ICON.
+            The Share Screen item in the call's ... menu has a new icon.
+            PLEASE TEST: open the ... menu during a call and check the Share Screen icon.
+
+            EARLIER (856): UPLOADS, REQUEST ACCEPTED, SMALL FIXES.
             A photo upload that gets stuck now restarts by itself after 20 seconds instead of spinning for minutes. When someone accepts your message request you get a notification, and it shows on the Notifications page. Screen share: the full-screen button is smaller glass. Chat header text turns dark on light wallpapers and white on dark ones. Profile call menu icons are outline.
             PLEASE TEST: send a photo on weak internet; have someone accept your message request; check the chat name on a light wallpaper.
 
