@@ -331,9 +331,7 @@ struct CallView: View {
                 // 2026-08-12: on a voice call that turns on a camera, ours slid UNDER the avatar
                 // circle; the standard is avatar behind, card in front). The card's drag bounds
                 // keep it clear of the header and control bar, so nothing interactive is covered.
-                if shareLayout { shareLayoutView(geo).zIndex(1) }
-                if call.isVideo, !shareLayout { pipLayer(geo).zIndex(2) }
-                if stageShown, shareFullscreen { shareCollapseButton.zIndex(3) }
+                callLayers(geo).zIndex(2)
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
@@ -1064,6 +1062,17 @@ struct CallView: View {
     }
 
     // MARK: - Share layout (owner, 2026-10-10)
+
+    /// The share layout, the floating tile and the full-screen share's back button, as ONE layer of
+    /// the body's ZStack (the body grew past what the type checker accepts with them inline). Same
+    /// order as before: card and tiles, then the floating tile, then the back button on top.
+    @ViewBuilder private func callLayers(_ geo: GeometryProxy) -> some View {
+        ZStack {
+            if shareLayout { shareLayoutView(geo) }
+            if call.isVideo, !shareLayout { pipLayer(geo) }
+            if stageShown, shareFullscreen { shareCollapseButton }
+        }
+    }
 
     /// The card under the header and the two people under it. Fixed geometry: the header and the
     /// call buttons fade over their own space, so nothing jumps when the controls hide.

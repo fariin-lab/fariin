@@ -263,7 +263,8 @@ final class CallKitManager: NSObject {
                     // 1:1 audit r2 A2, 2026-10-08: a refusal on THIS phone ends the ring here only.
                     // It wrote `ended` onto the shared doc and killed the ring on my other devices;
                     // the reference app marks only the refusing device's call.
-                    CallService.shared.endRingLocally(callId: callId)
+                    CallService.shared.endRingLocally(callId: callId,
+                                                      kitError: (error as NSError?)?.code)
                 }
             } else {
                 // Owner, 2026-10-10: the ring is up; the caller may now hear "Ringing...".

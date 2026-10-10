@@ -6971,8 +6971,13 @@ final class CallService: NSObject {
     /// 1:1 audit r2 A2, 2026-10-08: iOS refused to ring this call on THIS phone (a Focus, its block
     /// list). Ends here only: the doc stays ringing for my other devices, and the caller's ring-out
     /// closes it. No row from this phone (the caller's row or the answering device's covers it).
-    func endRingLocally(callId: String) {
+    func endRingLocally(callId: String, kitError: Int? = nil) {
         guard self.callId == callId, state == .incoming, !wasAccepted else { return }
+        // 2026-10-10: WHY iOS refused the ring, in this call's timing record (`callTiming/{id}`):
+        // 1 unentitled, 2 call UUID exists, 3 filtered by Do Not Disturb / Focus, 4 filtered by the
+        // block list. A refused ring left no trace anywhere, so a Focus that silenced every call
+        // looked like a broken call system.
+        if let kitError { mark("kitRefused\(kitError)") }
         endReason = .missed
         recordWritten = true
         finishCall(updateRemote: false, clearCallKit: false, localUser: true)
