@@ -2057,11 +2057,11 @@ struct ContactInfoView: View {
         Menu {
             Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                   video: false, fromProfile: true) } label: {
-                Label("Voice call", systemImage: "phone.fill")
+                Label("Voice call", systemImage: "phone")   // owner 2026-10-10: outline
             }
             Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                   video: true, fromProfile: true) } label: {
-                Label("Video call", systemImage: "video.fill")
+                Label("Video call", systemImage: "video")   // outline
             }
         } label: {
             PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)

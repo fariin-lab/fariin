@@ -80,7 +80,11 @@ import UIKit
         if let hit = backdropCache[key] { return hit }
         guard let picture = renderWallpaper(cid: cid, dark: dark, size: frame.size) else { return .unspecified }
         let band = CGRect(x: 0, y: 0, width: picture.size.width, height: min(150, picture.size.height))
-        let style: UIUserInterfaceStyle = averageLuminance(of: picture, in: band) < 0.4 ? .dark : .light
+        // Owner, 2026-10-10: "light wallpaper -> dark text, dark wallpaper -> white text". The switch
+        // was at 0.4, so medium-light wallpapers kept white text that barely read. Now whichever text
+        // has the HIGHER contrast wins: white's ratio is 1.05/(L+0.05), black's (L+0.05)/0.05, and they
+        // are equal at L ~ 0.179.
+        let style: UIUserInterfaceStyle = averageLuminance(of: picture, in: band) < 0.179 ? .dark : .light
         if backdropCache.count >= 8 { backdropCache.removeAll() }
         backdropCache[key] = style
         return style
