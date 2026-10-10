@@ -710,6 +710,18 @@ struct CallView: View {
                         .minimumScaleFactor(0.6)
                     VerifiedMark(uid: call.otherUid, size: 20)
                 }
+                // Owner, 2026-10-10: THEIR mute is the word "Muted" on its own line between the name
+                // and the timer (the reference messenger's placement). The slashed-mic badge that hung
+                // off the timer is gone: it landed on the digits. Fades with `remoteMuted` (see the
+                // animation on that value), so it follows a mute or unmute at once.
+                if call.remoteMuted, call.state == .active || call.state == .reconnecting {
+                    Text("Muted")
+                        .font(.system(size: statusSize, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                        .accessibilityLabel("\(otherFirstName) is muted")
+                        .transition(.opacity)
+                }
                 // 1:1 audit r2 H4, 2026-10-08: THEIR mute is a small slashed mic BESIDE the status, and
                 // the timer stays (the reference app never replaces the duration with a mute label).
                 // The status line itself still says hold / weak signal / Reconnecting (#42, M-057).
@@ -724,15 +736,6 @@ struct CallView: View {
                     TimelineView(.periodic(from: tickAnchor, by: 1)) { _ in
                         Text(statusText).font(.system(size: statusSize)).monospacedDigit().foregroundStyle(.white.opacity(0.75))
                             .lineLimit(1).minimumScaleFactor(0.7)   // 1:1 audit r3 G4, 2026-10-08
-                    }
-                }
-                .overlay(alignment: .leading) {
-                    if call.remoteMuted, call.state == .active {
-                        Image(systemName: "mic.slash.fill").font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .alignmentGuide(.leading) { $0[.trailing] + 5 }
-                            .accessibilityLabel("\(otherFirstName) is muted")
-                            .transition(.opacity)
                     }
                 }
             }
