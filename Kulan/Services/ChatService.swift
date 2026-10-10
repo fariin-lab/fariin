@@ -306,24 +306,56 @@ enum ChatService {
                                                  metadata: StorageMetadata,
                                                  progressId: String?) async throws {
         let task = ref.putFile(from: tmp, metadata: metadata)
-        // Exactly one resume: success and failure are mutually exclusive, and observers are torn
-        // down in both so a retry's task cannot report into a continuation that has already returned.
+        // ⛔ A STALLED TRANSFER IS RESTARTED, NOT WAITED OUT — owner, 2026-10-10 ("the image upload
+        // never ends", ring frozen part-way; the reference app restarts a stuck part in seconds). The SDK
+        // retries a stalled transfer silently for `maxUploadRetryTime` (120 s) per attempt, and the
+        // caller's loop then started again up to six times: many minutes of a frozen ring. Now no new
+        // bytes for `stallLimit` ends this attempt with a timeout (retryable), the task is cancelled,
+        // and the caller's loop starts a fresh transfer about two seconds later.
+        final class Box: @unchecked Sendable {
+            let lock = NSLock(); var done = false; var lastBytes: Int64 = -1; var lastMove = Date()
+        }
+        let box = Box()
+        let stallLimit: TimeInterval = 20
+        // Exactly one resume: success, failure and the stall check race, and only the first one
+        // counts (`box.done`). Observers are torn down so a retry's task cannot report into it.
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                if let progressId {
-                    task.observe(.progress) { snap in
-                        guard let p = snap.progress, p.totalUnitCount > 0 else { return }
-                        let fraction = Double(p.completedUnitCount) / Double(p.totalUnitCount)
-                        Task { @MainActor in UploadProgress.shared.report(progressId, fraction) }
-                    }
-                }
-                task.observe(.success) { _ in
+                let finish: (Result<Void, Error>) -> Void = { result in
+                    box.lock.lock()
+                    if box.done { box.lock.unlock(); return }
+                    box.done = true
+                    box.lock.unlock()
                     task.removeAllObservers()
-                    cont.resume()
+                    cont.resume(with: result)
                 }
+                task.observe(.progress) { snap in
+                    guard let p = snap.progress else { return }
+                    box.lock.lock()
+                    if p.completedUnitCount != box.lastBytes { box.lastBytes = p.completedUnitCount; box.lastMove = Date() }
+                    box.lock.unlock()
+                    guard let progressId, p.totalUnitCount > 0 else { return }
+                    let fraction = Double(p.completedUnitCount) / Double(p.totalUnitCount)
+                    Task { @MainActor in UploadProgress.shared.report(progressId, fraction) }
+                }
+                task.observe(.success) { _ in finish(.success(())) }
                 task.observe(.failure) { snap in
-                    task.removeAllObservers()
-                    cont.resume(throwing: snap.error ?? NSError(domain: StorageErrorDomain, code: -1))
+                    finish(.failure(snap.error ?? NSError(domain: StorageErrorDomain, code: -1)))
+                }
+                Task.detached {
+                    while true {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        box.lock.lock()
+                        let done = box.done, idle = Date().timeIntervalSince(box.lastMove)
+                        box.lock.unlock()
+                        if done { return }
+                        if idle >= stallLimit {
+                            print("[Upload] no progress for \(Int(idle)) s, restarting the transfer")
+                            finish(.failure(URLError(.timedOut)))   // retryable: a fresh attempt follows
+                            task.cancel()
+                            return
+                        }
+                    }
                 }
             }
         } onCancel: {

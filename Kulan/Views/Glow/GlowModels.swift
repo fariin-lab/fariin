@@ -514,6 +514,7 @@ struct GlowEvent: Identifiable, Equatable {
         case glowed                  // they gave me a glow
         case loved(String)           // they reacted to my story; the emoji they used
         case replied(String)         // they replied to my story; what they said
+        case acceptedRequest         // owner 2026-10-10: they accepted my message request
     }
     let id: String
     var person: GlowPerson
@@ -584,6 +585,25 @@ struct GlowEvent: Identifiable, Equatable {
                         at: v.viewedAt,
                         storyThumb: story.thumbUrl))
                 }
+            }
+        }
+
+        // 3. Owner, 2026-10-10: my message requests that the other person accepted. Derived from my
+        // own chats, like the rows above: the server stamps who and when (onRequestAccepted). A Chat
+        // Key unlock is not an accept by them, so it is left out.
+        if !me.isEmpty {
+            for c in ConversationsRepository.shared.conversations
+            where !c.isGroup && c.startedBy == me && c.accepted && c.acceptedVia != "pin"
+                && c.acceptedAtMillis > 0 {
+                guard let other = c.users.first(where: { $0 != me }), !other.isEmpty,
+                      c.acceptedBy.isEmpty || c.acceptedBy == other else { continue }
+                out.append(GlowEvent(
+                    id: "accepted-\(c.id)",
+                    person: GlowPerson(id: other, name: c.names[other] ?? "", handle: "",
+                                       photoUrl: c.photos[other]),
+                    kind: .acceptedRequest,
+                    at: Date(timeIntervalSince1970: c.acceptedAtMillis / 1000),
+                    storyThumb: nil))
             }
         }
 

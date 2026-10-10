@@ -1113,9 +1113,10 @@ struct CallView: View {
                     withAnimation(.easeInOut(duration: 0.25)) { shareFullscreen = true }
                 } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 48, height: 48)
-                        .background(Color.black.opacity(0.45), in: Circle())
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 40, height: 40)   // owner 2026-10-10: 40 pt, liquid glass
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .padding(12)
@@ -1150,9 +1151,10 @@ struct CallView: View {
             withAnimation(.easeInOut(duration: 0.25)) { shareFullscreen = false }
         } label: {
             Image(systemName: "arrow.down.right.and.arrow.up.left")
-                .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                .frame(width: 48, height: 48)
-                .background(Color.black.opacity(0.45), in: Circle())
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 40, height: 40)   // same as the full-screen button
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Exit full screen")

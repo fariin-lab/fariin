@@ -293,6 +293,9 @@ private struct GlowEventRow: View {
                     + Text(" reacted \(emoji) to your story.") + stamp
             case .replied(let what):
                 Text(event.person.name).fontWeight(.semibold) + Text(" replied: \"\(what)\"") + stamp
+            case .acceptedRequest:   // owner, 2026-10-10
+                Text(event.person.name).fontWeight(.semibold)
+                    + Text(" accepted your message request.") + stamp
             }
         }
         .font(.subheadline)

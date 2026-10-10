@@ -900,7 +900,11 @@ struct Conversation: Identifiable, Equatable, Hashable {
     /// `verifyChatPin` and read only to tell the owner — see `ContactInfoView` (audit S4).
     var acceptedVia: String
     /// The uid of whoever typed the key, when `acceptedVia` is "pin". Empty otherwise.
+    /// 2026-10-10: also stamped by the server (onRequestAccepted) for an ordinary Accept: the uid
+    /// of the person who accepted the request.
     var acceptedBy: String
+    /// 2026-10-10: when the request was accepted (server stamp, onRequestAccepted). 0 = unknown.
+    var acceptedAtMillis: Double
 
     init(id: String, data: [String: Any]) {
         self.id = id
@@ -970,6 +974,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.accepted = data["accepted"] as? Bool ?? (data["startedBy"] == nil)
         self.acceptedVia = data["acceptedVia"] as? String ?? ""
         self.acceptedBy = data["acceptedBy"] as? String ?? ""
+        self.acceptedAtMillis = ((data["acceptedAt"] as? Timestamp)?.dateValue().timeIntervalSince1970 ?? 0) * 1000
         self.restrictedFlags = stringArrayMap(data["restrictedFlags"])
         self.restrictedUntil = doubleMap(data["restrictedUntil"])
         self.lastReactionEnc = data["lastReactionEnc"] as? String
