@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (854): SCREEN SHARE TAPS + SMALLER NAME IN CALLS.
+            THIS BUILD (855): CALL FIXES.
+            Answering a call the other person already hung up now ends at once (it sat on Connecting... with the call sound half on). The other person's photo now appears on the call screen even when the call started from a place that had no photo loaded. Each call now records whether sound was sent and received, so a silent call can be traced.
+            PLEASE TEST: hang up just as the other person answers, then call again and check you hear each other; call from the Calls list and check the photo shows. If a call is silent, tell me the time.
+
+            EARLIER (854): SCREEN SHARE TAPS + SMALLER NAME IN CALLS.
             Screen share: a share now starts with the call buttons hidden; tap anywhere (the card, the tiles, the empty space) to show them and tap again to hide them, for both the person sharing and the person watching. Stop Sharing still works. The name at the top of a call is a little smaller.
             PLEASE TEST: share your screen and tap the card to show/hide the buttons; watch their share and do the same.
 
