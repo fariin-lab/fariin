@@ -5594,9 +5594,9 @@ final class CallService: NSObject {
             // TURN fetch (up to its 2s cap) inside "Connecting…". Fetched during the ring,
             // it is warm by pickup and the await is a no-op.
             Task { await self.refreshIceServers() }
+            self.ringGateAllowed(doc.documentID)   // gate passed above; "ringing" once iOS shows it
             CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
                                                 video: isVideoCall, callerUid: caller)
-            self.markRinging()
             self.mark("ring")
             // ⛔ PRE-NEGOTIATE HERE TOO. A call arrives by two different routes — a VoIP
             // push when the app is closed, and this listener when it is open — and the
@@ -5680,9 +5680,24 @@ final class CallService: NSObject {
     /// "Calling..." while the phone rang. The server ran the same block and privacy checks before it
     /// pushed; the phone's gate still ends the ring if it refuses.
     func ringShown(callId id: String) {
-        // 2026-10-10: back to build 848's receiving path (he: "848 calls 100%, 849 broken");
-        // ringing is told after the phone's gate again, as in 848. Kept as the hook.
-        _ = id
+        // Owner, 2026-10-10, with proof: a call at 12:57 UTC was refused by iOS (kitRefused3 =
+        // filtered by Do Not Disturb) 35 ms after this phone had already told the caller "ringing",
+        // so the caller saw "Ringing..." for a phone that never rang. "Ringing" now waits for BOTH
+        // this phone's gate and iOS accepting the ring (this hook); whichever lands second tells
+        // the caller. A refused ring never says "Ringing...". Delivery itself is untouched.
+        ringKitShownId = id
+        markRingingIfAlerted(id)
+    }
+    /// The two halves of "the callee is really being alerted" (see `ringShown`).
+    private var ringKitShownId: String?
+    private var ringGateOkId: String?
+    private func ringGateAllowed(_ id: String) {
+        ringGateOkId = id
+        markRingingIfAlerted(id)
+    }
+    private func markRingingIfAlerted(_ id: String) {
+        guard ringKitShownId == id, ringGateOkId == id, callId == id, state == .incoming, !wasAccepted else { return }
+        markRinging()
     }
 
     private func standDownForGlare(rearmListener: Bool) {
@@ -5868,7 +5883,7 @@ final class CallService: NSObject {
                 return
             }
             guard self.state == .incoming else { return }   // answered during the read: nothing left to do here
-            self.markRinging()   // allowed — only now does the caller hear it ring
+            self.ringGateAllowed(callId)   // allowed; "ringing" once iOS has the ring up (ringShown)
             self.mark("ring")
             // ⭐ THE OFFER, FETCHED WHILE IT IS STILL RINGING.
             //
