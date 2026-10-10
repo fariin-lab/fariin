@@ -57,6 +57,24 @@ enum RingbackTone {
         return wav(samples, sampleRate: sampleRate)
     }
 
+    // Owner, 2026-10-10: a short, soft RISING two-note chime when the other person turns their
+    // camera on mid-call (voice becoming video). Quieter than the end tone, about a third of a
+    // second, each note faded in and out so nothing clicks over their voice.
+    static func videoOnData(sampleRate: Int = 16000) -> Data {
+        let note = 0.12, gap = 0.04
+        let total = Int(Double(sampleRate) * (note * 2 + gap))
+        var samples = [Int16](repeating: 0, count: total)
+        for i in 0..<total {
+            let t = Double(i) / Double(sampleRate)
+            var v = 0.0, local = 0.0
+            if t < note { v = sin(2 * .pi * 660 * t); local = t }
+            else if t > note + gap { v = sin(2 * .pi * 880 * t); local = t - note - gap }
+            let env = sin(.pi * min(1, max(0, local / note)))   // smooth in and out
+            samples[i] = Int16(v * 5200 * env)
+        }
+        return wav(samples, sampleRate: sampleRate)
+    }
+
     private static func wav(_ samples: [Int16], sampleRate: Int) -> Data {
         var d = Data()
         let dataBytes = samples.count * 2

@@ -423,6 +423,28 @@ final class CallService: NSObject {
     /// only ever started into a live session; a "ringing" signal that lands before this waits for it.
     private var callAudioLive = false
     private var tonePlayer: AVAudioPlayer?       // busy / ended one-shot tones
+    private var videoChimePlayer: AVAudioPlayer?
+
+    /// Owner, 2026-10-10 (the reference messenger does this): their camera coming ON in a connected
+    /// call gets a light tap and a short soft chime. Once per off-to-on switch; never for the
+    /// camera a video call starts with (the first seconds after connect), never for the camera
+    /// flip their screen share causes, never while held. The chime plays into the call's own
+    /// running audio session: no category, mode or route change, so the call is not touched. The
+    /// tap follows the phone's own haptics setting and only exists while the app is in front.
+    private func chimeForTheirCameraIfDue() {
+        guard state == .active, !isHeld, !remoteScreenSharing,
+              let connected = connectedDate, Date().timeIntervalSince(connected) > 2 else { return }
+        DispatchQueue.main.async {
+            if UIApplication.shared.applicationState == .active {
+                let tap = UIImpactFeedbackGenerator(style: .medium)
+                tap.prepare(); tap.impactOccurred()
+            }
+        }
+        videoChimePlayer?.stop()
+        videoChimePlayer = try? AVAudioPlayer(data: RingbackTone.videoOnData())
+        videoChimePlayer?.volume = 0.6
+        videoChimePlayer?.play()
+    }
     private var localAudioTrack: RTCAudioTrack?
     // Video (1:1). Each side controls its OWN camera independently: no
     // permission — turning your camera on just sends your video and the other side sees it. The
@@ -3092,6 +3114,7 @@ final class CallService: NSObject {
         }
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
             remoteCameraOn = on
+            if on { chimeForTheirCameraIfDue() }
             // THEIR CAMERA COMING ON DEMANDS THE SCREEN BACK (owner's side-by-side reference,
             // 2026-08-12; FaceTime agrees): a voice call becoming video is the one moment in a call
             // that needs eyes. Minimized in the app → the call returns fullscreen by itself.
