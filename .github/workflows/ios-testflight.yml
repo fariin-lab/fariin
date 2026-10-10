@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (853): CALLS UNDER FOCUS / DO NOT DISTURB, THE SAME WAY AS THE MOST RELIABLE CALL APPS.
+            THIS BUILD (854): SCREEN SHARE TAPS + SMALLER NAME IN CALLS.
+            Screen share: a share now starts with the call buttons hidden; tap anywhere (the card, the tiles, the empty space) to show them and tap again to hide them, for both the person sharing and the person watching. Stop Sharing still works. The name at the top of a call is a little smaller.
+            PLEASE TEST: share your screen and tap the card to show/hide the buttons; watch their share and do the same.
+
+            EARLIER (853): CALLS UNDER FOCUS / DO NOT DISTURB, THE SAME WAY AS THE MOST RELIABLE CALL APPS.
             When the other phone's Focus or Do Not Disturb blocks your call, you now see "Calling..." and then "No answer", never a false "Ringing...". They get a missed call so they know you called. Nothing else about calls changed.
             PLEASE TEST: call a phone with Focus on (app open, in the background, closed): you should see Calling..., then No answer, and they get a missed call. Then with Focus off: Ringing... as normal.
 
