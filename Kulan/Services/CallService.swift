@@ -1571,6 +1571,7 @@ final class CallService: NSObject {
         // Register BEFORE the first frame: an outgoing video call captures while still ringing, so
         // waiting for .active would miss a backgrounding during the ring.
         observeLifecycleIfNeeded()
+        mark("camStartAsked")
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
             guard granted else {
@@ -1717,6 +1718,7 @@ final class CallService: NSObject {
         // 1:1 audit r2 check, 2026-10-08: and clear `cameraStarting`, which no start will now clear.
         let giveUp = { DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.mark("camGaveUp")
             self.cameraStarting = false
             self.resolvePendingSwitch()
             // 1:1 audit r3 D4, 2026-10-08: a live call whose camera could not start is a paused
@@ -1785,6 +1787,7 @@ final class CallService: NSObject {
                 // 1:1 audit r2 E1, 2026-10-08: a turn-on is announced only now, with the session up.
                 let announce = self.cameraStarting
                 self.cameraStarting = false
+                self.mark(capturer.captureSession.isRunning ? "camRunning" : "camNotRunning")
                 if capturer.captureSession.isRunning {
                     if self.cameraPausedByBackground { self.resumeCameraIfReallyBack() }
                     if announce { self.broadcastCameraState() }
@@ -1972,6 +1975,7 @@ final class CallService: NSObject {
         // times while it is the same live call and the value is still the one we meant; recovery
         // from .reconnecting re-sends it too (see `state`).
         let value = camsSignal
+        mark(value ? "camsOnSent" : "camsOffSent")   // 2026-10-10: camera evidence in callTiming
         db.collection("calls").document(id).updateData(["cams.\(me)": value]) { [weak self] err in
             guard let self, err != nil, attempt < 3 else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -1996,7 +2000,11 @@ final class CallService: NSObject {
     /// during the ring is already running, the answer says cams=false and startCapture's completion
     /// announces it (after the accept, so no camera write lands before it). Main only.
     private func markCameraStartingForAnswer() {
-        guard cameraOn, !shareOwnsCamera, videoCapturer?.captureSession.isRunning != true else { return }
+        guard cameraOn, !shareOwnsCamera, videoCapturer?.captureSession.isRunning != true else {
+            if cameraOn { mark("camAlreadyRunningAtAnswer") }
+            return
+        }
+        mark("camStartingAtAnswer")
         cameraStarting = true
     }
 
