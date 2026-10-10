@@ -4489,12 +4489,8 @@ final class CallService: NSObject {
         }
         // 1:1 audit r3 A4, 2026-10-08: they are ringing me right now. The system ring is up to
         // answer; no "already in a call" notice.
-        // Owner, 2026-10-10: pressing Call on the person ringing me ANSWERS their call (we both want
-        // to talk), as the reference messengers do. It used to do nothing.
-        if otherUid == uid, state == .incoming {
-            if !wasAccepted, let id = callId { CallKitManager.shared.answerRinging(callId: id) }
-            return
-        }
+        // Owner, 2026-10-10: never answered for the user; their ring (with Accept) is already up.
+        if otherUid == uid, state == .incoming { return }
         guard state == .idle else {
             MainActor.assumeIsolated { GroupCallService.presentOverTop(GroupCallService.busyNotice) }
             return
@@ -5669,27 +5665,21 @@ final class CallService: NSObject {
     /// listener path — their doc does not change when I stand down, so no further snapshot would
     /// ever arrive and I would sit idle while their phone rings on alone. The push path rings the
     /// call itself, so it passes false.
-    /// Owner, 2026-10-10: "they were calling me, I called them, my call dropped and they got a ring
-    /// with no sound". We both pressed Call, so we both want to talk: the reference messengers connect
-    /// the two. The glare loser drops its own dial (unchanged) and ANSWERS the winner's call the
-    /// moment it rings here (`ringShown`). Only for that person, only for 20 s after standing down.
-    private var glareAnswerUid: String?
-    private var glareAnswerUntil: Date?
-
-    /// CallKitManager: the system ring for `callId` is up. Main queue.
+    /// CallKitManager: the system ring for `callId` is up (iOS accepted the report). Main queue.
+    /// Owner, 2026-10-10: "Ringing..." must mean the callee is really being alerted (the reference
+    /// app's rule). The push path told the caller only after this phone's own gate read the database,
+    /// seconds after the ring was already on screen on a cold launch, so the caller sat on
+    /// "Calling..." while the phone rang. The server ran the same block and privacy checks before it
+    /// pushed; the phone's gate still ends the ring if it refuses.
     func ringShown(callId id: String) {
-        guard let uid = glareAnswerUid, let until = glareAnswerUntil else { return }
-        guard Date() < until else { glareAnswerUid = nil; glareAnswerUntil = nil; return }
-        guard state == .incoming, callId == id, otherUid == uid, !wasAccepted else { return }
-        glareAnswerUid = nil; glareAnswerUntil = nil
-        print("[Call] glare: both dialled, answering their call")
-        CallKitManager.shared.answerRinging(callId: id)
+        guard state == .incoming, callId == id, !wasAccepted else { return }
+        markRinging()
     }
 
     private func standDownForGlare(rearmListener: Bool) {
         if rearmListener { recheckIncomingWhenIdle = true }
-        // I was dialling exactly this person (both callers check `caller == otherUid`).
-        if !otherUid.isEmpty { glareAnswerUid = otherUid; glareAnswerUntil = Date().addingTimeInterval(20) }
+        // Owner, 2026-10-10: the loser's phone then RINGS the surviving call like any other (the
+        // reference engine's GlareLoser); it is never answered for the user.
         endReason = .hangup
         // Standing down in glare is bookkeeping, not a missed call. Without this the loser wrote a
         // call record whose outcome reads "missed" on the WINNER's phone — a red missed row for the
