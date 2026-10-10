@@ -598,8 +598,12 @@ struct CallView: View {
                 Button {
                     if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
                 } label: {
-                    Label(sharingOn ? "Stop Sharing" : "Share Screen",
-                          systemImage: sharingOn ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                    // Owner, 2026-10-10: his own Share Screen icon (asset ic_share_screen, template).
+                    if sharingOn {
+                        Label("Stop Sharing", systemImage: "rectangle.on.rectangle.slash")
+                    } else {
+                        Label { Text("Share Screen") } icon: { Image("ic_share_screen") }
+                    }
                 }
                 // Audit M-165, 2026-10-07: STOPPING is never disabled. During "Reconnecting…" the
                 // rule above greyed out Stop Sharing too, and the share could not be ended from here.
