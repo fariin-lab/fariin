@@ -58,7 +58,7 @@ struct CallView: View {
     @State private var topPillDone: (() -> Void)?
     /// 1:1 audit r2 H10, 2026-10-08: name and status grow with the text size (capped so the header
     /// still fits), and the decorative motions stand down under Reduce Motion.
-    @ScaledMetric(relativeTo: .title) private var nameScaled: CGFloat = 26
+    @ScaledMetric(relativeTo: .title) private var nameScaled: CGFloat = 22   // owner 2026-10-10: was 26, "a bit smaller"
     @ScaledMetric(relativeTo: .subheadline) private var statusScaled: CGFloat = 15
     private var nameSize: CGFloat { min(nameScaled, 40) }
     private var statusSize: CGFloat { min(statusScaled, 24) }
