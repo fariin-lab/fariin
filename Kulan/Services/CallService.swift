@@ -3091,13 +3091,15 @@ final class CallService: NSObject {
             // their video; un-minimizing tore down its source view and closed the window.
             // Owner, 2026-10-10: only the FIRST time in a call (`autoExpandedForVideo`), and not for a
             // call that started as video (it never went voice-to-video).
-            if on, !autoExpandedForVideo, state == .active || state == .reconnecting,
-               !CallPiPController.shared.isSystemPiPActive {
-                autoExpandedForVideo = true
-                if !startedAsVideo {
+            // Spent only by a camera-on that happens WHILE minimized (his words: "the first time the
+            // other user enables video while the call is minimized").
+            if on, state == .active || state == .reconnecting, !CallPiPController.shared.isSystemPiPActive {
+                if minimized, !autoExpandedForVideo, !startedAsVideo {
+                    autoExpandedForVideo = true
                     minimized = false
-                    if UIApplication.shared.applicationState != .active { postVideoSharingNote() }
                 }
+                // Unchanged: in the background their camera coming on still posts the note.
+                if UIApplication.shared.applicationState != .active { postVideoSharingNote() }
             }
             // Their video is what the swapped layout is BUILT ON: expanded means my feed is fullscreen
             // and theirs is in the tile. If they kill their camera while we are swapped, that tile has
