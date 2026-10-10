@@ -99,7 +99,7 @@ struct CallView: View {
     // Both cameras off = nothing to clear the way for, the controls stay.
     private var autoHideEnabled: Bool {
         connectedCall && !UIAccessibility.isVoiceOverRunning
-            && (call.cameraOn || call.remoteCameraOn || hasRemote || stageShown)
+            && (call.cameraOn || call.remoteCameraOn || hasRemote || stageShown || iAmSharing)   // 2026-10-10: my share too
     }
 
     private func armAutoHide() {
@@ -309,6 +309,13 @@ struct CallView: View {
             // last camera going off brings the controls back for good (armAutoHide's voice branch).
             .onChange(of: autoHideEnabled) { _, _ in armAutoHide() }
             .onChange(of: stageShown) { _, on in if !on { shareFullscreen = false } }
+            // Owner, 2026-10-10: a share (mine or theirs) starts with the controls HIDDEN; a tap
+            // brings them back. Never under VoiceOver (see autoHideEnabled).
+            .onChange(of: shareLayout) { _, on in
+                guard on, !UIAccessibility.isVoiceOverRunning else { return }
+                hideTask?.cancel()
+                withAnimation(.easeInOut(duration: 0.28)) { controlsVisible = false }
+            }
             // Screen share v3: landscape is allowed only while this screen shows their shared
             // screen. Their share ending, the call ending or a minimize brings portrait back.
             .onChange(of: landscapeWanted, initial: true) { _, on in OrientationLock.allowLandscape(on) }
@@ -1062,7 +1069,11 @@ struct CallView: View {
 
     @ViewBuilder private var shareCard: some View {
         ZStack(alignment: .bottomTrailing) {
+            // Owner, 2026-10-10: a tap on the card shows / hides the controls, as anywhere else on
+            // the call screen. Stop Sharing and the full-screen button keep their own taps.
             Color(white: 0.12)
+                .contentShape(Rectangle())
+                .onTapGesture { toggleControls() }
             if iAmSharing {
                 VStack(spacing: 20) {
                     if call.screenSharePhase == .starting {
@@ -1093,6 +1104,8 @@ struct CallView: View {
                 .foregroundStyle(.white)
                 .padding(20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { toggleControls() }   // the Stop button inside keeps its own tap
             } else {
                 ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleControls() })
                 Button {
@@ -1124,6 +1137,8 @@ struct CallView: View {
         }
         .frame(width: height * 0.74, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { toggleControls() }   // 2026-10-10: tiles toggle the controls too
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(name)
     }
@@ -2545,24 +2560,24 @@ extension CallView {
                 }
             }
                 .onAppear { if call.state == .outgoing, call.cameraOn { ringingPreviewShown = true } }
-                .onChange(of: call.isVideo) { _, _ in showControls() }
+                .onChange(of: call.isVideo) { _, _ in if !shareLayout { showControls() } }   // 2026-10-10: not over a share
             // r2 H3: their camera on/off re-arms the clock. 1:1 audit r3 G5, 2026-10-08: their real
             // camera signal only, not `hasRemote`, whose frame-stall half flips on a weak link and
             // made the controls and the tile jump every few seconds.
-                .onChange(of: call.remoteCameraOn) { _, _ in showControls() }
+                .onChange(of: call.remoteCameraOn) { _, _ in if !shareLayout { showControls() } }
             // r3 G3: the stage leaving with the chrome away brings it back.
-                .onChange(of: stageShown) { _, _ in showControls() }
+                .onChange(of: stageShown) { _, on in if !on { showControls() } }   // 2026-10-10: a share starts hidden
             // Screen share, 2026-10-08. My share going live: my feed leaves the big view (it would be
             // a picture of this very screen), so a swap I had made is undone.
                 .onChange(of: call.screenSharing) { _, live in
                 if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
-                showControls()
+                if !live { showControls() }   // 2026-10-10: a share starts with the controls hidden
             }
             // Their share starting or ending brings the chrome back; it never stays hidden after.
             // A swap to my own camera is undone when their share starts, so the share is what shows.
                 .onChange(of: call.remoteScreenSharing) { _, live in
                 if live, isLocalExpanded { withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded = false } }
-                showControls()
+                if !live { showControls() }   // 2026-10-10: a share starts with the controls hidden
             }
             // A NEW share from them: say who it is, once, then get off the picture.
                 .onChange(of: call.remoteScreenSharingSince) { _, since in
