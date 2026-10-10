@@ -4487,7 +4487,12 @@ final class CallService: NSObject {
         }
         // 1:1 audit r3 A4, 2026-10-08: they are ringing me right now. The system ring is up to
         // answer; no "already in a call" notice.
-        if otherUid == uid, state == .incoming { return }
+        // Owner, 2026-10-10: pressing Call on the person ringing me ANSWERS their call (we both want
+        // to talk), as the reference messengers do. It used to do nothing.
+        if otherUid == uid, state == .incoming {
+            if !wasAccepted, let id = callId { CallKitManager.shared.answerRinging(callId: id) }
+            return
+        }
         guard state == .idle else {
             MainActor.assumeIsolated { GroupCallService.presentOverTop(GroupCallService.busyNotice) }
             return
@@ -5662,8 +5667,27 @@ final class CallService: NSObject {
     /// listener path — their doc does not change when I stand down, so no further snapshot would
     /// ever arrive and I would sit idle while their phone rings on alone. The push path rings the
     /// call itself, so it passes false.
+    /// Owner, 2026-10-10: "they were calling me, I called them, my call dropped and they got a ring
+    /// with no sound". We both pressed Call, so we both want to talk: the reference messengers connect
+    /// the two. The glare loser drops its own dial (unchanged) and ANSWERS the winner's call the
+    /// moment it rings here (`ringShown`). Only for that person, only for 20 s after standing down.
+    private var glareAnswerUid: String?
+    private var glareAnswerUntil: Date?
+
+    /// CallKitManager: the system ring for `callId` is up. Main queue.
+    func ringShown(callId id: String) {
+        guard let uid = glareAnswerUid, let until = glareAnswerUntil else { return }
+        guard Date() < until else { glareAnswerUid = nil; glareAnswerUntil = nil; return }
+        guard state == .incoming, callId == id, otherUid == uid, !wasAccepted else { return }
+        glareAnswerUid = nil; glareAnswerUntil = nil
+        print("[Call] glare: both dialled, answering their call")
+        CallKitManager.shared.answerRinging(callId: id)
+    }
+
     private func standDownForGlare(rearmListener: Bool) {
         if rearmListener { recheckIncomingWhenIdle = true }
+        // I was dialling exactly this person (both callers check `caller == otherUid`).
+        if !otherUid.isEmpty { glareAnswerUid = otherUid; glareAnswerUntil = Date().addingTimeInterval(20) }
         endReason = .hangup
         // Standing down in glare is bookkeeping, not a missed call. Without this the loser wrote a
         // call record whose outcome reads "missed" on the WINNER's phone — a red missed row for the
@@ -5685,7 +5709,13 @@ final class CallService: NSObject {
 
     /// Set up an incoming call from a VoIP push (app may be cold-launching) so that a
     /// subsequent CallKit answer connects. No ringing here — CallKit shows the ring.
-    func prepareIncoming(callId: String, name: String, uid: String, photo: String?, video: Bool = false) {
+    /// Returns TRUE only when this push should ring. Owner, 2026-10-10 ("I declined and it rang
+    /// again"; "they called me while I called them, they got a ring with no sound"): every push was
+    /// reported to CallKit as a ring whatever was decided here, so a finished call, a glare loser's
+    /// dead call or a busied call rang on the winner's phone. PushManager now reports a false as a
+    /// ring that ends at once (`reportAndDiscard`), the shape iOS requires and never sees as a call.
+    @discardableResult
+    func prepareIncoming(callId: String, name: String, uid: String, photo: String?, video: Bool = false) -> Bool {
         // 1:1 audit r2 A3, 2026-10-08: a cold launch from a VoIP push builds no UI, so the block list
         // was never started and the phone-side block check read an empty list. Idempotent; it puts
         // the saved copy from disk in place at once.
@@ -5702,20 +5732,13 @@ final class CallService: NSObject {
         // back, or a repeat. Never rung, never recorded. PushManager still reports it right after
         // this returns, as iOS requires; with no system call up that report is a real ring, so it is
         // ended on the next turn of the main queue, the same way the group-busy case below does it.
-        if finishedCallIds.contains(callId) {
-            if state == .idle {
-                DispatchQueue.main.async {
-                    if CallKitManager.shared.activeCallId == callId { CallKitManager.shared.reportEnded() }
-                }
-            }
-            return
-        }
+        if finishedCallIds.contains(callId) { return false }
         // M-112 (2026-10-07): the tiebreak applies only once my own dial has been sent; see
         // settleAgainstCurrentCall.
         if state == .outgoing, !uid.isEmpty, uid == otherUid, callId != self.callId {
             if me < uid, dialCreateStarted {
                 glareBusy(callId)   // 1:1 audit #25: held until my own doc exists
-                return
+                return false        // their call lost the tie: it must not ring here
             }
             standDownForGlare(rearmListener: false)   // I lose: drop my call, ring theirs below
         }
@@ -5731,7 +5754,7 @@ final class CallService: NSObject {
         if !uid.isEmpty, uid == otherUid, callId != self.callId,
            (state == .incoming && !wasAccepted) || state == .active || state == .reconnecting {
             arbitratePushedRedial(callId: callId, name: name, uid: uid, photo: photo, video: video)
-            return
+            return false   // arbitrate reports the ring itself if this call wins
         }
         // The 1-2s `.ended` tail is not a live call (see observeIncoming). A callback inside it
         // was busied here, and CallKit then rang that busied call with nothing left to end it.
@@ -5771,7 +5794,9 @@ final class CallService: NSObject {
                     ref.updateData(["status": "ended", "endReason": EndReason.busy.rawValue])
                 }
             }
-            return
+            // The same call the open app is already ringing (its listener beat the push): the
+            // report joins that ring (M-001). Anything else is busy or group-busy: no ring.
+            return callId == self.callId && state == .incoming && !groupBusy
         }
         self.cameraOn = video   // camera-on-answer model: accepting a video call opens my camera immediately
         self.startedAsVideo = video
@@ -5851,6 +5876,7 @@ final class CallService: NSObject {
             // is awake and doing nothing anyway. By pickup the fast path applies to both routes in.
             self.prefetchOffer(callId: callId, attempt: 1)
         }
+        return true
     }
 
     /// A push from the person this phone is already ringing or talking to, for a DIFFERENT call

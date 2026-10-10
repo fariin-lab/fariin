@@ -265,8 +265,21 @@ final class CallKitManager: NSObject {
                     // the reference app marks only the refusing device's call.
                     CallService.shared.endRingLocally(callId: callId)
                 }
+            } else {
+                // Owner, 2026-10-10: the ring is up. If we both pressed Call, it is answered now.
+                DispatchQueue.main.async { CallService.shared.ringShown(callId: callId) }
             }
             completion?()
+        }
+    }
+
+    /// Answers the ringing system call exactly as the green button does (the CXAnswerCallAction
+    /// handler runs, audio session and all). Owner, 2026-10-10: two people who both pressed Call
+    /// are connected, not left with one dropped call and one ring. Only the call ringing now.
+    func answerRinging(callId: String) {
+        guard let uuid = activeUUID, activeCallId == callId else { return }
+        controller.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { error in
+            if let error { print("[Call] auto-answer refused:", error) }
         }
     }
 
