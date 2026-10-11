@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (875): CHAT FROM A STORY PROFILE.
+            THIS BUILD (876): REPOST ICON, SHARE SHEET, CREDIT OPENS PROFILE.
+            The repost mark is the new outline icon everywhere: the button by the heart, the credit line under a name, and the count on a story card. Share on your own story opens the app's share sheet (your chats and Copy Link), the same one a profile's Share opens. Tapping the original poster's name or face on a repost opens their profile.
+            STILL OPEN: video repost editor (no author face and name, picture frozen while the sound plays) and photo repost tap to full screen.
+            PLEASE TEST: the repost icon in all three places; Share on your own Everyone story and Copy Link; tap the credit on a repost.
+
+            EARLIER (875): CHAT FROM A STORY PROFILE.
             Opening a story, then the profile, then the chat button now opens the chat with its messages instead of an empty page.
             PLEASE TEST: open someone's story, tap their name, tap the chat button; also tap a message notification while a story is open.
 
