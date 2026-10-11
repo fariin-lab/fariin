@@ -792,7 +792,7 @@ struct ShareStorySheet: View {
             switch a.kind {
             case .everyone: return .everyone
             case .glowers:  return .glowers
-            case .custom:   return StoryAudienceTag(label: "custom", name: a.name)
+            case .custom:   return StoryAudienceTag(label: "custom", name: a.name, listIds: [a.id])
             default:        return .friends
             }
         }()
@@ -902,12 +902,13 @@ struct ShareStorySheet: View {
         let tag: StoryAudienceTag = {
             if multi {
                 return StoryAudienceTag(label: "custom",
-                                        name: lists.map(\.name).joined(separator: ", "))
+                                        name: lists.map(\.name).joined(separator: ", "),
+                                        listIds: lists.map(\.id))
             }
             switch a.kind {
             case .everyone: return .everyone
             case .glowers:  return .glowers
-            case .custom:   return StoryAudienceTag(label: "custom", name: a.name)
+            case .custom:   return StoryAudienceTag(label: "custom", name: a.name, listIds: [a.id])
             default:        return .friends
             }
         }()
@@ -996,7 +997,8 @@ struct ShareStorySheet: View {
         let replies = lists.allSatisfy { $0.allowReplies }
         // The header badge reads every list it went to. Device-local, like every custom name.
         let tag = StoryAudienceTag(label: "custom",
-                                   name: lists.map(\.name).joined(separator: ", "))
+                                   name: lists.map(\.name).joined(separator: ", "),
+                                   listIds: lists.map(\.id))
 
         if let video {
             StoriesService.shared.postVideoStoryBackground(

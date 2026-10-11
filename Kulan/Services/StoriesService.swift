@@ -71,6 +71,9 @@ enum StoryAudienceToken {
 struct StoryAudienceTag {
     var label: String        // "everyone" | "friends" | "glowers" | "custom" | "oneTime"
     var name: String = ""    // custom lists only, device-local
+    /// The custom list(s) it went to, by id: the link the header follows to the list's CURRENT name,
+    /// as the reference app links a story to its list rather than to a name. See `StoryAudienceLink`.
+    var listIds: [String] = []
     var oneTime: Bool { label == "oneTime" }
     static let friends = StoryAudienceTag(label: "friends")
     static let everyone = StoryAudienceTag(label: "everyone")
@@ -1508,6 +1511,7 @@ final class StoriesService {
             if let repostOf { payload["repostOf"] = repostOf.asData }
             try await docRef.setData(payload)
             StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
+            StoryAudienceStore.shared.linkStory(storyId, tag: tag)
 
             // Both halves were in flight together; wait for the photo to land before asking for its
             // URL. If the doc write above threw, this child task is cancelled and awaited on the way
@@ -1794,6 +1798,7 @@ final class StoriesService {
         if let repostOf { payload["repostOf"] = repostOf.asData }
         try await docRef.setData(payload)
         StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
+        StoryAudienceStore.shared.linkStory(storyId, tag: tag)
 
         do {
             try Task.checkCancellation()
@@ -1921,6 +1926,7 @@ final class StoriesService {
             "recipientUids": StoryAudienceToken.tokens(recipients),
         ])
         StoryPrefs.rememberAudienceName(storyId: story.id, tag: tag)
+        StoryAudienceStore.shared.linkStory(story.id, tag: tag)
         // ⚠️ THE REMEMBERED COUNT AND FACES FOR THIS STORY ARE DROPPED, NOT UPDATED.
         //
         // `StoryCountCache` is what the owner bar paints from before the server answers, and the

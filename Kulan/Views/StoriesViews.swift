@@ -934,7 +934,12 @@ enum StoryPrefs {
         var d = UserDefaults.standard.dictionary(forKey: audienceNamesKey) as? [String: String] ?? [:]
         // Same append-only shape as the seen/liked stores, and the same answer to it: a story is
         // gone in 24 hours but its name would sit here forever.
-        if d.count > 300 { d.removeAll() }
+        // Past 300, the names of stories no longer up go, not all of them: emptying the whole
+        // store put "Custom" on every live story at once.
+        if d.count > 300 {
+            let live = Set(StoriesRepository.shared.mine?.stories.map(\.id) ?? [])
+            d = d.filter { live.contains($0.key) }
+        }
         d[storyId] = tag.name
         UserDefaults.standard.set(d, forKey: audienceNamesKey)
     }
@@ -6050,7 +6055,8 @@ func storyAudienceTitle(for s: Story) -> String {
         // reads the one the post in flight was given.
         let name = StoriesService.isPending(s.id)
             ? StoriesService.shared.uploadingAudienceName(for: s.id)
-            : (StoryPrefs.audienceName(storyId: s.id) ?? recoveredAudienceName(s) ?? "")
+            : (StoryAudienceStore.shared.storyName(s.id)
+               ?? StoryPrefs.audienceName(storyId: s.id) ?? recoveredAudienceName(s) ?? "")
         return name.isEmpty ? "Custom" : name
     default: return "My Chats"
     }

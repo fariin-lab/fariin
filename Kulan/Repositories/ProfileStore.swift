@@ -568,7 +568,7 @@ final class ProfileStore {
         // 2026-09-24 audit: `push` too. It holds the push and VoIP tokens the servers read, and left
         // behind it kept pushes coming to this phone from every group the deleted uid was still in.
         // (functions-chatpin onUserDeleted now also removes it and takes the uid out of its groups.)
-        for sub in ["storyContexts", "storyLists", "devices", "publicStories", "push"] {
+        for sub in ["storyContexts", "storyLists", "storyAudiences", "devices", "publicStories", "push"] {
             if let docs = try? await db.collection("users").document(uid).collection(sub).getDocuments() {
                 for d in docs.documents { try? await d.reference.delete() }
             }

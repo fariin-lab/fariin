@@ -258,6 +258,24 @@ struct StoryAudience: Identifiable, Codable, Equatable {
 /// a network round trip to know what to draw — so every load is mirrored to disk and every launch
 /// starts from that mirror. A cold start with no network shows the lists you had; the listener
 /// corrects them when it arrives.
+/// ⛔ WHICH CUSTOM LIST(S) ONE OF MY STORIES WENT TO — owner, 2026-10-11, "make it like" the
+/// reference app. Theirs links a sent story to its list by the list's id and reads the name off the
+/// list, so a rename follows and a change of members cannot break it; the lists are backed up with
+/// the account, so the link survives a sign-out and a reinstall.
+///
+/// Ours lives at `users/{me}/storyAudiences/{storyId}`: readable and writable by me alone (the
+/// rules), never on the story itself, which its recipients can read. `name` is a snapshot of the
+/// name(s) at posting, for when a list has since been deleted. The server removes the record with
+/// the story (`onStoryDeleted`).
+///
+/// Before this the only link was a name kept on this phone keyed by story id, which a sign-out
+/// wiped, a reinstall lost, another phone never had, and past 300 entries was thrown away whole:
+/// every one of those read "Custom".
+struct StoryAudienceLink: Equatable {
+    var listIds: [String]
+    var name: String
+}
+
 @Observable
 final class StoryAudienceStore {
     static let shared = StoryAudienceStore()
@@ -291,6 +309,12 @@ final class StoryAudienceStore {
     }
 
     private var listener: ListenerRegistration?
+    private var linkListener: ListenerRegistration?
+    /// Story id -> the list(s) it went to. Mine only; see `StoryAudienceLink`.
+    private(set) var storyLinks: [String: StoryAudienceLink] = [:]
+    /// The server's answer has arrived at least once. Until then a missing link means "not known
+    /// yet", not "none", and nothing may be written over it.
+    private(set) var linksLoaded = false
     private var loadedFor = ""
     private let db = Firestore.firestore()
     private static let mirrorKey = "storyAudienceMirror"
@@ -333,6 +357,20 @@ final class StoryAudienceStore {
         guard !uid.isEmpty, uid != loadedFor else { return }
         stop()
         loadedFor = uid
+        // One small document per live story of mine. Read whole; the server removes each with its
+        // story, so this never grows past what is up.
+        linkListener = db.collection("users").document(uid).collection("storyAudiences")
+            .addSnapshotListener { [weak self] snap, _ in
+                guard let self, let docs = snap?.documents else { return }
+                var links: [String: StoryAudienceLink] = [:]
+                for d in docs {
+                    let data = d.data()
+                    links[d.documentID] = StoryAudienceLink(listIds: data["listIds"] as? [String] ?? [],
+                                                            name: data["name"] as? String ?? "")
+                }
+                self.storyLinks = links
+                self.linksLoaded = true
+            }
         listener = db.collection("users").document(uid).collection("storyLists")
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self, let docs = snap?.documents else { return }
@@ -361,6 +399,9 @@ final class StoryAudienceStore {
     func stop() {
         listener?.remove()
         listener = nil
+        linkListener?.remove()
+        linkListener = nil
+        linksLoaded = false
         loadedFor = ""
     }
 
@@ -372,8 +413,43 @@ final class StoryAudienceStore {
         glowers = .glowersAudience
         custom = []
         hiddenFrom = []
+        storyLinks = [:]
         select(StoryAudience.myFriendsId)
         UserDefaults.standard.removeObject(forKey: Self.mirrorKey)
+    }
+
+    // MARK: Story links
+
+    /// The name a custom story of mine shows: its list's name NOW, followed by id, so a rename
+    /// carries over. A list deleted since falls back to the name it had at posting. Nil when this
+    /// story has no link (posted before links existed), and the caller falls back further.
+    func storyName(_ storyId: String) -> String? {
+        guard let link = storyLinks[storyId] else { return nil }
+        let live = link.listIds.compactMap { id in custom.first { $0.id == id }?.name }
+            .filter { !$0.isEmpty }
+        if !live.isEmpty, live.count == link.listIds.count { return live.joined(separator: ", ") }
+        return link.name.isEmpty ? nil : link.name
+    }
+
+    /// Record which list(s) a story went to. Called after the story document is written, on posting
+    /// and on an audience edit. Any other audience removes the record, so an edited story cannot
+    /// keep wearing the name of a list it no longer goes to.
+    func linkStory(_ storyId: String, tag: StoryAudienceTag) {
+        let uid = loadedFor
+        guard !uid.isEmpty, !storyId.isEmpty, !StoriesService.isPending(storyId) else { return }
+        let ref = db.collection("users").document(uid).collection("storyAudiences").document(storyId)
+        guard tag.label == "custom", !tag.listIds.isEmpty || !tag.name.isEmpty else {
+            // Only a story that HAD a link has one to remove; an ordinary post writes nothing.
+            guard storyLinks[storyId] != nil else { return }
+            DispatchQueue.main.async { self.storyLinks[storyId] = nil }
+            ref.delete()
+            return
+        }
+        let link = StoryAudienceLink(listIds: Array(tag.listIds.prefix(StoryAudienceStore.maxCustom)),
+                                     name: String(tag.name.prefix(200)))
+        DispatchQueue.main.async { self.storyLinks[storyId] = link }
+        ref.setData(["listIds": link.listIds, "name": link.name,
+                     "createdAt": FieldValue.serverTimestamp()])
     }
 
     // MARK: Writing

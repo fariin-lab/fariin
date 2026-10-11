@@ -221,8 +221,13 @@ struct PostedStory: Identifiable, Equatable, Codable {
             state = .loaded(mine.stories.reversed().map { s in
                 // A custom story whose name this phone lost gets it back here, before the folders
                 // read it (see `recoveredAudienceName`).
-                if s.audienceLabel == "custom", StoryPrefs.audienceName(storyId: s.id) == nil {
-                    _ = recoveredAudienceName(s)
+                // A story posted before list links existed gets one now, from the name this phone
+                // still has, so it survives the next sign-out or reinstall.
+                if s.audienceLabel == "custom", StoryAudienceStore.shared.linksLoaded,
+                   StoryAudienceStore.shared.storyLinks[s.id] == nil,
+                   let name = StoryPrefs.audienceName(storyId: s.id) ?? recoveredAudienceName(s) {
+                    StoryAudienceStore.shared.linkStory(
+                        s.id, tag: StoryAudienceTag(label: "custom", name: name))
                 }
                 return PostedStory(id: s.id,
                             thumbUrl: s.thumbUrl.isEmpty ? s.mediaUrl : s.thumbUrl,

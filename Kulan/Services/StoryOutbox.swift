@@ -39,6 +39,8 @@ enum StoryOutbox {
         var allowsReplies: Bool
         var tagLabel: String
         var tagName: String
+        /// Optional: a ticket written before list links existed still decodes.
+        var tagListIds: [String]? = nil
         var captureProtected: Bool
         /// When it was first attempted. A post is not resumed for ever — see `pending`.
         var startedAt: Double
@@ -94,7 +96,7 @@ enum StoryOutbox {
         let t = Ticket(id: id, caption: caption, stickers: stickers,
                        excluded: Array(excluded), included: Array(included),
                        everyone: everyone, allowsReplies: allowsReplies,
-                       tagLabel: tag.label, tagName: tag.name,
+                       tagLabel: tag.label, tagName: tag.name, tagListIds: tag.listIds,
                        captureProtected: captureProtected,
                        startedAt: Date().timeIntervalSince1970,
                        ownerUid: ownerUid,
@@ -215,7 +217,7 @@ enum StoryOutbox {
                 image: img, caption: t.caption, stickers: t.stickers,
                 excluded: Set(t.excluded), included: Set(t.included),
                 everyone: t.everyone, allowsReplies: t.allowsReplies,
-                tag: StoryAudienceTag(label: t.tagLabel, name: t.tagName),
+                tag: StoryAudienceTag(label: t.tagLabel, name: t.tagName, listIds: t.tagListIds ?? []),
                 captureProtected: t.captureProtected,
                 repostOf: t.repostOf)   // 2026-09-24 audit: a repost resumes as a repost
         }

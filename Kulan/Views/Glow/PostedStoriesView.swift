@@ -115,7 +115,9 @@ struct PostedStoriesView: View {
             case "everyone": name = "Everyone"
             case "friends":  name = "My Chats"
             case "glowers":  name = "Glowers"
-            case "custom":   name = mergeCustom ? "Custom" : (StoryPrefs.audienceName(storyId: s.id) ?? "Custom")
+            case "custom":   name = mergeCustom ? "Custom"
+                                 : (StoryAudienceStore.shared.storyName(s.id)
+                                    ?? StoryPrefs.audienceName(storyId: s.id) ?? "Custom")
             default:         name = "My Chats"
             }
             let key = s.audience + ":" + name

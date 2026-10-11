@@ -615,6 +615,18 @@ service cloud.firestore {
       match /storyLists/{listId} {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
+      // Which custom list(s) one of my stories went to (2026-10-11, StoryAudienceLink). Mine alone:
+      // the story itself is readable by its recipients, so the link lives here and never there.
+      // The server deletes it with the story.
+      match /storyAudiences/{storyId} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['listIds', 'name', 'createdAt'])
+          && request.resource.data.listIds is list
+          && request.resource.data.listIds.size() <= 5
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 200;
+      }
       match /storyContexts/{authorUid} {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
