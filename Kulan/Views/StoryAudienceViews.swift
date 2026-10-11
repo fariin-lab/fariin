@@ -511,6 +511,8 @@ struct NameStoryView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Create") { onCreate() }
                     .fontWeight(.semibold)
+                    // Owner 2026-10-11: blue when it can be pressed; the disabled state stays grey.
+                    .tint(.blue)
                     // Required means required. A nameless list is unfindable in the picker, which is
                     // the one place its name is ever read.
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -547,12 +549,18 @@ struct NameStoryView: View {
         .onAppear {
             nameFocused = false
             focusWork?.cancel()
-            // 0.35s is `UINavigationController`'s own push duration, so the field is asked the moment
-            // the page has stopped moving and the keyboard gets the screen to itself.
-            let work = DispatchWorkItem { nameFocused = true }
-            focusWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
         }
+        // ⛔ AT THE END OF THE PUSH, NOT AFTER A GUESS AT IT — owner, 2026-10-11: the keyboard still
+        // came in from the left. 0.35s was the old push duration; inside an iOS 26 sheet the push runs
+        // longer, so the field was asked while the page was still sliding. UIKit's `viewDidAppear`
+        // is called when the transition has actually finished, whatever it took, so the keyboard
+        // always gets its own upward curve.
+        .background(DidAppear {
+            let work = DispatchWorkItem { nameFocused = true }
+            focusWork?.cancel()
+            focusWork = work
+            DispatchQueue.main.async(execute: work)
+        })
         // Backing out before it lands must not raise a keyboard onto a page that has gone, and must
         // leave the flag DOWN for the next visit — the pair is the fix, not either half.
         .onDisappear {
@@ -1330,5 +1338,20 @@ struct NewAudienceButton: UIViewRepresentable {
         var onOneTime: (() -> Void)?
         init(_ onCustom: @escaping () -> Void) { self.onCustom = onCustom }
         @objc func fire() { onCustom() }
+    }
+}
+
+/// Calls `action` from UIKit's `viewDidAppear`: once a push or present has fully finished, which a
+/// SwiftUI `.onAppear` (fired as it BEGINS) cannot tell you. Draws nothing, takes no touches.
+private struct DidAppear: UIViewControllerRepresentable {
+    let action: () -> Void
+    func makeUIViewController(context: Context) -> Host { Host(action: action) }
+    func updateUIViewController(_ vc: Host, context: Context) { vc.action = action }
+    final class Host: UIViewController {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action; super.init(nibName: nil, bundle: nil) }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override func loadView() { view = UIView(); view.isUserInteractionEnabled = false }
+        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); action() }
     }
 }
