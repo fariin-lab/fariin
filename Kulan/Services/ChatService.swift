@@ -3704,7 +3704,15 @@ enum ChatService {
     static func searchUsers(prefix: String) async -> [UserProfile] {
         var q = prefix.trimmingCharacters(in: .whitespaces).lowercased()
         if q.hasPrefix("@") { q.removeFirst() }
-        guard q.count >= 3 else { return [] }
+        guard !q.isEmpty else { return [] }
+        // ⛔ A SHORT USERNAME IS STILL FINDABLE — owner, 2026-10-11: typing "V" never found @V,
+        // because under the server's 3-character prefix minimum this returned nothing at all. Below
+        // it the answer is the EXACT handle only (one `usernames/{q}` get, the lookup that already
+        // exists), so a short name is reachable without opening prefix browsing of short strings.
+        guard q.count >= 3 else {
+            guard let u = await findByHandle(q), u.id != uid else { return [] }
+            return [u]
+        }
         guard let res = try? await Functions.functions(region: "me-central1")
                 .httpsCallable("searchUsernames").call(["query": q]),
               let rows = (res.data as? [String: Any])?["results"] as? [[String: Any]] else {

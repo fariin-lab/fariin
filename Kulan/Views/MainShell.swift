@@ -1748,8 +1748,11 @@ struct ChatsView: View {
     /// query they have moved on from.
     private func lookUpPeople(_ raw: String) async {
         let q = raw.trimmingCharacters(in: .whitespaces)
-        // The server's minimum (`searchUsernames`): under it there is no global half to wait for.
-        guard q.count >= 3 else { userHits = []; searchingUsers = false; return }
+        // Under the server's 3-character minimum `searchUsers` answers the exact handle only
+        // (owner 2026-10-11: "@V" must be findable), so only an empty query stops here.
+        guard !q.trimmingCharacters(in: CharacterSet(charactersIn: "@")).isEmpty else {
+            userHits = []; searchingUsers = false; return
+        }
         // ⛔ THE REFERENCE APP'S TIMING — owner, 2026-10-04. A query answered before is answered again
         // at once with no request (theirs keeps one context per query); a new one waits 0.4s, and
         // `.task(id:)` cancels it on the next keystroke, so a request is only ever sent for the query
