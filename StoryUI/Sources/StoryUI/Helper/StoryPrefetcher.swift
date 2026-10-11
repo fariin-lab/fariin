@@ -184,13 +184,17 @@ public enum StoryPrefetcher {
         }
     }
 
-    public static func prefetchFirsts(_ firsts: [Item], mediaDepth: Int = 2) {
+    /// - Parameter decode: false = bytes to disk only, no decoded pixels. For the app's arrival
+    ///   download (owner 2026-10-11, cube lag): decoding dozens of full-size pictures for stories
+    ///   nobody has opened yet ate the frames of the turn. The viewer's own lookahead decodes the
+    ///   next ones when they are actually near.
+    public static func prefetchFirsts(_ firsts: [Item], mediaDepth: Int = 2, decode: Bool = true) {
         guard !firsts.isEmpty else { return }
         queue.async {
             for (i, item) in firsts.enumerated() {
-                warmImage(item.poster, poster: true)
+                warmImage(item.poster, poster: true, decode: decode)
                 guard i < mediaDepth else { continue }
-                if item.isVideo { warmVideo(item.media) } else { warmImage(item.media, poster: false) }
+                if item.isVideo { warmVideo(item.media) } else { warmImage(item.media, poster: false, decode: decode) }
             }
         }
     }
@@ -300,7 +304,7 @@ public enum StoryPrefetcher {
 
     /// `poster` is the few-KB cover, and it keeps cellular. Everything else is the story itself and
     /// stands down. See the note on `warmVideo` for why the two are not treated the same.
-    private static func warmImage(_ urlString: String?, poster: Bool) {
+    private static func warmImage(_ urlString: String?, poster: Bool, decode: Bool = true) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         // ⚠️ BYTES ON DISK WERE TREATED AS "DONE" AND THEY ARE NOT DONE — this early return is what
         // made the flash survive every previous fix, and it is worst in the exact case he reported.
@@ -313,7 +317,7 @@ public enum StoryPrefetcher {
         // So a warm disk now means "skip the download", never "skip the decode". The decode is
         // cheap, off the main thread, and it is the half that actually removes the wait.
         if isWarm(urlString) {
-            Task.detached(priority: .utility) { await StoryMemoryCache.warm(url) }
+            if decode { Task.detached(priority: .utility) { await StoryMemoryCache.warm(url) } }
             return
         }
         guard claim(urlString) else { return }
@@ -351,8 +355,10 @@ public enum StoryPrefetcher {
             //
             // Off the main thread, and the cache is cost-limited, so three full-size photos held
             // ahead evict themselves rather than grow.
-            Task.detached(priority: .utility) {
-                _ = await StoryMemoryCache.prepare(data, for: url)
+            if decode {
+                Task.detached(priority: .utility) {
+                    _ = await StoryMemoryCache.prepare(data, for: url)
+                }
             }
         }.resume()
     }

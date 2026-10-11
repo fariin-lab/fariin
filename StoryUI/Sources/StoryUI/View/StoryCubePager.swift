@@ -145,6 +145,7 @@ final class StoryCubePagerVC: UIViewController {
     /// to show through. Carried across verbatim from the controller this replaces.
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        stopDragRateLink()   // the link retains its target; never outlive the page
         if isBeingDismissed { view.backgroundColor = .clear }
     }
 
@@ -269,17 +270,41 @@ final class StoryCubePagerVC: UIViewController {
             // visible.
             panBase = panFraction
             beginTurn()
+            startDragRateLink()
         case .changed:
             let w = view.bounds.width
             guard w > 1 else { return }
             panFraction = banded(panBase + g.translation(in: view).x / w)
             applyFold()
         case .ended, .cancelled, .failed:
+            stopDragRateLink()
             commit(velocity: g.velocity(in: view).x)
         default:
             break
         }
     }
+
+    /// ⛔ 120 HZ WHILE THE FINGER IS DOWN — owner, 2026-10-11: "make it 120 fps". The settle asks
+    /// for 120 through its own display link, but the drag had nothing asking, and a pan recogniser
+    /// alone does not make ProMotion run high — the system may pick a lower rate for it. A display
+    /// link with a 120 preferred range is how an app asks; this one does no work per frame, it only
+    /// holds the rate for the length of the drag. The settle's link takes over at the lift.
+    private var dragRateLink: CADisplayLink?
+
+    private func startDragRateLink() {
+        guard dragRateLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(dragRateTick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        dragRateLink = link
+    }
+
+    private func stopDragRateLink() {
+        dragRateLink?.invalidate()
+        dragRateLink = nil
+    }
+
+    @objc private func dragRateTick() {}
 
     /// Rubber-band, but ONLY where there is nobody to turn to. In the middle of a bucket list the
     /// finger is followed one-to-one, which is the half of this he reported missing.

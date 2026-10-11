@@ -2930,6 +2930,11 @@ final class StoriesRepository {
     /// to Wi-Fi, and stands down in Low Data Mode, so a repeat call costs nothing.
     private var lastArrivalKey = ""
     @MainActor private func prefetchOnArrival(_ groups: [StoryGroup]) {
+        // ⛔ NOT WHILE A STORY IS OPEN — owner, 2026-10-11, the cube turn lagging. Watching a story
+        // rebuilds the groups, and this re-ran on every rebuild, decoding dozens of full-size
+        // pictures in the background during the turn. The viewer runs its own lookahead; this one
+        // waits for the next rebuild after it closes.
+        if StoryDoorState.shared.isOpen { return }
         var items: [StoryPrefetcher.Item] = []
         // Hidden people are skipped: their cards are not on the page, so nobody is about to open them.
         let wanted = groups.filter { !Self.isDemoAuthor($0.authorUid) && !StoryPrefs.isHidden($0.authorUid) }
@@ -2944,7 +2949,9 @@ final class StoriesRepository {
         let key = items.map(\.media).joined(separator: "|")
         guard key != lastArrivalKey else { return }
         lastArrivalKey = key
-        StoryPrefetcher.prefetchFirsts(items, mediaDepth: items.count)
+        // Bytes only: pixels are decoded when a story is near (the viewer's lookahead) — decoding
+        // up to sixty pictures nobody has opened was the cost, not the download.
+        StoryPrefetcher.prefetchFirsts(items, mediaDepth: items.count, decode: false)
     }
 
     // A story crossing its 24h mark changes nothing in the database, so no listener fires —
