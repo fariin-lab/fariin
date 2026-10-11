@@ -51,7 +51,10 @@ struct StoriesTabView: View {
     @State private var search = ""
     /// The list layout's "Viewed updates" fold, remembered (owner 2026-10-11).
     @AppStorage("stories.viewedCollapsed") private var viewedCollapsed = false
-    @AppStorage("stories.hiddenCollapsed") private var hiddenCollapsed = false
+    /// ⛔ HIDDEN STORIES START FOLDED, EVERY TIME (owner, 2026-10-11: "always when I open the app I
+    /// see the hidden stories, make the default folded"). Not remembered: the reference app opens
+    /// its hidden section closed on each visit, since hiding someone means not wanting to see them.
+    @State private var hiddenCollapsed = true
     /// Who sat under "Viewed updates" when the hold began — see `friendsList`. nil = not held.
     @State private var viewedHold: Set<String>?
     /// ⛔ AND THE ORDER INSIDE EACH SECTION IS HELD TOO — audit 2026-10-11 #2: a close reloads the

@@ -75,7 +75,7 @@ jobs:
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
             THIS BUILD (872): STORY FREEZE AFTER A REPOST, STORY LINK CARD, CONNECTION RECOVERY.
-            Tapping the original poster's name on a repost no longer freezes the Stories page: the original opens and every story still opens after it. View Story on a story link card now grows out of the card's picture, and pulling down flies back onto the card where it is now. When the connection to the server gets stuck, the app keeps trying to reconnect instead of giving up until a restart. Reposting draws the card without pausing the app. The Chats search field keeps its grey.
+            Tapping the original poster's name on a repost no longer freezes the Stories page: the original opens and every story still opens after it. View Story on a story link card now grows out of the card's picture, and pulling down flies back onto the card where it is now. When the connection to the server gets stuck, the app keeps trying to reconnect instead of giving up until a restart. Reposting draws the card without pausing the app. The Chats search field keeps its grey. Hidden Stories starts folded each time the app opens.
             PLEASE TEST: the Chats search field in dark and light mode, and after a back swipe; repost a story full screen, open it while it uploads, tap the original poster's name, then open other stories; tap View Story on a link card, scroll a little, pull down; if messages stop sending, wait a minute without restarting and tell us if they go through.
 
             EARLIER (871): STORIES LIST, HIDDEN STORIES, CALLS UNDER FOCUS, DEVICES PAGE.
