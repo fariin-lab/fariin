@@ -99,7 +99,7 @@ final class StoryCubePagerVC: UIViewController {
     /// TRUE while a finger is down or a settle is running. Everything that must not interrupt a turn
     /// asks this — it replaces the old scroll view's `isTracking || isDragging || isDecelerating`,
     /// and unlike that one it cannot be left switched off by somebody else's flag.
-    var isActive: Bool { pan.state == .began || pan.state == .changed || settleLink != nil }
+    var isActive: Bool { pan.state == .began || pan.state == .changed || settling }
 
     /// Whether a horizontal drag may start one. False for a single bucket (nothing to turn to) and
     /// while the viewers sheet is up.
@@ -189,7 +189,6 @@ final class StoryCubePagerVC: UIViewController {
         beginTurn()
         panFraction = 0
         applyFold()
-        tapTurn = true
         commit(velocity: direction == .next ? -200 : 200)
         return true
     }
@@ -396,23 +395,21 @@ final class StoryCubePagerVC: UIViewController {
         }
     }
 
-    private var settleLink: CADisplayLink?
     private var settleFrom: CGFloat = 0
     private var settleTo: CGFloat = 0
-    private var settleStart: CFTimeInterval = 0
     private var settleDone: (() -> Void)?
-    /// ⛔ A TAPPED TURN, NOT A RELEASED ONE (owner, 2026-10-11: "it jumps 70% at once, then the last
-    /// 30% comes slowly; make it 1%, 2%, 3% up to 100%"). The release curve below is built to FINISH
-    /// a swipe the finger has mostly done: it runs about 70% of its distance in the first tenth of
-    /// its time. A tap starts the whole face from zero, so that front-loading IS the jump. A tap gets
-    /// an even ease-in-out over the same duration instead, and its clock starts on the first frame
-    /// actually drawn: the incoming story is built in the same pass as the commit, and a clock
-    /// started before that work began had already spent its first frames by the first tick.
-    /// Swipes keep the release curve and clock exactly as they were.
-    private var tapTurn = false
-    private var settleIsTap = false
-    /// This turn's own duration, chosen from how far it has to travel — see `span(forDistance:)`.
-    private var settleSpan: CFTimeInterval = StoryCubePagerVC.releaseDuration
+    /// A settle's animations are on the faces. Every settle bumps `settleToken`, so the completion of
+    /// one that was interrupted (its animations removed) can tell it is no longer the current one.
+    private var settling = false
+    private var settleToken = 0
+    /// ⛔ A TAP IS A SWIPE, ON THE SAME CURVE (owner, 2026-10-11: "the tap turn is too slow next to
+    /// the swipe, make it like [the reference] 100%"). Their tap is a pan begun and committed at zero
+    /// length with a velocity of ±200 (`navigate(direction:)`), so it runs the release's own 0.4s on
+    /// the release's own spring, whose first tenth of a second covers about 78% of the turn. Ours had
+    /// moved taps to an ease-in-out that covered 16% in that time, which is the slowness he felt.
+    /// What he had reported before that, "it jumps 70% at once", was the turn's first frames being
+    /// lost to the work at the commit, not the curve: see `settle`, which no longer runs per frame
+    /// on the main thread.
 
 
 
@@ -481,52 +478,128 @@ final class StoryCubePagerVC: UIViewController {
     /// Their release duration, in seconds. `StoryContainerScreen.swift:882`.
     private static let releaseDuration: CFTimeInterval = 0.4
 
+    /// ⛔ THE TURN IS PLAYED BY CORE ANIMATION, NOT DRAWN BY US EVERY FRAME (owner, 2026-10-11, the
+    /// tap turn next to theirs). Theirs (`setTransformAsKeyframes`, Transition.swift) works out every
+    /// frame's matrix up front, one per display refresh along the spring, and hands the whole track
+    /// to the render server as one keyframe animation played linearly. Ours wrote each face from a
+    /// main-thread display link, so every frame waited on the main thread, and the commit puts real
+    /// work there at exactly the moment the turn starts (`didFocus`, the pause notification and the
+    /// SwiftUI updates they cause). Those frames were simply lost, which read as a jump at the start.
+    ///
+    /// Now: the model is set to where the turn ends, and each face gets its transform track and its
+    /// paint order (`zPosition`, nearest the camera on top, frame by frame) as keyframes; the
+    /// darkening gets theirs too, a basic opacity animation on their curve for alpha. The animations
+    /// start when the transaction reaches the render server, so work done at the commit delays the
+    /// start instead of eating its first frames, and nothing the main thread does can drop a frame
+    /// of the turn after that. 120Hz is asked for on every animation, the same ask the display link
+    /// made.
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
         stopSettle(finishing: false)
-        // Taken here, before the early return, so a tap flag can never leak into the next swipe.
-        settleIsTap = tapTurn
-        tapTurn = false
         guard abs(panFraction - target) > 0.0001 else {
             panFraction = target
             applyFold()
             done()
             return
         }
-        settleFrom = panFraction
+        let w = view.bounds.width
+        let from = panFraction
+        settleFrom = from
         settleTo = target
-        // A tap's clock starts at its first tick (0 means "not started"); see `tapTurn`.
-        settleStart = settleIsTap ? 0 : CACurrentMediaTime()
-        settleSpan = Self.span(forDistance: target - panFraction)
         settleDone = done
-        let link = CADisplayLink(target: self, selector: #selector(stepSettle))
-        // ⛔ ASK FOR 120Hz, BECAUSE THE PLIST KEY ONLY LIFTS THE CEILING.
-        //
-        // `CADisableMinimumFrameDuration` in the Info.plist stops iOS capping the app at 60, but a
-        // display link still runs at whatever rate it ASKS for, and the default ask is the old 60.
-        // Both halves are required and neither does anything alone. This is the whole of the owner's
-        // "make it smooth and more fps": the turn keeps his 0.165s exactly, and a full face stops
-        // being ten frames and becomes twenty.
-        //
-        // The minimum is 80 rather than 60 so the system cannot quietly drop this to half rate to
-        // save power while a turn is on screen; `preferred: 120` is what it targets. On a 60Hz phone
-        // the range is clamped to what the display has and this line costs nothing.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
-        // `.common` so a settle that overlaps anything else on the main runloop still runs.
-        link.add(to: .main, forMode: .common)
-        settleLink = link
+        settleToken &+= 1
+        let token = settleToken
+        settling = true
+        panFraction = target
+
+        let duration = Self.releaseDuration
+        let fps = max(60, view.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond)
+        let steps = max(2, Int((duration * Double(fps)).rounded()))
+        let progress = (0...steps).map { Self.springProgress(CGFloat($0) / CGFloat(steps)) }
+
+        let land: () -> Void = { [weak self] in
+            guard let self, self.settleToken == token, self.settling else { return }
+            let done = self.settleDone
+            self.settling = false
+            self.settleDone = nil
+            self.applyFold()   // hands hit testing back to the face now square to the camera
+            done?()
+        }
+        // ⚠️ AND A BELT. The display link this replaces ran its completion whatever happened to the
+        // screen; an animation on layers that leave the window may never report finishing, and the
+        // completion carries the turn's bookkeeping (the resume, the neighbours, the delegate). So a
+        // timer lands the turn too, a little after it should have ended; whichever comes first wins
+        // and the token makes the other a no-op.
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.25, execute: land)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock(land)
+        // The model: where the turn ends. Nothing animates from these writes (`applyFold` disables
+        // actions); the animations below carry the picture there.
+        applyFold()
+        guard w > 1 else {
+            CATransaction.commit()
+            return
+        }
+        var faces: [(UIViewController, CGFloat)] = []
+        if let focused { faces.append((focused, 0)) }
+        if let after { faces.append((after, 1)) }
+        if let before { faces.append((before, -1)) }
+        for (vc, offset) in faces {
+            let ts = progress.map { from + (target - from) * $0 + offset }
+            let layer = vc.view.layer
+            let turn = CAKeyframeAnimation(keyPath: "transform")
+            turn.values = ts.map {
+                NSValue(caTransform3D: abs($0) < 0.0001 ? CATransform3DIdentity : StoryPager.cubeTransform($0, width: w))
+            }
+            let depth = CAKeyframeAnimation(keyPath: "zPosition")
+            depth.values = ts.map { -abs($0) }
+            for a in [turn, depth] {
+                a.duration = duration
+                a.calculationMode = .linear
+                a.timingFunction = CAMediaTimingFunction(name: .linear)   // the easing is in the values
+                a.preferredFrameRateRange = Self.turnFrameRate
+            }
+            layer.add(turn, forKey: Self.turnKey)
+            layer.add(depth, forKey: Self.depthKey)
+            if let g = tint(for: vc.view) {
+                let shade = CABasicAnimation(keyPath: "opacity")
+                shade.fromValue = Float(min(1, abs(from + offset) * 1.3))
+                shade.toValue = Float(min(1, abs(target + offset) * 1.3))
+                shade.duration = duration
+                // Their alpha on a `.spring` transition at a duration other than 0.5 is this bezier
+                // (CAAnimationUtils.swift), not the keyframed spring the transform gets.
+                shade.timingFunction = CAMediaTimingFunction(controlPoints: 0.38, 0.7, 0.125, 1.0)
+                shade.preferredFrameRateRange = Self.turnFrameRate
+                g.add(shade, forKey: Self.shadeKey)
+            }
+        }
+        CATransaction.commit()
     }
 
-    @objc private func stepSettle() {
-        if settleStart == 0 { settleStart = CACurrentMediaTime() }
-        let elapsed = CACurrentMediaTime() - settleStart
-        let u = min(1, CGFloat(elapsed / max(0.0001, settleSpan)))
-        let eased = settleIsTap ? Self.tapProgress(u) : Self.springProgress(u)
-        panFraction = settleFrom + (settleTo - settleFrom) * eased
-        applyFold()
-        guard u >= 1 else { return }
-        let done = settleDone
-        stopSettle(finishing: false)
-        done?()
+    private static let turnKey = "cube.turn"
+    private static let depthKey = "cube.depth"
+    private static let shadeKey = "cube.shade"
+    /// The same ask the display link made: the plist key only lifts the ceiling, and an animation
+    /// still runs at the rate it asks for. 80 at the least, so the system cannot halve it mid-turn.
+    private static let turnFrameRate = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+
+    /// Where the turn on screen has got to, read off the running animation's own clock. Used when a
+    /// finger grabs a moving cube, so it carries on from what the eye sees.
+    private func settleFractionNow() -> CGFloat {
+        guard let layer = (focused ?? before ?? after)?.view.layer,
+              let a = layer.animation(forKey: Self.turnKey), a.beginTime > 0, a.duration > 0 else {
+            return settleFrom   // added but not yet committed: nothing has moved yet
+        }
+        let now = layer.convertTime(CACurrentMediaTime(), from: nil)
+        let u = CGFloat((now - a.beginTime) / a.duration)
+        return settleFrom + (settleTo - settleFrom) * Self.springProgress(max(0, min(1, u)))
+    }
+
+    private func removeSettleAnimations() {
+        for vc in livePeers {
+            vc.view.layer.removeAnimation(forKey: Self.turnKey)
+            vc.view.layer.removeAnimation(forKey: Self.depthKey)
+            tints[ObjectIdentifier(vc.view)]?.removeAnimation(forKey: Self.shadeKey)
+        }
     }
 
     /// STOP THE SPRING. `finishing` decides whether the work it was carrying still runs.
@@ -553,9 +626,16 @@ final class StoryCubePagerVC: UIViewController {
     /// about to install.
     private func stopSettle(finishing: Bool) {
         let done = settleDone
-        settleLink?.invalidate()
-        settleLink = nil
         settleDone = nil
+        if settling {
+            // The cube stays where the eye last saw it: the model takes the animation's current
+            // value, then the animations go. The bumped token makes their completion a no-op.
+            panFraction = settleFractionNow()
+            settling = false
+            settleToken &+= 1
+            removeSettleAnimations()
+            applyFold()
+        }
         if finishing { done?() }
     }
 
@@ -563,17 +643,11 @@ final class StoryCubePagerVC: UIViewController {
     ///
     /// ⚠️ THE EASING IS IN THE VALUES, NOT IN THE TIMING, which is the one thing about their
     /// approach that must not be lost: they bake the curve into a keyframe track and replay that
-    /// track LINEARLY. Our display link does the same by asking this function for each frame's
-    /// value. Putting a timing function on top of already-eased values double-applies it.
+    /// track LINEARLY. `settle` now does exactly that: one value from this function per display
+    /// refresh, played with a linear timing function. Putting a timing function on top of
+    /// already-eased values double-applies it.
     static func springProgress(_ u: CGFloat) -> CGFloat {
         unitBezier(max(0, min(1, u)))
-    }
-
-    /// A tapped turn's progress: a smooth ease-in-out (smoothstep), gentle out of rest, even through
-    /// the middle, gentle into place. See `tapTurn`.
-    static func tapProgress(_ u: CGFloat) -> CGFloat {
-        let t = max(0, min(1, u))
-        return t * t * (3 - 2 * t)
     }
 
     /// ⛔ THEIR CURVE, AND IT IS A BEZIER RATHER THAN OUR SPRING — owner, 2026-09-11: "everything
@@ -694,7 +768,11 @@ final class StoryCubePagerVC: UIViewController {
             let face: UIView = vc.view
             // Hit testing belongs to the peer square to the camera and to nothing else, or a tap
             // meant for the story lands on a face that is edge-on behind it.
-            face.isUserInteractionEnabled = (vc === focused) && abs(panFraction) < 0.0001
+            // Not while a settle is playing: the model already says "square" for the whole turn.
+            face.isUserInteractionEnabled = (vc === focused) && abs(panFraction) < 0.0001 && !settling
+            // Nearest the camera on top. The settle animates this per frame (`settle`), so the paint
+            // order changes exactly where the faces cross, on the render server.
+            face.layer.zPosition = -abs(t)
             if abs(t) > 1.0 {
                 // Further away than one face: flat and invisible rather than left wearing whatever
                 // it last had. A stale rotation on a peer nobody can see is a black slab the moment
@@ -773,7 +851,6 @@ final class StoryCubePagerVC: UIViewController {
         return g
     }
 
-    deinit { settleLink?.invalidate() }
 }
 
 extension StoryCubePagerVC: UIGestureRecognizerDelegate {
