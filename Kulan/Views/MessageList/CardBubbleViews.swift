@@ -1,3 +1,4 @@
+import Combine
 import FirebaseFirestore
 import UIKit
 
@@ -92,10 +93,23 @@ final class LinkPreviewBubbleView: UIView {
     private let glyphIcon = UIImageView()
     private let joinButton = UIView()
     private let joinLabel = UILabel()
+    /// ⛔ A STORY CARD'S PICTURE IS THE STORY'S DOOR (owner, 2026-10-11: View Story "is open like
+    /// pop", and the pull-down did not go back to the card). The reference app opens the story out
+    /// of the card's own image and, at the close, finds that image again where it is now and lands
+    /// on it, hiding it while the story is up. The picture registers under this key in the story
+    /// scope, which is all `StoryDoor` needs to fly out of it, hide it, and land back on it.
+    /// Empty for every other kind of card.
+    private(set) var flightKey = ""
+    private var visibilityToken: AnyCancellable?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        // The published value, not a re-read of the property: see the note on `MediaBubbleView`'s
+        // own sink for the one-step-behind blank that re-reading caused.
+        visibilityToken = MediaSourceVisibility.shared.hiddenIdPublisher
+            .removeDuplicates()
+            .sink { [weak self] id in self?.applyVisibility(hiddenId: id) }
         glyphCircle.layer.cornerCurve = .circular
         glyphIcon.contentMode = .center
         joinButton.layer.cornerRadius = 10
@@ -125,7 +139,13 @@ final class LinkPreviewBubbleView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ p: BubbleBody.LinkPreview, plan: LinkPreviewPlan, tint: UIColor, cid: String) {
+    func configure(_ p: BubbleBody.LinkPreview, plan: LinkPreviewPlan, tint: UIColor, cid: String,
+                   rowId: String = "") {
+        var key = ""
+        if case .story = p.shape, plan.hero != nil, !rowId.isEmpty {
+            key = MediaOpenRects.key(.storyRow, Self.storySourceId(rowId))
+        }
+        setFlightKey(key)
         // The call card is rounder than a web preview (owner, 2026-10-07: "make the Kulan Call
         // corners rounded, Apple's rounded corners"): 16pt continuous, the glyph marks the kind.
         backing.layer.cornerRadius = plan.glyph != nil ? 16 : 12
@@ -221,9 +241,46 @@ final class LinkPreviewBubbleView: UIView {
         } else {
             button.isHidden = true; buttonLabel.isHidden = true
         }
+        applyVisibility(hiddenId: MediaSourceVisibility.shared.hiddenId)
     }
 
-    func prepareForReuse() { hero.reset() }
+    /// The id the chat hands `StoryDoor.openLink(from:)` for the card in row `rowId`; the door adds
+    /// the story scope itself.
+    static func storySourceId(_ rowId: String) -> String { "storylink-\(rowId)" }
+
+    /// A recycled cell lets go of the row it drew before, or a flight for that row would land on
+    /// whatever message this cell now shows (`MediaOpenRects.releaseView`).
+    private func setFlightKey(_ key: String) {
+        guard key != flightKey else { return }
+        if !flightKey.isEmpty { MediaOpenRects.releaseView(flightKey, ifItIs: hero) }
+        flightKey = key
+        if !key.isEmpty { register() }
+    }
+
+    /// The view, and the picture's own 8pt corner: without a registered radius the flight's cover
+    /// and landing take the stories row's 24 (`StoryDoor.sourceRadius`) and land as the wrong shape.
+    /// The rectangle beside it is only the radius' carrier; the flight asks the live view.
+    private func register() {
+        MediaOpenRects.captureView(flightKey, hero)
+        MediaOpenRects.capture(flightKey, hero.convert(hero.bounds, to: nil), cornerRadius: 8)
+    }
+
+    private func applyVisibility(hiddenId: String?) {
+        hero.alpha = (!flightKey.isEmpty && hiddenId == flightKey) ? 0 : 1
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // Re-registered on every window change, as the stories row does: a cell scrolled away and
+        // back is a different answer to "where is it".
+        if window != nil, !flightKey.isEmpty { register() }
+    }
+
+    func prepareForReuse() {
+        hero.reset()
+        setFlightKey("")
+        hero.alpha = 1
+    }
 }
 
 // ── A capsule with a glyph and a word ──

@@ -244,13 +244,17 @@ enum StoryDoor {
     /// me. Then, when the link names its author, that author's public stories, which is the only
     /// other way a link can exist: Share is offered on Everyone stories alone. False means it has
     /// expired, was deleted, or was never mine to see, and the caller says so.
-    static func openLink(storyId: String, handle: String?) async -> Bool {
+    ///
+    /// `sourceKey`: the link card's picture (`LinkPreviewBubbleView.storySourceId`), so the story
+    /// grows out of it and the pull-down lands back on it. Empty (a link tapped in the text) opens
+    /// with no flight, as before.
+    static func openLink(storyId: String, handle: String?, from sourceKey: String = "") async -> Bool {
         guard !StoryZoomPresenter.isActive else { return false }
         let repo = StoriesRepository.shared
         if var group = (repo.others + [repo.mine].compactMap { $0 })
             .first(where: { $0.stories.contains { $0.id == storyId } }) {
             group.stories = group.stories.filter { $0.id == storyId }
-            open(group, from: "", deliveredToMe: !group.isMine)
+            open(group, from: sourceKey, deliveredToMe: !group.isMine)
             return true
         }
         guard let handle, !handle.isEmpty,
@@ -259,7 +263,7 @@ enum StoryDoor {
                                                       photoUrl: user.photoUrl),
               let one = group.stories.first(where: { $0.id == storyId }) else { return false }
         group.stories = [one]
-        open(group, from: "")
+        open(group, from: sourceKey)
         return true
     }
 

@@ -1065,7 +1065,7 @@ final class MessageRowView: UIView {
         }()
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
-        v.configure(card, plan: plan, tint: b.textColor, cid: cid)
+        v.configure(card, plan: plan, tint: b.textColor, cid: cid, rowId: m.id)
     }
 
     private func applyStoryReply(_ b: BubblePlan, model m: MessageRowModel, cid: String) {

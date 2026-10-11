@@ -3727,11 +3727,13 @@ struct ThreadView: View {
     /// (`ProfileCardDoor`). A name nobody holds says so.
     /// ⛔ A STORY LINK OPENS THE STORY, NOT "Open link?" (owner, 2026-10-11). The link, its card and
     /// the card's View Story button all come here. One that cannot be found says so.
-    private func openStoryLink(_ url: URL) -> Bool {
+    /// `rowId`: the message whose card was tapped, so the story flies out of that card's picture.
+    private func openStoryLink(_ url: URL, rowId: String? = nil) -> Bool {
         guard let link = LinkPreviewService.storyLink(in: url) else { return false }
         inputFocused = false
+        let source = rowId.map(LinkPreviewBubbleView.storySourceId) ?? ""
         Task { @MainActor in
-            if !(await StoryDoor.openLink(storyId: link.id, handle: link.handle)) {
+            if !(await StoryDoor.openLink(storyId: link.id, handle: link.handle, from: source)) {
                 statusUnavailable = true
             }
         }
@@ -3908,7 +3910,7 @@ struct ThreadView: View {
                     openProfileHandle(handle)
                     return
                 }
-                if openStoryLink(u) { return }
+                if openStoryLink(u, rowId: id) { return }
                 WebLink.open(u)   // the in-app Safari sheet, not a trip out to Safari
             },
             onTapLinkProfile: { id in
