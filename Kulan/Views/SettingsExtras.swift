@@ -319,6 +319,14 @@ struct DevicesView: View {
 
     var body: some View {
         List {
+            // A drawn header so the page opens on a picture of what it is about, not three grey
+            // labels (owner, 2026-10-11: "give illustration art like big apps").
+            Section {
+                DevicesHeader()
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+            }
+
             Section {
                 if let this = sessions.first(where: { $0.isThisDevice }) {
                     Button { detail = this } label: { row(this) }
@@ -911,3 +919,91 @@ private struct BlockPickerView: View {
 // and people are found by @handle - so a page choosing who may see your number was storing a
 // preference about a field that does not exist. Its own footer admitted as much. Removed 2026-07-29
 // along with its Privacy row and its entry in settings search.
+
+// MARK: - Devices header art
+
+/// The top of the Devices page: one drawing in the hand of fariin.com (an ink line and one soft
+/// blue fill) of a phone in front of a laptop, a shield on the phone, then two lines saying what
+/// the page is for. Drawn with shapes, not an image, so the ink follows light and dark mode.
+private struct DevicesHeader: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            DevicesArt()
+                .frame(width: 168, height: 112)
+                .accessibilityHidden(true)
+            VStack(spacing: 4) {
+                Text("Your devices")
+                    .font(.title3.weight(.bold))
+                Text("Every device signed in to your account shows here. Sign out any you do not recognise.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct DevicesArt: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        let ink = dark ? Color.white : Color(red: 0.04, green: 0.05, blue: 0.06)
+        let paper = dark ? Color(white: 0.11) : Color.white
+        let wash = dark ? Color.blue.opacity(0.28) : Color(red: 0.85, green: 0.92, blue: 0.98)
+        let blue = Color(red: 0.02, green: 0.56, blue: 0.97)
+
+        Canvas { ctx, size in
+            // Drawn on a 168 x 112 grid and scaled to whatever the frame gives.
+            let k = size.width / 168
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * k, y: y * k) }
+            func box(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> Path {
+                Path(roundedRect: CGRect(x: x * k, y: y * k, width: w * k, height: h * k), cornerRadius: r * k)
+            }
+            let line = StrokeStyle(lineWidth: 2.4 * k, lineCap: .round, lineJoin: .round)
+
+            // the soft circle everything sits on
+            ctx.fill(Path(ellipseIn: CGRect(x: 32 * k, y: 6 * k, width: 104 * k, height: 104 * k)), with: .color(wash))
+
+            // the laptop: screen, two chat bubbles on it, the base
+            let screen = box(26, 24, 86, 56, 6)
+            ctx.fill(screen, with: .color(paper)); ctx.stroke(screen, with: .color(ink), style: line)
+            let b1 = box(36, 34, 36, 11, 5.5)
+            ctx.stroke(b1, with: .color(ink), style: line)
+            let b2 = box(56, 52, 42, 11, 5.5)
+            ctx.fill(b2, with: .color(blue)); ctx.stroke(b2, with: .color(ink), style: line)
+            let base = box(16, 80, 106, 8, 4)
+            ctx.fill(base, with: .color(paper)); ctx.stroke(base, with: .color(ink), style: line)
+
+            // the phone in front, with its speaker slot
+            let phone = box(104, 32, 38, 70, 8)
+            ctx.fill(phone, with: .color(paper)); ctx.stroke(phone, with: .color(ink), style: line)
+            var slot = Path(); slot.move(to: p(117, 39)); slot.addLine(to: p(129, 39))
+            ctx.stroke(slot, with: .color(ink), style: line)
+
+            // a shield with a tick on the phone's screen
+            var shield = Path()
+            shield.move(to: p(123, 52))
+            shield.addLine(to: p(135, 56.5))
+            shield.addLine(to: p(135, 65))
+            shield.addQuadCurve(to: p(123, 82), control: p(135, 76))
+            shield.addQuadCurve(to: p(111, 65), control: p(111, 76))
+            shield.addLine(to: p(111, 56.5))
+            shield.closeSubpath()
+            ctx.fill(shield, with: .color(blue)); ctx.stroke(shield, with: .color(ink), style: line)
+            var tick = Path()
+            tick.move(to: p(117.5, 66.5)); tick.addLine(to: p(121.5, 70.5)); tick.addLine(to: p(129, 62.5))
+            ctx.stroke(tick, with: .color(.white), style: StrokeStyle(lineWidth: 2.6 * k, lineCap: .round, lineJoin: .round))
+
+            // two small sparks
+            var spark = Path()
+            spark.move(to: p(152, 16)); spark.addLine(to: p(152, 26))
+            spark.move(to: p(147, 21)); spark.addLine(to: p(157, 21))
+            spark.move(to: p(14, 30)); spark.addLine(to: p(14, 37))
+            spark.move(to: p(10.5, 33.5)); spark.addLine(to: p(17.5, 33.5))
+            ctx.stroke(spark, with: .color(ink), style: line)
+        }
+    }
+}
