@@ -727,7 +727,8 @@ struct StoriesTabView: View {
                                  authorPhoto: profile.me?.photoUrl,
                                  addBadge: true,
                                  seen: true,
-                                 onCamera: { composeStory() })
+                                 onCamera: { composeStory() },
+                                 pressKey: StoryListRow.pressKey(Self.addRowKey))
                 }
                 .buttonStyle(.plain)
             }
@@ -807,7 +808,20 @@ struct StoriesTabView: View {
 
     /// The list's long press: the WHOLE ROW under the finger, not just its picture. Same menus as
     /// the grid and the strip.
+    /// The Add Story row's press key — there is no group yet, so no group id to use.
+    private static let addRowKey = "me-add"
+
     private func listRowTarget(at p: CGPoint) -> StoryMenuTarget? {
+        // ⛔ THE ADD STORY ROW HOLDS TOO — owner, 2026-10-11: "long press my story is not
+        // working". With nothing posted it offers My Story's own two entries.
+        if StoriesRepository.shared.mine?.stories.isEmpty ?? true,
+           let t = GlowCardPress.target(StoryListRow.pressKey(Self.addRowKey), at: p, actions: [
+                CMAction(title: "Add Story", icon: "ic_stories") { composeStory() },
+                CMAction(title: "Posted Stories", icon: "circle.dashed") {
+                    path.append(GlowRoute.postedStories(profile.me?.name ?? "My Story"))
+                }], corner: StoryListRow.pressCorner) {
+            return t
+        }
         if let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty,
            let t = GlowCardPress.target(StoryListRow.pressKey(mine.id), at: p,
                                         actions: myStoryActions(mine), corner: StoryListRow.pressCorner) {
