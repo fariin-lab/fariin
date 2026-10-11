@@ -935,7 +935,8 @@ struct StoriesTabView: View {
 
     /// Owner 2026-10-11: the section headings were grey; "white but not too white, soft white".
     /// The primary text colour at 85%, so dark mode gets a soft white and light mode a soft black.
-    private static let listHeadingColor = Color.primary.opacity(0.85)
+    /// Owner, later the same day: "this text looks too white, make it dark white" — 70%.
+    private static let listHeadingColor = Color.primary.opacity(0.7)
 
     /// The friends in the order the list draws them: Recent Stories, then Viewed Stories — the same
     /// split, held the same way (`viewedHold`), as `friendsList`.

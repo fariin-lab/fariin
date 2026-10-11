@@ -75,7 +75,7 @@ jobs:
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
             THIS BUILD (873): VIEW ONCE IN POSTED STORIES.
-            Posted Stories puts your View once stories in their own View once folder, and the filter menu has a View once option. There is one My Chats folder instead of two.
+            Posted Stories puts your View once stories in their own View once folder, and the filter menu has a View once option. There is one My Chats folder instead of two. The Stories headings (My Story, Recent, Viewed, Hidden) are a softer white.
             PLEASE TEST: post a View once story, open Posted Stories, look at All and at the View once filter.
 
             EARLIER (872): STORY FREEZE AFTER A REPOST, STORY LINK CARD, CONNECTION RECOVERY.
