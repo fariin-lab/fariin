@@ -1069,6 +1069,8 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
     /// The bar's background, hairline and glass are the system's; nothing else is touched.
     func reassertNavChrome() {
         guard let item = searchHostItem(), let bar = item.searchController?.searchBar else { return }
+        // The grey survives the back swipe — see `SearchFieldFill`. Once per field.
+        SearchFieldFill.own(bar.searchTextField)
         let shouldShow = item.searchController?.isActive ?? false
         if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
     }

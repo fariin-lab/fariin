@@ -203,6 +203,7 @@ struct StoriesTabView: View {
                 // the app is the better reading of the same wish, and it is the one he has now
                 // stated outright.
                 .searchable(text: $search, prompt: "Search")
+                .searchFieldOwnsFill()   // the grey survives the back swipe — see `SearchFieldFill`
                 // ⛔ THE CHATS FIX OF 2026-09-29, HERE TOO (owner, 2026-10-11: the search field's
                 // grey goes blank for the whole Back swipe). Held through the first push, as Chats
                 // does, so nothing flips when the swipe back to this page ends.

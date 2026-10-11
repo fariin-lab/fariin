@@ -1025,6 +1025,7 @@ struct CallsView: View {
             .voiceNoteBarSlot()   // under the search field (owner, 2026-09-29)
             .navigationTitle("Calls")
             .searchable(text: $searchText, prompt: "Search calls")
+            .searchFieldOwnsFill()   // the grey survives the back swipe — see `SearchFieldFill`
             .toolbar {
                 if selecting {
                     ToolbarItem(placement: .topBarLeading) {
