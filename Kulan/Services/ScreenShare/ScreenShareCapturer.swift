@@ -31,6 +31,11 @@ final class ScreenShareCapturer: RTCVideoCapturer {
     private var live = false
     private var stopped = false
     private var repeatTimer: DispatchSourceTimer?
+    /// `lastBuffer` was held back by the rate gate and has not gone out yet. Flushed once its slot
+    /// comes round: a still screen sends nothing newer, and the repeat timer only fires a second
+    /// later (screen share audit H1, 2026-10-11).
+    private var newestUnsent = false
+    private var flushScheduled = false
 
     /// Pushes into `source` (an RTCVideoSource is the capturer's delegate). Same as `init(delegate:)`.
     convenience init(source: RTCVideoSource) {
@@ -58,7 +63,12 @@ final class ScreenShareCapturer: RTCVideoCapturer {
             self.lastRotation = rotation
             guard self.live else { return }
             let now = CACurrentMediaTime()
-            guard now - self.lastPushAt >= self.minPushInterval else { return }
+            let wait = self.minPushInterval - (now - self.lastPushAt)
+            guard wait <= 0 else {
+                self.newestUnsent = true
+                self.scheduleFlush(after: wait)
+                return
+            }
             self.emit(buffer, rotation: rotation, at: now)
         }
     }
@@ -116,7 +126,19 @@ final class ScreenShareCapturer: RTCVideoCapturer {
         timer.resume()
     }
 
+    private func scheduleFlush(after delay: CFTimeInterval) {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        queue.asyncAfter(deadline: .now() + max(0.001, delay)) { [weak self] in
+            guard let self else { return }
+            self.flushScheduled = false
+            guard self.newestUnsent, self.live, !self.stopped, let buffer = self.lastBuffer else { return }
+            self.emit(buffer, rotation: self.lastRotation, at: CACurrentMediaTime())
+        }
+    }
+
     private func emit(_ buffer: RTCCVPixelBuffer, rotation: RTCVideoRotation, at now: CFTimeInterval) {
+        newestUnsent = false
         lastPushAt = now
         // Host-clock stamp at send time, always increasing: a repeated frame must carry a NEW
         // timestamp or the encoder drops it as a duplicate. The session delivers each frame within a

@@ -557,6 +557,8 @@ final class CallService: NSObject {
         var tileName = ""
         var tilePhotoUrl: String?
         var showsTile = false
+        /// The big feed is their shared screen: fitted whole, never cropped (screen share audit H5).
+        var bigIsScreen = false
     }
     /// My own name and photo, for whichever slot is showing MY switched-off camera.
     var myName: String { ProfileStore.shared.me?.name ?? "You" }
@@ -673,7 +675,10 @@ final class CallService: NSObject {
         // Dual mode: my track stays my camera during a share, so only the fallback share counts here.
         // 1:1 audit #11: what is really going out (`camsSignal`), not `cameraOn`; a paused camera
         // shows my photo instead of a frozen frame.
-        let localLive = localPreviewLive   // 1:1 audit r2 check, 2026-10-08
+        // Screen share audit H4, 2026-10-11: in fallback mode my track IS my screen, and the floating
+        // window would draw it back into the share (mirror in mirror). My slot shows my photo then,
+        // the same rule the call screen keeps.
+        let localLive = localPreviewLive && !shareOwnsCamera   // 1:1 audit r2 check, 2026-10-08
         let mirrorLocal = usingFrontCamera && !shareOwnsCamera
         if isLocalExpanded {
             f.big = localLive ? localVideoTrack : nil
@@ -685,6 +690,7 @@ final class CallService: NSObject {
             f.big = remoteVideoLive ? remoteVideoTrack : nil
             // Their dual-mode share is on its own track and goes big, whatever their camera is doing.
             if remoteScreenSharing, remoteScreenMode == "track", let screen = remoteScreenTrack { f.big = screen }
+            f.bigIsScreen = remoteScreenSharing && f.big != nil
             f.bigName = otherName; f.bigPhotoUrl = otherPhotoUrl
             f.tile = localLive ? localVideoTrack : nil
             f.mirrorTile = mirrorLocal

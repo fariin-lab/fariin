@@ -105,13 +105,18 @@ enum ScreenShareIPC {
                 NSLog("[ScreenShare] IPC: no App Group container")
                 return nil
             }
-            let path = dir.appendingPathComponent(name).path
+            var url = dir.appendingPathComponent(name)
+            let path = url.path
             let fd = open(path, O_RDWR | O_CREAT, 0o644)
             guard fd >= 0 else {
                 NSLog("[ScreenShare] IPC: open %@ failed errno %d", name, errno)
                 return nil
             }
             defer { close(fd) }
+            // Screen frames never go into a device backup (screen share audit H3, 2026-10-11).
+            var noBackup = URLResourceValues()
+            noBackup.isExcludedFromBackup = true
+            try? url.setResourceValues(noBackup)
             var st = stat()
             guard fstat(fd, &st) == 0 else { return nil }
             if Int(st.st_size) < size {
@@ -242,6 +247,21 @@ enum ScreenShareIPC {
 
         func touchKeepalive(_ ns: UInt64) {
             file.set(ns, at: Video.oKeepaliveNs)
+        }
+
+        /// True when no extension is stamping the keepalive (stopped, or dead past the timeout).
+        var writerIdle: Bool {
+            let stamp = keepaliveNs
+            let now = ScreenShareIPC.nowNs()
+            return stamp == 0 || (now > stamp && now - stamp > ScreenShareIPC.keepaliveTimeoutNs)
+        }
+
+        /// Zeroes both frame slots so the last shared screens (a bank app, a chat) do not stay on
+        /// disk after the share. The seq is kept, so a reader never sees it go backwards. Call only
+        /// when no frame is being written (screen share audit H3, 2026-10-11).
+        func wipeFrames() {
+            memset(file.base + Video.headerSize, 0, 2 * Video.slotStride)
+            msync(file.base, file.size, MS_ASYNC)
         }
 
         /// Copies an NV12 buffer (even width/height, both edges <= 1920) into the free slot and

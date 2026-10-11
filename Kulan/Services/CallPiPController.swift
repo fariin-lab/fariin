@@ -82,6 +82,7 @@ final class CallPiPController: NSObject {
     private func applyFeeds(_ feeds: CallService.PiPFeeds) {
         bigView.mirrored = feeds.mirrorBig
         tileView.mirrored = feeds.mirrorTile
+        bigView.fitsWhole = feeds.bigIsScreen
         // A switched-off camera shows that person's photo, not a black rectangle, and the tile keeps
         // its place for the whole call — the same rule the call screen follows.
         bigView.setPlaceholder(name: feeds.bigName, photoUrl: feeds.bigPhotoUrl, visible: feeds.big == nil)
@@ -307,6 +308,14 @@ final class PiPVideoView: UIView {
     private let initialLabel = UILabel()
     private var rotationDegrees = 0
     var mirrored = false { didSet { if mirrored != oldValue { setNeedsLayout() } } }
+    /// A shared screen is shown whole on black; a camera fills the window (screen share audit H5,
+    /// 2026-10-11: aspect fill cut the edges off a share and left a landscape one a thin strip).
+    var fitsWhole = false {
+        didSet {
+            guard fitsWhole != oldValue else { return }
+            sampleView.displayLayer.videoGravity = fitsWhole ? .resizeAspect : .resizeAspectFill
+        }
+    }
 
     var displayLayer: AVSampleBufferDisplayLayer { sampleView.displayLayer }
 

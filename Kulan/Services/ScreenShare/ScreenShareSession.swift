@@ -94,6 +94,8 @@ final class ScreenShareSession {
         // extension never starts into "the call has ended".
         control.markShareWanted()
         mainControl = control
+        // Frames left by a share whose extension and app both died (screen share audit H3, 2026-10-11).
+        if video.writerIdle { video.wipeFrames() }
         observers = [
             ScreenShareIPC.DarwinObserver(name: ScreenShareIPC.Notify.started) { [weak self] in
                 DispatchQueue.main.async { self?.extensionSaidStarted() }
@@ -320,6 +322,8 @@ final class ScreenShareSession {
             self.readerStopped = true
             self.timer?.cancel(); self.timer = nil
             self.control = nil
+            // A killed extension never ran its own wipe (screen share audit H3, 2026-10-11).
+            if let video = self.video, video.writerIdle { video.wipeFrames() }
             self.video = nil
             self.pool = nil
         }

@@ -45,9 +45,15 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var startNs: UInt64 = 0
     private static let adoptGraceNs: UInt64 = 3_000_000_000
 
-    // Video state, touched only on ReplayKit's sample callback.
+    // Video state, touched only on `videoQueue` (ReplayKit's callback runs on it synchronously).
+    private let videoQueue = DispatchQueue(label: "com.kulan.ss3.video", qos: .userInitiated)
     private static let minFrameInterval = 1.0 / 31.0
     private var lastFrameTime: Double = -1
+    /// The newest frame the pacing gate held back. ReplayKit sends nothing more for a still screen,
+    /// so it is written once its slot comes round, or the viewer stays one step behind until the
+    /// next change (screen share audit H1, 2026-10-11).
+    private var heldSample: CMSampleBuffer?
+    private var heldFlushScheduled = false
     private var transferSession: VTPixelTransferSession?
     private var outputPool: CVPixelBufferPool?
     private var poolWidth = 0
@@ -104,7 +110,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     override func broadcastResumed() {
-        lastFrameTime = -1
+        videoQueue.async { self.lastFrameTime = -1 }
         NSLog("[ScreenShare] extension: resumed")
     }
 
@@ -116,7 +122,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
         switch sampleBufferType {
         case .video:
-            handleVideo(sampleBuffer)
+            videoQueue.sync { handleVideo(sampleBuffer, paced: true) }
         case .audioApp:
             // App audio is captured into the ring only once the app can send it. The 1:1 WebRTC
             // build has no hook to mix it into the call yet (see ScreenShareAudioMixer), so until
@@ -217,6 +223,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
         stopObserver = nil
         if running {
             video?.touchKeepalive(0)
+            // On the video queue, so a frame being written right now cannot land after the wipe.
+            videoQueue.sync {
+                heldSample = nil
+                video?.wipeFrames()
+            }
             ScreenShareIPC.post(ScreenShareIPC.Notify.stopped)
         }
         running = false
@@ -224,13 +235,19 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     // MARK: Video
 
-    private func handleVideo(_ sampleBuffer: CMSampleBuffer) {
-        guard let video, let source = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    /// videoQueue. `paced: false` is the held frame's flush, which has already waited its turn.
+    private func handleVideo(_ sampleBuffer: CMSampleBuffer, paced: Bool) {
+        // No frame after teardown wiped the slots (screen share audit H3, 2026-10-11).
+        guard !ended, let video, let source = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let t = pts.isValid ? CMTimeGetSeconds(pts) : Double(ScreenShareIPC.nowNs()) / 1e9
         // 30 fps pacing. A backwards jump (clock reset) is accepted as a fresh start.
-        if lastFrameTime >= 0, t >= lastFrameTime, t - lastFrameTime < Self.minFrameInterval { return }
+        if paced, lastFrameTime >= 0, t >= lastFrameTime, t - lastFrameTime < Self.minFrameInterval {
+            holdForFlush(sampleBuffer, after: Self.minFrameInterval - (t - lastFrameTime))
+            return
+        }
+        heldSample = nil
         lastFrameTime = t
 
         var orientation: UInt32 = 1 // CGImagePropertyOrientation.up
@@ -263,6 +280,21 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
         let timestampNs = UInt64(max(0, t) * 1_000_000_000)
         video.writeFrame(frame, orientation: orientation, fullRange: fullRange, timestampNs: timestampNs)
+    }
+
+    /// videoQueue. Keeps only the newest held frame; one flush per gap. A frame that passes the gate
+    /// first clears it, so the flush then writes nothing.
+    private func holdForFlush(_ sampleBuffer: CMSampleBuffer, after delay: Double) {
+        heldSample = sampleBuffer
+        guard !heldFlushScheduled else { return }
+        heldFlushScheduled = true
+        videoQueue.asyncAfter(deadline: .now() + max(0.001, delay)) { [weak self] in
+            guard let self else { return }
+            self.heldFlushScheduled = false
+            guard let held = self.heldSample else { return }
+            self.heldSample = nil
+            self.handleVideo(held, paced: false)
+        }
     }
 
     /// Fit inside 1920 on both edges, keep the aspect, never upscale, even sizes.
