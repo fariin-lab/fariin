@@ -486,7 +486,13 @@ struct PostedStoriesView: View {
                     } description: {
                         Text(filter.explain)
                     } actions: {
-                        Button("Show All") { filter = .all }.buttonStyle(.borderedProminent)
+                        // Owner 2026-10-11: in dark mode the app's white tint made this a white pill
+                        // with white words. Grey, with the label readable in both modes, and named
+                        // for what it does.
+                        Button("Clear Filter") { filter = .all }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color(uiColor: .systemGray))
+                            .foregroundStyle(.white)
                     }
                 }
             } else {
