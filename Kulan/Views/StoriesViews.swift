@@ -1474,7 +1474,10 @@ struct StoryViewer: View {
     /// is stiffness (2π/0.25)² = 631, and it stops at a distance nobody can see. Together those take
     /// the flight from the 0.51s he measured to about 0.3s, which is what another mainstream messenger's own story
     /// transition costs (0.2s grow + 0.1s cross fade).
-    @State private var heroAnimator = SheetProgressAnimator(stiffness: 631, settleEpsilon: 0.004)
+    /// Owner 2026-10-11: the drag-down close "looks late, add a small speed" — 631 to 720, about 6%
+    /// shorter. This is the default every flight without its own number uses: the close's landing
+    /// and the spring-back.
+    @State private var heroAnimator = SheetProgressAnimator(stiffness: 720, settleEpsilon: 0.004)
     /// How far the finger has to travel for the card to be fully seated in the row card. Generous on
     /// purpose: the shrink has to read as gradual under a slow drag, and the close commits long
     /// before this is reached.
@@ -3714,7 +3717,9 @@ struct StoryViewer: View {
             // decision rather than tune one.
             //
             // ONE NUMBER TO TURN. Too floaty, put it back up; still too abrupt, take it to 440.
-                    stiffness: 480, settle: 0.0015,
+                    // Owner 2026-10-11: "opening looks a little late, add a small speed" — 480 to 560,
+                    // about 7% shorter (1/sqrt k). The curve and the epsilon are untouched.
+                    stiffness: 560, settle: 0.0015,
                     cover: heroCoverOut, crop: heroCoverOut, dimFloor: { $0 }) {
                 hero.live = false
                 hero.cover = false
