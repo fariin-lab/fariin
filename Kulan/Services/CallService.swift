@@ -7099,6 +7099,9 @@ final class CallService: NSObject {
         // block list. A refused ring left no trace anywhere, so a Focus that silenced every call
         // looked like a broken call system.
         if let kitError { mark("kitRefused\(kitError)") }
+        // 3 = filtered by Do Not Disturb / Focus: this phone's Focus silenced it. Remembered here
+        // so the call's bubble on this phone reads "Silenced voice call · Focus mode".
+        if kitError == 3 { FocusSilencedCalls.add(callId) }
         endReason = .missed
         recordWritten = true
         finishCall(updateRemote: false, clearCallKit: false, localUser: true)
@@ -7753,5 +7756,30 @@ private final class FirstFrameProbe: NSObject, RTCVideoRenderer {
         fired = true
         lock.unlock()
         if first { DispatchQueue.main.async(execute: onFirst) }
+    }
+}
+
+/// ⛔ CALLS THIS PHONE'S FOCUS SILENCED (owner, 2026-10-11, the reference's "Silenced voice call ·
+/// Focus mode"). iOS refuses to ring a call that a Focus filters and says so (CallKit error 3,
+/// `endRingLocally`); the call then ends as missed like any other. Only THIS phone was silenced, so
+/// the fact is kept on this phone, by call id, and the chat's call bubble asks it
+/// (`MessageRowModelBuilder.callRow`). Newest 300 kept; older calls read as plain missed.
+enum FocusSilencedCalls {
+    private static let key = "focusSilencedCalls"
+    private static let lock = NSLock()
+
+    static func add(_ callId: String) {
+        guard !callId.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        var ids = UserDefaults.standard.stringArray(forKey: key) ?? []
+        guard !ids.contains(callId) else { return }
+        ids.append(callId)
+        if ids.count > 300 { ids.removeFirst(ids.count - 300) }
+        UserDefaults.standard.set(ids, forKey: key)
+    }
+
+    static func contains(_ callId: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(callId)
     }
 }

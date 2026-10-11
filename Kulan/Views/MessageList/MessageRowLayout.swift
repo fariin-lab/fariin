@@ -2432,7 +2432,8 @@ enum MessageRowLayout {
                              rowWidth: CGFloat) -> CallPlan {
         let statusAttr = NSAttributedString(string: c.status, attributes: [
             .font: UIFont.systemFont(ofSize: 16, weight: .semibold),
-            .foregroundColor: c.mine ? UIColor.white : UIColor.label])
+            // A Focus-silenced call is grey, as the reference draws it.
+            .foregroundColor: c.mine ? UIColor.white : (c.silenced ? UIColor.secondaryLabel : UIColor.label)])
         let detailAttr = NSAttributedString(string: c.detail, attributes: [
             .font: UIFont.systemFont(ofSize: 13),
             .foregroundColor: c.mine ? UIColor.white.withAlphaComponent(0.75) : UIColor.secondaryLabel])
@@ -2455,8 +2456,10 @@ enum MessageRowLayout {
         let stackH = statusH + 2 + detailH
         let top = (bubbleH - stackH) / 2
 
-        let iconColor: UIColor = c.missedIncoming ? .systemRed : (c.mine ? .white : BubblePalette.accent)
+        let iconColor: UIColor = c.silenced ? .secondaryLabel
+            : c.missedIncoming ? .systemRed : (c.mine ? .white : BubblePalette.accent)
         let discColor: UIColor = c.mine ? UIColor.white.withAlphaComponent(0.22)
+            : c.silenced ? UIColor.secondaryLabel.withAlphaComponent(0.14)
             : (c.missedIncoming ? UIColor.systemRed.withAlphaComponent(0.14)
                                 : BubblePalette.accent.withAlphaComponent(0.14))
 

@@ -766,11 +766,18 @@ enum MessageRowModelBuilder {
         // "Missed call" (red) is ONLY for calls I RECEIVED and did not answer. When I was the caller
         // and nobody picked up it is an outgoing call with "No answer" — never red, never "call
         // back", because I was the one calling.
-        let incomingMissed = missed && !mine
+        // ⛔ SILENCED BY MY FOCUS (owner, 2026-10-11, the reference's bubble): an incoming call this
+        // phone's Focus kept from ringing reads "Silenced voice call · Focus mode", grey, not the
+        // missed red. The call message's id is "call_<callId>". See `FocusSilencedCalls`.
+        let silenced = missed && !mine && m.id.hasPrefix("call_")
+            && FocusSilencedCalls.contains(String(m.id.dropFirst(5)))
+        let incomingMissed = missed && !mine && !silenced
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
-        let status = video ? (incomingMissed ? "Missed video call" : "Video call")
-                           : (incomingMissed ? "Missed voice call" : "Voice call")
+        let status = silenced ? (video ? "Silenced video call" : "Silenced voice call")
+            : video ? (incomingMissed ? "Missed video call" : "Video call")
+                    : (incomingMissed ? "Missed voice call" : "Voice call")
         let detail: String = {
+            if silenced { return "Focus mode · \(time)" }
             if ringing { return "Ringing · \(time)" }
             if ongoing { return "Ongoing · \(time)" }
             if incomingMissed { return "Call back · \(time)" }
@@ -789,7 +796,8 @@ enum MessageRowModelBuilder {
             // The call bubble follows the chat colour like every other sent bubble, instead of
             // always being the brand accent.
             fill: mine ? myFill(ctx) : receivedFill(ctx),
-            rim: !mine && ctx.onWallpaper)
+            rim: !mine && ctx.onWallpaper,
+            silenced: silenced)
     }
 
     private static func durationLabel(_ s: Int) -> String {

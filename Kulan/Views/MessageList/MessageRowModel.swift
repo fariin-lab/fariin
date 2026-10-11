@@ -392,6 +392,8 @@ struct CallRow: Equatable {
     var video: Bool
     var fill: BubbleFill
     var rim: Bool
+    /// Silenced by this phone's Focus: grey title and icon instead of the missed red.
+    var silenced: Bool = false
 }
 
 /// One row of the list. A message can carry a day separator and the unread divider ABOVE it — the
