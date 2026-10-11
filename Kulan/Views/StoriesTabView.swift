@@ -720,15 +720,35 @@ struct StoriesTabView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Posted Stories")
             if storyBudget.uploading {
-                // A post in the air: its picture and a spinner, tap opens the live upload viewer —
-                // what the strip's uploading card does. See `StoryListRow.isUploading`.
+                // ⛔ THE SAME STACK THROUGH A SEND — owner, 2026-10-11, with the reference app's own My
+                // Story cell as the model: its stack is its two NEWEST stories, and a story still
+                // sending is one of them from the moment it is posted. This row used to be replaced
+                // by a one-picture card (grey until the new thumbnail decoded) and then swapped back,
+                // so the stack vanished for the whole upload and jumped on the way out.
+                //
+                // Newest first: the posts in the air (newest last in `inFlight`), then what is
+                // already posted. Front = the newest that HAS a picture; behind it, the next one.
+                // A post whose thumbnail is not decoded yet simply waits its turn, so nothing is grey
+                // while anything at all can be shown.
+                let pending = storyBudget.inFlight.compactMap(\.image)
+                let posted = StoriesRepository.shared.mine?.stories ?? []
+                let postedURL: (Story) -> String = { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl }
+                let frontPosted = pending.isEmpty ? posted.last : nil
+                let backPosted: Story? = pending.count >= 2 ? nil
+                    : pending.count == 1 ? posted.last
+                    : (posted.count >= 2 ? posted[posted.count - 2] : nil)
                 Button { openUploadingStory() } label: {
-                    StoryListRow(thumbUrl: "", title: "My Story",
+                    StoryListRow(thumbUrl: frontPosted.map(postedURL) ?? "",
+                                 blurThumb: frontPosted?.blurThumb ?? "",
+                                 title: "My Story",
                                  subtitle: storyBudget.uploadPhase == .preparing ? "Preparing…" : "Uploading…",
                                  authorName: profile.me?.name ?? "You",
                                  authorPhoto: profile.me?.photoUrl,
                                  isUploading: true,
-                                 uploadingImage: storyBudget.uploadingImage,
+                                 uploadingImage: pending.last,
+                                 backImage: pending.count >= 2 ? pending[pending.count - 2] : nil,
+                                 backThumbUrl: backPosted.map(postedURL) ?? "",
+                                 backBlurThumb: backPosted?.blurThumb ?? "",
                                  onCamera: { composeStory() })
                 }
                 .buttonStyle(.plain)

@@ -62,6 +62,9 @@ struct StoryListRow: View {
     /// posted, dimmed, with a spinner over it. Before this the list had no uploading state at all.
     var isUploading = false
     var uploadingImage: UIImage? = nil
+    /// The picture BEHIND the front one while posting, when it is a post still in the air (a local
+    /// picture, no url yet). Wins over `backThumbUrl`. See the uploading branch in `friendsList`.
+    var backImage: UIImage? = nil
     var seen = false
     /// ⛔ ONE ARC PER STORY — owner, 2026-10-11: "use my story ring system, the one the chat list
     /// uses". Per story, oldest → newest, from `StoryPrefs.seenFlags`; drawn by `StoryRingView`, the
@@ -139,7 +142,7 @@ struct StoryListRow: View {
           // stack, so hiding the source hides all of it; its frame is the front picture's, so the
           // flight's rectangle is unchanged. The face stays outside it and stays on screen.
           ZStack(alignment: .bottomTrailing) {
-            if !backThumbUrl.isEmpty {
+            if backImage != nil || !backThumbUrl.isEmpty {
                 // ⛔ THE REFERENCE APP'S STACK, FROM ITS SOURCE, NOT GUESSED — owner, 2026-10-11:
                 // "go read the code, don't guess again". Its My Story cell, scaled by our height
                 // (97 / 84) so our front picture keeps its own size:
@@ -149,7 +152,10 @@ struct StoryListRow: View {
                 //   divider 60×88, corner = the front's, page colour, 2 out on every side of the
                 //           front, between the two, so the front reads as cut out of the back
                 let k = Self.thumbSize.height / 84
-                StoryImage(url: backThumbUrl, maxPixels: StoryImage.cardPixels, blurThumb: backBlurThumb)
+                Group {
+                    if let backImage { Image(uiImage: backImage).resizable().scaledToFill() }
+                    else { StoryImage(url: backThumbUrl, maxPixels: StoryImage.cardPixels, blurThumb: backBlurThumb) }
+                }
                     .frame(width: 43 * k, height: 64 * k)
                     .clipShape(RoundedRectangle(cornerRadius: 6 * k, style: .continuous))
                     .rotationEffect(.radians(-0.18168878))
@@ -197,7 +203,12 @@ struct StoryListRow: View {
             if isUploading {
                 // ⛔ NO SYSTEM SPINNER ON THE PICTURE — owner, 2026-10-11. The picture is shown as
                 // it is; the app's own spinning arc runs on the face instead (see `faceRing`).
+                // ⛔ NEVER GREY WHILE THERE IS A PICTURE TO SHOW — owner, 2026-10-11: until the new
+                // picture's thumbnail is ready the row keeps the newest one it already has
+                // (`thumbUrl`, set by the uploading branch), the way the reference app's My Story
+                // cell keeps its stack through a send.
                 if let uploadingImage { Image(uiImage: uploadingImage).resizable().scaledToFill() }
+                else if !thumbUrl.isEmpty { StoryImage(url: thumbUrl, maxPixels: StoryImage.cardPixels, blurThumb: blurThumb) }
                 else { Color(uiColor: .secondarySystemFill) }
             } else if thumbUrl.isEmpty, addBadge, let photo = authorPhoto, !photo.isEmpty {
                 StoryImage(url: photo, maxPixels: StoryImage.cardPixels)
