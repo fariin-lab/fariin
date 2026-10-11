@@ -1920,7 +1920,12 @@ struct StoryViewer: View {
     private func sheetsOnly(_ v: some View) -> some View {
         v
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
-        .sheet(item: $shareURL) { p in ActivityView(items: [p.url]) }
+        // ⛔ THE APP'S OWN SHARE SHEET (owner, 2026-10-11): the chats to send it to, Copy Link, and
+        // the system share behind its circle, the same sheet a profile or a call link shares
+        // through. Sent into a chat, the link carries its story card (`SendContactSheet` builds it).
+        .sheet(item: $shareURL) { p in
+            SendContactSheet(contactText: p.url.absoluteString, onSent: { flashSentToast($0) })
+        }
         // ⛔ REPOST — his spec, 2026-09-11, and the reference's own flow: the mark opens the
         // COMPOSER, it does not post. The reposter adds their own text, drawing and stickers there
         // and picks their own audience on the sheet after, which is also what makes the repost their
