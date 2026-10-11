@@ -367,6 +367,19 @@ struct StoriesTabView: View {
             .filter { $0.person.name.lowercased().contains(q) }
         if friends.isEmpty && glowing.isEmpty {
             ContentUnavailableView.search(text: search)
+        } else if AppFeatures.storyList {
+            // ⛔ RESULTS IN THE LIST'S OWN ROWS — owner, 2026-10-11: search still showed the old
+            // cards. Same row, same tap, same hold as the page; the grid branch below is kept.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    listHeading("Friends")
+                    LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+                        ForEach(friends) { g in friendListRow(g) }
+                    }
+                }
+                .padding(.bottom, 24 - StoryListRow.rowPad)
+                .glowCardLongPress { listRowTarget(at: $0) }
+            }
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
