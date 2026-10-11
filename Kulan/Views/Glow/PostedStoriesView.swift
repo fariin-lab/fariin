@@ -556,8 +556,10 @@ struct PostedStoriesView: View {
                                 // (`StoryAudienceRow.badge`), at heading size.
                                 HStack(spacing: 10) {
                                     Self.folderBadge(f.kind)
+                                    // 17, the Stories list's own headings (My Story, Recent
+                                    // Stories, Viewed Stories) — owner, 2026-10-11.
                                     Text(f.name)
-                                        .font(.system(size: 20, weight: .semibold))
+                                        .font(.system(size: 17, weight: .semibold))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                 }
