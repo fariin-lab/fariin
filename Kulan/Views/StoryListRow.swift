@@ -126,6 +126,12 @@ struct StoryListRow: View {
     /// it sits OUTSIDE the rect reporter: the morph and the lift fly the picture alone.
     private var thumbStack: some View {
         ZStack(alignment: .bottomTrailing) {
+          // ⛔ THE WHOLE STACK IS ONE SOURCE — owner, 2026-10-11: with a story open and dragged down,
+          // the front picture was hidden for the flight but the tilted back card and its divider
+          // stayed, so half a picture stuck out of the empty slot. The rect reporter now sits on the
+          // stack, so hiding the source hides all of it; its frame is the front picture's, so the
+          // flight's rectangle is unchanged. The face stays outside it and stays on screen.
+          ZStack(alignment: .bottomTrailing) {
             if !backThumbUrl.isEmpty {
                 // ⛔ THE REFERENCE APP'S STACK, FROM ITS SOURCE, NOT GUESSED — owner, 2026-10-11:
                 // "go read the code, don't guess again". Its My Story cell, scaled by our height
@@ -148,6 +154,9 @@ struct StoryListRow: View {
                     .offset(x: 2, y: 2)
             }
             thumb
+          }
+          .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+          .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow, cornerRadius: Self.corner))
             if addBadge { plusBadge.offset(x: 6, y: 6) }
             else if showsFace { faceView.offset(x: 7, y: 5) }
         }
@@ -179,7 +188,6 @@ struct StoryListRow: View {
         }
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
         .clipShape(shape)
-        .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow, cornerRadius: Self.corner))
     }
 
     /// The grid card's ⊕: white bold plus on a black disc, edged in the page colour so it reads
