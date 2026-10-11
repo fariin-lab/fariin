@@ -75,7 +75,7 @@ jobs:
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
             THIS BUILD (865): THE FACE FLIES WITH THE STORY.
-            Opening a story from the Stories list, the person's face circle leaves the row and flies into the story's header avatar; closing (X or drag down) it flies back and lands on the row. It follows your finger while dragging and returns to the header if you let go without closing.
+            Opening a story from the Stories list, the person's face circle leaves the row and flies into the story's header avatar; closing (X or drag down) it flies back and lands on the row. While you drag, it stays on the story header; it flies to the row only once you let go and the story closes. Only one face is visible during the whole transition.
             PLEASE TEST: open a story and watch the face go to the header; close with X; drag down slowly and let go (no close), then drag down and close; swipe to another person and close.
 
             EARLIER (864): POSTED STORIES FOLDERS, STORY ORDER, A LITTLE FASTER.
