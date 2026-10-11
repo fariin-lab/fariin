@@ -194,8 +194,8 @@ struct GlowProfileView: View {
                 VStack(spacing: 0) {
                     header
                     identity
-                    statsCard.padding(.horizontal, 16).padding(.top, 18)
-                    insightsCard.padding(.horizontal, 16).padding(.top, 12)
+                    if AppFeatures.glow { statsCard.padding(.horizontal, 16).padding(.top, 18) }   // hidden 2026-10-10
+                    if AppFeatures.insights { insightsCard.padding(.horizontal, 16).padding(.top, 12) }   // hidden 2026-10-10
                     // The About card (Joined + Complete your profile) is off the page, owner's
                     // order 2026-09-30. `aboutCard` is kept below, unused.
                     postedStoriesCard.padding(.horizontal, 16).padding(.top, 22)

@@ -15,3 +15,16 @@ enum CallFeatures {
     /// link's pre-join screen from a chat, a web link or the list.
     static let callLinks = false
 }
+
+/// App features that are built but hidden — owner, 2026-10-10: "completely disable and hide the
+/// Glow feature ... also completely hide the Insights feature. Do not delete any code or data; keep
+/// them in the codebase for future use." Every entry point checks its switch; nothing is deleted
+/// and no data is touched. Flip a switch to `true` and that feature comes back as it was.
+enum AppFeatures {
+    /// Glow: the Glowing grid and "Glowing" search results on the Stories tab, the Glow button and
+    /// "Glow Story" menu item on a profile, the Glowers · Glowing card on My Profile, the Glowers
+    /// tab and glow rows on the Notifications page, and Glow in the feature tour.
+    static let glow = false
+    /// Insights: the Insights card on My Profile, the only way into the Insights page.
+    static let insights = false
+}

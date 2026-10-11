@@ -28,8 +28,9 @@ struct FeatureTourView: View {
         Page(title: "Private chats",
              text: "Messages are end-to-end encrypted. Only you and the people you talk to can read them.",
              art: AnyView(TourArt.privateChats)),
-        Page(title: "Stories and Glow",
-             text: "Share moments that disappear after a day. Glow someone to follow their stories.",
+        Page(title: AppFeatures.glow ? "Stories and Glow" : "Stories",   // Glow hidden 2026-10-10
+             text: AppFeatures.glow ? "Share moments that disappear after a day. Glow someone to follow their stories."
+                                    : "Share moments that disappear after a day.",
              art: AnyView(TourArt.stories)),
         Page(title: "Calls",
              text: "Voice and video calls with the people in your chats.",

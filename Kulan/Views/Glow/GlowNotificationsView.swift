@@ -78,7 +78,7 @@ struct GlowNotificationsView: View {
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(Chip.allCases) { c in
+                ForEach(Chip.allCases.filter { AppFeatures.glow || $0 != .glowers }) { c in   // hidden 2026-10-10
                     let on = chip == c
                     Button { chip = c } label: {
                         Text(c.title)
@@ -173,6 +173,7 @@ struct GlowNotificationsView: View {
     }
 
     private func matches(_ e: GlowEvent) -> Bool {
+        if !AppFeatures.glow, e.isGlow { return false }   // hidden 2026-10-10: no glow rows
         switch chip {
         case .all: return true
         case .glowers: return e.isGlow

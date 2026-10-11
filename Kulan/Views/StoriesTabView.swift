@@ -314,7 +314,7 @@ struct StoriesTabView: View {
                     // ⚠️ NO DISCOVER. His mockup had a Discover grid here and he removed it by name
                     // on 2026-09-02 ("no discover feature"). The file's older note said Discover was
                     // being left room to land in; that room is now Glow's.
-                    glowSection
+                    if AppFeatures.glow { glowSection }   // hidden 2026-10-10
                 }
             }
             // ⚠️ NO `contentMargins` DANCE HERE, AND THAT IS THE POINT OF THE MOVE. In the chat list
@@ -357,7 +357,7 @@ struct StoriesTabView: View {
                             }
                         }
                     }
-                    if !glowing.isEmpty {
+                    if AppFeatures.glow, !glowing.isEmpty {   // hidden 2026-10-10
                         searchGroup("Glowing") {
                             ForEach(glowing) { c in
                                 // Same split as the section this came from: the card is the story,
@@ -552,6 +552,7 @@ struct StoriesTabView: View {
     }
 
     private var hasGlowGrid: Bool {
+        guard AppFeatures.glow else { return false }   // hidden 2026-10-10: Friends is the grid then
         guard !glow.glowRelationship.isEmpty else { return false }
         switch glowStories.state {
         case .loading:          return true

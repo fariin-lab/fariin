@@ -666,7 +666,7 @@ struct ContactInfoView: View {
         // audience, i.e. a way to start broadcasting to a person you had deliberately cut off. Two
         // doors to one action have to answer the same question; the note on `glowActionButton` says
         // as much and only one of them was doing it.
-        if !isSelf && !blocked { glowMenuItem; Divider() }
+        if AppFeatures.glow, !isSelf && !blocked { glowMenuItem; Divider() }   // hidden 2026-10-10
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
         // Wallpaper pops back to the CHAT and posts to its ThreadView — from a story-opened profile
@@ -2012,7 +2012,7 @@ struct ContactInfoView: View {
                 //
                 // ⚠️ TWO DOORS TO ONE ACTION, HIS ASK: this button AND "Glow Story" in the ••• menu
                 // below. They call the same thing — a second door is only a second door.
-                glowActionButton
+                if AppFeatures.glow { glowActionButton }   // hidden 2026-10-10
                 callMenuButton
             }
             if !isSelf {
