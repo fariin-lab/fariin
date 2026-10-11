@@ -46,6 +46,8 @@ struct PostedStory: Identifiable, Equatable, Codable {
     var views: Int?
     /// "everyone" | "friends" | "glowers" | "custom" — what the Posted Stories filter groups by.
     var audience: String
+    /// Posted as View once. Optional so a copy saved before this field existed still decodes.
+    var oneTime: Bool? = nil
 }
 
 /// Resolves uids into rows for the Glowers / Glowing lists and the notifications page.
@@ -238,7 +240,8 @@ struct PostedStory: Identifiable, Equatable, Codable {
                             // The number this phone last saw for this story, so the badge is on the
                             // first frame — see `StoryViewCountCache`. `loadViewCounts` corrects it.
                             views: StoryViewCountCache.get(s.id),
-                            audience: s.audienceLabel)
+                            audience: s.audienceLabel,
+                            oneTime: s.oneTime ? true : nil)
             })
             return
         }

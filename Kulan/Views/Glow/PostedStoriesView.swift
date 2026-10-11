@@ -25,7 +25,9 @@ struct PostedStoriesView: View {
     enum Filter: String, CaseIterable, Identifiable {
         /// ⛔ HIS ORDER — owner, 2026-09-11: "All posted stories / My friends / Glowers / all
         /// Custom". Glowers ahead of Custom is his, not alphabetical.
-        case all, friends, glowers, custom
+        /// `oneTime` last: owner, 2026-10-11, "add a once view option" — a View once story was filed
+        /// under My Chats with nothing to tell it apart.
+        case all, friends, glowers, custom, oneTime
         var id: String { rawValue }
         /// The filters the menu offers. Glowers goes with the Glow feature (owner, 2026-10-11:
         /// "I hid that feature, why is it still showing").
@@ -44,6 +46,8 @@ struct PostedStoriesView: View {
             case .friends: return "My Chats"
             case .glowers: return "Glowers"
             case .custom: return "All Custom"
+            // The words the story's own header uses for it (`storyAudienceTitle`).
+            case .oneTime: return "View once"
             }
         }
         /// What it means in one line, his "the filtering behaviour should be clear and easy to
@@ -54,17 +58,20 @@ struct PostedStoriesView: View {
             case .friends: return "Stories visible to everyone you chat with"
             case .custom: return "Stories shared with a custom audience"
             case .glowers: return "Stories shared with your Glowers"
+            case .oneTime: return "Stories each person can watch once"
             }
         }
         /// ⚠️ MATCHES THE STORY'S OWN LABEL. "everyone" is deliberately counted as a friends-visible
         /// story here: an Everyone story reaches every chat you have accepted AND the profile, so
         /// hiding it from the My Friends filter would be a lie about who can see it.
-        func matches(_ audience: String) -> Bool {
+        func matches(_ s: PostedStory) -> Bool {
+            let audience = s.audience
             switch self {
             case .all: return true
             case .friends: return audience == "friends" || audience == "everyone"
             case .custom: return audience == "custom"
             case .glowers: return audience == "glowers"
+            case .oneTime: return s.oneTime == true
             }
         }
     }
@@ -114,18 +121,28 @@ struct PostedStoriesView: View {
         var at: [String: Int] = [:]
         for s in rows {
             let name: String
-            switch s.audience {
-            case "everyone": name = "Everyone"
-            case "friends":  name = "My Chats"
-            case "glowers":  name = "Glowers"
-            case "custom":   name = mergeCustom ? "Custom"
-                                 : (StoryAudienceStore.shared.storyName(s.id)
-                                    ?? StoryPrefs.audienceName(storyId: s.id) ?? "Custom")
-            default:         name = "My Chats"
+            // The folder's kind. ⚠️ An audience word this page does not know is My Chats, the same
+            // default every reader of the label uses, and it joins THAT folder: keyed by the raw word,
+            // it opened a second "My Chats" heading (owner's screenshot, 2026-10-11).
+            var kind = s.audience
+            if s.oneTime == true {
+                // A View once story gets its own folder, whoever it went to (owner, 2026-10-11).
+                kind = "oneTime"
+                name = "View once"
+            } else {
+                switch s.audience {
+                case "everyone": name = "Everyone"
+                case "friends":  name = "My Chats"
+                case "glowers":  name = "Glowers"
+                case "custom":   name = mergeCustom ? "Custom"
+                                     : (StoryAudienceStore.shared.storyName(s.id)
+                                        ?? StoryPrefs.audienceName(storyId: s.id) ?? "Custom")
+                default:         name = "My Chats"; kind = "friends"
+                }
             }
-            let key = s.audience + ":" + name
+            let key = kind + ":" + name
             if let i = at[key] { out[i].rows.append(s) }
-            else { at[key] = out.count; out.append(PostedFolder(id: key, name: name, kind: s.audience, rows: [s])) }
+            else { at[key] = out.count; out.append(PostedFolder(id: key, name: name, kind: kind, rows: [s])) }
         }
         return out
     }
@@ -513,7 +530,7 @@ struct PostedStoriesView: View {
                 .buttonStyle(.borderedProminent)
             }
         case .loaded(let all):
-            let rows = all.filter { filter.matches($0.audience) }
+            let rows = all.filter { filter.matches($0) }
             if rows.isEmpty {
                 // ⚠️ TWO DIFFERENT EMPTIES, AND THEY MUST READ DIFFERENTLY. No stories at all is a
                 // fact about the account; no stories THROUGH THIS FILTER is a fact about the
