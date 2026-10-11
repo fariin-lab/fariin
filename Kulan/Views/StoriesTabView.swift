@@ -595,7 +595,11 @@ struct StoriesTabView: View {
                                           authorPhoto: profile.me?.photoUrl,
                                           isMine: true,
                                           seen: !mine.hasUnseen,
-                                          rectKey: mine.id)
+                                          rectKey: mine.id,
+                                          // ⛔ THE + ADDS A STORY — owner, 2026-10-10: tapping the
+                                          // + on my own card did nothing new; the card still
+                                          // opens my story, the face and + open the composer.
+                                          onAvatarTap: { composeStory() })
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -915,13 +919,13 @@ struct StoriesTabView: View {
             // pile of transforms. What is in the catalogue is the two paths from it on a clean 24pt
             // box with the transforms folded in — same drawing, nothing else in the file. Template
             // rendering reads the alpha, so the fill colour in there is a convention, not a choice.
-            Image("ic_add_story").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 22, height: 22)
-                .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .heavy))
-                        .offset(x: 4, y: 3)
-                }
+            //
+            // ⛔ OUTLINE, THE REFERENCE APP'S NEW-STORY MARK — owner, 2026-10-10: "make it outline
+            // icons ... copy [the reference app's] add story icon". Redrawn as our own SVG (a circle,
+            // solid on the left and dashed on the right, with a plus), not their file. It carries
+            // its own plus, so the badge plus is gone. `ic_add_story` (his 09-11 drawing) is kept.
+            Image("ic_new_story").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 26, height: 26)
         }
     }
 
@@ -936,7 +940,10 @@ struct StoriesTabView: View {
             // ⚠️ SIZED BY A `frame`, NOT BY `font`, and drawn as a template so it takes the tint —
             // an asset ignores `font` entirely. Same 22 as the `ic_stories` button beside it, which
             // is what makes the pair read as one bar. Both notes are written up on that button.
-            Image("ic_bell").renderingMode(.template).resizable().scaledToFit()
+            // ⛔ OUTLINE — owner, 2026-10-10: both header icons outline. `ic_bell` is filled and the
+            // mute control still uses it, so this button takes the outline system bell.
+            Image(systemName: "bell")
+                .font(.system(size: 19, weight: .regular))
                 .frame(width: 22, height: 22)
                 .overlay(alignment: .topTrailing) {
                     if hasUnreadGlow {
