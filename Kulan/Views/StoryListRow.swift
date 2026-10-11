@@ -103,15 +103,25 @@ struct StoryListRow: View {
     private var thumbStack: some View {
         ZStack(alignment: .bottomTrailing) {
             if !backThumbUrl.isEmpty {
-                // The reference app's stack: same card, a little shorter, nudged left and dimmed,
-                // so it reads as "behind" rather than as a second story beside it.
+                // ⛔ THE REFERENCE APP'S STACK, FROM ITS SOURCE, NOT GUESSED — owner, 2026-10-11:
+                // "go read the code, don't guess again". Its My Story cell, scaled by our height
+                // (97 / 84) so our front picture keeps its own size:
+                //   back    43×64, corner 6, rotated −0.18168878 rad, top inset 4, pinned leading,
+                //           NOT dimmed; the container is 8 wider than the front, so the back
+                //           starts 8 left of it
+                //   divider 60×88, corner = the front's, page colour, 2 out on every side of the
+                //           front, between the two, so the front reads as cut out of the back
+                let k = Self.thumbSize.height / 84
                 StoryImage(url: backThumbUrl, maxPixels: StoryImage.cardPixels, blurThumb: backBlurThumb)
-                    .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
-                    .overlay(Color.black.opacity(0.35))
-                    .clipShape(shape)
-                    .scaleEffect(0.88, anchor: .leading)
-                    .offset(x: -9)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .frame(width: 43 * k, height: 64 * k)
+                    .clipShape(RoundedRectangle(cornerRadius: 6 * k, style: .continuous))
+                    .rotationEffect(.radians(-0.18168878))
+                    .frame(width: Self.thumbSize.width, height: Self.thumbSize.height, alignment: .topLeading)
+                    .offset(x: -8 * k, y: 4 * k)
+                RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+                    .fill(scheme == .dark ? Color.black : Color.white)
+                    .frame(width: Self.thumbSize.width + 4, height: Self.thumbSize.height + 4)
+                    .offset(x: 2, y: 2)
             }
             thumb
             if addBadge { plusBadge.offset(x: 6, y: 6) }
