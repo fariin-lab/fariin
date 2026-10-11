@@ -499,7 +499,8 @@ struct PostedStoriesView: View {
                     // per audience (Everyone, My Chats, each custom list by its own name), in the order
                     // their newest story was posted. Anyone else's page, or a single filter, stays one
                     // grid: who another person posted to is not mine to see.
-                    let folders = isMe && filter == .all ? Self.folders(rows) : []
+                    // ...and "All Custom" the same way, one folder per custom list (owner, same day).
+                    let folders = isMe && (filter == .all || filter == .custom) ? Self.folders(rows) : []
                     if !folders.isEmpty {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(folders) { f in
