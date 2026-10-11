@@ -4643,7 +4643,7 @@ struct StoryViewer: View {
         Task {
             // The viewer has almost always cached this already — it is the picture on screen — so
             // this is usually instant and falls back to a fetch only when it is not.
-            let image = await DiskImageCache.shared.image(for: story.previewUrl)
+            let image = await Self.storyImage(story.previewUrl)
             // ⛔ THE CARD — owner, 2026-10-11 (`RepostCard`): the original as a rounded card with its
             // author's face and name, over its own colours. Built here, before the composer opens,
             // so the composer edits exactly what will be posted. The face is best effort: no
@@ -4695,7 +4695,7 @@ struct StoryViewer: View {
             var bytes = StoryBytes.data(for: story.mediaUrl)
             if bytes == nil { bytes = try? await URLSession.shared.data(from: remote).0 }
             let wrote = bytes.map { (try? $0.write(to: local, options: .atomic)) != nil } ?? false
-            let poster = await DiskImageCache.shared.image(for: story.previewUrl)
+            let poster = await Self.storyImage(story.previewUrl)
             // The card chip's face, best effort, the same lookup the photo card uses.
             let photo = authorPhoto(story.authorUid)
             let avatar: UIImage? = if let photo, !photo.isEmpty {
@@ -4785,8 +4785,25 @@ struct StoryViewer: View {
 
     private func loadCurrentImage(_ captured: String? = nil) async -> UIImage? {
         guard let url = captured ?? currentStory?.mediaUrl, !url.isEmpty else { return nil }
+        return await Self.storyImage(url)
+    }
+
+    /// ⛔ A STORY'S PICTURE, WHEREVER IT IS — owner, 2026-10-11: Repost said "Could not load that
+    /// story". Since 858 the full picture lives in the viewer's own disk cache (`StoryBytes`, the
+    /// one the story on screen was drawn from) and `DiskImageCache` only keeps the small card copy
+    /// under a `#1000` key — so a lookup there for the plain url found nothing, and it never
+    /// downloads. In order: memory, the app's cache, the viewer's cache, then the network.
+    static func storyImage(_ url: String) async -> UIImage? {
+        guard !url.isEmpty else { return nil }
         if let m = DiskImageCache.shared.memoryImage(url) { return m }
-        return await DiskImageCache.shared.image(for: url)
+        if let d = await DiskImageCache.shared.image(for: url) { return d }
+        let data: Data? = await Task.detached(priority: .userInitiated) { () -> Data? in
+            if let local = StoryBytes.data(for: url) { return local }
+            guard let u = URL(string: url) else { return nil }
+            return try? await URLSession.shared.data(from: u).0
+        }.value
+        guard let data, let img = UIImage(data: data) else { return nil }
+        return img.preparingForDisplay() ?? img
     }
 
     private func saveCurrentImage(_ captured: String? = nil) {
