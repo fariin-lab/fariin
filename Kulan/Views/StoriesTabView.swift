@@ -690,6 +690,7 @@ struct StoriesTabView: View {
                                  subtitle: "Disappears after 24 hours",
                                  authorName: profile.me?.name ?? "You",
                                  authorPhoto: profile.me?.photoUrl,
+                                 addBadge: true,
                                  seen: true,
                                  onCamera: { composeStory() })
                 }

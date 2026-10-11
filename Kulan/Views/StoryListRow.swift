@@ -30,6 +30,10 @@ struct StoryListRow: View {
     var authorName: String = ""
     var authorPhoto: String? = nil
     var showsFace = true
+    /// ⛔ NO STORY YET — owner, 2026-10-11, with a mockup: the tile shows MY profile picture and
+    /// wears the + badge instead of the face. The badge is the grid card's own (black, white bold
+    /// plus), not the reference's blue.
+    var addBadge = false
     var seen = false
     /// ⛔ THE STACK — owner, 2026-10-11, as the reference app draws My Story with more than one
     /// story: the previous picture peeks out behind the newest one. Empty = no stack.
@@ -93,14 +97,21 @@ struct StoryListRow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
             thumb
-            if showsFace { faceView.offset(x: 7, y: 5) }
+            if addBadge { plusBadge.offset(x: 6, y: 6) }
+            else if showsFace { faceView.offset(x: 7, y: 5) }
         }
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
     }
 
     @ViewBuilder private var thumb: some View {
         Group {
-            if thumbUrl.isEmpty {
+            if thumbUrl.isEmpty, addBadge, let photo = authorPhoto, !photo.isEmpty {
+                StoryImage(url: photo, maxPixels: StoryImage.cardPixels)
+            } else if thumbUrl.isEmpty, addBadge {
+                shape.fill(Color(uiColor: .secondarySystemFill))
+                    .overlay(Image(systemName: "person.fill").font(.system(size: 26))
+                        .foregroundStyle(.secondary))
+            } else if thumbUrl.isEmpty {
                 // No story yet: the same tile shape, holding a plus, so the row does not change
                 // shape when the first story lands.
                 shape.fill(Color(uiColor: .secondarySystemFill))
@@ -113,6 +124,19 @@ struct StoryListRow: View {
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
         .clipShape(shape)
         .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow, cornerRadius: Self.corner))
+    }
+
+    /// The grid card's ⊕: white bold plus on a black disc, edged in the page colour so it reads
+    /// as sitting on top of the picture.
+    private var plusBadge: some View {
+        Image(systemName: "plus")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 24, height: 24)
+            .background(Color.black, in: Circle())
+            .padding(2)
+            .background(Circle().fill(scheme == .dark ? Color.black : Color.white))
+            .allowsHitTesting(false)
     }
 
     /// The face with the same two rings the grid card's face wears: green→blue unseen, grey seen.
