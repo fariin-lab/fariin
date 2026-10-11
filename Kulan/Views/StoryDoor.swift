@@ -390,11 +390,16 @@ enum StoryDoor {
     /// This used to be two binding writes (`viewerGroup = nil`, `showUploadViewer = false`) on the
     /// screen that owned the covers. A presented screen cannot be dismissed that way, so every such
     /// site has to come through here or it silently stops working the day its door migrates.
-    static func dismiss() {
-        guard StoryZoomPresenter.isActive || StoryDoorState.shared.isOpen else { return }
-        StoryZoomPresenter.finish()
+    ///
+    /// - Parameter then: runs once the viewer has really left the window (at once when nothing was
+    ///   open). For a caller that navigates next: on iOS 26 the stage is still leaving a tick later,
+    ///   and a chat pushed underneath it then misses its own appearance and draws blank (owner,
+    ///   2026-10-11: story > profile > the chat button > an empty chat page).
+    static func dismiss(then: (() -> Void)? = nil) {
+        guard StoryZoomPresenter.isActive || StoryDoorState.shared.isOpen else { then?(); return }
         StoryDoorState.shared.uploadingOpen = false
         closed()
+        StoryZoomPresenter.finish(then: then)
     }
 
     // MARK: - The viewer, and the three ways out of it

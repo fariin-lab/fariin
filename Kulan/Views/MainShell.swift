@@ -2945,8 +2945,18 @@ struct ChatsView: View {
         StoryCameraDoor.close()
         // The story viewer is not a cover any more, so it cannot be dismissed by clearing a binding:
         // it is a presented screen and the door takes it away. Same job, one call.
-        StoryDoor.dismiss()
         profileGroup = nil
+        // ⛔ AND THE CHAT OPENS ONCE IT HAS GONE (owner, 2026-10-11: story > profile > the chat
+        // button showed an empty chat page with only its big title). The path was rebuilt in the
+        // same breath as the dismissal, and on iOS 26 the story stage is still leaving then: the
+        // chat was pushed under it and never got its appearance, so its list never drew. When no
+        // story is up this runs at once, exactly as before.
+        StoryDoor.dismiss { openPendingChatTarget(cid) }
+    }
+
+    private func openPendingChatTarget(_ cid: String) {
+        // The intent may have been taken by another path while the story was leaving.
+        guard router.pendingChatId == cid else { return }
         // 2026-09-24 audit: a notification for the chat that is ALREADY open (left on screen, then
         // the app went to the background) rebuilt the path to the same chat, remounting it and
         // throwing away its scroll position and composer state. The foreground-banner path already
