@@ -208,6 +208,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// Disable Sharing › No Screenshots: the list draws inside the secure canvas (owner, 2026-10-03).
     /// Declared after `forceDark` for the same argument-order reason.
     var noScreenshots: Bool = false
+    /// The chat list's long-press peek: no header there, so no header blur over the top messages
+    /// (owner, 2026-10-11). The opened chat keeps its blur. Declared last for the same reason.
+    var hidesHeaderBlur: Bool = false
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -223,6 +226,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
         vc.setCaptureProtected(noScreenshots)
+        vc.setHeaderBlurHidden(hidesHeaderBlur)
         // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
         // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
         // following the system again rather than being pinned the other way.
@@ -5802,6 +5806,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private let captureField = UITextField()
     /// The chat header's blur — see `ChatHeaderBlurView`.
     private let headerBlur = ChatHeaderBlurView()
+
+    /// The long-press peek has no header, so it shows no header blur (owner, 2026-10-11).
+    func setHeaderBlurHidden(_ hidden: Bool) {
+        if headerBlur.isHidden != hidden { headerBlur.isHidden = hidden }
+    }
 
     /// From the top of the screen to 34pt below the bar and never under 100pt, the reference chat's
     /// reach. `safeAreaInsets.top` on this full-screen view is the status bar plus the bar.

@@ -4120,7 +4120,8 @@ struct ThreadView: View {
             // ⛔ LIFTED 2026-09-29 (see `dark`): a wallpapered chat follows the phone again, so the
             // UIKit half is no longer pinned either.
             forceDark: false,
-            noScreenshots: repo.noScreenshots   // Disable Sharing (2026-10-03)
+            noScreenshots: repo.noScreenshots,  // Disable Sharing (2026-10-03)
+            hidesHeaderBlur: preview            // the long-press peek has no header (2026-10-11)
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
