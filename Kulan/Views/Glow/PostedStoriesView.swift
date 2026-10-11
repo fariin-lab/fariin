@@ -560,7 +560,8 @@ struct PostedStoriesView: View {
                                 // confusing". The same badges the Share Story sheet draws
                                 // (`StoryAudienceRow.badge`), at heading size.
                                 HStack(spacing: 10) {
-                                    Self.folderBadge(f.kind)
+                                    // Text only (owner, 2026-10-11, later: "remove icons"). The
+                                    // badge stays defined in `folderBadge` should it come back.
                                     // 17, the Stories list's own headings (My Story, Recent
                                     // Stories, Viewed Stories) — owner, 2026-10-11.
                                     Text(f.name)
