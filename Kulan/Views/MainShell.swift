@@ -3027,10 +3027,10 @@ struct ArchivedChatsView: View {
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
-    private var archivedStories: [StoryGroup] {
-        _ = prefsTick
-        return storiesRepo.others.filter { StoryPrefs.isHidden($0.authorUid) }
-    }
+    /// ⛔ EMPTY ON PURPOSE (owner, 2026-10-11: "archive page never add hidden stories"). Hidden
+    /// people's stories live in the Stories tab's Hidden Stories list now, which is also where they
+    /// are unhidden. Kept as an empty list so the strip and everything keyed to it stand down.
+    private var archivedStories: [StoryGroup] { [] }
     private var storyCardW: CGFloat { (UIScreen.main.bounds.width - 24 - 30) / 4 }
 
     /// The archived row's long-press menu. Deliberately short: this is a drawer you visit to take
