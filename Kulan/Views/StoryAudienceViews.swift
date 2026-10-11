@@ -288,8 +288,12 @@ struct StoryPeoplePicker: View {
             }
         }
         .listStyle(.insetGrouped)
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Name or username")
+        // ⛔ THE FIELD AT THE BOTTOM, THE BAR KEPT — owner, 2026-10-11, with the reference screenshot:
+        // searching moved the pinned drawer field up into the navigation bar, where it sat over the
+        // title and the action button. iOS 26's own bottom search field stays above the keyboard
+        // with its ✕, and `.avoidHidingContent` keeps the title and the button while it is active.
+        .searchable(text: $search, prompt: "Name or username")
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -304,6 +308,9 @@ struct StoryPeoplePicker: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(saveTitle) { onSave() }
                     .fontWeight(.semibold)
+                    // Owner 2026-10-11: the reference's blue capsule; dims when it cannot act.
+                    .buttonStyle(.glassProminent)
+                    .tint(.blue)
                     .disabled(requireAtLeastOne && selected.isEmpty)
             }
         }
@@ -421,8 +428,12 @@ struct SelectViewersView: View {
                 }
             }
         }
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Name or username")
+        // ⛔ THE FIELD AT THE BOTTOM, THE BAR KEPT — owner, 2026-10-11, with the reference screenshot:
+        // searching moved the pinned drawer field up into the navigation bar, where it sat over the
+        // title and the action button. iOS 26's own bottom search field stays above the keyboard
+        // with its ✕, and `.avoidHidingContent` keeps the title and the button while it is active.
+        .searchable(text: $search, prompt: "Name or username")
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -434,6 +445,9 @@ struct SelectViewersView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(actionTitle) { onAction() }
                     .fontWeight(.semibold)
+                    // Owner 2026-10-11: the reference's blue capsule; dims when it cannot act.
+                    .buttonStyle(.glassProminent)
+                    .tint(.blue)
                     .disabled(requiresSelection && selected.isEmpty)
             }
         }
@@ -512,6 +526,8 @@ struct NameStoryView: View {
                 Button("Create") { onCreate() }
                     .fontWeight(.semibold)
                     // Owner 2026-10-11: blue when it can be pressed; the disabled state stays grey.
+                    // The same blue capsule as Next on the page before it.
+                    .buttonStyle(.glassProminent)
                     .tint(.blue)
                     // Required means required. A nameless list is unfindable in the picker, which is
                     // the one place its name is ever read.
