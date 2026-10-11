@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (874): STORY SWIPE, PHOTO REPOST ZOOM, PROFILE FREEZE.
+            THIS BUILD (875): CHAT FROM A STORY PROFILE.
+            Opening a story, then the profile, then the chat button now opens the chat with its messages instead of an empty page.
+            PLEASE TEST: open someone's story, tap their name, tap the chat button; also tap a message notification while a story is open.
+
+            EARLIER (874): STORY SWIPE, PHOTO REPOST ZOOM, PROFILE FREEZE.
             Swiping between people follows your finger from the first frame and keeps moving the instant you let go (taps unchanged). A photo repost card can no longer be pinched smaller than the screen, which showed a second blurred box. Opening a profile from a story no longer risks freezing the Stories page.
             STILL OPEN: video repost editor (no author face and name, picture frozen while the sound plays) and photo repost tap to full screen. A screen recording helps.
             PLEASE TEST: swipe slowly and quickly between people, let go halfway; repost a photo and pinch it; open a profile from a story, then open another story.
