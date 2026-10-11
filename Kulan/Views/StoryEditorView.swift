@@ -661,6 +661,8 @@ struct StoryEditorView: View {
     @State private var repostVideoCard = false
     /// A repost of a clip, the only time the card is drawn live rather than baked.
     private var isRepostVideo: Bool { repostOf != nil && repostFullSource == nil && currentIsVideo }
+    /// A photo repost showing its baked card (not the original full screen). See `minScale` above.
+    private var isRepostPhotoCard: Bool { repostOf != nil && repostFullSource != nil && !repostFullScreen }
     @State private var index = 0
     @State private var showAddPicker = false
 
@@ -1592,7 +1594,14 @@ struct StoryEditorView: View {
                               // The card is ONE size: pinned so a pinch cannot pull the clip out
                               // from under its rounded frame. Full screen frames as it always did.
                               maxScale: repostVideoCard ? RepostVideoCard.scale : 4,
-                              minScale: repostVideoCard ? RepostVideoCard.scale : 0.4,
+                              // ⛔ A PHOTO REPOST'S CARD DOES NOT SHRINK (owner, 2026-10-11: "when I
+                              // repost an image then zoom out it has another blur"). The card is one
+                              // baked picture that carries its own page-coloured surround
+                              // (`RepostCard.render`), so pinching it smaller drew that surround as a
+                              // second box over the page. It fills the frame exactly at 1; zooming in
+                              // stays as it was.
+                              minScale: repostVideoCard ? RepostVideoCard.scale
+                                  : (isRepostPhotoCard ? 1 : 0.4),
                               interactive: !isDrawing && editingID == nil,
                               relay: photoTransform,
                               // The dial's value and whether the clip is running — both plain inputs
