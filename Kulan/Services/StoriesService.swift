@@ -272,7 +272,13 @@ enum StoryShareRights {
         // The author's own copy, and the two flags that say "not this one" even then. A one-time
         // story I posted is still one-time for the people who got it, and passing it on would hand
         // it to somebody who is not in that count at all.
-        if s.authorUid == me { return !s.oneTime && !s.captureProtected }
+        // ⛔ AND ONLY IF IT WENT TO EVERYONE — owner, 2026-10-11: his own My Chats story offered
+        // Share and Copy Story Link. "Only when Everyone was chosen before posting; My Chats or a
+        // custom list never shows them, and never makes a link." A link to a story only some
+        // people may watch is a link that tells everyone else it exists.
+        if s.authorUid == me {
+            return s.audienceLabel == StoryAudienceTag.everyone.label && !s.oneTime && !s.captureProtected
+        }
         guard s.audienceLabel == StoryAudienceTag.everyone.label else { return false }
         guard !s.oneTime, !s.captureProtected else { return false }
         return !authorHasBlockedMe(s.authorUid)
