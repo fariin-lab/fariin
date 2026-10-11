@@ -1452,21 +1452,6 @@ struct StoryViewer: View {
         var alpha: CGFloat = 1
         var rest: CGPoint = .zero        // the card's centre at rest, window coords
         var anchor: CGRect = .zero       // the row card it flies to and from, window coords
-        /// The card strip at rest, window coords — read only while untransformed (`heroEndpoints`).
-        /// The flying avatar places the header avatar from it (`placeFlightAvatar`).
-        var restRect: CGRect = .zero
-        /// The flying avatar's picture, and the person it is of, so it is built once per person.
-        var avatarImage: UIImage?
-        var avatarFor = ""
-        /// ⛔ THE FACE WAITS FOR THE RELEASE — owner, 2026-10-11, and the reference's own behaviour:
-        /// while the finger drags the story down, the avatar stays in the header and rides with the
-        /// card; it only starts for the row circle when the finger lets go and the close begins.
-        /// `avatarHeld` is the finger-down state (blend 0, stay on the header). `avatarFrom` is the
-        /// card's fraction when the close began, so the trip to the row runs over the close alone,
-        /// 0 → 1, instead of jumping to wherever the pull had left the fraction. -1 = an open,
-        /// whose fraction is used as it is.
-        var avatarHeld = false
-        var avatarFrom: CGFloat = -1
         // The ends of whichever animation is running. One scalar drives them both (see heroAnimator).
         var fromF: CGFloat = 0, toF: CGFloat = 0
         var fromC: CGPoint = .zero, toC: CGPoint = .zero
@@ -3217,93 +3202,6 @@ struct StoryViewer: View {
         MediaOpenRects.registeredCornerRadius(MediaOpenRects.key(.storyRow, heroKeyNow())) ?? 24
     }
 
-    /// ⛔ THE FLYING AVATAR — owner, 2026-10-11, the reference app's story transition, read from its
-    /// source: on the open the person's face leaves the row and lands on the story header's avatar;
-    /// on the close (button or pull) it flies back and lands on the row's face. Both on the card's
-    /// own curve: it is placed from the SAME fraction the card is (`hero.f`, 0 = full screen,
-    /// 1 = in the row), so it can never run ahead of or behind the card.
-    ///
-    /// Path: the header avatar's place THIS frame (the rest rect scaled about the card's centre with
-    /// the card, as `heroDragY` scales it) blended toward the row face's photo by `f`. At f = 0 it
-    /// is exactly the header avatar, at f = 1 exactly the row's photo, so each end hands over to the
-    /// real circle with no jump. The real header avatar is hidden while the copy stands in for it,
-    /// and the row's face is already hidden by the source hide (`HidesWithSource`).
-    ///
-    /// Anything missing (no header measurement yet, no face rect, the face not actually hidden for
-    /// this person) means no copy at all: the transition is then exactly what it was before.
-    private func placeFlightAvatar() {
-        let key = heroKeyNow()
-        let show = hero.live && !hero.closed && (hero.f > 0.0005 || hero.exiting)
-        guard show, !key.isEmpty, hero.restRect.width > 1, hero.anchor.width > 1,
-              let local = StoryCardMorph.headerAvatarLocal, local.width > 1,
-              MediaSourceVisibility.shared.hiddenId == MediaOpenRects.key(.storyRow, key),
-              let face = MediaOpenRects.liveRect(MediaOpenRects.key(.storyRow, StoryListRow.faceKey(key))),
-              face.width > 1
-        else { endFlightAvatar(); return }
-        if hero.avatarFor != key || hero.avatarImage == nil {
-            hero.avatarImage = flightAvatarImage(for: key)
-            hero.avatarFor = key
-        }
-        guard let image = hero.avatarImage, let v = StoryZoomPresenter.flightAvatar(image: image) else {
-            endFlightAvatar(); return
-        }
-        let r = hero.restRect
-        let f: CGFloat
-        if hero.avatarHeld {
-            f = 0
-        } else if hero.avatarFrom >= 0 {
-            f = min(1, max(0, (hero.f - hero.avatarFrom) / max(0.0001, 1 - hero.avatarFrom)))
-        } else {
-            f = min(1, max(0, hero.f))
-        }
-        // The card's scale this frame — the same reading `heroDragY` makes.
-        let scale = 1 + (hero.anchor.width / r.width - 1) * hero.f
-        let blockW = StoryCardMorph.headerBlockWidth > 1 ? StoryCardMorph.headerBlockWidth : r.width
-        let headerRest = CGRect(x: r.minX + (r.width - blockW) / 2 + local.minX,
-                                y: r.minY + local.minY, width: local.width, height: local.height)
-        let headerNow = CGPoint(x: hero.center.x + (headerRest.midX - r.midX) * scale,
-                                y: hero.center.y + (headerRest.midY - r.midY) * scale)
-        let headerSide = headerRest.width * scale
-        let photo = face.insetBy(dx: StoryListRow.facePhotoInset, dy: StoryListRow.facePhotoInset)
-        let side = headerSide + (photo.width - headerSide) * f
-        let cx = headerNow.x + (photo.midX - headerNow.x) * f
-        let cy = headerNow.y + (photo.midY - headerNow.y) * f
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        v.frame = CGRect(x: cx - side / 2, y: cy - side / 2, width: side, height: side)
-        v.layer.cornerRadius = side / 2
-        CATransaction.commit()
-        if !StoryCardMorph.headerAvatarHidden { StoryCardMorph.headerAvatarHidden = true }
-    }
-
-    private func endFlightAvatar() {
-        hero.avatarHeld = false
-        hero.avatarFrom = -1
-        StoryZoomPresenter.removeFlightAvatar()
-        if StoryCardMorph.headerAvatarHidden { StoryCardMorph.headerAvatarHidden = false }
-    }
-
-    /// The person's photo as the row draws it (memory cache, no wait), else the app's letter circle.
-    private func flightAvatarImage(for key: String) -> UIImage? {
-        let g = groups.first { $0.id == key || key.hasSuffix($0.id) }
-        if let url = g?.photoUrl, !url.isEmpty, let img = DiskImageCache.shared.memoryImage(url) {
-            return img
-        }
-        let name = g?.name ?? ""
-        let d: CGFloat = 96
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.opaque = false
-        return UIGraphicsImageRenderer(size: CGSize(width: d, height: d), format: fmt).image { _ in
-            UIColor(white: 0.45, alpha: 1).setFill()
-            UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: d, height: d)).fill()
-            let letter = String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased() as NSString
-            let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 42, weight: .semibold),
-                                                        .foregroundColor: UIColor.white]
-            let t = letter.size(withAttributes: attrs)
-            letter.draw(at: CGPoint(x: (d - t.width) / 2, y: (d - t.height) / 2), withAttributes: attrs)
-        }
-    }
-
     private func applyHero() {
         guard StoryCardMorph.shared.isFlightAvailable else { return }
         let f = hero.f
@@ -3345,7 +3243,6 @@ struct StoryViewer: View {
         // (see `HeroBox.coverAlpha`); the drag holds it at 0, so what is under the hand is story A,
         // unaltered, all the way down.
         StoryCardMorph.shared.setFlightCoverAlpha(hero.cover ? hero.coverAlpha : 0)
-        placeFlightAvatar()
         // AND THE SURROUND LEAVES AND ARRIVES ON THE SAME FRACTION. `heroFlying` (my own footer, the
         // no-replies pill, the page's black) and `storyFlightActive` (the library's reply bar) used
         // to flip at the START of a flight and back at its END, so the bottom of the screen popped
@@ -3637,8 +3534,6 @@ struct StoryViewer: View {
         // ladder waits for.
         guard let card = StoryCardMorph.shared.flightRestRect,
               let src = onScreenRect(for: heroKeyNow()) else { return nil }
-        // Only at rest: `flightRestRect` folds in any transform already applied.
-        if hero.f < 0.001 { hero.restRect = card }
         return (CGPoint(x: card.midX, y: card.midY), src)
     }
 
@@ -3830,7 +3725,6 @@ struct StoryViewer: View {
                 hero.cover = false
                 hero.coverAlpha = 0
                 hero.crop = 0
-                endFlightAvatar()   // the header's own avatar takes over where the copy landed
                 // Belt only: `applyHero` has already crossed both of these on the way in, at 0.18.
                 if heroFlying { heroFlying = false }
                 setFlightChromeHidden(false)
@@ -3992,8 +3886,6 @@ struct StoryViewer: View {
             hero.cover = StoryZoomPresenter.coverSourceKey == heroKeyNow()
             hero.coverAlpha = 0
             hero.exiting = true        // a pull is an exit: the black page goes now, not over 76pt
-            hero.avatarHeld = true     // the face stays on the header until the finger lets go
-            hero.avatarFrom = -1
             // THE FINGER OWNS THE FLOOR. Held at full for the whole drag, so the backdrop cannot
             // wash out however far he pulls; a committed landing fades it back out. See `dimFloor`.
             hero.dimFloor = 1
@@ -4104,9 +3996,6 @@ struct StoryViewer: View {
             hero.closed = true
             // The card is home. Take the cover away with no animation of its own — see onHeroClose.
             if let onHeroClose { onHeroClose() } else { isPresented = false }
-            // The row's face is revealed by the close above; the copy sitting on it goes in the
-            // same pass, so the two exchange on one frame.
-            endFlightAvatar()
             // ⚠️ NOT WHILE THE SCREEN IS STILL UP. This flag means "the card is being moved by
             // something that is not a page swipe", and while it is raised `StoryDetailView` returns
             // a fold angle of ZERO. Clearing it re-enables a fold that derives from the page's
@@ -4134,9 +4023,6 @@ struct StoryViewer: View {
         // retarget that could not photograph the card — a wrong-picture cover would be worse than
         // none: solid while it travels (t³), melting into the visible card as it arrives.
         hero.cover = StoryZoomPresenter.coverSourceKey == heroKeyNow()
-        // The release: the face leaves the header now, over the close that is starting.
-        hero.avatarHeld = false
-        hero.avatarFrom = min(0.999, max(0, hero.f))
         if hero.cover {
             // THE WHOLE EXCHANGE HAPPENS HERE, in the snap that follows the release: the flying
             // card cross-fades from the story he was watching into the row card's own picture —
@@ -4191,7 +4077,6 @@ struct StoryViewer: View {
                 cover: { _ in 0 }, crop: { _ in 0 }) {
             hero.live = false
             hero.cover = false
-            endFlightAvatar()
             if heroFlying { heroFlying = false }     // belt: applyHero crossed this at 0.18
             setFlightChromeHidden(false)
             // Full screen, square, unmasked, and the wall behind opaque again. `resetFlight` is

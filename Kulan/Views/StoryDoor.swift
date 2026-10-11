@@ -223,53 +223,8 @@ enum StoryDoor {
         // The tapped view is photographed HERE, at tap time, while it is definitely on screen: the
         // snapshot rides the flight as the cover the open wears. Nil (nothing registered, or the view
         // scrolled away) degrades to an open with no cover, which is still a correct flight.
-        let picture = liveView(sourceKey)
-        StoryZoomPresenter.present(viewer(req), coverFrom: picture,
-                                   coverRadius: sourceRadius(sourceKey), coverKey: sourceKey,
-                                   coverPatch: { faceFreeCover($0, group: g, sourceKey: sourceKey, picture: picture) })
-    }
-
-    /// ⛔ ONE FACE, NOT TWO — owner, 2026-10-11: at the start of an open the face showed twice, the
-    /// flying copy leaving and a second one left behind in the corner of the cover. The cover is a
-    /// window crop of the row picture taken at the tap, and the list row's face circle overlaps that
-    /// picture's corner, so it was baked into the cover. Here the overlap is painted over with the
-    /// picture itself (the same cached image the row draws, filled the same way), so the cover is
-    /// the picture alone and the flying face (`StoryViewer.placeFlightAvatar`) is the only face.
-    ///
-    /// No list face registered for this key, or the row's image not in memory: the shot is returned
-    /// untouched — exactly the cover there was before.
-    static func faceFreeCover(_ shot: UIImage, group g: StoryGroup, sourceKey: String,
-                              picture: UIView?) -> UIImage {
-        guard let picture, let window = picture.window,
-              let face = MediaOpenRects.liveRect(MediaOpenRects.key(.storyRow, StoryListRow.faceKey(sourceKey))),
-              let s = g.stories.last else { return shot }
-        let url = s.thumbUrl.isEmpty ? s.mediaUrl : s.thumbUrl
-        guard let image = DiskImageCache.shared.memoryImage("\(url)#\(Int(StoryImage.cardPixels))")
-                ?? DiskImageCache.shared.memoryImage(url) else { return shot }
-        let pic = picture.convert(picture.bounds, to: window)
-        guard pic.width > 1, pic.height > 1, face.intersects(pic) else { return shot }
-        let size = shot.size
-        let faceLocal = CGRect(x: (face.minX - pic.minX) * size.width / pic.width,
-                               y: (face.minY - pic.minY) * size.height / pic.height,
-                               width: face.width * size.width / pic.width,
-                               height: face.height * size.height / pic.height)
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = shot.scale
-        fmt.opaque = false
-        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
-            shot.draw(at: .zero)
-            // Inside the card's own rounded shape only (the crop already cleared the corners), and a
-            // hair beyond the face's edge so no rim of it survives.
-            let radius = min(sourceRadius(sourceKey) * 1.12, min(size.width, size.height) / 2)
-            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius).addClip()
-            UIBezierPath(ovalIn: faceLocal.insetBy(dx: -1, dy: -1)).addClip()
-            // Aspect-fill, centred — how `StoryImage` fills the row's frame.
-            let iw = image.size.width, ih = image.size.height
-            guard iw > 0, ih > 0 else { return }
-            let k = max(size.width / iw, size.height / ih)
-            let w = iw * k, h = ih * k
-            image.draw(in: CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h))
-        }
+        StoryZoomPresenter.present(viewer(req), coverFrom: liveView(sourceKey),
+                                   coverRadius: sourceRadius(sourceKey), coverKey: sourceKey)
     }
 
     /// ⛔ A REPOST'S CREDIT LINE OPENS THE ORIGINAL STORY — 2026-09-24. From INSIDE a viewer: the
@@ -326,11 +281,8 @@ enum StoryDoor {
         // for a shrunken one.
         guard StoryZoomPresenter.coverSourceKey != sourceKey else { return }
         guard let view = liveView(sourceKey),
-              let raw = StoryCardShot.renderBehindCover(view, cornerRadius: sourceRadius(sourceKey))
+              let shot = StoryCardShot.renderBehindCover(view, cornerRadius: sourceRadius(sourceKey))
         else { return }
-        // The close's cover must not carry a second face either — see `faceFreeCover`.
-        let person = request.flatMap { r in (r.siblings + [r.group]).first { sourceKey.hasSuffix($0.id) } }
-        let shot = person.map { faceFreeCover(raw, group: $0, sourceKey: sourceKey, picture: view) } ?? raw
         StoryZoomPresenter.retargetCover(shot, sourceKey: sourceKey)
         MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, sourceKey))
     }
