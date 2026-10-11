@@ -27,6 +27,9 @@ struct PostedStoriesView: View {
         /// Custom". Glowers ahead of Custom is his, not alphabetical.
         case all, friends, glowers, custom
         var id: String { rawValue }
+        /// The filters the menu offers. Glowers goes with the Glow feature (owner, 2026-10-11:
+        /// "I hid that feature, why is it still showing").
+        static var shown: [Filter] { AppFeatures.glow ? allCases : allCases.filter { $0 != .glowers } }
         /// ⛔ THE WHOLE LABEL, AND NOTHING ELSE — owner, 2026-09-11: "the posted stories texts, fix
         /// please, users feel confused, just make it minimalist".
         ///
@@ -266,7 +269,7 @@ struct PostedStoriesView: View {
                 ToolbarItem(placement: .principal) {
                     Menu {
                         Picker("Filter", selection: $filter) {
-                            ForEach(Filter.allCases) { f in
+                            ForEach(Filter.shown) { f in
                                 // The sentence rides along inside the menu row, so the explanation
                                 // he asked for survives losing the sheet.
                                 Text(f.title).tag(f)
@@ -602,7 +605,7 @@ private struct FilterSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(PostedStoriesView.Filter.allCases) { f in
+                ForEach(PostedStoriesView.Filter.shown) { f in
                     Button {
                         selection = f
                         dismiss()
