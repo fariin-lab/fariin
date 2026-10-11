@@ -105,7 +105,8 @@ enum StoryZoomPresenter {
     ///   corners of the crop — which are the chat list, not the card — never ride the flight. See
     ///   `StoryCardShot.crop`, which is where his white corners are actually removed.
     static func present<Content: View>(_ content: Content, coverFrom source: UIView? = nil,
-                                       coverRadius: CGFloat = 0, coverKey: String = "") {
+                                       coverRadius: CGFloat = 0, coverKey: String = "",
+                                       coverPatch: ((UIImage) -> UIImage)? = nil) {
         guard container == nil else { return }
         guard let top = topController() else { return }
         Self.coverKey = coverKey.isEmpty ? nil : coverKey
@@ -123,7 +124,10 @@ enum StoryZoomPresenter {
         // ONE copy of that crop, in `StoryCardShot` — the row's long-press lift needs exactly the
         // same picture of exactly the same card, and two functions that have to agree pixel for
         // pixel is the mistake this area keeps writing down.
-        if let source, let shot = StoryCardShot.crop(source, cornerRadius: coverRadius) {
+        if let source, let raw = StoryCardShot.crop(source, cornerRadius: coverRadius) {
+            // The flying face's copy must be the only face (owner 2026-10-11) — see
+            // `StoryDoor.faceFreeCover`.
+            let shot = coverPatch?(raw) ?? raw
             vc.setCoverImage(shot)
         }
         vc.setContent(AnyView(content))
