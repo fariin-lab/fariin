@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (864): POSTED STORIES FOLDERS, STORY ORDER, A LITTLE FASTER.
+            THIS BUILD (865): THE FACE FLIES WITH THE STORY.
+            Opening a story from the Stories list, the person's face circle leaves the row and flies into the story's header avatar; closing (X or drag down) it flies back and lands on the row. It follows your finger while dragging and returns to the header if you let go without closing.
+            PLEASE TEST: open a story and watch the face go to the header; close with X; drag down slowly and let go (no close), then drag down and close; swipe to another person and close.
+
+            EARLIER (864): POSTED STORIES FOLDERS, STORY ORDER, A LITTLE FASTER.
             Posted Stories groups your stories into folders by audience with the name above each (All and All Custom); the empty-filter button is grey and reads Clear Filter. In the viewer, left and right follow the Stories page: Recent Stories, then Viewed Stories. Opening and closing a story are a little faster. The face ring is thinner, like the chat list. Share, Copy Story Link and Repost only appear on stories posted to Everyone, your own included.
             PLEASE TEST: Posted Stories > All and All Custom; from a Viewed story swipe right and left; from the last Recent story swipe right; open and drag-close a story.
 
