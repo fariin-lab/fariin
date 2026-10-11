@@ -1305,11 +1305,14 @@ struct StoriesTabView: View {
     /// does the regular time"). The same person's card in the strip and on the grid must answer a
     /// hold the same way; the layout is the only thing that differs between them.
     private func friendActions(_ g: StoryGroup) -> [CMAction] {
-        [CMAction(title: "Send Message", icon: "message") { openStoryChat(g) },
-         CMAction(title: "Open Profile", icon: "person.crop.circle") { profileGroup = g },
+        // Owner 2026-10-11: the app's own outline icons, not system symbols — the chat-list menu's
+        // chat mark, Settings' profile mark and the Archive mark. `CMContextMenu` falls back to an
+        // asset when the name is not a symbol.
+        [CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
+         CMAction(title: "Open Profile", icon: "ic_account") { profileGroup = g },
          // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
          // `hideTarget`.
-         CMAction(title: "Hide Stories", icon: "archivebox", destructive: true) { hideTarget = g }]
+         CMAction(title: "Hide Stories", icon: "ic_archive", destructive: true) { hideTarget = g }]
     }
 
     /// My own card's menu, the strip's again: the one action a card of my own stories offers that a
