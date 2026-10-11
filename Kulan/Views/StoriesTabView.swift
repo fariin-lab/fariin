@@ -739,7 +739,7 @@ struct StoriesTabView: View {
             // ⚠️ THE SPLIT IS HELD WHILE A STORY IS OPEN AND FOR THE SESSION, the same rule the strip
             // keeps (`StoryDoorState.orderHeldForSession`): closing a story greys its ring and moves
             // nothing; the row changes section when he leaves the tab and comes back.
-            let viewed = groups.filter { viewedHold.map { held in held.contains($0.id) } ?? !$0.hasUnseen }
+            let viewed = groups.filter { g in viewedHold.map { held in held.contains(g.id) } ?? !g.hasUnseen }
             let recent = groups.filter { g in !viewed.contains { $0.id == g.id } }
             if !recent.isEmpty {
                 listHeading("Recent updates")
