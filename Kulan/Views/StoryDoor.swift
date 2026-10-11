@@ -281,7 +281,7 @@ enum StoryDoor {
         // for a shrunken one.
         guard StoryZoomPresenter.coverSourceKey != sourceKey else { return }
         guard let view = liveView(sourceKey),
-              let shot = StoryCardShot.render(view, cornerRadius: sourceRadius(sourceKey))
+              let shot = StoryCardShot.renderBehindCover(view, cornerRadius: sourceRadius(sourceKey))
         else { return }
         StoryZoomPresenter.retargetCover(shot, sourceKey: sourceKey)
         MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, sourceKey))

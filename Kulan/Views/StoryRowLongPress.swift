@@ -259,6 +259,9 @@ enum StoryCardShot {
     /// window flattening loses them. `afterScreenUpdates: false`, same as everything here — the
     /// card was committed long ago, and a flush is the re-entrancy trap `7763494` was about.
     /// ⚠️ Photograph BEFORE hiding: an alpha-0 card renders blank from its own tree too.
+    ///
+    /// ⛔ AND NOT FOR A SWIFTUI CARD — see `renderBehindCover`. A SwiftUI card registers an ANCHOR
+    /// (`MediaViewAnchor`, a `.background` that draws nothing), so its own tree is empty.
     static func render(_ view: UIView, cornerRadius: CGFloat = 0) -> UIImage? {
         let size = view.bounds.size
         guard size.width > 1, size.height > 1, view.window != nil else { return nil }
@@ -271,6 +274,38 @@ enum StoryCardShot {
                              cornerRadius: r).addClip()
             }
             view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: false)
+        }
+    }
+
+    /// ⛔ THE CARD AS IT IS ON THE PAGE UNDER THE VIEWER — owner, 2026-10-11: switch from Ali to
+    /// Ahmed inside the viewer, close from Ahmed's A, and his B only appears after the landing.
+    ///
+    /// ROOT CAUSE: the swipe retarget photographed the registered view with `render`, and on the
+    /// SwiftUI grid and list that view is the empty anchor, so the retargeted cover was a blank
+    /// image. The close then had nothing to fade to and the card's B arrived after it had landed.
+    /// The FIRST person was fine because the open crops the window at tap time.
+    ///
+    /// The viewer is presented `.overFullScreen`, so the page is still in the window, under the
+    /// root controller's view, while the viewer lives beside it in the transition view. Drawing
+    /// the ROOT VIEW's own tree, shifted to the card's rectangle, gives the page's pixels at that
+    /// rectangle (picture, face, ring) with no story in front: the same picture the open's window
+    /// crop takes, for a card that is covered. Works for the UIKit strip as well.
+    static func renderBehindCover(_ view: UIView, cornerRadius: CGFloat = 0) -> UIImage? {
+        guard let window = view.window, let root = window.rootViewController?.view,
+              view.isDescendant(of: root) else { return render(view, cornerRadius: cornerRadius) }
+        let rect = view.convert(view.bounds, to: root)
+        guard rect.width > 1, rect.height > 1 else { return nil }
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: rect.size, format: format).image { _ in
+            if cornerRadius > 0.5 {
+                let r = min(cornerRadius * 1.12, min(rect.width, rect.height) / 2)
+                UIBezierPath(roundedRect: CGRect(origin: .zero, size: rect.size),
+                             cornerRadius: r).addClip()
+            }
+            root.drawHierarchy(in: CGRect(x: -rect.minX, y: -rect.minY,
+                                          width: root.bounds.width, height: root.bounds.height),
+                               afterScreenUpdates: false)
         }
     }
 }
