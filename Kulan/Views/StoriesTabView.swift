@@ -761,6 +761,7 @@ struct StoriesTabView: View {
                                  authorPhoto: profile.me?.photoUrl,
                                  addBadge: true,
                                  seen: true,
+                                 rectKey: Self.addRowKey,   // the lift's picture — see `listLift`
                                  onCamera: { composeStory() },
                                  pressKey: StoryListRow.pressKey(Self.addRowKey))
                 }
@@ -849,23 +850,35 @@ struct StoriesTabView: View {
         // ⛔ THE ADD STORY ROW HOLDS TOO — owner, 2026-10-11: "long press my story is not
         // working". With nothing posted it offers My Story's own two entries.
         if StoriesRepository.shared.mine?.stories.isEmpty ?? true,
-           let t = GlowCardPress.target(StoryListRow.pressKey(Self.addRowKey), at: p, actions: [
+           let t = listLift(row: Self.addRowKey, at: p, actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { composeStory() },
                 CMAction(title: "Posted Stories", icon: "circle.dashed") {
                     path.append(GlowRoute.postedStories(profile.me?.name ?? "My Story"))
-                }], corner: StoryListRow.pressCorner) {
+                }]) {
             return t
         }
         if let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty,
-           let t = GlowCardPress.target(StoryListRow.pressKey(mine.id), at: p,
-                                        actions: myStoryActions(mine), corner: StoryListRow.pressCorner) {
+           let t = listLift(row: mine.id, at: p, actions: myStoryActions(mine)) {
             return t
         }
         for g in visibleFriends {
-            if let t = GlowCardPress.target(StoryListRow.pressKey(g.id), at: p, actions: friendActions(g),
-                                            corner: StoryListRow.pressCorner) { return t }
+            if let t = listLift(row: g.id, at: p, actions: friendActions(g)) { return t }
         }
         return nil
+    }
+
+    /// The press is answered by the WHOLE ROW, but what lifts is the PICTURE — owner, 2026-10-11:
+    /// lifting the row showed its page-coloured band as a white panel in light mode. The row's key
+    /// is only the hit area; the picture (registered under the bare id) is what the menu raises.
+    private func listLift(row id: String, at p: CGPoint, actions: [CMAction]) -> StoryMenuTarget? {
+        // Main-thread by construction (a UIKit gesture callback) — same assertion as `GlowCardPress`.
+        MainActor.assumeIsolated {
+            let rowKey = MediaOpenRects.key(.storyRow, StoryListRow.pressKey(id))
+            guard let r = MediaOpenRects.liveRect(rowKey), r.contains(p) else { return nil }
+            let picKey = MediaOpenRects.key(.storyRow, id)
+            guard let pic = MediaOpenRects.drawnRect(picKey) ?? MediaOpenRects.liveRect(picKey) else { return nil }
+            return StoryMenuTarget(key: picKey, rect: pic, actions: actions, cornerRadius: StoryListRow.corner)
+        }
     }
 
     // MARK: - Glow
