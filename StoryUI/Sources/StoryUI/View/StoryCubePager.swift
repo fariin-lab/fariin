@@ -189,6 +189,7 @@ final class StoryCubePagerVC: UIViewController {
         beginTurn()
         panFraction = 0
         applyFold()
+        tapTurn = true
         commit(velocity: direction == .next ? -200 : 200)
         return true
     }
@@ -400,6 +401,16 @@ final class StoryCubePagerVC: UIViewController {
     private var settleTo: CGFloat = 0
     private var settleStart: CFTimeInterval = 0
     private var settleDone: (() -> Void)?
+    /// ⛔ A TAPPED TURN, NOT A RELEASED ONE (owner, 2026-10-11: "it jumps 70% at once, then the last
+    /// 30% comes slowly; make it 1%, 2%, 3% up to 100%"). The release curve below is built to FINISH
+    /// a swipe the finger has mostly done: it runs about 70% of its distance in the first tenth of
+    /// its time. A tap starts the whole face from zero, so that front-loading IS the jump. A tap gets
+    /// an even ease-in-out over the same duration instead, and its clock starts on the first frame
+    /// actually drawn: the incoming story is built in the same pass as the commit, and a clock
+    /// started before that work began had already spent its first frames by the first tick.
+    /// Swipes keep the release curve and clock exactly as they were.
+    private var tapTurn = false
+    private var settleIsTap = false
     /// This turn's own duration, chosen from how far it has to travel — see `span(forDistance:)`.
     private var settleSpan: CFTimeInterval = StoryCubePagerVC.releaseDuration
 
@@ -472,6 +483,9 @@ final class StoryCubePagerVC: UIViewController {
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
         stopSettle(finishing: false)
+        // Taken here, before the early return, so a tap flag can never leak into the next swipe.
+        settleIsTap = tapTurn
+        tapTurn = false
         guard abs(panFraction - target) > 0.0001 else {
             panFraction = target
             applyFold()
@@ -480,7 +494,8 @@ final class StoryCubePagerVC: UIViewController {
         }
         settleFrom = panFraction
         settleTo = target
-        settleStart = CACurrentMediaTime()
+        // A tap's clock starts at its first tick (0 means "not started"); see `tapTurn`.
+        settleStart = settleIsTap ? 0 : CACurrentMediaTime()
         settleSpan = Self.span(forDistance: target - panFraction)
         settleDone = done
         let link = CADisplayLink(target: self, selector: #selector(stepSettle))
@@ -502,9 +517,11 @@ final class StoryCubePagerVC: UIViewController {
     }
 
     @objc private func stepSettle() {
+        if settleStart == 0 { settleStart = CACurrentMediaTime() }
         let elapsed = CACurrentMediaTime() - settleStart
         let u = min(1, CGFloat(elapsed / max(0.0001, settleSpan)))
-        panFraction = settleFrom + (settleTo - settleFrom) * Self.springProgress(u)
+        let eased = settleIsTap ? Self.tapProgress(u) : Self.springProgress(u)
+        panFraction = settleFrom + (settleTo - settleFrom) * eased
         applyFold()
         guard u >= 1 else { return }
         let done = settleDone
@@ -550,6 +567,13 @@ final class StoryCubePagerVC: UIViewController {
     /// value. Putting a timing function on top of already-eased values double-applies it.
     static func springProgress(_ u: CGFloat) -> CGFloat {
         unitBezier(max(0, min(1, u)))
+    }
+
+    /// A tapped turn's progress: a smooth ease-in-out (smoothstep), gentle out of rest, even through
+    /// the middle, gentle into place. See `tapTurn`.
+    static func tapProgress(_ u: CGFloat) -> CGFloat {
+        let t = max(0, min(1, u))
+        return t * t * (3 - 2 * t)
     }
 
     /// ⛔ THEIR CURVE, AND IT IS A BEZIER RATHER THAN OUR SPRING — owner, 2026-09-11: "everything
