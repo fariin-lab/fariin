@@ -141,6 +141,9 @@ struct StoryBurnIn {
     /// two sampled colours it draws on screen, so the surround he framed against is the surround
     /// that lands.
     var backdrop: UIImage? = nil
+    /// Rounded corners on a shrunken clip, as a fraction of its width. 0 = square, which is what
+    /// every pinch-to-shrink has always posted; only the repost card sets it.
+    var holeCorner: CGFloat = 0
 
     /// The trim page's Adjust dial, -1…1 with 0 untouched. It rides here rather than on
     /// `StoryVideoPayload` because everything else the editor did to the picture rides here, and the

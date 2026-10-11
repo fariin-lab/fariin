@@ -4679,8 +4679,8 @@ struct StoryViewer: View {
 
     /// ⛔ A VIDEO REPOST — owner, 2026-10-11. The clip is copied to a local file (from the viewer's
     /// own cache when it has it, which is almost always, else downloaded) and the composer opens on
-    /// it like any picked video: trim, mute, text and stickers are the reposter's. It posts full
-    /// screen with the credit in the header (`card: false`); the card shape is photos-only for now.
+    /// it like any picked video: trim, mute, text and stickers are the reposter's. It opens as the
+    /// card (`RepostVideoCard`) and a tap switches it to full screen, exactly like a photo repost.
     private func beginVideoRepost(_ story: Story, authorName: String) {
         guard let remote = URL(string: story.mediaUrl), !story.mediaUrl.isEmpty else { return }
         repostLoading = true
@@ -4691,6 +4691,11 @@ struct StoryViewer: View {
             if bytes == nil { bytes = try? await URLSession.shared.data(from: remote).0 }
             let wrote = bytes.map { (try? $0.write(to: local, options: .atomic)) != nil } ?? false
             let poster = await DiskImageCache.shared.image(for: story.previewUrl)
+            // The card chip's face, best effort, the same lookup the photo card uses.
+            let photo = authorPhoto(story.authorUid)
+            let avatar: UIImage? = if let photo, !photo.isEmpty {
+                await DiskImageCache.shared.image(for: photo)
+            } else { nil }
             await MainActor.run {
                 repostLoading = false
                 guard wrote else {
@@ -4702,7 +4707,10 @@ struct StoryViewer: View {
                     StoryEditorView(source: poster ?? UIImage(),
                                     repostOf: StoryRepost(authorUid: story.authorUid,
                                                           authorName: authorName,
-                                                          storyId: story.id, card: false),
+                                                          // The composer decides: card by
+                                                          // default, full screen on a tap.
+                                                          storyId: story.id, card: true),
+                                    repostAvatar: avatar,
                                     onPosted: { flashSentToast("Reposted") },
                                     sourceVideo: .init(url: local)),
                     onDismissed: { repostUp = false })

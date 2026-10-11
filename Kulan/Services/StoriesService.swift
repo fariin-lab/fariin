@@ -1693,7 +1693,8 @@ final class StoriesService {
                                                            contentScale: burn?.contentScale ?? 1,
                                                            backdrop: burn?.backdrop,
                                                            storyBackdrop: true,
-                                                           brightness: burn?.brightness ?? 0) else {
+                                                           brightness: burn?.brightness ?? 0,
+                                                           holeCorner: burn?.holeCorner ?? 0) else {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }

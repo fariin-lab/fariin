@@ -69,7 +69,8 @@ enum VideoTranscoder {
                         overlay: UIImage? = nil, cropRect: CGRect? = nil,
                         canvasAspect: CGFloat? = nil, contentScale: CGFloat = 1,
                         backdrop: UIImage? = nil, storyBackdrop: Bool = false,
-                        brightness: Double = 0) async -> Prepared? {
+                        brightness: Double = 0,
+                        holeCorner: CGFloat = 0) async -> Prepared? {
         // ⛔ BRIGHTNESS IS A PRE-PASS, AND IT HAS TO BE (owner, 2026-08-20 — the trim page's Adjust
         // tab). It cannot ride the composition the export already uses: `burnIn` composites with
         // LAYER INSTRUCTIONS and a Core Animation tool, which has nowhere to hang a Core Image
@@ -209,7 +210,7 @@ enum VideoTranscoder {
             session.videoComposition = await burnIn(asset: exportAsset, overlay: overlay,
                                                     cropRect: cropRect, canvasAspect: canvasAspect,
                                                     contentScale: contentScale, backdrop: backdrop,
-                                                    hd: hd)
+                                                    holeCorner: holeCorner, hd: hd)
         } else if let ba = backdropAspect {
             // ⚠️ THIS `if let` IS THE OLD SILENT FALL-THROUGH, and it is why he reported black bars
             // four separate times. The blur build had four ways to return nil and every one of them
@@ -431,7 +432,8 @@ enum VideoTranscoder {
 
     private static func burnIn(asset: AVAsset, overlay: UIImage?, cropRect: CGRect?,
                                canvasAspect: CGFloat?, contentScale: CGFloat = 1,
-                               backdrop: UIImage? = nil, hd: Bool) async -> AVVideoComposition? {
+                               backdrop: UIImage? = nil, holeCorner: CGFloat = 0,
+                               hd: Bool) async -> AVVideoComposition? {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
               let natural = try? await track.load(.naturalSize),
               let transform = try? await track.load(.preferredTransform) else { return nil }
@@ -509,7 +511,17 @@ enum VideoTranscoder {
                 ctx.cgContext.setBlendMode(.clear)
                 // Half a point INSIDE the clip: a hole a hair too small leaves a hairline of
                 // gradient over the picture, a hole a hair too big leaves one of black beside it.
-                ctx.cgContext.fill(placed.insetBy(dx: 0.5, dy: 0.5))
+                let hole = placed.insetBy(dx: 0.5, dy: 0.5)
+                if holeCorner > 0 {
+                    // ⛔ THE REPOST CARD'S ROUNDED CORNERS (owner 2026-10-11): the surround keeps the
+                    // four corners of the clip, so the video reads as a rounded card. A fraction of
+                    // the clip's width, the same ratio the photo card is drawn with (`RepostCard`).
+                    ctx.cgContext.addPath(UIBezierPath(roundedRect: hole,
+                                                       cornerRadius: hole.width * holeCorner).cgPath)
+                    ctx.cgContext.fillPath()
+                } else {
+                    ctx.cgContext.fill(hole)
+                }
             }
         }
 

@@ -143,3 +143,90 @@ enum RepostCard {
         return (colour(0), colour(4))
     }
 }
+
+import SwiftUI
+
+/// ⛔ THE VIDEO CARD, LIVE — owner, 2026-10-11: "users can repost photo and video, card and full
+/// screen". A photo card is baked once (`RepostCard.render`); a clip cannot be, so the editor shows
+/// the clip shrunk to the card's width (its existing pinch-out, which the export already burns in
+/// with the canvas gradient around it) and draws THIS over it: the gradient with a rounded hole
+/// where the clip is, so its corners are rounded, plus the author chip. The export draws the same
+/// chip into its overlay and cuts the same rounded hole (`StoryBurnIn.holeCorner`), so the posted
+/// clip is what was framed here.
+enum RepostVideoCard {
+    /// The clip's width on the card, as a fraction of its fitted width — the photo card's width.
+    static let scale: CGFloat = RepostCard.maxWidth
+    /// Corner radius as a fraction of the clip's drawn width — the photo card's ratio.
+    static let corner: CGFloat = 0.04
+    /// The chip, in fractions of the CANVAS width, matching the photo card's 64 / 36 / 26 px on 1080.
+    static let face: CGFloat = 64.0 / 1080
+    static let font: CGFloat = 36.0 / 1080
+    static let inset: CGFloat = 26.0 / 1080
+}
+
+/// The author chip, laid out for a canvas `width` points wide.
+struct RepostChipView: View {
+    let name: String
+    let avatar: UIImage?
+    let width: CGFloat
+
+    var body: some View {
+        let d = width * RepostVideoCard.face
+        HStack(spacing: d * 0.28) {
+            Group {
+                if let avatar { Image(uiImage: avatar).resizable().scaledToFill() }
+                else {
+                    ZStack {
+                        Color(white: 0.45)
+                        Text(String(name.prefix(1)).uppercased())
+                            .font(.system(size: d * 0.47, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .frame(width: d, height: d)
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: max(1, d * 0.047)))
+            Text(name.isEmpty ? "Story" : name)
+                .font(.system(size: width * RepostVideoCard.font, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+                .lineLimit(1)
+        }
+        .fixedSize()
+    }
+}
+
+/// The page-coloured surround with a rounded hole over the clip, plus the chip in its corner.
+struct RepostCardFrame: View {
+    let canvas: CGSize
+    let clip: CGRect
+    let top: UIColor
+    let bottom: UIColor
+    let name: String
+    let avatar: UIImage?
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            SurroundShape(hole: clip, radius: clip.width * RepostVideoCard.corner)
+                .fill(LinearGradient(colors: [Color(uiColor: top), Color(uiColor: bottom)],
+                                     startPoint: .top, endPoint: .bottom),
+                      style: FillStyle(eoFill: true))
+            RepostChipView(name: name, avatar: avatar, width: canvas.width)
+                .offset(x: clip.minX + canvas.width * RepostVideoCard.inset,
+                        y: clip.minY + canvas.width * RepostVideoCard.inset)
+        }
+        .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+        .allowsHitTesting(false)
+    }
+
+    private struct SurroundShape: Shape {
+        let hole: CGRect
+        let radius: CGFloat
+        func path(in rect: CGRect) -> Path {
+            var p = Path(rect)
+            p.addRoundedRect(in: hole, cornerSize: CGSize(width: radius, height: radius), style: .continuous)
+            return p
+        }
+    }
+}

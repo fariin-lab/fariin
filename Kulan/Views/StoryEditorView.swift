@@ -157,6 +157,10 @@ struct StoryEditorView: View {
     /// `RepostCard`) and a tap on the picture switches it to the original full screen, and back.
     /// nil = not a repost, or no full-screen copy to offer; the tap then does what it always did.
     var repostFullSource: UIImage? = nil
+    /// The original author's face for a VIDEO repost's card chip (`RepostVideoCard`). The photo
+    /// card bakes its chip into `source`; a clip cannot be baked, so the chip is drawn live here and
+    /// burned in by the export.
+    var repostAvatar: UIImage? = nil
     var onPosted: () -> Void = {}
     /// A WHOLE POST ARRIVING FROM THE VIDEO EDITOR. When a picture joins a video-first post, that
     /// screen cannot hold it (its model is a list of clips, each of which IS a video), so it hands
@@ -652,6 +656,11 @@ struct StoryEditorView: View {
     @State private var items: [DraftItem] = []
     /// The repost is showing the original full screen rather than the card. See `repostFullSource`.
     @State private var repostFullScreen = false
+    /// A VIDEO repost is showing as the card: the clip at `RepostVideoCard.scale` with the rounded
+    /// surround and the chip over it. Off = full screen. See `RepostVideoCard`.
+    @State private var repostVideoCard = false
+    /// A repost of a clip, the only time the card is drawn live rather than baked.
+    private var isRepostVideo: Bool { repostOf != nil && repostFullSource == nil && currentIsVideo }
     @State private var index = 0
     @State private var showAddPicker = false
 
@@ -1369,6 +1378,16 @@ struct StoryEditorView: View {
                         items = [DraftItem(image: Self.blackPoster, videoURL: v.url,
                                            duration: 0, assetID: v.assetID)]
                         index = 0
+                        if repostOf != nil {
+                            // A video repost opens as the card, like a photo repost (owner
+                            // 2026-10-11): the clip shrunk to the card's width, centred.
+                            items[0].zoom = RepostVideoCard.scale
+                            repostVideoCard = true
+                            // It plays on its own: on a repost the tap switches card / full screen.
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                if !previewPlaying { togglePreview() }
+                            }
+                        }
                         restoreCurrent()   // the SAME door every other arrival uses — see below
                         Task { await resolveSourceVideo(v.url) }
                     } else if seedItems.isEmpty {
@@ -1515,7 +1534,8 @@ struct StoryEditorView: View {
                             repostOf: repostOf.map { r in
                                 var r = r
                                 // A card only when there IS one: a video repost has no card copy.
-                                r.card = repostFullSource != nil && !repostFullScreen
+                                r.card = (repostFullSource != nil && !repostFullScreen)
+                                    || (repostFullSource == nil && repostVideoCard)
                                 return r
                             },
                             onPosted: { onPosted(); dismiss() })
@@ -1569,7 +1589,11 @@ struct StoryEditorView: View {
             // The UIKit container clips to its own bounds, so a zoomed photo never leaves the card.
             ZoomableImageView(image: edited, player: currentIsVideo ? previewPlayer : nil,
                               scale: $photoZoom, offset: $photoOffset,
-                              maxScale: 4, interactive: !isDrawing && editingID == nil,
+                              // The card is ONE size: pinned so a pinch cannot pull the clip out
+                              // from under its rounded frame. Full screen frames as it always did.
+                              maxScale: repostVideoCard ? RepostVideoCard.scale : 4,
+                              minScale: repostVideoCard ? RepostVideoCard.scale : 0.4,
+                              interactive: !isDrawing && editingID == nil,
                               relay: photoTransform,
                               // The dial's value and whether the clip is running — both plain inputs
                               // the renderer reads. See `StoryVideoPreviewView`.
@@ -1604,7 +1628,9 @@ struct StoryEditorView: View {
                                   //
                                   // One view owns tap, pinch and pan now, at every moment, and the
                                   // circle stays as the thing that SAYS it can be played.
-                                  if currentIsVideo, !isDrawing, editingID == nil {
+                                  if isRepostVideo, !isDrawing, editingID == nil {
+                                      toggleRepostVideoShape()
+                                  } else if currentIsVideo, !isDrawing, editingID == nil {
                                       togglePreview()
                                   } else if !currentIsVideo, !isDrawing, editingID == nil {
                                       toggleRepostShape()
@@ -1627,6 +1653,13 @@ struct StoryEditorView: View {
                                   withAnimation(.snappy(duration: 0.22)) { select(next) }
                               })
                 .frame(width: card.width, height: card.height)
+
+            if repostVideoCard, isRepostVideo {
+                RepostCardFrame(canvas: card, clip: repostClipRect(in: card),
+                                top: canvasColours.top, bottom: canvasColours.bottom,
+                                name: repostOf?.authorName ?? "", avatar: repostAvatar)
+                    .transition(.opacity)
+            }
 
             videoMark
 
@@ -3585,6 +3618,29 @@ struct StoryEditorView: View {
         Haptics.impact(.light)
     }
 
+    /// Card / full screen for a VIDEO repost: the clip's scale is the whole difference, and the
+    /// text, drawings and stickers stay where they are.
+    @MainActor private func toggleRepostVideoShape() {
+        guard isRepostVideo, items.indices.contains(index) else { return }
+        stashCurrent()
+        repostVideoCard.toggle()
+        items[index].zoom = repostVideoCard ? RepostVideoCard.scale : 1
+        items[index].offset = .zero
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { restoreCurrent() }
+        Haptics.impact(.light)
+        // A repost clip plays on its own (the tap is the shape switch, not play/pause).
+        if !previewPlaying { togglePreview() }
+    }
+
+    /// Where the card's clip is drawn on a canvas of `size`: its fitted size at the card scale,
+    /// centred. The SAME rectangle the export's rounded hole is cut at, because both come from the
+    /// fit (`photoFitSize`) and the scale, and the export centres a shrunken clip the same way.
+    private func repostClipRect(in size: CGSize) -> CGRect {
+        let fit = photoFitSize(in: size)
+        let w = fit.width * RepostVideoCard.scale, h = fit.height * RepostVideoCard.scale
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+
     @MainActor private func stashCurrent() {
         guard items.indices.contains(index) else { return }
         items[index].cropped = croppedSource
@@ -3888,13 +3944,22 @@ struct StoryEditorView: View {
         // ⚠️ STICKERS COUNT AS ART. Left off this line a clip with nothing but a sticker on it takes
         // the untouched path and posts without it — the video half of the same trap `flatten`'s fast
         // path carries a note about.
-        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty
+        let card = repostVideoCard && isRepostVideo
+        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty || card
         guard hasArt || cropRect != nil || reframed || shrunk else { return nil }
 
         var art: UIImage?
         if hasArt {
             let composed = ZStack(alignment: .bottom) {
                 Color.clear
+                // The repost card's chip, under everything he added, at the same place the editor
+                // drew it (`RepostCardFrame`), on the same canvas.
+                if card {
+                    RepostChipView(name: repostOf?.authorName ?? "", avatar: repostAvatar, width: size.width)
+                        .offset(x: repostClipRect(in: size).minX + size.width * RepostVideoCard.inset,
+                                y: repostClipRect(in: size).minY + size.width * RepostVideoCard.inset)
+                        .frame(width: size.width, height: size.height, alignment: .topLeading)
+                }
                 // Stickers first, so a caption dropped on top of one still reads — the same order
                 // the canvas and the photo flatten both use.
                 ForEach(stickers) { s in
@@ -3968,6 +4033,7 @@ struct StoryEditorView: View {
                            canvasAspect: size.height > 0 ? size.width / size.height : nil,
                            contentScale: shrunk ? photoZoom : 1,
                            backdrop: shrunk ? canvasBackdrop(size: size) : nil,
+                           holeCorner: card && shrunk ? RepostVideoCard.corner : 0,
                            // The Adjust tab's dial, carried with everything else the editor did.
                            brightness: items.indices.contains(index) ? items[index].brightness : 0)
     }
