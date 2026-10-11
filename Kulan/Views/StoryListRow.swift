@@ -187,6 +187,9 @@ struct StoryListRow: View {
             }
         }
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+        // Owner 2026-10-11: "the picture looks zoomed out, zoom in about 10%". The picture fills
+        // the same frame 10% closer; the frame, its corners and the face are unchanged.
+        .scaleEffect(1.1)
         .clipShape(shape)
     }
 
