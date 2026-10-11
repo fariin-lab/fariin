@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (868): SMOOTH CUBE ON TAP, NO EMPTY SPACE AFTER A STORY.
+            THIS BUILD (869): SHORT STORY LINKS, PULL TO CLOSE FROM A LINK, ONE SHARE SHEET.
+            Story links are short for older stories too (22 characters instead of the long id). A story opened from a link's View Story closes when you pull it down. Share on a story (the ... menu and Posted Stories' hold menu) opens the app's own share sheet: the chats to send it to and Copy Link; a story sent to a chat arrives with its card. Copy Story Link is removed from both menus.
+            PLEASE TEST: share an older story and look at the link; open it from View Story and pull down; Share > pick a chat; Share > Copy Link.
+
+            EARLIER (868): SMOOTH CUBE ON TAP, NO EMPTY SPACE AFTER A STORY.
             Tapping to the next person turns the cube evenly from start to finish (no 70% jump, then a slow 30%). Closing a story no longer pushes the Stories list down and leaves empty space under the search bar. Posted Stories folder names are the same size as the Stories list headings. Glowers is gone from the Posted Stories filter and from Download my data. Story privacy from the Stories menu has no bottom bar. On Everyone, Add People and Select Viewers the search bar is always at the bottom.
             PLEASE TEST: tap through several people's stories; open a story and close it by scrolling down; open Settings > Stories > Everyone before and after adding someone.
 
