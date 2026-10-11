@@ -195,9 +195,15 @@ struct StoryRepost: Equatable, Hashable, Codable {
     var authorName: String
     var storyId: String
     var modified: Bool = false
+    /// ⛔ DRAWN AS A CARD — owner, 2026-10-11 (`RepostCard`): the picture itself carries the
+    /// author's face and name, so the viewer's header does not repeat them. False for every repost
+    /// made before the card, which keep their header credit line. OPTIONAL so a post saved in the
+    /// outbox before this field existed still decodes (`StoryOutbox` stores this type as JSON).
+    var card: Bool? = nil
 
     var asData: [String: Any] {
-        ["authorUid": authorUid, "authorName": authorName, "storyId": storyId, "modified": modified]
+        ["authorUid": authorUid, "authorName": authorName, "storyId": storyId, "modified": modified,
+         "card": card ?? false]
     }
 
     static func from(_ raw: Any?) -> StoryRepost? {
@@ -209,7 +215,8 @@ struct StoryRepost: Equatable, Hashable, Codable {
         return StoryRepost(authorUid: uid,
                            authorName: m["authorName"] as? String ?? "",
                            storyId: m["storyId"] as? String ?? "",
-                           modified: m["modified"] as? Bool ?? false)
+                           modified: m["modified"] as? Bool ?? false,
+                           card: m["card"] as? Bool)
     }
 }
 

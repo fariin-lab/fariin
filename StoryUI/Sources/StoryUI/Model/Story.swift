@@ -217,13 +217,33 @@ public struct StoryTapArea: Identifiable, Hashable {
     /// nil for every story posted before the host started sending it, and nil is honoured rather than
     /// guessed — those keep the flat mapping they were placed with.
     public var aspect: Double?
+    /// ⛔ A PERSON, NOT A LINK — owner, 2026-10-11, the repost card: a tap pauses the story and
+    /// shows a bubble with this person's face and name; tapping the bubble asks the host to open
+    /// their profile (`.storyTapPersonOpen`, object = `id`) instead of opening `url`.
+    public var person: StoryTapPerson?
 
     public init(id: String = UUID().uuidString, x: Double, y: Double, w: Double, h: Double,
-                rotation: Double, url: URL, aspect: Double? = nil) {
+                rotation: Double, url: URL, aspect: Double? = nil, person: StoryTapPerson? = nil) {
         self.id = id
         self.x = x; self.y = y; self.w = w; self.h = h
         self.rotation = rotation
         self.url = url
         self.aspect = aspect
+        self.person = person
     }
+}
+
+/// Who a person tap area names. `id` is the host's own (a uid) and comes back in the notification.
+public struct StoryTapPerson: Hashable {
+    public var id: String
+    public var name: String
+    public var photoURL: URL?
+    public init(id: String, name: String, photoURL: URL?) {
+        self.id = id; self.name = name; self.photoURL = photoURL
+    }
+}
+
+public extension Notification.Name {
+    /// A person bubble was tapped. object = `StoryTapPerson.id`.
+    static let storyTapPersonOpen = Notification.Name("storyTapPersonOpen")
 }

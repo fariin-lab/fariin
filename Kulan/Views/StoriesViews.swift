@@ -1764,7 +1764,7 @@ struct StoryViewer: View {
                                                         // it shows the picture with. See
                                                         // `StoryTapTarget.aspect`.
                                                         aspect: t.aspect)
-                        },
+                        } + repostTapArea(s),
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
                         // This flag decides WHERE THE VIEWER OPENS. The rule that reads it lives in
@@ -1916,6 +1916,10 @@ struct StoryViewer: View {
         // The composer is presented from `beginRepost`, by UIKit and over this stage — the
         // `fullScreenCover` that used to sit here took the stage out of the window and was the
         // "repost is frozen" report; see `StoryComposerPresenter`.
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name.storyTapPersonOpen)) { note in
+            guard let uid = note.object as? String, !uid.isEmpty else { return }
+            openRepostAuthor(uid)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyRepostTapped"))) { note in
             guard let id = note.object as? String else { return }
             beginRepost(storyId: id)
@@ -3113,7 +3117,7 @@ struct StoryViewer: View {
         // so it survives the account being deleted, the original expiring, or the original's author
         // blocking this viewer since — see `StoryRepost`. "Reposted" alone is the last resort for a
         // repost written before a name could be resolved; it is honest and it is never blank.
-        if let r = s.repostOf {
+        if let r = s.repostOf, r.card != true {
             // The ORIGINAL author's small circle beside their name, and the line is a door: a tap
             // opens that original story (`openRepostOriginal`), not the reposter's profile. The
             // photo is a lookup because it is only decoration — the name is what is stored — and a
@@ -4632,19 +4636,29 @@ struct StoryViewer: View {
             // The viewer has almost always cached this already — it is the picture on screen — so
             // this is usually instant and falls back to a fetch only when it is not.
             let image = await DiskImageCache.shared.image(for: story.previewUrl)
+            // ⛔ THE CARD — owner, 2026-10-11 (`RepostCard`): the original as a rounded card with its
+            // author's face and name, over its own colours. Built here, before the composer opens,
+            // so the composer edits exactly what will be posted. The face is best effort: no
+            // picture reachable draws the letter circle.
+            let photo = authorPhoto(story.authorUid)
+            let avatar: UIImage? = if let photo, !photo.isEmpty {
+                await DiskImageCache.shared.image(for: photo)
+            } else { nil }
+            let card = image.map { RepostCard.render($0, name: authorName, avatar: avatar) }
             await MainActor.run {
                 repostLoading = false
-                guard let image else {
+                guard let card else {
                     flashSentToast("Could not load that story")
                     return
                 }
                 let draft = StoryRepostDraft(
-                    image: image,
+                    image: card,
                     info: StoryRepost(authorUid: story.authorUid,
                                       // Stored, not looked up later: an account can be deleted and a
                                       // story can go, and the credit line has to survive both.
                                       authorName: authorName,
-                                      storyId: story.id))
+                                      storyId: story.id,
+                                      card: true))
                 // ⚠️ FULL SCREEN, NOT A SHEET — the composer is a full-screen editor everywhere else
                 // it opens from — and OVER THE STAGE, NOT INSTEAD OF IT: a `fullScreenCover` took
                 // this viewer out of the window and left it wrecked for when the composer came back
@@ -4657,6 +4671,31 @@ struct StoryViewer: View {
                     onDismissed: { repostUp = false })
             }
         }
+    }
+
+    /// ⛔ THE REPOST'S TAP — owner, 2026-10-11, the reference's "suad ›": a tap in the middle column
+    /// of a repost pauses it and shows the original author's face and name; tapping that opens their
+    /// profile. Laid over EVERY repost, card or not, from the stored credit — nothing extra is
+    /// written to the story. The column is `RepostCard.tapRect`, kept off the left and right fifths
+    /// where taps move between stories.
+    private func repostTapArea(_ s: Story) -> [StoryUI.StoryTapArea] {
+        guard let r = s.repostOf, let u = URL(string: "kulan://repost") else { return [] }
+        let t = RepostCard.tapRect
+        return [StoryUI.StoryTapArea(id: "repost-\(s.id)", x: t.midX, y: t.midY,
+                                     w: t.width, h: t.height, rotation: 0, url: u,
+                                     person: StoryUI.StoryTapPerson(
+                                        id: r.authorUid,
+                                        name: r.authorName.isEmpty ? "Reposted" : r.authorName,
+                                        photoURL: authorPhoto(r.authorUid).flatMap(URL.init(string:))))]
+    }
+
+    /// The bubble's tap: the original author's profile, in the same sheet the header's tap uses.
+    private func openRepostAuthor(_ uid: String) {
+        let r = groups.flatMap(\.stories).compactMap(\.repostOf).first { $0.authorUid == uid }
+        profileSheet = groups.first(where: { $0.authorUid == uid })
+            ?? StoryGroup(authorUid: uid, name: r?.authorName ?? "",
+                          photoUrl: authorPhoto(uid), stories: [],
+                          lastViewedAt: nil, isMine: uid == me)
     }
 
     /// The picture for a uid this viewer may not have a group for: the groups on screen first, then

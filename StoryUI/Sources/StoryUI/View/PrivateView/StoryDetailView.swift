@@ -1463,6 +1463,20 @@ private extension StoryDetailView {
         // two were worked out separately from the same fractions, so the bubble could be sitting
         // exactly where the tap area was NOT — see `tapRect` for why that arithmetic was wrong.
         let badge = tapRect(t, in: canvas)
+        if let person = t.person {
+            // ⛔ A PERSON BUBBLE STANDS IN THE MIDDLE OF ITS AREA — the repost card's centre column
+            // (owner 2026-10-11, the reference's "suad ›"). The area is tall, so "on its top or
+            // bottom edge" would put the answer far from where the finger is.
+            VisitLinkBubble(tailDown: true, person: person) { openPerson(person) }
+                .position(x: badge.midX, y: badge.midY)
+                .transition(.scale(scale: 0.94, anchor: .bottom).combined(with: .opacity))
+        } else {
+            linkBubble(for: t, badge: badge, in: canvas)
+        }
+    }
+
+    @ViewBuilder
+    private func linkBubble(for t: StoryTapArea, badge: CGRect, in canvas: CGSize) -> some View {
         let badgeTop = badge.minY
         let badgeBottom = badge.maxY
         // ⛔ UNDER THE BADGE IS THE RESTING PLACE NOW (owner 2026-08-22: "just is coming under the
@@ -1519,6 +1533,13 @@ private extension StoryDetailView {
     private func open(_ url: URL) {
         armedTapID = nil
         UIApplication.shared.open(url)
+    }
+
+    /// The host opens the profile (a sheet over this story), so the story stays paused, exactly as
+    /// it does when a link leaves for the browser; the sheet's own close resumes it.
+    private func openPerson(_ p: StoryTapPerson) {
+        armedTapID = nil
+        NotificationCenter.default.post(name: .storyTapPersonOpen, object: p.id)
     }
 
     /// The bubble's own height, which the placement above needs before the thing has been laid out —
@@ -2617,6 +2638,8 @@ struct StoryFoldKey: PreferenceKey {
 struct VisitLinkBubble: View {
     /// False when the bubble had to flip under the badge, which turns the tail over with it.
     var tailDown: Bool
+    /// Set for a person area: the face and the name stand where "Visit link" does.
+    var person: StoryTapPerson? = nil
     var onTap: () -> Void
 
     private static let radius: CGFloat = 10
@@ -2626,15 +2649,34 @@ struct VisitLinkBubble: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 6) {
-                Text("Visit link")
-                    .font(.system(size: 17))
+            HStack(spacing: person == nil ? 6 : 10) {
+                if let person {
+                    AsyncImage(url: person.photoURL) { phase in
+                        if let img = phase.image { img.resizable().scaledToFill() }
+                        else {
+                            ZStack {
+                                Color.white.opacity(0.25)
+                                Text(String(person.name.prefix(1)).uppercased())
+                                    .font(.system(size: 15, weight: .semibold))
+                            }
+                        }
+                    }
+                    .frame(width: 34, height: 34)
+                    .clipShape(Circle())
+                    Text(person.name.isEmpty ? "Profile" : person.name)
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(1)
+                } else {
+                    Text("Visit link")
+                        .font(.system(size: 17))
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
                     .opacity(0.6)
             }
             .foregroundColor(.white)
-            .padding(.horizontal, 18)
+            .padding(.leading, person == nil ? 18 : 10)
+            .padding(.trailing, 18)
             .frame(height: Self.rowH)
             .background(
                 BubbleShape(tailDown: tailDown, radius: Self.radius,
