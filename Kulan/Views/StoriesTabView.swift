@@ -53,6 +53,14 @@ struct StoriesTabView: View {
     @AppStorage("stories.viewedCollapsed") private var viewedCollapsed = false
     /// Who sat under "Viewed updates" when the hold began — see `friendsList`. nil = not held.
     @State private var viewedHold: Set<String>?
+    /// ⛔ AND THE ORDER INSIDE EACH SECTION IS HELD TOO — audit 2026-10-11 #2: a close reloads the
+    /// repository, which re-sorts unseen-first, so a person just watched slid down inside Recent
+    /// while the hold only froze WHICH section they were in. Latched with `viewedHold`; people who
+    /// arrive while it is held go first (they are the newest).
+    @State private var heldOrder: [String]?
+    /// Ticks once a minute so the rows' "5m ago" stays true on a page left open (audit #16).
+    @State private var minuteTick = 0
+    @Environment(\.scenePhase) private var scenePhase
     /// The person a long press asked to hide, and the alert that asks before it happens. The strip
     /// puts up a `UIAlertController` from its own presenter; a SwiftUI grid says it this way, with
     /// the same title, the same message and the same destructive button.
@@ -133,6 +141,31 @@ struct StoriesTabView: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
+                // ⛔ THE HOLD IS LATCHED HERE, ON THE PAGE, NOT ON THE LIST — audit #5: the list
+                // leaves the tree while a search is up, and its `initial: true` re-latched the split
+                // from the CURRENT seen state when it came back, moving people mid-session. The page
+                // is mounted for as long as the tab is, so this fires on real changes only.
+                .onChange(of: storyDoorState.isOpen || storyDoorState.orderHeldForSession, initial: true) { _, held in
+                    if held {
+                        // Latched at the OPEN: the split and the order as they stood before watching.
+                        if viewedHold == nil {
+                            viewedHold = Set(visibleFriends.filter { !$0.hasUnseen }.map(\.id))
+                            heldOrder = visibleFriends.map(\.id)
+                        }
+                    } else {
+                        viewedHold = nil
+                        heldOrder = nil
+                    }
+                }
+                // Audit #6: coming back to the app is coming back to the tab — the same refresh the
+                // owner's rule gives a tab switch, so a friend who posts while the phone sleeps
+                // moves up to Recent. Never under an open story.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active, !storyDoorState.isOpen { storyDoorState.releaseOrderHold() }
+                }
+                .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+                    minuteTick &+= 1
+                }
                 .voiceNoteBarSlot()   // under the header (owner, 2026-09-29)
                 .navigationTitle("Stories")
                 // ⛔ INLINE, THE SECOND HALF OF "make the header like this exactly" — his reference
@@ -289,6 +322,11 @@ struct StoriesTabView: View {
         } else if showsFirstRunSkeleton {
             firstRunSkeleton
         } else {
+            // ⛔ THE ROW BEING WATCHED STAYS ON SCREEN — audit #3, and the reference app's own rule:
+            // while a story is open the list scrolls, without animation, to keep the current person's
+            // row visible, so the close always has its row to land on (a person paged to below the
+            // fold used to drift-close). Only the list layout's rows carry these ids.
+            ScrollViewReader { listProxy in
             ScrollView {
                 VStack(spacing: 0) {
                     // ⚠️ A DEBUG BAND, FOR ONE BUILD ONLY — 2026-09-09. It draws nothing unless
@@ -345,6 +383,11 @@ struct StoriesTabView: View {
                     if AppFeatures.glow { glowSection }   // hidden 2026-10-10
                 }
             }
+            .onChange(of: storyDoorState.activeSourceKey) { _, key in
+                guard AppFeatures.storyList, storyDoorState.isOpen, let key, !key.isEmpty else { return }
+                listProxy.scrollTo(key, anchor: .center)
+            }
+            }
             // ⚠️ NO `contentMargins` DANCE HERE, AND THAT IS THE POINT OF THE MOVE. In the chat list
             // the row was drawn OUTSIDE the List and slid by hand against `chatScrollY`, with the
             // list carrying a top margin the height of the row, because a row INSIDE a list lifts as
@@ -365,7 +408,9 @@ struct StoriesTabView: View {
             .filter { !StoryPrefs.isHidden($0.authorUid) && $0.name.lowercased().contains(q) }
         let glowing = (glowStories.state.value ?? [])
             .filter { $0.person.name.lowercased().contains(q) }
-        if friends.isEmpty && glowing.isEmpty {
+        // Audit #8: with Glow off its matches are never drawn, so they cannot keep this page from
+        // saying "no results".
+        if friends.isEmpty && (glowing.isEmpty || !AppFeatures.glow) {
             ContentUnavailableView.search(text: search)
         } else if AppFeatures.storyList {
             // ⛔ RESULTS IN THE LIST'S OWN ROWS — owner, 2026-10-11: search still showed the old
@@ -697,7 +742,8 @@ struct StoriesTabView: View {
     /// own row opens the composer. The picture registers under the group's id, so the morph and the
     /// hold find it exactly as they find a grid card.
     @ViewBuilder private func friendsList() -> some View {
-        let groups = visibleFriends
+        let groups = heldOrdered(visibleFriends)
+        let _ = minuteTick   // re-read once a minute so "Xm ago" moves (audit #16)
         VStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
             // ⛔ "MY STORY ›" OPENS POSTED STORIES — owner, 2026-10-11, with the reference: a
             // heading over my own row, and tapping it opens the page of everything I have posted.
@@ -749,6 +795,7 @@ struct StoriesTabView: View {
                                  backImage: pending.count >= 2 ? pending[pending.count - 2] : nil,
                                  backThumbUrl: backPosted.map(postedURL) ?? "",
                                  backBlurThumb: backPosted?.blurThumb ?? "",
+                                 rectKey: StoryDoor.uploadingSourceKey,   // audit #13: the door's anchor
                                  onCamera: { composeStory() })
                 }
                 .buttonStyle(.plain)
@@ -815,6 +862,10 @@ struct StoriesTabView: View {
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(viewedCollapsed ? 180 : 0))
                             .padding(.trailing, StoryListRow.margin)
+                            // Audit #17: the heading text carries 16 above and 4 below; the same here
+                            // so the two centre on the same line.
+                            .padding(.top, 16)
+                            .padding(.bottom, 4)
                     }
                     .contentShape(Rectangle())
                 }
@@ -829,10 +880,7 @@ struct StoriesTabView: View {
         }
         .padding(.top, 12 - StoryListRow.rowPad)
         .padding(.bottom, 24 - StoryListRow.rowPad)
-        .onChange(of: storyDoorState.isOpen || storyDoorState.orderHeldForSession, initial: true) { _, held in
-            // Latched at the OPEN, so it holds the split as it stood before the story was watched.
-            viewedHold = held ? Set(visibleFriends.filter { !$0.hasUnseen }.map(\.id)) : nil
-        }
+        // The hold is latched on the page now — see the `.onChange` in `body` (audit #5).
         .glowCardLongPress { listRowTarget(at: $0) }
     }
 
@@ -843,10 +891,27 @@ struct StoriesTabView: View {
     /// The friends in the order the list draws them: Recent Stories, then Viewed Stories — the same
     /// split, held the same way (`viewedHold`), as `friendsList`.
     private func listDisplayOrder() -> [StoryGroup] {
-        let groups = visibleFriends
+        let groups = heldOrdered(visibleFriends)
         let viewed = groups.filter { g in viewedHold.map { $0.contains(g.id) } ?? !g.hasUnseen }
         let viewedIds = Set(viewed.map(\.id))
-        return groups.filter { !viewedIds.contains($0.id) } + viewed
+        // Audit #3: a collapsed Viewed section has no rows on screen, so the viewer does not walk
+        // into it — it walks the page as drawn, and a close always has its row to land on.
+        return groups.filter { !viewedIds.contains($0.id) } + (viewedCollapsed ? [] : viewed)
+    }
+
+    /// The groups in the held order while a story session holds the page (audit #2); as they come
+    /// otherwise. Anyone not in the snapshot (posted meanwhile) goes first.
+    private func heldOrdered(_ groups: [StoryGroup]) -> [StoryGroup] {
+        guard let order = heldOrder else { return groups }
+        let index = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return groups.sorted { (index[$0.id] ?? -1) < (index[$1.id] ?? -1) }
+    }
+
+    /// The friends the search field is showing, in its own order (audit #4).
+    private var searchMatches: [StoryGroup] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return StoriesRepository.shared.others
+            .filter { !StoryPrefs.isHidden($0.authorUid) && $0.name.lowercased().contains(q) }
     }
 
     private func listHeading(_ title: String) -> some View {
@@ -874,6 +939,7 @@ struct StoriesTabView: View {
                          pressKey: StoryListRow.pressKey(g.id))
         }
         .buttonStyle(.plain)
+        .id(g.id)   // the scroll target while its story is open (audit #3)
     }
 
     /// The list's long press: the WHOLE ROW under the finger, not just its picture. Same menus as
@@ -916,22 +982,42 @@ struct StoriesTabView: View {
                           at p: CGPoint, actions: [CMAction]) -> StoryMenuTarget? {
         // Main-thread by construction (a UIKit gesture callback) — same assertion as `GlowCardPress`.
         MainActor.assumeIsolated { () -> StoryMenuTarget? in
+            // ⛔ ONLY ROWS THAT ARE ON SCREEN — audit #1: `liveRect` falls back to the last rectangle
+            // ever written, so rows hidden by a search, a collapsed section or the uploading swap
+            // still "contained" the finger and lifted the wrong person's menu. `liveViewRect` asks
+            // the row's own view and answers nothing when it is gone.
             let rowKey = MediaOpenRects.key(.storyRow, StoryListRow.pressKey(id))
-            guard let r = MediaOpenRects.liveRect(rowKey), r.contains(p) else { return nil }
+            guard let r = MediaOpenRects.liveViewRect(rowKey), r.contains(p) else { return nil }
             let picKey = MediaOpenRects.key(.storyRow, id)
-            guard let pic = MediaOpenRects.drawnRect(picKey) ?? MediaOpenRects.liveRect(picKey) else { return nil }
+            guard let pic = MediaOpenRects.liveViewRect(picKey) else { return nil }
             let d = badge ? StoryListRow.badgeDiameter : StoryListRow.faceDiameter
             let hang = badge ? StoryListRow.badgeHang : StoryListRow.faceHang
             let face = CGRect(x: pic.maxX + hang.width - d, y: pic.maxY + hang.height - d, width: d, height: d)
-            let rect = pic.union(face)
+            // Audit #12: my own stacked row lifts its back card too (it is hidden with the stack).
+            // Its place and turn are the row's own numbers (`StoryListRow.thumbStack`).
+            let mine = StoriesRepository.shared.mine
+            let stacked = mine?.id == id && (mine?.stories.count ?? 0) > 1
+            let k = StoryListRow.thumbSize.height / 84
+            let back = CGRect(x: pic.minX - 8 * k, y: pic.minY + 4 * k, width: 43 * k, height: 64 * k)
+            let backTurn = CGAffineTransform(translationX: back.midX, y: back.midY)
+                .rotated(by: -0.18168878)
+                .translatedBy(x: -back.midX, y: -back.midY)
+            let backPath = UIBezierPath(roundedRect: back, cornerRadius: 6 * k)
+            backPath.apply(backTurn)
+            var rect = pic.union(face)
+            if stacked { rect = rect.union(backPath.bounds) }
             let shape = UIBezierPath(roundedRect: pic.offsetBy(dx: -rect.minX, dy: -rect.minY),
                                      cornerRadius: StoryListRow.corner)
             shape.append(UIBezierPath(ovalIn: face.offsetBy(dx: -rect.minX, dy: -rect.minY)))
+            if stacked {
+                backPath.apply(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+                shape.append(backPath)
+            }
 
             var labelRect: CGRect?
             var labelImage: UIImage?
             let textKey = MediaOpenRects.key(.storyRow, StoryListRow.textKey(id))
-            if let tr = MediaOpenRects.drawnRect(textKey) ?? MediaOpenRects.liveRect(textKey) {
+            if let tr = MediaOpenRects.liveViewRect(textKey) {
                 let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
                 let dark = scene?.windows.first?.traitCollection.userInterfaceStyle == .dark
                 let renderer = ImageRenderer(content: StoryListRow.textBlock(title: title, subtitle: subtitle)
@@ -1421,10 +1507,13 @@ struct StoriesTabView: View {
         // the page draws Recent then Viewed. On the list layout it now gets exactly the page:
         // Recent top to bottom, then Viewed top to bottom, so left and right are the row above and
         // the row below. The grid keeps the order it always had.
+        let searching = !search.trimmingCharacters(in: .whitespaces).isEmpty
         let others = AppFeatures.storyList
-            ? listDisplayOrder()
+            ? (searching ? searchMatches : listDisplayOrder())   // audit #4: search walks its results
             : StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-        StoryDoor.open(g, among: g.isMine ? [g] + others : others, from: sourceKey ?? g.id,
+        // Audit #14, the reference app's rule on the list layout: My Story opens alone.
+        let among: [StoryGroup] = g.isMine ? (AppFeatures.storyList ? [g] : [g] + others) : others
+        StoryDoor.open(g, among: among, from: sourceKey ?? g.id,
                        pinned: sourceKey != nil,
                        // These came out of `StoriesRepository.others`, whose query is "recipientUids
                        // contains me" — so being here IS the author's audience choice, and the reply

@@ -86,6 +86,9 @@ struct StoryListRow: View {
         HStack(spacing: 18) {
             thumbStack
             Self.textBlock(title: title, subtitle: subtitle)
+                // Audit #11: while the long press lifts a copy of the name and time, the row's own
+                // step aside — the face already does (`HidesWithSource`).
+                .modifier(HidesWithSource(id: rectKey ?? "", labelOnly: true))
                 .modifier(MediaRectReporter(id: pressKey.map { _ in textKey } ?? "", scope: .storyRow,
                                             cornerRadius: 0))
             Spacer(minLength: 8)
@@ -160,7 +163,10 @@ struct StoryListRow: View {
                 RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
                     .fill(scheme == .dark ? Color.black : Color.white)
                     .frame(width: Self.thumbSize.width + 4, height: Self.thumbSize.height + 4)
-                    .offset(x: 2, y: 2)
+                    // Audit #9: laid out at the picture's own size and drawn 2pt out on every
+                    // side. Its 70x98 used to BE the stack's size, which pushed the front picture
+                    // 2pt right and down of the frame the row reports and the flight lands on.
+                    .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
             }
             thumb
           }
@@ -289,14 +295,24 @@ struct StoryListRow: View {
 /// instant `MediaRectReporter` applies to the picture itself. Draws nothing and reports nothing.
 private struct HidesWithSource: ViewModifier {
     let id: String
+    /// Only when the hide carries the label too (`MediaSourceVisibility.hidesLabel`) — the long
+    /// press's lift, which brings its own copy of the name. A flight leaves the name in place.
+    var labelOnly = false
     @State private var isHidden = false
+    @State private var hiddenKey: String?
     private var key: String { MediaOpenRects.key(.storyRow, id) }
     func body(content: Content) -> some View {
         content
             .opacity(isHidden ? 0 : 1)
             .onReceive(MediaSourceVisibility.shared.hiddenIdPublisher) { current in
-                let now = !id.isEmpty && current == key
-                if isHidden != now { isHidden = now }
+                hiddenKey = current
+                update()
             }
+            .onReceive(MediaSourceVisibility.shared.$hidesLabel) { _ in update() }
+    }
+    private func update() {
+        var now = !id.isEmpty && hiddenKey == key
+        if labelOnly { now = now && MediaSourceVisibility.shared.hidesLabel }
+        if isHidden != now { isHidden = now }
     }
 }

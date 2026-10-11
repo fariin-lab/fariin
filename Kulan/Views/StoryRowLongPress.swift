@@ -723,6 +723,10 @@ struct StoryRowLongPress: UIViewRepresentable {
         /// behaviour this had before the rectangle could move at all.
         private func heldTarget() -> StoryMenuTarget? {
             guard let t = rampTarget else { return nil }
+            // Audit #10: a shaped lift (the list row) is the picture PLUS its face and back card,
+            // not the picture's own rect — rebuilding it from that key dropped the face, the name
+            // and the shape. It is returned as it was resolved.
+            if t.liftShape != nil { return t }
             guard let r = MediaOpenRects.drawnRect(t.key) ?? MediaOpenRects.liveRect(t.key) else { return t }
             return StoryMenuTarget(key: t.key, rect: r, actions: t.actions,
                                    labelRect: t.labelRect, labelView: t.labelView,
@@ -1060,7 +1064,7 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // taken off the screen and nothing was raised in its place, so the card lost its
                 // name for the whole press. `labelView` is the same test the lift itself makes
                 // twenty lines up, so the two can no longer disagree.
-                MediaSourceVisibility.shared.hide(t.key, withLabel: t.labelView != nil)
+                MediaSourceVisibility.shared.hide(t.key, withLabel: t.labelView != nil || t.labelImage != nil)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
                 o.present(in: window, startAtSqueeze: true)
 

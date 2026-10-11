@@ -779,7 +779,9 @@ final class StoriesService {
         }
         inFlight.append(pending)
         uploading = true
-        uploadPhase = .preparing   // every post starts on the phone's half
+        // Audit #15: only the FIRST post in a queue starts on "Preparing" — a picture added while
+        // another is already sending must not set the row back to it.
+        if inFlight.count <= 1 { uploadPhase = .preparing }
         // Each post owns a token; the completion below only touches shared state if it's STILL the
         // owner. Without this, a cancel-then-repost (or a quick second post) let the FIRST task's
         // completion run last and wipe the SECOND upload's spinner + task handle (so it couldn't be
