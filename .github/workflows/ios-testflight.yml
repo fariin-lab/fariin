@@ -75,7 +75,7 @@ jobs:
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
             THIS BUILD (866): MY STORY KEEPS ITS STACK WHILE UPLOADING. STORY TRANSITION BACK TO 864.
-            The flying-face transition from 865 is removed: opening and closing a story work exactly as in 864.
+            The flying-face transition from 865 is removed: opening and closing a story work exactly as in 864. Repost works again (it said "Could not load that story"); forward and share of a story picture use the same fix.
             While a story uploads, My Story keeps the overlapping stack: the picture being posted on top, the previous one tilted behind. No grey card, no single picture, no jump when it finishes. Posted Stories folders show their audience badge (your photo for Everyone, the orange people circle for My Chats, the folder for custom lists). Select Viewers names are white again (not blue). On Name Story the keyboard comes up from the bottom, and Create is blue when it can be pressed. Searching on Select Viewers keeps the search bar at the bottom above the keyboard and the title and blue Next at the top. People you pick appear as chips (photo, name, x) in a row above the list on Select Viewers and the story privacy pickers.
             PLEASE TEST: post one picture; post two at once; post a third while the first two upload; watch My Story the whole time.
 
