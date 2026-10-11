@@ -872,7 +872,7 @@ struct StoriesTabView: View {
     /// is only the hit area; the picture (registered under the bare id) is what the menu raises.
     private func listLift(row id: String, at p: CGPoint, actions: [CMAction]) -> StoryMenuTarget? {
         // Main-thread by construction (a UIKit gesture callback) — same assertion as `GlowCardPress`.
-        MainActor.assumeIsolated {
+        MainActor.assumeIsolated { () -> StoryMenuTarget? in
             let rowKey = MediaOpenRects.key(.storyRow, StoryListRow.pressKey(id))
             guard let r = MediaOpenRects.liveRect(rowKey), r.contains(p) else { return nil }
             let picKey = MediaOpenRects.key(.storyRow, id)
