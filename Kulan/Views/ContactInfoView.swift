@@ -2012,8 +2012,25 @@ struct ContactInfoView: View {
                 //
                 // ⚠️ TWO DOORS TO ONE ACTION, HIS ASK: this button AND "Glow Story" in the ••• menu
                 // below. They call the same thing — a second door is only a second door.
-                if AppFeatures.glow { glowActionButton }   // hidden 2026-10-10
-                callMenuButton
+                if AppFeatures.glow {   // hidden 2026-10-10
+                    glowActionButton
+                    callMenuButton
+                } else {
+                    // Owner 2026-10-11: with Glow hidden, voice gets its own circle back and the
+                    // video circle dials straight away. Same `startCall`, same `fromProfile: true`.
+                    Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
+                                                          video: false, fromProfile: true) } label: {
+                        PosterActionIcon(icon: "phone.fill", onPhoto: hasPhotoHeader)
+                    }
+                    .tint(.primary)
+                    .accessibilityLabel("Voice call")
+                    Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
+                                                          video: true, fromProfile: true) } label: {
+                        PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)
+                    }
+                    .tint(.primary)
+                    .accessibilityLabel("Video call")
+                }
             }
             if !isSelf {
                 Menu { muteMenuItems } label: {
