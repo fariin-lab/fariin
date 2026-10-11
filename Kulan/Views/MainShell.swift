@@ -3352,7 +3352,7 @@ struct ArchivedChatsView: View {
             // one stays at the bottom on both screens.
             return StoryMenuTarget(key: key, rect: cardRect, actions: [
                 CMAction(title: "Send Message", icon: "message") { openStoryChat(g) },
-                CMAction(title: "Open Profile", icon: "person.crop.circle") { profileGroup = g },
+                CMAction(title: "View Profile", icon: "person.crop.circle") { profileGroup = g },
                 CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
                     StoryPrefs.toggleHidden(g.authorUid)
                     prefsTick += 1

@@ -78,7 +78,7 @@ struct GlowStoriesGridView: View {
         [CMAction(title: "Send Message", icon: "message") {
             chatTarget = ChatTarget(id: cid(p.id), name: p.name, photo: p.photoUrl)
          },
-         CMAction(title: "Open Profile", icon: "person.crop.circle") { profileTarget = p }]
+         CMAction(title: "View Profile", icon: "person.crop.circle") { profileTarget = p }]
     }
 
     @ViewBuilder private var content: some View {

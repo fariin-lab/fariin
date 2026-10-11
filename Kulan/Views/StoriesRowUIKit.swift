@@ -1866,7 +1866,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             // A friend's card dips on press exactly as mine does, so its lift takes the drawn rect too.
             return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Send Message", icon: "message") { [weak self] in self?.onMessage(g) },
-                CMAction(title: "Open Profile", icon: "person.crop.circle") { [weak self] in self?.onProfile(g) },
+                CMAction(title: "View Profile", icon: "person.crop.circle") { [weak self] in self?.onProfile(g) },
                 CMAction(title: "Hide Stories", icon: "archivebox", destructive: true) { [weak self] in
                     self?.confirmHide(g)
                 },

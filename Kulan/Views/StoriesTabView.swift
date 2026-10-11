@@ -51,6 +51,7 @@ struct StoriesTabView: View {
     @State private var search = ""
     /// The list layout's "Viewed updates" fold, remembered (owner 2026-10-11).
     @AppStorage("stories.viewedCollapsed") private var viewedCollapsed = false
+    @AppStorage("stories.hiddenCollapsed") private var hiddenCollapsed = false
     /// Who sat under "Viewed updates" when the hold began — see `friendsList`. nil = not held.
     @State private var viewedHold: Set<String>?
     /// ⛔ AND THE ORDER INSIDE EACH SECTION IS HELD TOO — audit 2026-10-11 #2: a close reloads the
@@ -890,6 +891,37 @@ struct StoriesTabView: View {
                     }
                 }
             }
+            // ⛔ HIDDEN STORIES, A THIRD LIST (owner, 2026-10-11, the reference's "Hidden updates"):
+            // the people whose stories he hid, only while there is one, dimmed, folding on its
+            // chevron like Viewed Stories. Their stories still open from here.
+            let hidden = hiddenFriends
+            if !hidden.isEmpty {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { hiddenCollapsed.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Hidden Stories")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Self.listHeadingColor)
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(hiddenCollapsed ? 180 : 0))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, StoryListRow.margin)
+                    .padding(.top, 16)
+                    .padding(.bottom, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hiddenCollapsed ? "Show hidden stories" : "Hide hidden stories")
+                if !hiddenCollapsed {
+                    LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+                        ForEach(hidden) { g in friendListRow(g).opacity(0.45) }
+                    }
+                }
+            }
         }
         .padding(.top, 12 - StoryListRow.rowPad)
         .padding(.bottom, 24 - StoryListRow.rowPad)
@@ -1385,6 +1417,13 @@ struct StoriesTabView: View {
         return StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
     }
 
+    /// The people whose stories he hid, for the Hidden Stories list — the other half of the same
+    /// filter.
+    private var hiddenFriends: [StoryGroup] {
+        _ = prefsTick
+        return StoriesRepository.shared.others.filter { StoryPrefs.isHidden($0.authorUid) }
+    }
+
     /// WHICH CARD ON A FRIENDS GRID IS UNDER THE FINGER, and what its menu says. Asked at press
     /// time, so it describes the grid as it stands rather than as it stood at layout — the same
     /// contract `StoriesRow.menuTarget` keeps for the strip.
@@ -1439,7 +1478,7 @@ struct StoriesTabView: View {
         // chat mark, Settings' profile mark and the Archive mark. `CMContextMenu` falls back to an
         // asset when the name is not a symbol.
         [CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
-         CMAction(title: "Open Profile", icon: "ic_account") { profileGroup = g },
+         CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g },
          // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
          // `hideTarget`.
          CMAction(title: "Hide Stories", icon: "ic_archive", destructive: true) { hideTarget = g }]
@@ -1479,7 +1518,7 @@ struct StoriesTabView: View {
             path.append(ChatTarget(id: storyCid(p.id), name: p.name, photo: p.photoUrl))
          },
          // Exactly what the FACE on this card does, so one action cannot mean two things.
-         CMAction(title: "Open Profile", icon: "person.crop.circle") {
+         CMAction(title: "View Profile", icon: "person.crop.circle") {
             path.append(GlowRoute.profile(p.id, p.name, p.photoUrl ?? ""))
          }]
     }
@@ -1527,7 +1566,10 @@ struct StoriesTabView: View {
             ? (searching ? searchMatches : listDisplayOrder())   // audit #4: search walks its results
             : StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
         // Audit #14, the reference app's rule on the list layout: My Story opens alone.
-        let among: [StoryGroup] = g.isMine ? (AppFeatures.storyList ? [g] : [g] + others) : others
+        // A hidden person's story walks the Hidden Stories list, not the page above it.
+        let isHiddenRow = AppFeatures.storyList && !g.isMine && StoryPrefs.isHidden(g.authorUid)
+        let among: [StoryGroup] = g.isMine ? (AppFeatures.storyList ? [g] : [g] + others)
+                                           : (isHiddenRow ? hiddenFriends : others)
         StoryDoor.open(g, among: among, from: sourceKey ?? g.id,
                        pinned: sourceKey != nil,
                        // These came out of `StoriesRepository.others`, whose query is "recipientUids
