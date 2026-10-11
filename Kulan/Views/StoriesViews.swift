@@ -4712,11 +4712,23 @@ struct StoryViewer: View {
         guard let remote = URL(string: story.mediaUrl), !story.mediaUrl.isEmpty else { return }
         repostLoading = true
         Task {
-            let local = FileManager.default.temporaryDirectory
-                .appendingPathComponent("repost-\(UUID().uuidString).mp4")
-            var bytes = StoryBytes.data(for: story.mediaUrl)
-            if bytes == nil { bytes = try? await URLSession.shared.data(from: remote).0 }
-            let wrote = bytes.map { (try? $0.write(to: local, options: .atomic)) != nil } ?? false
+            // ⛔ OFF THE MAIN THREAD, AND NOT A SECOND DOWNLOAD (owner, 2026-10-11: "when I click
+            // repost the app freezes for seconds"). This read the whole clip into memory and wrote
+            // it out again ON the main thread, after downloading it again from the network even
+            // when the viewer had just played it. The viewer's finished copy is copied file to file
+            // now; only a clip that is not on the phone is fetched, straight to a file.
+            let wrote: URL? = await Task.detached(priority: .userInitiated) { () -> URL? in
+                let local = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("repost-\(UUID().uuidString).mp4")
+                if let cached = StoryVideoFile.cached(for: remote),
+                   (try? FileManager.default.copyItem(at: cached, to: local)) != nil {
+                    return local
+                }
+                guard let (tmp, resp) = try? await URLSession.shared.download(from: remote),
+                      (resp as? HTTPURLResponse).map({ $0.statusCode == 200 }) ?? true,
+                      (try? FileManager.default.moveItem(at: tmp, to: local)) != nil else { return nil }
+                return local
+            }.value
             let poster = await Self.storyImage(story.previewUrl)
             // The card chip's face, best effort, the same lookup the photo card uses.
             let photo = authorPhoto(story.authorUid)
@@ -4725,7 +4737,7 @@ struct StoryViewer: View {
             } else { nil }
             await MainActor.run {
                 repostLoading = false
-                guard wrote else {
+                guard let local = wrote else {
                     flashSentToast("Could not load that story")
                     return
                 }

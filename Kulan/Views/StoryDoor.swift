@@ -269,11 +269,18 @@ enum StoryDoor {
         guard let group = (repo.others + [repo.mine].compactMap { $0 })
                 .first(where: { $0.authorUid == authorUid && $0.stories.contains { $0.id == storyId } })
         else { return false }
-        StoryZoomPresenter.finish()
-        closed()
-        // No source key: there is no card on screen to fly out of, and an empty key is an open with
-        // no cover, which is what a story opened from a chat's reply quote already does.
-        DispatchQueue.main.async { StoryDoor.open(group, from: "", startStoryId: storyId) }
+        // ⚠️ NOT INSIDE THE TAP (owner, 2026-10-11: tapping a full-screen repost's credit crashed the
+        // app). This ran from the viewer's own tap handler and tore that viewer down, its video
+        // players with it, while the handler was still on the stack. The teardown now waits for the
+        // tap to finish, and the original opens a tick after that, as before.
+        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+        DispatchQueue.main.async {
+            StoryZoomPresenter.finish()
+            closed()
+            // No source key: there is no card on screen to fly out of, and an empty key is an open
+            // with no cover, which is what a story opened from a chat's reply quote already does.
+            DispatchQueue.main.async { StoryDoor.open(group, from: "", startStoryId: storyId) }
+        }
         return true
     }
 

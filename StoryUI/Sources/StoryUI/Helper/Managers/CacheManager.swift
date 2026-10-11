@@ -16,6 +16,12 @@ public enum Result<T> {
 /// can put them where `CacheManager.loadVideo` looks and the just-posted story plays with zero
 /// network instead of re-downloading its own upload. Public because the poster lives in the app
 /// target; CacheManager itself stays internal.
+/// The viewer's own finished copy of a story video, for the app (the repost composer reads it
+/// instead of downloading the clip a second time). Nil when it is not fully on disk.
+public enum StoryVideoFile {
+    public static func cached(for remoteURL: URL) -> URL? { CacheManager.cachedFileIfUsable(for: remoteURL) }
+}
+
 public enum StoryVideoSeed {
     public static func seed(_ data: Data, for remoteURL: URL) {
         guard data.count > 4096 else { return }   // below isUsableCacheFile's floor it would only wedge the cache

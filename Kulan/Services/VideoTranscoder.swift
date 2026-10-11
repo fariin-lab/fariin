@@ -529,9 +529,11 @@ enum VideoTranscoder {
             let parent = CALayer(); parent.frame = CGRect(origin: .zero, size: render)
             let video = CALayer(); video.frame = parent.frame
             // Core Animation composes video with the origin at the BOTTOM left, so a canvas-sized
-            // picture's rectangle is converted into that space and its contents flipped about its
-            // own centre. Flipping the parent instead would turn the video upside down with it,
-            // which is the classic way this ends up shipping inverted.
+            // picture's RECTANGLE is converted into that space. Its CONTENTS are not flipped: a
+            // CGImage already draws upright in a layer there. ⛔ The flip that was here turned the
+            // whole overlay upside down (owner, 2026-10-11: a video repost's name posted at the
+            // bottom, upside down — the same was true of text and drawing on any edited video).
+            // Flipping the parent instead would turn the video upside down with it.
             func canvasLayer(_ image: UIImage) -> CALayer? {
                 guard let cg = image.cgImage else { return nil }
                 let l = CALayer()
@@ -540,7 +542,6 @@ enum VideoTranscoder {
                                  width: canvas.width, height: canvas.height)
                 l.contents = cg
                 l.contentsGravity = .resize
-                l.transform = CATransform3DMakeScale(1, -1, 1)
                 return l
             }
             parent.addSublayer(video)
