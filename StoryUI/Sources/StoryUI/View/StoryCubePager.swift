@@ -269,6 +269,18 @@ final class StoryCubePagerVC: UIViewController {
             // wherever it was back to square. Grabbing a moving cube is exactly when that is most
             // visible.
             panBase = panFraction
+            // ⛔ THE FINGER IS FOLLOWED FROM THE FIRST FRAME (owner, 2026-10-11: "when I swipe I feel
+            // a slight lag", the tap already right). Theirs (`beginHorizontalPan`) applies the
+            // recogniser's translation at `.began`; ours waited for the first `.changed`, so the
+            // cube sat still for a frame and then jumped the distance the recogniser had already
+            // let the finger travel. Applied here, and sent to the screen at once with `flush`,
+            // BEFORE the pause below makes every story page re-render on this same thread.
+            let w = view.bounds.width
+            if w > 1 {
+                panFraction = banded(panBase + g.translation(in: view).x / w)
+                applyFold()
+                CATransaction.flush()
+            }
             beginTurn()
             startDragRateLink()
         case .changed:
@@ -278,7 +290,7 @@ final class StoryCubePagerVC: UIViewController {
             applyFold()
         case .ended, .cancelled, .failed:
             stopDragRateLink()
-            commit(velocity: g.velocity(in: view).x)
+            commit(velocity: g.velocity(in: view).x, fromFinger: true)
         default:
             break
         }
@@ -326,7 +338,7 @@ final class StoryCubePagerVC: UIViewController {
 
     /// Their thresholds: past 0.3 of a width, or moving at 100pt/s, and the turn is taken. A tap
     /// arrives here with ±200, so it is always past the second one.
-    private func commit(velocity vx: CGFloat) {
+    private func commit(velocity vx: CGFloat, fromFinger: Bool = false) {
         let far = abs(panFraction) >= 0.3
         let fast = abs(vx) >= 100
         // Past the distance, the direction is where the finger DRAGGED; short of it, a commit can
@@ -375,7 +387,8 @@ final class StoryCubePagerVC: UIViewController {
         // It does NOT start the story playing. That is the pause raised in `beginTurn` and lowered
         // in `endTurn`, deliberately still at the end of the turn, so the incoming clip cannot run
         // behind a face that is edge-on.
-        delegate?.cubePager(self, didFocus: target)
+        // A tap announces first, exactly as it has since its turn was fixed (owner: "100% fixed").
+        if !fromFinger { delegate?.cubePager(self, didFocus: target) }
         settle(to: 0) { [weak self] in
             guard let self else { return }
             // The peer that is now two away is released here rather than at the start of the turn:
@@ -385,6 +398,16 @@ final class StoryCubePagerVC: UIViewController {
             self.endTurn()
             guard let focused = self.focused else { return }
             self.delegate?.cubePager(self, didSettleOn: focused, committed: true)
+        }
+        // ⛔ A RELEASE STARTS MOVING BEFORE THE ANNOUNCEMENT IS PAID FOR (owner, 2026-10-11, the
+        // swipe's "slight lag"). `didFocus` re-renders the story screen on the main thread, and the
+        // settle's animations only leave for the render server when this run-loop turn ends, after
+        // that work. So the cube stood still under the lifted finger for as long as the re-render
+        // took. Now the animations are flushed to the render server first, where nothing on this
+        // thread can hold them, and the announcement follows in the same turn.
+        if fromFinger {
+            CATransaction.flush()
+            delegate?.cubePager(self, didFocus: target)
         }
     }
 
