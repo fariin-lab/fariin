@@ -391,20 +391,37 @@ struct ContactInfoView: View {
     /// The Message button. Friends and Everyone accounts open the chat; a My Friends account we are
     /// not friends with gets the prompt instead (his fourth screenshot), because the thread behind
     /// it could only show a locked bar — better to ask the one useful question here.
+    /// ⛔ FROM A STORY, THE CHAT OPENS IN CHATS, NOT INSIDE THIS SHEET — owner, 2026-10-11: "open a
+    /// story, tap the profile, tap Message, and I can't close the chat; scrolling down does nothing".
+    /// Inside the sheet the chat's "read older" drag and the sheet's "drag to close" are the same
+    /// gesture, so one of them always lost (2026-08-18 gave it to the list and disabled the
+    /// dismiss). The way out is to not open it there: the app's own route (`AppRouter`, what a
+    /// notification tap uses) takes the story viewer and this sheet away, switches to Chats and
+    /// opens the chat full screen, where both scrolling and Back work normally. Every other source
+    /// still pushes inside the profile, unchanged.
+    private func goToChat() {
+        guard source == .story else { openChat = true; return }
+        let router = AppRouter.shared
+        router.pendingChatName = name
+        router.pendingChatPhoto = photoUrl
+        router.pendingChatPush = false
+        router.pendingChatId = cid
+    }
+
     private func tapMessage() {
         let audience = Audience(rawValue: targetPrivacy["messages"] ?? "") ?? .everyone
         if audience == .contacts && !isFriend {
             // Owner decision 2026-10-10: the Chat Key prompt only for someone who HAS a key; with
             // none, the chat opens on its "can't message" notice (no key button there either).
             if let known = ChatPin.cachedKeyExists(uid: otherUid) {
-                if known { showPinPrompt = true } else { openChat = true }
+                if known { showPinPrompt = true } else { goToChat() }
             } else {
                 Task { @MainActor in
-                    if await ChatPin.keyExists(uid: otherUid) == true { showPinPrompt = true } else { openChat = true }
+                    if await ChatPin.keyExists(uid: otherUid) == true { showPinPrompt = true } else { goToChat() }
                 }
             }
         } else {
-            openChat = true
+            goToChat()
         }
     }
 
@@ -1264,7 +1281,7 @@ struct ContactInfoView: View {
                 // The sheet already hands its success to the next runloop turn (audit U3), so the
                 // push begins after the dismissal rather than fighting it.
                 ChatPinEntrySheet(uid: otherUid, name: shownName,
-                                  handle: handle.isEmpty ? nil : "@" + handle) { _ in openChat = true }
+                                  handle: handle.isEmpty ? nil : "@" + handle) { _ in goToChat() }
             }
             .darkAlert("Block \(shownName)?",
                        message: "Blocked users will not be able to call you or send you messages.",
