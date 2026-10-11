@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (861): STORY FIXES, MISSED-CALL BADGE, SHORT USERNAME SEARCH.
+            THIS BUILD (862): SMOOTHER STORY SWIPE, STORY LIST POLISH.
+            The 3D swipe between people no longer lags: the background story download no longer decodes pictures while you watch, and the swipe asks for 120Hz while your finger is down. Story pictures are 56x84. Long press lifts the picture with its face, name and time. The picture you are posting shows at once while "Preparing...". The face ring has one segment per story, like the chat list. Headings are soft white and read My Story, Recent Stories, Viewed Stories.
+            PLEASE TEST: swipe between several people in the viewer and check it feels smooth; long-press a row; post a story and check the picture shows at once; post 2-3 stories and check the ring segments.
+
+            EARLIER (861): STORY FIXES, MISSED-CALL BADGE, SHORT USERNAME SEARCH.
             Closing a story after swiping to another person now fades to that person's newest story during the close, not after it. "My Story >" opens Posted Stories. Pictures 69x97, thinner face gap, My Story stack drawn like the reference app (tilted back card). Uploading shows a spinning ring on your face instead of the system spinner. New camera icon on your row; + badge is white in dark mode. Search results use the list rows. Long press lifts only the picture. Calls tab badge no longer re-counts missed calls you already saw. Searching "V" finds @V.
             PLEASE TEST: open Ali, go to his B, swipe to Ahmed, close from his A; post 2 stories and check the stack and the uploading ring; long-press a row in light mode; miss a call, open Calls, miss another, check the badge says 1; search a 1-letter username.
 
