@@ -274,12 +274,24 @@ enum StoryDoor {
         // players with it, while the handler was still on the stack. The teardown now waits for the
         // tap to finish, and the original opens a tick after that, as before.
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
+        //
+        // ⛔ AND THE ORIGINAL OPENS WHEN THE OLD SCREEN IS GONE, NOT A TICK LATER (owner, 2026-10-11:
+        // after the credit tap the story closed and reopened, then no story on the page would open).
+        // On iOS 26 the old screen was still leaving at that tick, and the present landed on it. See
+        // `StoryZoomPresenter.finish(then:)`.
         DispatchQueue.main.async {
-            StoryZoomPresenter.finish()
+            // The uploading door's own exit (`openUploading`'s `finish`) never runs on this path, so
+            // its flag is dropped here as `dismiss()` does. Left up, `isOpen` stayed true for good:
+            // the Stories page held its order and rings frozen after the viewer was gone.
+            StoryDoorState.shared.uploadingOpen = false
+            // `closed()` FIRST: the completion below can run inside `finish` (an iOS that removes the
+            // screen at once), and the old exit's cleanup would then wipe the new viewer's request.
             closed()
-            // No source key: there is no card on screen to fly out of, and an empty key is an open
-            // with no cover, which is what a story opened from a chat's reply quote already does.
-            DispatchQueue.main.async { StoryDoor.open(group, from: "", startStoryId: storyId) }
+            StoryZoomPresenter.finish {
+                // No source key: there is no card on screen to fly out of, and an empty key is an
+                // open with no cover, which is what a story opened from a chat's reply quote does.
+                StoryDoor.open(group, from: "", startStoryId: storyId)
+            }
         }
         return true
     }

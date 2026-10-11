@@ -121,6 +121,17 @@ enum StoryZoomPresenter {
         // (`stageHeroOpen`), and a system presentation under it would be a second one nobody asked
         // for — the exact note the cover carried.
         top.present(vc, animated: false)
+        // ⛔ A REFUSED PRESENT MUST NOT LEAVE `isActive` TRUE (owner, 2026-10-11: after a repost's
+        // credit tap "no matter how many times I tap a Story to open it, nothing happens"). UIKit
+        // refuses a present on a screen that is still leaving and says so only in the console. The
+        // flag was already raised, the screen never appeared, so no `viewDidDisappear` belt could
+        // lower it, and every story door after it returned at its `isActive` guard until relaunch.
+        // A successful present links the two controllers at once; no link means it did not happen.
+        if vc.presentingViewController == nil {
+            container = nil
+            Self.coverKey = nil
+            MediaSourceVisibility.shared.reveal()
+        }
     }
 
     /// Delete-refeed: swap the viewer for one fed the remaining stories, in place, no re-present.
@@ -132,10 +143,13 @@ enum StoryZoomPresenter {
 
     /// The flight has landed (or the viewer must leave NOW): take the screen away with no animation
     /// of its own. Anything else would play a second close over the one the finger just drew.
-    static func finish() {
+    /// - Parameter then: runs once the screen has really left the window. For a door that opens
+    ///   another viewer straight after (`StoryDoor.reopen`): on iOS 26 an `animated: false` dismissal
+    ///   is still finishing a tick later, and a present made then lands on the leaving screen.
+    static func finish(then: (() -> Void)? = nil) {
         let vc = container
         container = nil
-        vc?.tearDown()
+        if let vc { vc.tearDown(then: then) } else { then?() }
     }
 
     /// The close that has nowhere to fly (the row card scrolled away, or geometry never came good):
@@ -347,7 +361,7 @@ final class StoryZoomContainerVC: UIViewController {
         }
     }
 
-    func tearDown() {
+    func tearDown(then: (() -> Void)? = nil) {
         // ⚠️ BLANK FIRST, DISMISS SECOND — the iOS 26 giant-blink, his 01:12 screenshot. This used
         // to dismiss first and trust `animated: false` to have the screen out of the window before
         // `detachFlight` ran `resetFlight`, which snaps the container back to identity and full
@@ -357,7 +371,15 @@ final class StoryZoomContainerVC: UIViewController {
         // zero its alpha. Hiding the view first costs nothing when the removal is synchronous and
         // paints nothing when it is not: the teardown no longer depends on which OS it runs on.
         view.isHidden = true
-        dismiss(animated: false)
+        // From the PRESENTER, so this screen goes even when something sits on top of it (a profile
+        // sheet, the composer). `dismiss` sent to a controller that is presenting another takes only
+        // the one above, and left this stage in the window: hidden, so invisible, still taking every
+        // touch on the page under it.
+        if let presenter = presentingViewController {
+            presenter.dismiss(animated: false, completion: then)
+        } else {
+            then?()
+        }
         // THE CUBE STAYS FLAT UNTIL THE SCREEN IS GONE. The landing used to clear this, but the
         // landing is 0.03s before the removal on this door — and an unflagged card that is still
         // parked on the row card computes a large fold angle from its global minX. See the note in
