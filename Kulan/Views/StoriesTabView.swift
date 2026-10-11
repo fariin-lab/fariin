@@ -712,7 +712,8 @@ struct StoriesTabView: View {
                 Button { openUploadingStory() } label: {
                     StoryListRow(thumbUrl: "", title: "My Story",
                                  subtitle: storyBudget.uploadPhase == .preparing ? "Preparing…" : "Uploading…",
-                                 showsFace: false,
+                                 authorName: profile.me?.name ?? "You",
+                                 authorPhoto: profile.me?.photoUrl,
                                  isUploading: true,
                                  uploadingImage: storyBudget.uploadingImage,
                                  onCamera: { composeStory() })

@@ -133,12 +133,10 @@ struct StoryListRow: View {
     @ViewBuilder private var thumb: some View {
         Group {
             if isUploading {
-                Group {
-                    if let uploadingImage { Image(uiImage: uploadingImage).resizable().scaledToFill() }
-                    else { Color(uiColor: .secondarySystemFill) }
-                }
-                .overlay(Color.black.opacity(0.35))
-                .overlay(ProgressView().tint(.white))
+                // ⛔ NO SYSTEM SPINNER ON THE PICTURE — owner, 2026-10-11. The picture is shown as
+                // it is; the app's own spinning arc runs on the face instead (see `faceRing`).
+                if let uploadingImage { Image(uiImage: uploadingImage).resizable().scaledToFill() }
+                else { Color(uiColor: .secondarySystemFill) }
             } else if thumbUrl.isEmpty, addBadge, let photo = authorPhoto, !photo.isEmpty {
                 StoryImage(url: photo, maxPixels: StoryImage.cardPixels)
             } else if thumbUrl.isEmpty, addBadge {
@@ -180,15 +178,38 @@ struct StoryListRow: View {
             .padding(Self.gap + Self.ring)
             // Owner 2026-10-11: the gap is pure black in dark mode, pure white in light.
             .background(Circle().fill(scheme == .dark ? Color.black : Color.white))
-            .overlay {
-                Circle().strokeBorder(
-                    seen
-                        ? AnyShapeStyle(scheme == .dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA))
-                        : AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
-                                                       startPoint: .bottomLeading, endPoint: .topTrailing)),
-                    lineWidth: seen ? 1.5 : Self.ring)
-            }
+            .overlay { faceRing }
             .allowsHitTesting(false)
+    }
+
+    @State private var spin = false
+
+    private var unseenGradient: LinearGradient {
+        LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
+                       startPoint: .bottomLeading, endPoint: .topTrailing)
+    }
+
+    /// The ring on the face. While a post is going up it is the app's own uploading arc — the
+    /// strip's uploading card exactly (`UploadingAvatarRing`): trimmed to 0.72, round caps, one
+    /// turn every 0.9s, linear — in the unseen ring's colours, owner 2026-10-11.
+    @ViewBuilder private var faceRing: some View {
+        if isUploading {
+            Circle()
+                .inset(by: Self.ring / 2)
+                .trim(from: 0, to: 0.72)
+                .stroke(unseenGradient, style: StrokeStyle(lineWidth: Self.ring, lineCap: .round))
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .onAppear {
+                    withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
+                }
+                .onDisappear { spin = false }
+        } else {
+            Circle().strokeBorder(
+                seen
+                    ? AnyShapeStyle(scheme == .dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA))
+                    : AnyShapeStyle(unseenGradient),
+                lineWidth: seen ? 1.5 : Self.ring)
+        }
     }
 
     /// "10h ago" — the wording on his screenshot.
