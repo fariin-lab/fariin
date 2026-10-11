@@ -3533,6 +3533,20 @@ struct StoryViewer: View {
     /// story was opened from somewhere that does not report a rect, and in either case there is
     /// nowhere to fly: the caller falls back to a plain open/close rather than flying to `.zero`,
     /// which is the top-left corner of the screen and looks like a bug because it is one.
+    /// ⛔ A STORY WITH NOTHING TO FLY HOME TO STILL CLOSES ON A PULL (owner, 2026-10-11: opened from
+    /// a story link's View Story, "scroll down to close is not working"). A chat card is not a
+    /// registered source, so `heroEndpoints` had no anchor and the drag never began. With no source,
+    /// the card shrinks toward a small spot low in the middle of the screen and the close finishes
+    /// there, the same gesture and the same commit test as every other close. Used by the drag only;
+    /// the open keeps its own rules.
+    private func heroLooseEndpoints() -> (rest: CGPoint, anchor: CGRect)? {
+        guard let card = StoryCardMorph.shared.flightRestRect, card.width > 1 else { return nil }
+        let w = card.width * 0.25, h = card.height * 0.25
+        let screen = UIScreen.main.bounds
+        let anchor = CGRect(x: card.midX - w / 2, y: screen.height * 0.78 - h / 2, width: w, height: h)
+        return (CGPoint(x: card.midX, y: card.midY), anchor)
+    }
+
     private func heroEndpoints() -> (rest: CGPoint, anchor: CGRect)? {
         // `flightRestRect`, not `cardWindowRect`: the flight transforms the presenter's container,
         // so its rest geometry must be resolved against THAT view. Same published metrics, same
@@ -3876,7 +3890,8 @@ struct StoryViewer: View {
             // anyway; this is the belt to that braces.
             guard !(showViewers && viewersProgress > 0.02) else { return }
             heroAnimator.cancel()
-            guard !hero.committing, let (rest, anchor) = heroEndpoints() else { return }
+            guard !hero.committing,
+                  let (rest, anchor) = heroEndpoints() ?? heroLooseEndpoints() else { return }
             hero.live = true
             hero.rest = rest
             hero.anchor = anchor

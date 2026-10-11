@@ -11,6 +11,48 @@ import UIKit
 // to appear at all — sites like x.com serve an empty JS shell to in-app fetchers, so the reader saw
 // nothing. When even the sender's fetch fails, the message simply carries no preview — exactly
 // the reference app's behaviour.
+/// ⛔ AN OLD STORY'S ID, SHORT IN A LINK (owner, 2026-10-11: "the link is too long"). Stories posted
+/// before 2026-10-11 have a 36-character UUID id; in a link it is written as its 16 bytes in base 62,
+/// always 22 characters (the call-link scheme, `CallLinkKey.compact`), and read back to the UUID.
+/// New stories already have 10-character ids and pass through unchanged; 22 never collides with 10.
+enum StoryLinkId {
+    private static let base62 = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+
+    static func short(_ id: String) -> String {
+        guard let u = UUID(uuidString: id) else { return id }
+        var num = withUnsafeBytes(of: u.uuid) { Array($0) }
+        var digits = [Character](repeating: "0", count: 22)
+        for pos in stride(from: 21, through: 0, by: -1) {
+            var rem = 0
+            for i in num.indices {
+                let cur = rem << 8 | Int(num[i])
+                num[i] = UInt8(cur / 62)
+                rem = cur % 62
+            }
+            digits[pos] = base62[rem]
+        }
+        return String(digits)
+    }
+
+    static func full(_ s: String) -> String {
+        guard s.count == 22 else { return s }
+        var num = [UInt8](repeating: 0, count: 16)
+        for ch in s {
+            guard let d = base62.firstIndex(of: ch) else { return s }
+            var carry = d
+            for i in stride(from: 15, through: 0, by: -1) {
+                let cur = Int(num[i]) * 62 + carry
+                num[i] = UInt8(cur & 0xff)
+                carry = cur >> 8
+            }
+            guard carry == 0 else { return s }
+        }
+        let u = UUID(uuid: (num[0], num[1], num[2], num[3], num[4], num[5], num[6], num[7],
+                            num[8], num[9], num[10], num[11], num[12], num[13], num[14], num[15]))
+        return u.uuidString
+    }
+}
+
 actor LinkPreviewService {
     static let shared = LinkPreviewService()
 
@@ -96,9 +138,9 @@ actor LinkPreviewService {
               host == "fariin.com" else { return nil }
         let parts = url.path.split(separator: "/").map(String.init)
         if parts.count == 3, parts[1] == "s", !parts[0].isEmpty, !parts[2].isEmpty {
-            return (parts[2], parts[0])
+            return (StoryLinkId.full(parts[2]), parts[0])
         }
-        if parts.count == 2, parts[0] == "s", !parts[1].isEmpty { return (parts[1], nil) }
+        if parts.count == 2, parts[0] == "s", !parts[1].isEmpty { return (StoryLinkId.full(parts[1]), nil) }
         return nil
     }
 

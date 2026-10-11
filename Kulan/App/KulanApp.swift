@@ -184,7 +184,8 @@ struct KulanApp: App {
     /// the reference app's shape. The username is what lets someone the story was never sent to find
     /// it on the author's public stories. No username yet: the old /s/<id> form, still understood.
     static func storyLink(id: String, handle: String? = nil) -> String {
-        let i = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let short = StoryLinkId.short(id)   // an old UUID id goes out as 22 characters
+        let i = short.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? short
         let h = (handle ?? ProfileStore.shared.me?.handle ?? "").trimmingCharacters(in: .whitespaces)
         guard !h.isEmpty, let he = h.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             return "\(linkHost)/s/\(i)"
@@ -242,7 +243,7 @@ struct KulanApp: App {
             if parts.count == 3, parts[1] == "s" {
                 let h = parts[0], id = parts[2]
                 guard Self.safeSegment(h), Self.safeSegment(id) else { return nil }
-                return .story(id, handle: h)
+                return .story(StoryLinkId.full(id), handle: h)
             }
             guard parts.count >= 2 else { return nil }
             kind = parts[0]
@@ -263,7 +264,7 @@ struct KulanApp: App {
         switch kind {
         case "u": return .user(value)
         case "g": return .group(value)
-        case "s": return .story(value, handle: nil)
+        case "s": return .story(StoryLinkId.full(value), handle: nil)
         // The web landing page's "Open in Kulan" button, for a phone that had the app but did not
         // get the universal link: kulan://video/<22-char id>, kulan://voice/<id>, and
         // kulan://call/<bcdf-ghkm-…> for the old form. Custom scheme only; the https shapes were
