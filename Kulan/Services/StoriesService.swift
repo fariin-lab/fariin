@@ -1532,7 +1532,8 @@ final class StoriesService {
                                              trim: ClosedRange<Double>? = nil, caption: String = "",
                                              stickers: [StoryTapTarget] = [],
                                              excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
-                                             captureProtected: Bool = false) {
+                                             captureProtected: Bool = false,
+                                             repostOf: StoryRepost? = nil) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         // Its own entry in the queue, exactly as a photo post takes one — see `PendingUpload`.
@@ -1565,7 +1566,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf) }
             catch is CancellationError { cancelled = true }
             catch { failure = Self.friendlyPostError(error) }   // video keeps no ticket to tear up
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -1601,7 +1602,8 @@ final class StoriesService {
     func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil, burn: StoryBurnIn? = nil,
                         caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                         excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
-                        captureProtected: Bool = false) async throws {
+                        captureProtected: Bool = false,
+                        repostOf: StoryRepost? = nil) async throws {
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
         // A hand trim decides where the material starts and how much of it there is; the split then
         // works on THAT, not on the original file. Trim to 20s and you get one story, not the first
@@ -1619,7 +1621,7 @@ final class StoriesService {
                                        stickers: stickers,
                                        expiryHours: expiryHours, excluded: excluded,
                                        included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
-                                       captureProtected: captureProtected)
+                                       captureProtected: captureProtected, repostOf: repostOf)
             return
         }
 
@@ -1644,7 +1646,7 @@ final class StoriesService {
                                                stickers: i == 0 ? stickers : [],
                                                expiryHours: expiryHours, excluded: excluded,
                                                included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
-                                               captureProtected: captureProtected)
+                                               captureProtected: captureProtected, repostOf: repostOf)
                     lastError = nil
                     break
                 } catch is CancellationError {
@@ -1671,7 +1673,8 @@ final class StoriesService {
                                   stickers: [StoryTapTarget] = [],
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
                                   everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag,
-                                  captureProtected: Bool = false) async throws {
+                                  captureProtected: Bool = false,
+                                  repostOf: StoryRepost? = nil) async throws {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -1712,7 +1715,7 @@ final class StoriesService {
         let expiresAt = Date().addingTimeInterval(expiryHours * 3600)
 
         let docRef = db.collection("stories").document(storyId)
-        try await docRef.setData([
+        var payload: [String: Any] = [
             "authorUid": me,
             "createdAt": FieldValue.serverTimestamp(),
             "expiresAt": Timestamp(date: expiresAt),
@@ -1759,7 +1762,10 @@ final class StoriesService {
             // `array-contains` query, the read rule and the Cloud Function all key on it, and a
             // rename would have to land in three places at the same instant.
             "recipientUids": StoryAudienceToken.tokens(recipients),
-        ])
+        ]
+        // A video repost carries its credit exactly as a photo repost does (owner 2026-10-11).
+        if let repostOf { payload["repostOf"] = repostOf.asData }
+        try await docRef.setData(payload)
         StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
         do {
@@ -1796,7 +1802,8 @@ final class StoriesService {
                                         duration: prepared.duration,
                                         expiresAt: expiresAt,
                                         allowsReplies: allowsReplies,
-                                        captureProtected: captureProtected)
+                                        captureProtected: captureProtected,
+                                        repostOf: repostOf)
             }
             // Warm both caches with the poster so my-story cards + the viewer's first frame are instant.
             if let img = UIImage(data: prepared.thumbnail) {

@@ -153,6 +153,10 @@ struct StoryEditorView: View {
     /// All this carries is the credit line — see `StoryRepost`. The caption, the stickers, the
     /// audience and the twenty-four hours are the reposter's own, decided here like any other post.
     var repostOf: StoryRepost? = nil
+    /// ⛔ THE REPOST'S OTHER SHAPE — owner, 2026-10-11: a repost opens as the card (`source`, see
+    /// `RepostCard`) and a tap on the picture switches it to the original full screen, and back.
+    /// nil = not a repost, or no full-screen copy to offer; the tap then does what it always did.
+    var repostFullSource: UIImage? = nil
     var onPosted: () -> Void = {}
     /// A WHOLE POST ARRIVING FROM THE VIDEO EDITOR. When a picture joins a video-first post, that
     /// screen cannot hold it (its model is a list of clips, each of which IS a video), so it hands
@@ -646,6 +650,8 @@ struct StoryEditorView: View {
     /// edit state would mean five parallel copies of every tool's state on a screen that is already
     /// device-verified, and the risk of that is not worth being able to un-crop something you left.
     @State private var items: [DraftItem] = []
+    /// The repost is showing the original full screen rather than the card. See `repostFullSource`.
+    @State private var repostFullScreen = false
     @State private var index = 0
     @State private var showAddPicker = false
 
@@ -1504,7 +1510,14 @@ struct StoryEditorView: View {
             // flows get the same compact fitted sheet.
             ShareStorySheet(image: s.data, caption: s.caption, video: s.video, extras: pendingExtras,
                             stickers: s.stickers,
-                            repostOf: repostOf,
+                            // The shape he left it in decides the credit: a card carries the
+                            // author on the picture, full screen carries it in the header.
+                            repostOf: repostOf.map { r in
+                                var r = r
+                                // A card only when there IS one: a video repost has no card copy.
+                                r.card = repostFullSource != nil && !repostFullScreen
+                                return r
+                            },
                             onPosted: { onPosted(); dismiss() })
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -1593,6 +1606,8 @@ struct StoryEditorView: View {
                                   // circle stays as the thing that SAYS it can be played.
                                   if currentIsVideo, !isDrawing, editingID == nil {
                                       togglePreview()
+                                  } else if !currentIsVideo, !isDrawing, editingID == nil {
+                                      toggleRepostShape()
                                   }
                               },
                               onSwipe: { step in
@@ -3554,6 +3569,22 @@ struct StoryEditorView: View {
     /// Park the live tool state back on the item it belongs to. NOTHING IS FLATTENED: the picture is
     /// left as it came in and the edits are stored next to it, so coming back finds the crop still a
     /// crop you can change and the strokes still strokes you can undo.
+    /// Card ⇄ full screen for a repost. Only the PICTURE changes: everything drawn, written or
+    /// stuck on it stays where it is, and the framing starts fresh for the new shape.
+    @MainActor private func toggleRepostShape() {
+        guard let full = repostFullSource, items.count == 1, items.indices.contains(index),
+              !items[index].isVideo else { return }
+        stashCurrent()
+        repostFullScreen.toggle()
+        items[index].image = repostFullScreen ? full : source
+        items[index].cropped = nil
+        items[index].cropRect = nil
+        items[index].zoom = 0
+        items[index].offset = .zero
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { restoreCurrent() }
+        Haptics.impact(.light)
+    }
+
     @MainActor private func stashCurrent() {
         guard items.indices.contains(index) else { return }
         items[index].cropped = croppedSource

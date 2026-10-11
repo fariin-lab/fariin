@@ -799,7 +799,8 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
-                tag: tag, captureProtected: captureProtected)
+                tag: tag, captureProtected: captureProtected,
+                repostOf: repostOf)   // a video repost credits its author too
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,

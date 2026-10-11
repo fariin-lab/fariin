@@ -1738,7 +1738,9 @@ struct StoryViewer: View {
                     // down there (the flag itself, and both branches of `storyType`), and the same
                     // compound expression repeated three times inside an argument list that size is
                     // exactly what tips it over. One `let`, resolved once.
-                    let canPassOn = StoryShareRights.allows(s) && !s.isVideo
+                    // Videos too since 2026-10-11 (owner: "user repost video and image") — the
+                    // composer takes the clip itself now, see `beginRepost`.
+                    let canPassOn = StoryShareRights.allows(s)
                     return StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,
@@ -4629,8 +4631,9 @@ struct StoryViewer: View {
         // The story is found across every group the viewer was given, not only the one on screen:
         // the footer belongs to whichever page is up, and pages change under a swipe.
         guard let story = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
-              StoryShareRights.allows(story), !story.isVideo else { return }
+              StoryShareRights.allows(story) else { return }
         let authorName = groups.first(where: { $0.authorUid == story.authorUid })?.name ?? ""
+        if story.isVideo { beginVideoRepost(story, authorName: authorName); return }
         repostLoading = true
         Task {
             // The viewer has almost always cached this already — it is the picture on screen — so
@@ -4667,7 +4670,41 @@ struct StoryViewer: View {
                 repostUp = true
                 StoryComposerPresenter.present(
                     StoryEditorView(source: draft.image, repostOf: draft.info,
+                                    repostFullSource: image,
                                     onPosted: { flashSentToast("Reposted") }),
+                    onDismissed: { repostUp = false })
+            }
+        }
+    }
+
+    /// ⛔ A VIDEO REPOST — owner, 2026-10-11. The clip is copied to a local file (from the viewer's
+    /// own cache when it has it, which is almost always, else downloaded) and the composer opens on
+    /// it like any picked video: trim, mute, text and stickers are the reposter's. It posts full
+    /// screen with the credit in the header (`card: false`); the card shape is photos-only for now.
+    private func beginVideoRepost(_ story: Story, authorName: String) {
+        guard let remote = URL(string: story.mediaUrl), !story.mediaUrl.isEmpty else { return }
+        repostLoading = true
+        Task {
+            let local = FileManager.default.temporaryDirectory
+                .appendingPathComponent("repost-\(UUID().uuidString).mp4")
+            var bytes = StoryBytes.data(for: story.mediaUrl)
+            if bytes == nil { bytes = try? await URLSession.shared.data(from: remote).0 }
+            let wrote = bytes.map { (try? $0.write(to: local, options: .atomic)) != nil } ?? false
+            let poster = await DiskImageCache.shared.image(for: story.previewUrl)
+            await MainActor.run {
+                repostLoading = false
+                guard wrote else {
+                    flashSentToast("Could not load that story")
+                    return
+                }
+                repostUp = true
+                StoryComposerPresenter.present(
+                    StoryEditorView(source: poster ?? UIImage(),
+                                    repostOf: StoryRepost(authorUid: story.authorUid,
+                                                          authorName: authorName,
+                                                          storyId: story.id, card: false),
+                                    onPosted: { flashSentToast("Reposted") },
+                                    sourceVideo: .init(url: local)),
                     onDismissed: { repostUp = false })
             }
         }
