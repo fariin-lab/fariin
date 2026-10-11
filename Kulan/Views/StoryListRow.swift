@@ -26,6 +26,14 @@ struct StoryListRow: View {
     /// The key the whole row registers for the long press. The picture keeps the group's own id
     /// for the open/close morph, so the two never collide.
     static func pressKey(_ id: String) -> String { "listrow-\(id)" }
+    /// Where the name and time sit, so the long press can lift them with the picture.
+    static func textKey(_ id: String) -> String { "listtext-\(id)" }
+    /// The face (or + badge) as drawn: its diameter and how far it hangs past the picture's
+    /// bottom-trailing corner. The lift cuts its shape from these.
+    static var faceDiameter: CGFloat { face + 2 * (gap + ring) }
+    static let faceHang = CGSize(width: 7, height: 5)
+    static let badgeDiameter: CGFloat = 28
+    static let badgeHang = CGSize(width: 6, height: 6)
     /// The author's face on the picture's bottom-right corner, ring included.
     static let face: CGFloat = 26
     static let ring: CGFloat = 2
@@ -67,16 +75,9 @@ struct StoryListRow: View {
     var body: some View {
         HStack(spacing: 18) {
             thumbStack
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))   // the reference app's name size
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Self.textBlock(title: title, subtitle: subtitle)
+                .modifier(MediaRectReporter(id: pressKey.map { _ in textKey } ?? "", scope: .storyRow,
+                                            cornerRadius: 0))
             Spacer(minLength: 8)
             if let onCamera {
                 // Owner 2026-10-11: his camera icon, on Liquid Glass.
@@ -96,6 +97,25 @@ struct StoryListRow: View {
         .padding(.vertical, Self.rowPad)
         .contentShape(Rectangle())
         .modifier(MediaRectReporter(id: pressKey ?? "", scope: .storyRow, cornerRadius: Self.pressCorner))
+    }
+
+    /// The id this row's keys are built from (the part after "listrow-").
+    private var textKey: String {
+        Self.textKey(String((pressKey ?? "").dropFirst("listrow-".count)))
+    }
+
+    /// Name over time — one builder, so the long press lifts exactly the text the row draws.
+    static func textBlock(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))   // the reference app's name size
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(subtitle)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
     }
 
     /// Back picture (if any) → front picture → face. The face hangs past the picture's corner, so

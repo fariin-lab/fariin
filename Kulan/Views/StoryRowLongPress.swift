@@ -189,6 +189,15 @@ struct StoryMenuTarget {
     /// with and only a card that says otherwise gets a different one. It is declared last so the
     /// memberwise initialiser's existing argument order is untouched.
     var cornerRadius: CGFloat = 24
+    /// ⛔ A SHAPE FOR THE LIFT, IN `rect`'S OWN COORDINATES — owner, 2026-10-11, the list row: the
+    /// press took the face circle off the corner and left the name behind. The list's lift is the
+    /// picture PLUS the face hanging off it, and a window crop of that union carries page colour in
+    /// the gaps (the white panel he refused). With a path, the crop is cut to exactly the shapes and
+    /// transparent everywhere else, and `cornerRadius` is not applied on top. nil = as before.
+    var liftShape: UIBezierPath? = nil
+    /// The name strip as a ready picture (transparent around the glyphs), for a card with no UIKit
+    /// label to render — a SwiftUI row. Used in place of `labelView` when set.
+    var labelImage: UIImage? = nil
 }
 
 /// A picture of what is really on screen inside `rect`.
@@ -931,15 +940,27 @@ struct StoryRowLongPress: UIViewRepresentable {
                     return
                 }
                 StoryPressDebug.shared.noteBegan("MENU SHOWN")
-                let image = UIImageView(image: shot)
+                // A shaped lift is cut into the picture itself (see `StoryMenuTarget.liftShape`), so
+                // it scales with the copy and needs no layer mask kept in step.
+                let cut: UIImage = t.liftShape.map { path in
+                    let f = UIGraphicsImageRendererFormat.preferred()
+                    f.opaque = false
+                    return UIGraphicsImageRenderer(size: t.rect.size, format: f).image { _ in
+                        path.addClip()
+                        shot.draw(in: CGRect(origin: .zero, size: t.rect.size))
+                    }
+                } ?? shot
+                let image = UIImageView(image: cut)
                 image.frame = CGRect(origin: .zero, size: t.rect.size)
                 image.contentMode = .scaleAspectFill   // only ever scales uniformly; belt anyway
-                // The card's OWN radius, asked of the target rather than typed here — see
-                // `StoryMenuTarget.cornerRadius`. Two card sizes press now and they round
-                // differently.
-                image.layer.cornerRadius = t.cornerRadius
-                image.layer.cornerCurve = .continuous   // every card in this app is continuous
-                image.layer.masksToBounds = true
+                if t.liftShape == nil {
+                    // The card's OWN radius, asked of the target rather than typed here — see
+                    // `StoryMenuTarget.cornerRadius`. Two card sizes press now and they round
+                    // differently.
+                    image.layer.cornerRadius = t.cornerRadius
+                    image.layer.cornerCurve = .continuous   // every card in this app is continuous
+                    image.layer.masksToBounds = true
+                }
 
                 // THE NAME COMES WITH IT (his "also show Name"). A second crop rather than one taller
                 // one, because the card is rounded and the name is not — a single image under a
@@ -963,8 +984,9 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // card above is a window crop because its pixels really are on the window; the name
                 // is glyphs on nothing, and a window crop of "nothing" is the chat list.
                 var liftedName: UIView?
-                if let lr = t.labelRect, let lv = t.labelView,
-                   let nameShot = StoryCardShot.render(lv, cornerRadius: 0) {
+                if let lr = t.labelRect,
+                   let nameShot = t.labelImage
+                       ?? t.labelView.flatMap({ StoryCardShot.render($0, cornerRadius: 0) }) {
                     let name = UIImageView(image: nameShot)
                     name.frame = CGRect(x: lr.minX - frame.minX, y: lr.minY - frame.minY,
                                         width: lr.width, height: lr.height)

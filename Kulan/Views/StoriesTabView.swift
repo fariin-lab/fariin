@@ -850,34 +850,63 @@ struct StoriesTabView: View {
         // ⛔ THE ADD STORY ROW HOLDS TOO — owner, 2026-10-11: "long press my story is not
         // working". With nothing posted it offers My Story's own two entries.
         if StoriesRepository.shared.mine?.stories.isEmpty ?? true,
-           let t = listLift(row: Self.addRowKey, at: p, actions: [
+           let t = listLift(row: Self.addRowKey, title: "Add Story", subtitle: "Disappears after 24 hours",
+                            badge: true, at: p, actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { composeStory() },
                 CMAction(title: "Posted Stories", icon: "circle.dashed") {
                     path.append(GlowRoute.postedStories(profile.me?.name ?? "My Story"))
                 }]) {
             return t
         }
-        if let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty,
-           let t = listLift(row: mine.id, at: p, actions: myStoryActions(mine)) {
+        if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last,
+           let t = listLift(row: mine.id, title: "My Story", subtitle: StoryListRow.ago(newest.createdAt),
+                            badge: false, at: p, actions: myStoryActions(mine)) {
             return t
         }
         for g in visibleFriends {
-            if let t = listLift(row: g.id, at: p, actions: friendActions(g)) { return t }
+            if let t = listLift(row: g.id, title: g.name,
+                                subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                                badge: false, at: p, actions: friendActions(g)) { return t }
         }
         return nil
     }
 
-    /// The press is answered by the WHOLE ROW, but what lifts is the PICTURE — owner, 2026-10-11:
-    /// lifting the row showed its page-coloured band as a white panel in light mode. The row's key
-    /// is only the hit area; the picture (registered under the bare id) is what the menu raises.
-    private func listLift(row id: String, at p: CGPoint, actions: [CMAction]) -> StoryMenuTarget? {
+    /// The press is answered by the WHOLE ROW; what lifts is the picture WITH its face (or + badge)
+    /// and the name and time beside it — owner, 2026-10-11: lifting the row showed a white panel in
+    /// light mode, and lifting the picture alone took the face and the name away. The picture and
+    /// face are one window crop cut to their two shapes (`StoryMenuTarget.liftShape`), transparent
+    /// between them; the text is drawn fresh on a clear background (`labelImage`), so no page colour
+    /// rides along anywhere.
+    private func listLift(row id: String, title: String, subtitle: String, badge: Bool,
+                          at p: CGPoint, actions: [CMAction]) -> StoryMenuTarget? {
         // Main-thread by construction (a UIKit gesture callback) — same assertion as `GlowCardPress`.
         MainActor.assumeIsolated { () -> StoryMenuTarget? in
             let rowKey = MediaOpenRects.key(.storyRow, StoryListRow.pressKey(id))
             guard let r = MediaOpenRects.liveRect(rowKey), r.contains(p) else { return nil }
             let picKey = MediaOpenRects.key(.storyRow, id)
             guard let pic = MediaOpenRects.drawnRect(picKey) ?? MediaOpenRects.liveRect(picKey) else { return nil }
-            return StoryMenuTarget(key: picKey, rect: pic, actions: actions, cornerRadius: StoryListRow.corner)
+            let d = badge ? StoryListRow.badgeDiameter : StoryListRow.faceDiameter
+            let hang = badge ? StoryListRow.badgeHang : StoryListRow.faceHang
+            let face = CGRect(x: pic.maxX + hang.width - d, y: pic.maxY + hang.height - d, width: d, height: d)
+            let rect = pic.union(face)
+            let shape = UIBezierPath(roundedRect: pic.offsetBy(dx: -rect.minX, dy: -rect.minY),
+                                     cornerRadius: StoryListRow.corner)
+            shape.append(UIBezierPath(ovalIn: face.offsetBy(dx: -rect.minX, dy: -rect.minY)))
+
+            var labelRect: CGRect?
+            var labelImage: UIImage?
+            let textKey = MediaOpenRects.key(.storyRow, StoryListRow.textKey(id))
+            if let tr = MediaOpenRects.drawnRect(textKey) ?? MediaOpenRects.liveRect(textKey) {
+                let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+                let dark = scene?.windows.first?.traitCollection.userInterfaceStyle == .dark
+                let renderer = ImageRenderer(content: StoryListRow.textBlock(title: title, subtitle: subtitle)
+                    .frame(width: tr.width, height: tr.height, alignment: .leading)
+                    .environment(\.colorScheme, dark ? .dark : .light))
+                renderer.scale = scene?.screen.scale ?? 3
+                if let img = renderer.uiImage { labelRect = tr; labelImage = img }
+            }
+            return StoryMenuTarget(key: picKey, rect: rect, actions: actions, labelRect: labelRect,
+                                   cornerRadius: StoryListRow.corner, liftShape: shape, labelImage: labelImage)
         }
     }
 
