@@ -157,11 +157,16 @@ struct StoryListRow: View {
                     .offset(x: 2, y: 2)
             }
             thumb
+            // ⛔ THE FACE IS PART OF THE SOURCE — owner, 2026-10-11: with a story open, the picture
+            // left its row but the face stayed behind. The old strip kept its face circle INSIDE the
+            // box it hid for the flight (`StoryRowUIView.heroBox`, hidden by `applyVisibility`), so
+            // the two always left and came back together; this does the same. An offset is drawing
+            // only, so the reported frame is still exactly the picture's.
+            if addBadge { plusBadge.offset(x: 6, y: 6) }
+            else if showsFace { faceView.offset(x: 7, y: 5) }
           }
           .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
           .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow, cornerRadius: Self.corner))
-            if addBadge { plusBadge.offset(x: 6, y: 6) }
-            else if showsFace { faceView.offset(x: 7, y: 5) }
         }
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
     }
