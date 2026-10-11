@@ -36,7 +36,10 @@ struct StoryListRow: View {
     static let badgeHang = CGSize(width: 6, height: 6)
     /// The author's face on the picture's bottom-right corner, ring included.
     static let face: CGFloat = 26
-    static let ring: CGFloat = 2
+    /// ⛔ THE CHAT LIST'S RING, IN PROPORTION — owner, 2026-10-11, "ring width looks big, use the
+    /// chat list's". The chat list draws 2pt on a 58pt ring (`MainShell.ringedSide`); the same 2pt
+    /// on this 32pt face read nearly twice as heavy. 2 / 58 of the face is 1.2.
+    static let ring: CGFloat = 1.2
     static let gap: CGFloat = 1   // owner 2026-10-11: thinner gap; face and ring unchanged
 
     let thumbUrl: String
