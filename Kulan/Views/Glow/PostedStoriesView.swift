@@ -70,12 +70,40 @@ struct PostedStoriesView: View {
     struct PostedFolder: Identifiable {
         let id: String
         let name: String
+        /// The audience kind: "everyone" | "friends" | "glowers" | "custom".
+        let kind: String
         var rows: [PostedStory]
     }
 
     /// Stories grouped by the audience they were posted to. A custom list is named by what it was
     /// called when the story went out (`StoryPrefs.audienceName`, kept on this phone), so two lists
     /// are two folders; a custom story whose name this phone never saw goes under "Custom".
+    /// The Share Story sheet's audience badge, scaled from its 40pt to 28pt with the same
+    /// proportions: Everyone wears my own face, My Chats the orange people circle, a custom list my
+    /// folder drawing on grey, Glowers the glow mark.
+    @ViewBuilder static func folderBadge(_ kind: String) -> some View {
+        let d: CGFloat = 28
+        if kind == "everyone" {
+            AvatarView(name: ProfileStore.shared.me?.name ?? "You",
+                       photoUrl: ProfileStore.shared.me?.photoUrl, size: d)
+        } else {
+            ZStack {
+                Circle().fill((kind == "custom" ? Color.gray : kind == "glowers" ? Color.primary : Color.orange).gradient)
+                if kind == "custom" {
+                    Image("ic_story_folder_fill").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: d * 23 / 40, height: d * 23 / 40)
+                        .foregroundStyle(.white)
+                } else if kind == "glowers" {
+                    GlowStyle.mark(d * 23 / 40).foregroundStyle(Color(.systemBackground))
+                } else {
+                    Image(systemName: "person.2.fill").font(.system(size: d * 17 / 40, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: d, height: d)
+        }
+    }
+
     static func folders(_ rows: [PostedStory]) -> [PostedFolder] {
         var out: [PostedFolder] = []
         var at: [String: Int] = [:]
@@ -90,7 +118,7 @@ struct PostedStoriesView: View {
             }
             let key = s.audience + ":" + name
             if let i = at[key] { out[i].rows.append(s) }
-            else { at[key] = out.count; out.append(PostedFolder(id: key, name: name, rows: [s])) }
+            else { at[key] = out.count; out.append(PostedFolder(id: key, name: name, kind: s.audience, rows: [s])) }
         }
         return out
     }
@@ -510,10 +538,17 @@ struct PostedStoriesView: View {
                     if !folders.isEmpty {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(folders) { f in
-                                Text(f.name)
-                                    .font(.system(size: 20, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
+                                // ⛔ THE AUDIENCE'S OWN BADGE BEFORE ITS NAME — owner, 2026-10-11:
+                                // "show the Everyone, custom and My Chats icons, now it looks
+                                // confusing". The same badges the Share Story sheet draws
+                                // (`StoryAudienceRow.badge`), at heading size.
+                                HStack(spacing: 10) {
+                                    Self.folderBadge(f.kind)
+                                    Text(f.name)
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                }
                                     .padding(.horizontal, PostedGrid.margin + 6)
                                     .padding(.top, 18)
                                     .padding(.bottom, 10)
