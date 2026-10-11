@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (869): SHORT STORY LINKS, PULL TO CLOSE FROM A LINK, ONE SHARE SHEET.
+            THIS BUILD (870): VIDEO REPOST FIXES.
+            Reposting a video no longer freezes the app: the clip already on the phone is used, in the background. The creator's name and photo on a posted video repost are the right way up and at the top (text and drawing on any edited video were upside down too; fixed). Tapping the creator's name on a full-screen repost no longer crashes.
+            STILL OPEN: in the repost editor the creator's name and photo may not show on a video card. A screen recording of the editor opening helps.
+            PLEASE TEST: repost a video (how fast the editor opens); post it as a card and as full screen; tap the creator's name; add text to a normal video and post.
+
+            EARLIER (869): SHORT STORY LINKS, PULL TO CLOSE FROM A LINK, ONE SHARE SHEET.
             Story links are short for older stories too (22 characters instead of the long id). A story opened from a link's View Story closes when you pull it down. Share on a story (the ... menu and Posted Stories' hold menu) opens the app's own share sheet: the chats to send it to and Copy Link; a story sent to a chat arrives with its card. Copy Story Link is removed from both menus.
             PLEASE TEST: share an older story and look at the link; open it from View Story and pull down; Share > pick a chat; Share > Copy Link.
 
