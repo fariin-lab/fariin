@@ -1399,6 +1399,12 @@ struct StoryViewersSheet: UIViewRepresentable {
                 await MainActor.run {
                     guard let self else { return }
                     self.tasks[id] = nil
+                    // A failed read with nothing held is NOT "No views yet": keep the spinner and
+                    // ask again shortly, for as long as this story is one of the three on screen.
+                    if people == nil, StoryViewerListCache.get(id) == nil {
+                        self.retryLater(id)
+                        return
+                    }
                     self.view?.setLoading(false, for: id)
                     // ⚠️ A FAILED READ IS NEVER REMEMBERED, AND THAT IS HIS "No views yet" UNDER A
                     // CARD READING ONE VIEW.
@@ -1427,8 +1433,20 @@ struct StoryViewersSheet: UIViewRepresentable {
             let first = lastTick == nil
             lastTick = tick
             // The first tick is the listener attaching, which tells us nothing we did not just fetch.
-            guard !first, !active.isEmpty, StoryViewerListCache.get(active) != nil else { return }
+            // No held list is no reason to skip: a first read that failed is exactly when a moved
+            // count should make it ask again.
+            guard !first, !active.isEmpty else { return }
             scheduleRefresh(active)
+        }
+
+        /// A failed first read, asked again every 3 seconds while the story is still on screen.
+        private func retryLater(_ id: String) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.view != nil,
+                      [self.activeId, self.prevId, self.nextId].contains(id),
+                      self.tasks[id] == nil, StoryViewerListCache.get(id) == nil else { return }
+                self.fill(id)
+            }
         }
         private var lastTick: Int?
 

@@ -2173,11 +2173,15 @@ final class StoriesService {
         // sort below), so the cap only drops the oldest names past the first 500; the COUNT on the
         // card comes from `meta/views`, not from this list, and stays the true total. Every receipt
         // write sets `viewedAt`, so ordering by it leaves none out.
+        // ⚠️ SERVER ONLY (2026-10-11, his "one view but No views yet" on plane wifi). The default
+        // source falls back to the phone's cached copy of this query when the network is down, and
+        // that copy was saved before anybody had watched, so it answered an empty list as if it were
+        // true, beside a count that was right. Offline is now nil, which the sheet retries.
         guard let snap = try? await db.collection("stories").document(storyId)
             .collection("views")
             .order(by: "viewedAt", descending: true)
             .limit(to: Self.viewerListCap)
-            .getDocuments() else { return nil }
+            .getDocuments(source: .server) else { return nil }
         let docs = snap.documents
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         return docs.map { d in
