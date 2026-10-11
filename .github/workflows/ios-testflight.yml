@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (873): VIEW ONCE IN POSTED STORIES.
+            THIS BUILD (874): STORY SWIPE, PHOTO REPOST ZOOM, PROFILE FREEZE.
+            Swiping between people follows your finger from the first frame and keeps moving the instant you let go (taps unchanged). A photo repost card can no longer be pinched smaller than the screen, which showed a second blurred box. Opening a profile from a story no longer risks freezing the Stories page.
+            STILL OPEN: video repost editor (no author face and name, picture frozen while the sound plays) and photo repost tap to full screen. A screen recording helps.
+            PLEASE TEST: swipe slowly and quickly between people, let go halfway; repost a photo and pinch it; open a profile from a story, then open another story.
+
+            EARLIER (873): VIEW ONCE IN POSTED STORIES.
             Posted Stories puts your View once stories in their own View once folder, and the filter menu has a View once option. There is one My Chats folder instead of two. The Stories headings (My Story, Recent, Viewed, Hidden) are a softer white.
             PLEASE TEST: post a View once story, open Posted Stories, look at All and at the View once filter.
 
