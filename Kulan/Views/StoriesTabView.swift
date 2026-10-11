@@ -301,6 +301,8 @@ struct StoriesTabView: View {
                                onProfile: { g in profileGroup = g },
                                onOpenUploading: { openUploadingStory() },
                                onPostedStories: { g in path.append(GlowRoute.postedStories(g.name)) })
+                    } else if AppFeatures.storyList {
+                        friendsList()   // owner 2026-10-11; the grid below is kept whole
                     } else {
                         friendsGrid()
                     }
@@ -649,6 +651,58 @@ struct StoriesTabView: View {
             .glowCardLongPress { friendsGridTarget(at: $0) }
         }
         .padding(.top, 4)
+    }
+
+    /// FRIENDS AS A LIST — owner, 2026-10-11, the layout on his screenshot. See `StoryListRow`.
+    /// Same doors as the grid: a tap opens the story, a hold opens the same menu, the camera on my
+    /// own row opens the composer. The picture registers under the group's id, so the morph and the
+    /// hold find it exactly as they find a grid card.
+    @ViewBuilder private func friendsList() -> some View {
+        let groups = visibleFriends
+        VStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+            if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
+                Button { openStoryFromRow(mine) } label: {
+                    StoryListRow(thumbUrl: newest.thumbUrl.isEmpty ? newest.mediaUrl : newest.thumbUrl,
+                                 blurThumb: newest.blurThumb,
+                                 title: "My Story",
+                                 subtitle: StoryListRow.ago(newest.createdAt),
+                                 rectKey: mine.id,
+                                 onCamera: { composeStory() })
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button { composeStory() } label: {
+                    StoryListRow(thumbUrl: "", title: "Add Story",
+                                 subtitle: "Disappears after 24 hours",
+                                 onCamera: { composeStory() })
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !groups.isEmpty {
+                Text("Recent updates")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, StoryListRow.margin)
+                    .padding(.top, 4)
+                    .padding(.bottom, -8)
+            }
+            LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+                ForEach(groups) { g in
+                    Button { openStoryFromRow(g) } label: {
+                        StoryListRow(thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
+                                     blurThumb: g.stories.last?.blurThumb ?? "",
+                                     title: g.name,
+                                     subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                                     rectKey: g.id)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 24)
+        .glowCardLongPress { friendsGridTarget(at: $0, corner: StoryListRow.corner) }
     }
 
     // MARK: - Glow

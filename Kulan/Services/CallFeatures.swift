@@ -27,4 +27,7 @@ enum AppFeatures {
     static let glow = false
     /// Insights: the Insights card on My Profile, the only way into the Insights page.
     static let insights = false
+    /// Stories tab layout (owner 2026-10-11): true = one person per row (`StoryListRow`), false =
+    /// the original two-column card grid, kept whole.
+    static let storyList = true
 }
