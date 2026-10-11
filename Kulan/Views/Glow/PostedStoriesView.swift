@@ -301,31 +301,33 @@ struct PostedStoriesView: View {
                 // His order is unchanged — Share, the count, Delete — and `Spacer()` between items
                 // is how a toolbar group is told to push them apart.
                 if isMe, editing {
-                    ToolbarItemGroup(placement: .bottomBar) {
+                    ToolbarItem(placement: .bottomBar) {
                         Button { shareSelected() } label: {
                             Image(systemName: "square.and.arrow.up")
                         }
                         .disabled(selected.isEmpty || deleting)
-                        Spacer()
-                        // ⛔ ONE WIDTH, WHATEVER IT SAYS — owner, 2026-09-11, with the pill ringed:
-                        // "selected button fix width size". On iOS 26 a bottom-bar item is drawn in
-                        // its own glass capsule sized to its content, so this one grew and shrank
-                        // as the words changed: "Select Stories" is the widest thing it ever says,
-                        // "1 Selected" much narrower, and every tick on a tile resized the capsule
-                        // between two round buttons that never move.
-                        //
-                        // ⚠️ THE WIDEST LABEL RESERVES THE ROOM, rather than a number I pick. A
-                        // `ZStack` takes the size of its largest child, so the hidden copy of the
-                        // longest state sets the width once and the visible line is centred in it.
-                        // A typed width would be measured at one text size and wrong at every
-                        // other; this is correct at all of them, including Larger Text.
+                    }
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    // ⛔ PLAIN TEXT, NOT A BUTTON (owner, 2026-10-11: "the selected count looks too
+                    // small, use Apple's size"). In one group with the two buttons, iOS 26 drew the
+                    // label in a round glass button of its own and squeezed it to "Se-lec…". Photos'
+                    // select bar is the model: the count as plain 17pt semibold text with no
+                    // background, at its full width, between the two round buttons.
+                    // The widest label still reserves the room (see the note it replaces), so the
+                    // buttons do not move as the count changes.
+                    ToolbarItem(placement: .bottomBar) {
                         ZStack {
                             Text("Select Stories").hidden()
                             Text(selected.isEmpty ? "Select Stories" : "\(selected.count) Selected")
                                 .foregroundStyle(selected.isEmpty ? .secondary : .primary)
                         }
-                        .font(.subheadline.weight(.semibold))
-                        Spacer()
+                        .font(.headline)
+                        .lineLimit(1)
+                        .fixedSize()
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
                         Button { confirmDelete = true } label: {
                             if deleting { ProgressView() }
                             else { Image(systemName: "trash") }
