@@ -1651,15 +1651,18 @@ struct StoryEditorView: View {
                                   guard items.indices.contains(next) else { return }
                                   captionFocused = false
                                   withAnimation(.snappy(duration: 0.22)) { select(next) }
-                              })
+                              },
+                              topOverlay: (repostVideoCard && isRepostVideo)
+                                  ? AnyView(RepostCardFrame(canvas: card, clip: repostClipRect(in: card),
+                                                            top: canvasColours.top,
+                                                            bottom: canvasColours.bottom,
+                                                            name: repostOf?.authorName ?? "",
+                                                            avatar: repostAvatar))
+                                  : nil)
                 .frame(width: card.width, height: card.height)
 
-            if repostVideoCard, isRepostVideo {
-                RepostCardFrame(canvas: card, clip: repostClipRect(in: card),
-                                top: canvasColours.top, bottom: canvasColours.bottom,
-                                name: repostOf?.authorName ?? "", avatar: repostAvatar)
-                    .transition(.opacity)
-            }
+            // The video repost's card frame is drawn INSIDE the zoomable view now, above the clip
+            // — see `ZoomableImageView.topOverlay`.
 
             videoMark
 
@@ -4934,6 +4937,11 @@ struct ZoomableImageView: UIViewRepresentable {
     /// It belongs HERE and not on a SwiftUI gesture over the top, because this view's own pan
     /// recogniser is what was eating the swipe. Nothing to do with the strip.
     var onSwipe: (Int) -> Void = { _ in }
+    /// Drawn ABOVE the clip, inside this same UIKit view (the video repost's card frame and author
+    /// chip). As a SwiftUI sibling it was hidden under the video (owner, 2026-10-11: "before Next
+    /// the name and avatar are not showing"); here the order is the subview order and cannot lose.
+    /// It does not move with the pinch: only the picture and the clip are transformed.
+    var topOverlay: AnyView? = nil
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -4971,6 +4979,15 @@ struct ZoomableImageView: UIViewRepresentable {
         ])
         clip.setPlayer(player)
         clip.isHidden = player == nil
+
+        let overlay = UIHostingController(rootView: topOverlay ?? AnyView(EmptyView()))
+        overlay.view.backgroundColor = .clear
+        overlay.view.isUserInteractionEnabled = false
+        overlay.view.frame = container.bounds
+        overlay.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.view.isHidden = topOverlay == nil
+        container.addSubview(overlay.view)
+        context.coordinator.overlay = overlay
 
         context.coordinator.container = container
         context.coordinator.imageView = iv
@@ -5026,6 +5043,8 @@ struct ZoomableImageView: UIViewRepresentable {
         // Hidden rather than removed: a photo item has no clip and must not have an empty player
         // layer sitting over its picture, but the view stays so the constraints never rebuild.
         c.clipView?.isHidden = player == nil
+        c.overlay?.rootView = topOverlay ?? AnyView(EmptyView())
+        c.overlay?.view.isHidden = topOverlay == nil
         c.pinch?.isEnabled = interactive
         c.pan?.isEnabled = interactive
         if !c.active {   // adopt external scale/offset (e.g. a reset) only when not mid-gesture
@@ -5057,6 +5076,8 @@ struct ZoomableImageView: UIViewRepresentable {
         weak var container: UIView?
         weak var imageView: UIImageView?
         weak var clipView: StoryVideoPreviewView?
+        /// Held strongly: its view is in the container, the controller itself is not parented.
+        var overlay: UIHostingController<AnyView>?
         var pinch: UIPinchGestureRecognizer?
         var pan: UIPanGestureRecognizer?
         var curScale: CGFloat
