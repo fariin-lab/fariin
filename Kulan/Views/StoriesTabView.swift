@@ -820,6 +820,15 @@ struct StoriesTabView: View {
     /// The primary text colour at 85%, so dark mode gets a soft white and light mode a soft black.
     private static let listHeadingColor = Color.primary.opacity(0.85)
 
+    /// The friends in the order the list draws them: Recent Stories, then Viewed Stories — the same
+    /// split, held the same way (`viewedHold`), as `friendsList`.
+    private func listDisplayOrder() -> [StoryGroup] {
+        let groups = visibleFriends
+        let viewed = groups.filter { g in viewedHold.map { $0.contains(g.id) } ?? !g.hasUnseen }
+        let viewedIds = Set(viewed.map(\.id))
+        return groups.filter { !viewedIds.contains($0.id) } + viewed
+    }
+
     private func listHeading(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 17, weight: .semibold))
@@ -1386,7 +1395,15 @@ struct StoriesTabView: View {
     /// fold would republish a key with no visible card behind it and the pull-down would go dead.
     /// The page hands us its own namespaced key precisely because its cards are all on one screen.
     private func openStoryFromRow(_ g: StoryGroup, sourceKey: String? = nil) {
-        let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
+        // ⛔ THE VIEWER WALKS THE PAGE AS IT IS DRAWN — owner, 2026-10-11: from a Viewed story,
+        // "next" jumped back up into the unseen ones, and from the last Recent one "next" ended
+        // instead of reaching the first Viewed one. The viewer was handed the repository's order,
+        // the page draws Recent then Viewed. On the list layout it now gets exactly the page:
+        // Recent top to bottom, then Viewed top to bottom, so left and right are the row above and
+        // the row below. The grid keeps the order it always had.
+        let others = AppFeatures.storyList
+            ? listDisplayOrder()
+            : StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
         StoryDoor.open(g, among: g.isMine ? [g] + others : others, from: sourceKey ?? g.id,
                        pinned: sourceKey != nil,
                        // These came out of `StoriesRepository.others`, whose query is "recipientUids
