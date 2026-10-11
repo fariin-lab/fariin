@@ -29,7 +29,7 @@ struct StoryListRow: View {
     /// The author's face on the picture's bottom-right corner, ring included.
     static let face: CGFloat = 26
     static let ring: CGFloat = 2
-    static let gap: CGFloat = 2
+    static let gap: CGFloat = 1   // owner 2026-10-11: thinner gap; face and ring unchanged
 
     let thumbUrl: String
     var blurThumb: String = ""
