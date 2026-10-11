@@ -38,7 +38,12 @@ struct KulanApp: App {
                 // main-actor isolated, which this is. Memory only and synchronous, which is what the
                 // hook asks for; a miss falls through to the old path unchanged.
                 .task {
-                    StoryPosterSource.provider = { DiskImageCache.shared.memoryImage($0) }
+                    // 2026-10-10: a Stories-page card now holds only its small copy (`StoryImage
+                    // .cardPixels`), so the open falls back to that as its first frame.
+                    StoryPosterSource.provider = {
+                        DiskImageCache.shared.memoryImage($0)
+                            ?? DiskImageCache.shared.memoryImage("\($0)#\(Int(StoryImage.cardPixels))")
+                    }
                     // ⛔ AND THE SAME CACHE FOR THE STORY HEADER'S AVATAR, for the same reason one
                     // level down. That view knew only `URLCache.shared`, which nothing else in this
                     // app writes to — so the profile picture the app had just seeded on disk when

@@ -2914,7 +2914,35 @@ final class StoriesRepository {
             // Persist the freshly built row so the NEXT cold start paints it on the first frame.
             StoryRowCache.save(uid: me, mine: mg, others: gs, profiles: self.profileCache)
             self.scheduleExpiryTick(nextExpiry)
+            self.prefetchOnArrival(gs)
         }
+    }
+
+    /// ⛔ DOWNLOAD ON ARRIVAL — 2026-10-10, his "make the stories page strong" order, the reference
+    /// app's rule (its StoryManager): when a story arrives it downloads up to THREE unwatched stories
+    /// per person, and only for about TWENTY people, in the background. Ours only warmed the first
+    /// story per person, and only from the UIKit strip, so the two-column grid (the layout in use)
+    /// warmed nothing and every card opened on a download.
+    ///
+    /// Here, in the store, it runs for every layout and every time the list changes (a new post
+    /// lands through the listener). `others` is unseen-first, so the first twenty are the people
+    /// most likely to be opened. `StoryPrefetcher` dedupes in-flight and on-disk files, keeps videos
+    /// to Wi-Fi, and stands down in Low Data Mode, so a repeat call costs nothing.
+    private var lastArrivalKey = ""
+    @MainActor private func prefetchOnArrival(_ groups: [StoryGroup]) {
+        var items: [StoryPrefetcher.Item] = []
+        for g in groups.prefix(20) where !Self.isDemoAuthor(g.authorUid) {
+            let unseen = g.stories.filter {
+                !StoryPrefs.isStorySeen($0.id) && $0.createdAt > (g.lastViewedAt ?? .distantPast)
+            }
+            for s in unseen.prefix(3) where !s.mediaUrl.isEmpty {
+                items.append(.init(media: s.mediaUrl, poster: s.previewUrl, isVideo: s.isVideo))
+            }
+        }
+        let key = items.map(\.media).joined(separator: "|")
+        guard key != lastArrivalKey else { return }
+        lastArrivalKey = key
+        StoryPrefetcher.prefetchFirsts(items, mediaDepth: items.count)
     }
 
     // A story crossing its 24h mark changes nothing in the database, so no listener fires —

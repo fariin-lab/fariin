@@ -33,6 +33,21 @@ enum StoryDiskCache {
     }
 }
 
+/// THE VIEWER'S PHOTO BYTES, OPEN TO THE APP — 2026-10-10. The Stories page cards kept their own
+/// copy in `DiskImageCache` while the viewer kept this one, so one story photo was downloaded twice:
+/// once for the card, again on open. The card now reads from here first and writes here after a
+/// download, so either side's download serves both. Synchronous file IO: call it off the main thread.
+public enum StoryBytes {
+    public static func data(for urlString: String) -> Data? {
+        guard let url = URL(string: urlString), !urlString.isEmpty else { return nil }
+        return try? Data(contentsOf: StoryDiskCache.path(url))
+    }
+    public static func store(_ data: Data, for urlString: String) {
+        guard let url = URL(string: urlString), !urlString.isEmpty, !data.isEmpty else { return }
+        StoryDiskCache.store(data, for: url)
+    }
+}
+
 /// DECODED IMAGES, IN MEMORY, ABOVE THE DISK.
 ///
 /// The "instant" disk path was not instant. `StoryDiskCache.image` does `Data(contentsOf:)` and then

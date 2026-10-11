@@ -140,6 +140,8 @@ struct GlowStoryCardView: View {
     static let badgeStrokeRatio: CGFloat = 1.5 / 16.0
 
     let thumbUrl: String
+    /// The story's ~30px cover from its own document, drawn blurred until the picture lands.
+    var blurThumb: String = ""
     let name: String
     let authorPhoto: String?
     /// Draws the small ⊕ on the face, which marks YOUR OWN card — his reference has it on My Story
@@ -239,10 +241,11 @@ struct GlowStoryCardView: View {
     }
 
     init(thumbUrl: String, name: String, authorPhoto: String?, isMine: Bool = false,
-         isAdd: Bool = false, seen: Bool = false,
+         isAdd: Bool = false, blurThumb: String = "", seen: Bool = false,
          rectKey: String? = nil, corner: CGFloat = GlowStoryCardView.corner,
          onAvatarTap: (() -> Void)? = nil) {
         self.thumbUrl = thumbUrl
+        self.blurThumb = blurThumb
         self.name = name
         self.authorPhoto = authorPhoto
         self.isMine = isMine
@@ -260,6 +263,7 @@ struct GlowStoryCardView: View {
         // there stands for several stories at once.
         self.init(thumbUrl: card.story.thumbUrl, name: card.person.name,
                   authorPhoto: card.person.photoUrl,
+                  blurThumb: card.story.blurThumb,
                   seen: StoryPrefs.isStorySeen(card.story.id),
                   rectKey: rectKey, onAvatarTap: onAvatarTap)
     }
@@ -273,7 +277,7 @@ struct GlowStoryCardView: View {
             // `isAdd`. It has his face, though, which is what `AddStoryFace` puts there; with no
             // photo it falls back to the same fill the Glowing grid waits behind, so the two still
             // read as one family.
-            .overlay { if isAdd { AddStoryFace(photoUrl: authorPhoto) } else { StoryImage(url: thumbUrl) } }
+            .overlay { if isAdd { AddStoryFace(photoUrl: authorPhoto) } else { StoryImage(url: thumbUrl, maxPixels: StoryImage.cardPixels, blurThumb: blurThumb) } }
             .overlay(alignment: .bottom) {
                 // The name has to survive a bright photograph, and a scrim is what does that
                 // without dimming the whole card — the same trick the story caption uses.

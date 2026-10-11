@@ -3,6 +3,7 @@ import PhotosUI
 import Photos
 import UIKit
 import CoreImage
+import ImageIO
 import StoryUI
 
 // ⛔ TWENTY ARCS, AND NOT ONE MORE — and the reason a 29-story ring vanished entirely.
@@ -152,11 +153,30 @@ struct StoryImage: View {
     /// Memory only, never the disk: this runs during a gesture and `AvatarView`'s synchronous disk
     /// read is licensed by avatars being a few KB. A story is a full-screen photo. A miss simply
     /// falls through to `load()` as before.
-    init(url: String, fitCanvas: Bool = false, cardFillThreshold: CGFloat? = nil) {
+    /// ⛔ A SMALL COPY FOR A CARD — 2026-10-10, his "make the stories page strong" order. A card
+    /// drew the full story photo, decoded up to 2048px (about 9 MB of memory each), to fill a card
+    /// about 560 x 860 pixels. The reference app's list draws a small thumbnail it makes on the phone
+    /// and keeps those in memory. Set, this decodes the photo down to `maxPixels` on its longest side
+    /// and caches that copy under its own key, so the viewer's full-size copy is untouched.
+    var maxPixels: CGFloat? = nil
+    /// The card size: longest side of a two-column card's picture at 3x, with room for the fill crop.
+    nonisolated static let cardPixels: CGFloat = 1000
+    private var cacheKey: String { maxPixels.map { "\(url)#\(Int($0))" } ?? url }
+
+    /// ⛔ THE STORY'S OWN BLURRED COVER WHILE IT LOADS — 2026-10-10, same order. Every story already
+    /// carries `blurThumb` (a ~30px JPEG in its document) and the viewer draws it; the Stories page
+    /// card ignored it and showed a grey shimmer. The reference app's list does the same: a blurred
+    /// preview first, the picture over it. Decoded once here; nil keeps the shimmer.
+    private let cover: UIImage?
+
+    init(url: String, fitCanvas: Bool = false, cardFillThreshold: CGFloat? = nil,
+         maxPixels: CGFloat? = nil, blurThumb: String = "") {
         self.url = url
         self.fitCanvas = fitCanvas
         self.cardFillThreshold = cardFillThreshold
-        if let warm = DiskImageCache.shared.memoryImage(url) {
+        self.maxPixels = maxPixels
+        self.cover = blurThumb.isEmpty ? nil : Data(base64Encoded: blurThumb).flatMap(UIImage.init(data:))
+        if let warm = DiskImageCache.shared.memoryImage(maxPixels.map { "\(url)#\(Int($0))" } ?? url) {
             _image = State(initialValue: warm)
             // Seed the canvas in the SAME breath as the photo. If it were left to `apply` the card
             // would draw one frame of photo-on-black before the gradient arrived, and one frame of
@@ -237,7 +257,15 @@ struct StoryImage: View {
                 // reasoning as the composer's segmented control, which pins its trait rather than
                 // hardcoding colours. Pinned here rather than in `SkeletonFill`, which is shared with
                 // the chat and call lists where the light shimmer is correct.
-                SkeletonFill().environment(\.colorScheme, .dark)
+                if let cover {
+                    // Inside a `Color.clear` overlay so the fill cannot report an oversized layout
+                    // (the same rule as the photo above); the blur hides the 30px source.
+                    Color.clear
+                        .overlay(Image(uiImage: cover).resizable().scaledToFill().blur(radius: 14, opaque: true))
+                        .clipped()
+                } else {
+                    SkeletonFill().environment(\.colorScheme, .dark)
+                }
             }
         }
         .animation(.easeOut(duration: 0.25), value: image != nil)   // fade in when loaded
@@ -305,8 +333,22 @@ struct StoryImage: View {
     }
 
     @MainActor private func load() async {
-        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
+        let key = cacheKey
+        if let cached = await DiskImageCache.shared.image(for: key) { await apply(cached); return }
         guard let u = URL(string: url), !url.isEmpty else { return }
+        // ONE DOWNLOAD SERVES BOTH CACHES — see `StoryBytes`. Bytes already on this phone (the
+        // viewer's copy, or the full-size card copy) are decoded instead of fetched again.
+        let src = url, small = maxPixels
+        if let (local, bytes) = await Task.detached(priority: .userInitiated, operation: { () -> (UIImage, Data)? in
+            guard let d = StoryBytes.data(for: src) ?? DiskImageCache.shared.bytesSync(src),
+                  let img = Self.decode(d, maxPixels: small) else { return nil }
+            return (img, d)
+        }).value {
+            // The small copy is re-encoded (a few hundred KB); a full-size one keeps its own bytes.
+            DiskImageCache.shared.store(local, data: small == nil ? bytes : nil, for: key)
+            await apply(local)
+            return
+        }
         // Retry with backoff so a card never gets stuck on a black placeholder. The two reported
         // failures — "sometimes a black image" and "after updating the app I can't see my story" —
         // are both a single failed fetch (a network blip, or a cold disk cache after a fresh
@@ -316,14 +358,42 @@ struct StoryImage: View {
         for delay in delays {
             if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
             if Task.isCancelled { return }
-            if let (data, _) = try? await MediaSession.shared.data(from: u), let img = UIImage(data: data) {
+            if let (data, _) = try? await MediaSession.shared.data(from: u) {
+                if let small {
+                    // Card: keep the full bytes in the viewer's cache so opening the story needs no
+                    // second download, and only the small decoded copy in this one.
+                    guard let img = await Task.detached(priority: .userInitiated, operation: {
+                        Self.decode(data, maxPixels: small)
+                    }).value else { continue }
+                    Task.detached(priority: .utility) { StoryBytes.store(data, for: src) }
+                    DiskImageCache.shared.store(img, data: nil, for: key)
+                    await apply(img)
+                    return
+                }
+                guard let img = UIImage(data: data) else { continue }
                 DiskImageCache.shared.store(img, data: data, for: url)
+                Task.detached(priority: .utility) { StoryBytes.store(data, for: src) }
                 await apply(img)
                 return
             }
         }
         // Still failing after all attempts (rare for a live story URL) — leave the skeleton up
         // rather than the old black card; a repo reload with a fresh URL retriggers this task.
+    }
+
+    /// Off-main decode. With `maxPixels`, ImageIO decodes straight to the small size (the full
+    /// bitmap is never made); without it, the plain decode the full-size path always used.
+    nonisolated static func decode(_ data: Data, maxPixels: CGFloat?) -> UIImage? {
+        guard let maxPixels else { return UIImage(data: data)?.preparingForDisplay() ?? UIImage(data: data) }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     @MainActor private func apply(_ img: UIImage) async {

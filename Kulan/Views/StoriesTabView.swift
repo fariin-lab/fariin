@@ -350,6 +350,7 @@ struct StoriesTabView: View {
                                         thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                                         name: g.name,
                                         authorPhoto: g.photoUrl,
+                                        blurThumb: g.stories.last?.blurThumb ?? "",
                                         seen: !g.hasUnseen,
                                         rectKey: g.id)
                                 }
@@ -594,6 +595,7 @@ struct StoriesTabView: View {
                                           name: "My Story",
                                           authorPhoto: profile.me?.photoUrl,
                                           isMine: true,
+                                          blurThumb: newest.blurThumb,
                                           seen: !mine.hasUnseen,
                                           rectKey: mine.id,
                                           // ⛔ THE + ADDS A STORY — owner, 2026-10-10: tapping the
@@ -632,6 +634,7 @@ struct StoriesTabView: View {
                             thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                             name: g.name,
                             authorPhoto: g.photoUrl,
+                            blurThumb: g.stories.last?.blurThumb ?? "",
                             seen: !g.hasUnseen,
                             rectKey: g.id)
                     }
@@ -812,6 +815,7 @@ struct StoriesTabView: View {
                                 thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                                 name: g.name,
                                 authorPhoto: g.photoUrl,
+                                blurThumb: g.stories.last?.blurThumb ?? "",
                                 seen: !g.hasUnseen,
                                 rectKey: key,
                                 corner: StoryTileGrid.corner)
