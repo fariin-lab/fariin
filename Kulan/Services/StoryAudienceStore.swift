@@ -315,7 +315,11 @@ final class StoryAudienceStore {
     /// ⚠️ He has a CUSTOM list literally named "Glowers" from before this existed (his 2026-09-02
     /// screenshot of the share sheet). This does not touch it: it is a different id and a different
     /// kind, so the two can sit in the same sheet. Tell him to delete his by hand if he wants to.
-    var all: [StoryAudience] { [everyone, myFriends, glowers] + custom }
+    ///
+    /// ⛔ HIDDEN WITH GLOW — owner, 2026-10-11, Glowers still showing in Story privacy and Share
+    /// Story. Left out of `all`, so `audience(id:)` cannot find it and a saved Glowers choice falls
+    /// back to My Friends through `selected`, the same path as a deleted list.
+    var all: [StoryAudience] { (AppFeatures.glow ? [everyone, myFriends, glowers] : [everyone, myFriends]) + custom }
 
     func audience(id: String) -> StoryAudience? { all.first { $0.id == id } }
 
