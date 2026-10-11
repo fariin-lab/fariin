@@ -11,7 +11,7 @@ import SwiftUI
 /// smaller picture; he said by name not to shrink to it. Measured off his screenshot at 63×91, then
 /// "add 2" (2026-10-11 second pass) → 65×93.
 struct StoryListRow: View {
-    static let thumbSize = CGSize(width: 69, height: 97)   // owner 2026-10-11: +4 more
+    static let thumbSize = CGSize(width: 56, height: 84)   // owner 2026-10-11: the reference app's exact size (MyStoriesViewController 56x84); fill/zoom unchanged
     /// ⛔ 14, CONTINUOUS — owner, 2026-10-11: "corners not smooth, use iOS 26 Apple corners". The
     /// continuous (squircle) curve at a slightly larger radius, the shape the system draws.
     static let corner: CGFloat = 14
