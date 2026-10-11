@@ -157,16 +157,20 @@ struct StoryListRow: View {
                     .offset(x: 2, y: 2)
             }
             thumb
-            // ⛔ THE FACE IS PART OF THE SOURCE — owner, 2026-10-11: with a story open, the picture
-            // left its row but the face stayed behind. The old strip kept its face circle INSIDE the
-            // box it hid for the flight (`StoryRowUIView.heroBox`, hidden by `applyVisibility`), so
-            // the two always left and came back together; this does the same. An offset is drawing
-            // only, so the reported frame is still exactly the picture's.
-            if addBadge { plusBadge.offset(x: 6, y: 6) }
-            else if showsFace { faceView.offset(x: 7, y: 5) }
           }
           .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
           .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow, cornerRadius: Self.corner))
+            // ⛔ THE FACE STEPS ASIDE WITH THE PICTURE, AND STAYS WHERE IT IS — owner, 2026-10-11:
+            // with a story open the picture left its row but the face stayed behind; and "keep the
+            // face exactly where it is, hide it on open, bring it back on close with the picture".
+            // Same rule the old strip kept (`StoryRowUIView.applyVisibility` hid the face with the
+            // picture), done by listening to the SAME hide signal the picture listens to, so the two
+            // leave and return on the same frame, and nothing is moved or re-parented.
+            Group {
+                if addBadge { plusBadge.offset(x: 6, y: 6) }
+                else if showsFace { faceView.offset(x: 7, y: 5) }
+            }
+            .modifier(HidesWithSource(id: rectKey ?? ""))
         }
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
     }
@@ -266,5 +270,22 @@ struct StoryListRow: View {
         if s < 3600 { return "\(s / 60)m ago" }
         if s < 86_400 { return "\(s / 3600)h ago" }
         return "\(s / 86_400)d ago"
+    }
+}
+
+/// The picture's hide, for something that is not the picture: invisible exactly while the source
+/// keyed `id` is hidden for a flight or a lift (`MediaSourceVisibility`), the same test and the same
+/// instant `MediaRectReporter` applies to the picture itself. Draws nothing and reports nothing.
+private struct HidesWithSource: ViewModifier {
+    let id: String
+    @State private var isHidden = false
+    private var key: String { MediaOpenRects.key(.storyRow, id) }
+    func body(content: Content) -> some View {
+        content
+            .opacity(isHidden ? 0 : 1)
+            .onReceive(MediaSourceVisibility.shared.hiddenIdPublisher) { current in
+                let now = !id.isEmpty && current == key
+                if isHidden != now { isHidden = now }
+            }
     }
 }
