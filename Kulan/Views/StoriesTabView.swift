@@ -1582,7 +1582,10 @@ struct StoriesTabView: View {
         // Audit #14, the reference app's rule on the list layout: My Story opens alone.
         // A hidden person's story walks the Hidden Stories list, not the page above it.
         let isHiddenRow = AppFeatures.storyList && !g.isMine && StoryPrefs.isHidden(g.authorUid)
-        let among: [StoryGroup] = g.isMine ? (AppFeatures.storyList ? [g] : [g] + others)
+        // ⛔ MY STORY LEADS INTO EVERYONE ELSE (owner, 2026-10-11: "when I am on my story and swipe
+        // to the next person, it does not work"). Audit #14 had My Story open alone; he wants the
+        // swipe to carry on to the page below it, as the grid always did.
+        let among: [StoryGroup] = g.isMine ? [g] + others
                                            : (isHiddenRow ? hiddenFriends : others)
         StoryDoor.open(g, among: among, from: sourceKey ?? g.id,
                        pinned: sourceKey != nil,
