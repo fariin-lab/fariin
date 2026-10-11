@@ -30,7 +30,11 @@ struct GlowStoryCardView: View {
     /// the name and the face sit. Both were checked against the arc rather than assumed: the face's
     /// nearest point lands 24 from the corner's centre against a 34 radius, and the name's padding
     /// went to 14 below to keep the same clearance on its side.
-    static let corner: CGFloat = 34
+    ///
+    /// ⛔ 24, THE POSTED STORIES CORNER — owner, 2026-10-10: "use exactly the same card dimensions
+    /// and corner styling as the Posted Stories cards", two cards per row kept. Read from
+    /// `StoryTileGrid` so the two grids cannot drift again. This reverses the 34 above.
+    static let corner: CGFloat = StoryTileGrid.corner
     /// ⛔ 20 AND 16, MEASURED OFF HIS REFERENCE — owner, 2026-09-02: "the corners are correct now,
     /// don't touch them, only fix the height and width, make it exactly like image 2".
     ///
@@ -47,8 +51,14 @@ struct GlowStoryCardView: View {
     ///
     /// ⚠️ NOT copied by reference from `StoryRowMetrics`. That enum is `@MainActor` and these are
     /// plain statics; naming the source in writing is what keeps them honest.
-    static let gutter: CGFloat = 16
-    static let margin: CGFloat = 20
+    ///
+    /// ⛔ 6 AND 12, THE POSTED STORIES GAPS — owner, 2026-10-10, same order as the corner above. He
+    /// chose "two cards fill the row": the Posted card is 131pt wide on three columns, so two of
+    /// them would leave a third of the row empty. The shape (aspect 0.655) was already the same;
+    /// the cards now take the Posted page's edge and gap and grow to fill two columns.
+    /// `StoryRowMetrics.hPad` (the friends strip) was NOT moved; he asked for the cards only.
+    static let gutter: CGFloat = StoryTileGrid.gap
+    static let margin: CGFloat = StoryTileGrid.margin
     /// ⛔ 48, HIS NUMBER — owner, 2026-09-02, after ringing the face on these cards three separate
     /// times: "make it 48". It was 40. 48 is the same diameter the story ring wears on a chat list
     /// row, so the face reads at one size wherever the app draws a person with a live story.
