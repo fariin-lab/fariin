@@ -58,8 +58,18 @@ struct MainShell: View {
     // Missed-call badge on the Calls tab: incoming missed calls newer
     // than the last time the tab was viewed. Local-only "seen" watermark.
     @AppStorage("callsSeenAt") private var callsSeenAt: Double = 0
+    /// ⛔ AND THE MISSED CALLS ACTUALLY SEEN, BY ID — owner, 2026-10-11: "after I viewed that
+    /// missed call, the next missed call badges all the old ones too". The time watermark alone
+    /// trusted every row's date to sit still and to sort against the newest row loaded; a row whose
+    /// date moved past the mark came back as new. A missed call that was on screen in the Calls tab
+    /// is remembered by its id and never counts again, whatever its date does. Newest 300 kept.
+    @AppStorage("callsSeenIds") private var callsSeenIdsRaw: String = ""
+    private var callsSeenIds: Set<String> { Set(callsSeenIdsRaw.split(separator: ",").map(String.init)) }
     private var missedBadge: Int {
-        callsRepo.calls.filter { $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt }.count
+        let seen = callsSeenIds
+        return callsRepo.calls.filter {
+            $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt && !seen.contains($0.id)
+        }.count
     }
     /// audit M-089, 2026-10-07: the badge only refreshed on my own calls (the history has no
     /// listener), so a call missed while the app slept never badged until a relaunch.
@@ -69,6 +79,15 @@ struct MainShell: View {
     /// arrived meanwhile (its row is dated when it rang, earlier than now) was born already seen and
     /// never badged. Only moves forward.
     private func markCallsSeen() {
+        let missed = callsRepo.calls.filter(\.missedIncoming).map(\.id)
+        if !missed.isEmpty {
+            var ids = callsSeenIdsRaw.split(separator: ",").map(String.init)
+            let have = Set(ids)
+            ids += missed.filter { !have.contains($0) }
+            if ids.count > 300 { ids.removeFirst(ids.count - 300) }
+            let raw = ids.joined(separator: ",")
+            if raw != callsSeenIdsRaw { callsSeenIdsRaw = raw }
+        }
         guard let newest = callsRepo.calls.first?.date.timeIntervalSince1970, newest > callsSeenAt else { return }
         callsSeenAt = newest
     }

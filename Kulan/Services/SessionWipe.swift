@@ -256,7 +256,7 @@ enum SessionWipe {
             // account this one's burn list.
             "seenStoryItems.at", "likedStories.at", "oneTimeUsed.at",
             // misc account-scoped state
-            "defaultDisappearSeconds", "callsSeenAt",
+            "defaultDisappearSeconds", "callsSeenAt", "callsSeenIds",
         ]
         for k in exact { d.removeObject(forKey: k) }
         HiddenMessages.clear()   // stored key + its in-memory mirror
