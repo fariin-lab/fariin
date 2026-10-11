@@ -4674,7 +4674,13 @@ struct StoryViewer: View {
             let avatar: UIImage? = if let photo, !photo.isEmpty {
                 await DiskImageCache.shared.image(for: photo)
             } else { nil }
-            let card = image.map { RepostCard.render($0, name: authorName, avatar: avatar) }
+            // ⚠️ DRAWN OFF THE MAIN THREAD (owner, 2026-10-11: "Repost freezes"). The card is a
+            // 1080x1920 render with a 40pt blurred shadow and a colour sample of the whole picture;
+            // on the main thread it froze the screen between the tap and the composer. Image
+            // rendering is safe off the main thread; the result is the same picture.
+            let card: UIImage? = await Task.detached(priority: .userInitiated) {
+                image.map { RepostCard.render($0, name: authorName, avatar: avatar) }
+            }.value
             await MainActor.run {
                 repostLoading = false
                 guard let card else {
@@ -4831,13 +4837,15 @@ struct StoryViewer: View {
         guard !url.isEmpty else { return nil }
         if let m = DiskImageCache.shared.memoryImage(url) { return m }
         if let d = await DiskImageCache.shared.image(for: url) { return d }
-        let data: Data? = await Task.detached(priority: .userInitiated) { () -> Data? in
-            if let local = StoryBytes.data(for: url) { return local }
-            guard let u = URL(string: url) else { return nil }
-            return try? await URLSession.shared.data(from: u).0
+        // ⚠️ THE DECODE IS OFF THE MAIN THREAD TOO (owner, 2026-10-11: "Repost freezes"). The
+        // bytes were read in the background and then decoded here, on the main thread: a full-size
+        // story picture is tens of milliseconds of frozen screen at the moment Repost is tapped.
+        return await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            var data = StoryBytes.data(for: url)
+            if data == nil, let u = URL(string: url) { data = try? await URLSession.shared.data(from: u).0 }
+            guard let data, let img = UIImage(data: data) else { return nil }
+            return img.preparingForDisplay() ?? img
         }.value
-        guard let data, let img = UIImage(data: data) else { return nil }
-        return img.preparingForDisplay() ?? img
     }
 
     private func saveCurrentImage(_ captured: String? = nil) {
