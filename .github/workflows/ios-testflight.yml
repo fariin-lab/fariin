@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (870): VIDEO REPOST FIXES.
+            THIS BUILD (871): STORIES LIST, HIDDEN STORIES, CALLS UNDER FOCUS, DEVICES PAGE.
+            Stories list: a Hidden Stories section (dimmed, folds); Open Profile reads View Profile; the Archive no longer shows hidden stories. My Story swipes on to the next person again. Posted Stories: folder names without a badge, plain select count. The search field keeps its grey through a back swipe. The video repost editor shows the card frame and the creator's name above the clip. A call silenced by your Focus reads "Silenced voice call · Focus mode". The My Profile card in Settings is hidden. The Devices page has a new drawn header.
+            PLEASE TEST: hide a story and find it under Hidden Stories; swipe from My Story to the next person; repost a video and look at the editor; call a phone in Focus and check its Calls tab; open Settings > Devices.
+
+            EARLIER (870): VIDEO REPOST FIXES.
             Reposting a video no longer freezes the app: the clip already on the phone is used, in the background. The creator's name and photo on a posted video repost are the right way up and at the top (text and drawing on any edited video were upside down too; fixed). Tapping the creator's name on a full-screen repost no longer crashes.
             STILL OPEN: in the repost editor the creator's name and photo may not show on a video card. A screen recording of the editor opening helps.
             PLEASE TEST: repost a video (how fast the editor opens); post it as a card and as full screen; tap the creator's name; add text to a normal video and post.
