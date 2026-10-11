@@ -3135,7 +3135,10 @@ struct StoryViewer: View {
             // photo is a lookup because it is only decoration — the name is what is stored — and a
             // person with no picture reachable gets the app's letter circle from their name.
             let name = r.authorName.isEmpty ? "Reposted" : r.authorName
+            // His repost mark (owner, 2026-10-11: "update everywhere"); the system glyph stays as
+            // the fallback the badge draws when an asset is missing.
             return StoryAudienceBadge(systemImage: "arrow.2.squarepath",
+                                      assetImage: "ic_repost",
                                       text: name,
                                       person: StoryAudienceBadge.Person(name: name,
                                                                         photoURL: authorPhoto(r.authorUid)),

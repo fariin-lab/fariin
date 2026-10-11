@@ -244,7 +244,14 @@ final class StoryRowCountView: UIView {
         // reading — a red heart made the number look like an alert rather than a count, and it was
         // the only coloured mark on a strip that is otherwise white over a photograph.
         heart.tintColor = .white
-        repost.image = UIImage(systemName: "arrow.2.squarepath", withConfiguration: symbol)
+        // His repost mark (owner, 2026-10-11: "update everywhere"). Drawn at 18pt, the width the
+        // 15pt bold eye and heart beside it come out at, because these icons sit at their own size
+        // (`.center`) and the asset's own is 24.
+        repost.image = UIImage(named: "ic_repost").map { img in
+            UIGraphicsImageRenderer(size: CGSize(width: 18, height: 18)).image { _ in
+                img.draw(in: CGRect(x: 0, y: 0, width: 18, height: 18))
+            }.withRenderingMode(.alwaysTemplate)
+        } ?? UIImage(systemName: "arrow.2.squarepath", withConfiguration: symbol)
         repost.tintColor = .white
         repost.isHidden = true
         reposts.isHidden = true
