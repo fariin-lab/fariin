@@ -1239,6 +1239,8 @@ struct StoriesTabView: View {
             // settings". `StorySettingsView` is that page, the same one Settings pushes; a second
             // copy of those switches is how two screens come to disagree about one setting.
             StorySettingsView()
+                // A pushed page, not a tab: no bottom bar (owner, 2026-10-11), as Posted Stories.
+                .toolbar(.hidden, for: .tabBar)
         case .profile(let uid, let name, let photo):
             // ⛔ THE ORDINARY PROFILE FOR ANOTHER PERSON — owner, 2026-09-02: "when I click a
             // profile you're showing me Glowers and Posted stories; that's the one I see when I
