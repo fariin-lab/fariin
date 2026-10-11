@@ -52,20 +52,59 @@ extension View {
 /// colour (`tertiarySystemFill`, measured off his light-mode screenshot at 238 on white, which is
 /// exactly that fill) as a capsule with the system's continuous corner. Done once per field; the
 /// corner follows the field's height as the bar folds it.
+///
+/// ⛔ THE GREY IS A LAYER OF OURS, NOT THE FIELD'S `backgroundColor` (owner, 2026-10-11, Chats:
+/// "the search bar completely losing its grey", the field drawn black on black). The first version
+/// set `backgroundColor` once per field and never looked again. The search bar rewrites its field's
+/// background on its own updates, and once it had, nothing ever put the grey back. A sublayer at
+/// the bottom of the field is ours alone: the bar has no reason to touch it, and it is re-sized,
+/// re-coloured and re-checked on every bounds change and every light/dark change.
+/// Same colour as before: `tertiarySystemFill`, the system search field's own grey, which is also
+/// what the reference app's chat list shows, since it keeps the system field.
 enum SearchFieldFill {
     private static var key = 0
 
+    private final class Owned {
+        let fill = CALayer()
+        var watch: NSKeyValueObservation?
+        var traits: Any?
+    }
+
     static func own(_ field: UISearchTextField) {
-        guard objc_getAssociatedObject(field, &key) == nil else { return }
-        field.borderStyle = .none
-        field.backgroundColor = .tertiarySystemFill
-        field.layer.cornerCurve = .continuous
-        field.layer.cornerRadius = field.bounds.height / 2
-        field.clipsToBounds = true
-        let watch = field.layer.observe(\.bounds, options: [.new]) { layer, _ in
-            layer.cornerRadius = layer.bounds.height / 2
+        if let owned = objc_getAssociatedObject(field, &key) as? Owned {
+            apply(owned, to: field)   // asked again on every appearance: cheap, and heals anything
+            return
         }
-        objc_setAssociatedObject(field, &key, watch, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let owned = Owned()
+        owned.fill.cornerCurve = .continuous
+        owned.fill.zPosition = -1
+        field.layer.insertSublayer(owned.fill, at: 0)
+        owned.watch = field.layer.observe(\.bounds, options: [.new]) { [weak field, weak owned] _, _ in
+            guard let field, let owned else { return }
+            apply(owned, to: field)
+        }
+        if #available(iOS 17.0, *) {
+            owned.traits = field.registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+                [weak owned] (f: UISearchTextField, _: UITraitCollection) in
+                if let owned { apply(owned, to: f) }
+            }
+        }
+        objc_setAssociatedObject(field, &key, owned, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        apply(owned, to: field)
+    }
+
+    private static func apply(_ owned: Owned, to field: UISearchTextField) {
+        // The system's own background stays stood down, or its pop-time removal comes back.
+        if field.borderStyle != .none { field.borderStyle = .none }
+        if field.backgroundColor != nil { field.backgroundColor = nil }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // no implicit fade when the bar folds the field
+        owned.fill.frame = field.layer.bounds
+        owned.fill.cornerRadius = field.layer.bounds.height / 2
+        owned.fill.backgroundColor = UIColor.tertiarySystemFill
+            .resolvedColor(with: field.traitCollection).cgColor
+        if owned.fill.superlayer !== field.layer { field.layer.insertSublayer(owned.fill, at: 0) }
+        CATransaction.commit()
     }
 
     /// The search controller SwiftUI's `.searchable` installed, found from any view controller
