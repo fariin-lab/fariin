@@ -2931,7 +2931,9 @@ final class StoriesRepository {
     private var lastArrivalKey = ""
     @MainActor private func prefetchOnArrival(_ groups: [StoryGroup]) {
         var items: [StoryPrefetcher.Item] = []
-        for g in groups.prefix(20) where !Self.isDemoAuthor(g.authorUid) {
+        // Hidden people are skipped: their cards are not on the page, so nobody is about to open them.
+        let wanted = groups.filter { !Self.isDemoAuthor($0.authorUid) && !StoryPrefs.isHidden($0.authorUid) }
+        for g in wanted.prefix(20) {
             let unseen = g.stories.filter {
                 !StoryPrefs.isStorySeen($0.id) && $0.createdAt > (g.lastViewedAt ?? .distantPast)
             }
