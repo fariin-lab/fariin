@@ -75,7 +75,7 @@ jobs:
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
             THIS BUILD (866): MY STORY KEEPS ITS STACK WHILE UPLOADING.
-            While a story uploads, My Story keeps the overlapping stack: the picture being posted on top, the previous one tilted behind. No grey card, no single picture, no jump when it finishes. Posted Stories folders show their audience badge (your photo for Everyone, the orange people circle for My Chats, the folder for custom lists).
+            While a story uploads, My Story keeps the overlapping stack: the picture being posted on top, the previous one tilted behind. No grey card, no single picture, no jump when it finishes. Posted Stories folders show their audience badge (your photo for Everyone, the orange people circle for My Chats, the folder for custom lists). Select Viewers names are white again (not blue). On Name Story the keyboard comes up from the bottom, and Create is blue when it can be pressed.
             PLEASE TEST: post one picture; post two at once; post a third while the first two upload; watch My Story the whole time.
 
             EARLIER (865): THE FACE FLIES WITH THE STORY.
