@@ -61,6 +61,7 @@ struct StoriesTabView: View {
     /// Ticks once a minute so the rows' "5m ago" stays true on a page left open (audit #16).
     @State private var minuteTick = 0
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     /// The person a long press asked to hide, and the alert that asks before it happens. The strip
     /// puts up a `UIAlertController` from its own presenter; a SwiftUI grid says it this way, with
     /// the same title, the same message and the same destructive button.
@@ -201,6 +202,10 @@ struct StoriesTabView: View {
                 // the app is the better reading of the same wish, and it is the one he has now
                 // stated outright.
                 .searchable(text: $search, prompt: "Search")
+                // ⛔ THE CHATS FIX OF 2026-09-29, HERE TOO (owner, 2026-10-11: the search field's
+                // grey goes blank for the whole Back swipe). Held through the first push, as Chats
+                // does, so nothing flips when the swipe back to this page ends.
+                .toolbarColorScheme(path.count <= 1 ? colorScheme : nil, for: .navigationBar)
                 .navigationDestination(for: GlowRoute.self) { glowDestination($0) }
                 .navigationDestination(for: ChatTarget.self) { t in
                     // Same rule as the chat list's stack: the official channel is its own screen,

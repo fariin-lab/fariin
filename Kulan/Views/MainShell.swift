@@ -1086,6 +1086,10 @@ struct CallsView: View {
             .navigationDestination(item: $profileTarget) { c in
                 ContactInfoView(cid: c.cid, name: c.name, photoUrl: c.photoUrl, source: .calls)
             }
+            // ⛔ THE CHATS FIX OF 2026-09-29, HERE TOO (owner, 2026-10-11: the search field's grey
+            // goes blank for the whole Back swipe). A root that declares no scheme gets one only
+            // when the pop ENDS, and the bar redraws the field then. Declared, nothing flips.
+            .toolbarColorScheme(scheme, for: .navigationBar)
             .navigationDestination(item: $groupInfoTarget) { c in GroupCallInfoView(entry: c) }
             .navigationDestination(item: $linkTarget) { l in CallLinkDetailsView(link: l) }
             .createCallLinkFlow(isPresented: $showCreateLink)
