@@ -120,7 +120,8 @@ struct StoryListRow: View {
     private var faceView: some View {
         AvatarView(name: authorName, photoUrl: authorPhoto, size: Self.face)
             .padding(Self.gap + Self.ring)
-            .background(Circle().fill(Color(uiColor: .systemBackground)))
+            // Owner 2026-10-11: the gap is pure black in dark mode, pure white in light.
+            .background(Circle().fill(scheme == .dark ? Color.black : Color.white))
             .overlay {
                 Circle().strokeBorder(
                     seen
