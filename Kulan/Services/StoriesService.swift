@@ -749,9 +749,20 @@ final class StoriesService {
                                               // 2026-09-24 audit: and whose story it reposts, so a
                                               // resumed repost keeps its credit.
                                               repostOf: repostOf)
-            // A CARD-SIZED thumbnail, not the whole photograph: this is drawn in a small rounded
-            // rectangle in the row and nowhere else.
-            return (UIImage(data: image)?.boundedForDisplay(maxPixels: 420), ticket)
+            // The card's thumbnail is NOT made here any more — see `quick` below.
+            return (nil, ticket)
+        }
+        // ⛔ THE PICTURE FIRST, ON ITS OWN — owner, 2026-10-11: "while preparing it shows grey, show
+        // me the image I'm uploading". The thumbnail used to come out of `prep`, after the cache
+        // seed, the outbox ticket written to disk and a FULL-resolution decode, so the row stayed
+        // grey for the whole "Preparing…". ImageIO decodes straight to 420px, which is a few
+        // milliseconds, and nothing else waits on it.
+        let quick = Task.detached(priority: .userInitiated) { StoryImage.decode(image, maxPixels: 420) }
+        Task { @MainActor in
+            guard let card = await quick.value,
+                  let i = self.inFlight.firstIndex(where: { $0.id == pendingId }),
+                  self.inFlight[i].image == nil else { return }
+            self.inFlight[i].image = card
         }
         inFlight.append(pending)
         uploading = true
