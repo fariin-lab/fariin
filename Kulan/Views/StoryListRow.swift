@@ -7,28 +7,47 @@ import SwiftUI
 /// comes back by setting `AppFeatures.storyList` to false. His words: "do not delete, replace, or
 /// destroy my original design".
 ///
-/// ⚠️ THE PICTURE KEEPS HIS SIZE, ONLY THE CORNER AND THE NAME FOLLOW THE REFERENCE APP. Its list
-/// uses a much smaller picture; he said by name not to shrink to it. `thumbSize` is measured off his
-/// screenshot (148×213 px on a 924 px-wide shot of a 393 pt screen).
+/// ⚠️ THE PICTURE KEEPS HIS SIZE, ONLY THE NAME FOLLOWS THE REFERENCE APP. Its list uses a much
+/// smaller picture; he said by name not to shrink to it. Measured off his screenshot at 63×91, then
+/// "add 2" (2026-10-11 second pass) → 65×93.
 struct StoryListRow: View {
-    static let thumbSize = CGSize(width: 63, height: 91)
-    static let corner: CGFloat = 12          // the reference app's thumbnail corner
+    static let thumbSize = CGSize(width: 65, height: 93)
+    /// ⛔ 14, CONTINUOUS — owner, 2026-10-11: "corners not smooth, use iOS 26 Apple corners". The
+    /// continuous (squircle) curve at a slightly larger radius, the shape the system draws.
+    static let corner: CGFloat = 14
     static let margin: CGFloat = 20
     static let rowSpacing: CGFloat = 24
+    /// The author's face on the picture's bottom-right corner, ring included.
+    static let face: CGFloat = 26
+    static let ring: CGFloat = 2
+    static let gap: CGFloat = 2
 
     let thumbUrl: String
     var blurThumb: String = ""
     let title: String
     let subtitle: String
+    /// The face in the corner. nil photo still draws the initials face.
+    var authorName: String = ""
+    var authorPhoto: String? = nil
+    var showsFace = true
+    var seen = false
+    /// ⛔ THE STACK — owner, 2026-10-11, as the reference app draws My Story with more than one
+    /// story: the previous picture peeks out behind the newest one. Empty = no stack.
+    var backThumbUrl: String = ""
+    var backBlurThumb: String = ""
     /// The key the open/close morph and the long press look the picture up by — the group's id,
     /// the same string the grid card registers, so `openStoryFromRow` lands on it unchanged.
     var rectKey: String? = nil
     /// The camera circle on the right of my own row.
     var onCamera: (() -> Void)? = nil
 
+    @Environment(\.colorScheme) private var scheme
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: Self.corner, style: .continuous) }
+
     var body: some View {
-        HStack(spacing: 16) {
-            thumb
+        HStack(spacing: 18) {
+            thumbStack
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 17, weight: .semibold))   // the reference app's name size
@@ -56,8 +75,28 @@ struct StoryListRow: View {
         .contentShape(Rectangle())
     }
 
+    /// Back picture (if any) → front picture → face. The face hangs past the picture's corner, so
+    /// it sits OUTSIDE the rect reporter: the morph and the lift fly the picture alone.
+    private var thumbStack: some View {
+        ZStack(alignment: .bottomTrailing) {
+            if !backThumbUrl.isEmpty {
+                // The reference app's stack: same card, a little shorter, nudged left and dimmed,
+                // so it reads as "behind" rather than as a second story beside it.
+                StoryImage(url: backThumbUrl, maxPixels: StoryImage.cardPixels, blurThumb: backBlurThumb)
+                    .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+                    .overlay(Color.black.opacity(0.35))
+                    .clipShape(shape)
+                    .scaleEffect(0.88, anchor: .leading)
+                    .offset(x: -9)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+            thumb
+            if showsFace { faceView.offset(x: 7, y: 5) }
+        }
+        .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
+    }
+
     @ViewBuilder private var thumb: some View {
-        let shape = RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
         Group {
             if thumbUrl.isEmpty {
                 // No story yet: the same tile shape, holding a plus, so the row does not change
@@ -72,6 +111,23 @@ struct StoryListRow: View {
         .frame(width: Self.thumbSize.width, height: Self.thumbSize.height)
         .clipShape(shape)
         .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow, cornerRadius: Self.corner))
+    }
+
+    /// The face with the same two rings the grid card's face wears: green→blue unseen, grey seen.
+    /// A page-coloured gap between face and ring, as on the reference.
+    private var faceView: some View {
+        AvatarView(name: authorName, photoUrl: authorPhoto, size: Self.face)
+            .padding(Self.gap + Self.ring)
+            .background(Circle().fill(Color(uiColor: .systemBackground)))
+            .overlay {
+                Circle().strokeBorder(
+                    seen
+                        ? AnyShapeStyle(scheme == .dark ? Color(hex: 0x505052) : Color(hex: 0xCACACA))
+                        : AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
+                                                       startPoint: .bottomLeading, endPoint: .topTrailing)),
+                    lineWidth: seen ? 1.5 : Self.ring)
+            }
+            .allowsHitTesting(false)
     }
 
     /// "10h ago" — the wording on his screenshot.

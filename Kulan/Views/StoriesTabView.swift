@@ -666,6 +666,16 @@ struct StoriesTabView: View {
                                  blurThumb: newest.blurThumb,
                                  title: "My Story",
                                  subtitle: StoryListRow.ago(newest.createdAt),
+                                 authorName: profile.me?.name ?? "You",
+                                 authorPhoto: profile.me?.photoUrl,
+                                 seen: !mine.hasUnseen,
+                                 // The stack, once there are two or more stories.
+                                 backThumbUrl: mine.stories.count > 1
+                                     ? mine.stories[mine.stories.count - 2].thumbUrl.isEmpty
+                                         ? mine.stories[mine.stories.count - 2].mediaUrl
+                                         : mine.stories[mine.stories.count - 2].thumbUrl
+                                     : "",
+                                 backBlurThumb: mine.stories.count > 1 ? mine.stories[mine.stories.count - 2].blurThumb : "",
                                  rectKey: mine.id,
                                  onCamera: { composeStory() })
                 }
@@ -674,6 +684,9 @@ struct StoriesTabView: View {
                 Button { composeStory() } label: {
                     StoryListRow(thumbUrl: "", title: "Add Story",
                                  subtitle: "Disappears after 24 hours",
+                                 authorName: profile.me?.name ?? "You",
+                                 authorPhoto: profile.me?.photoUrl,
+                                 seen: true,
                                  onCamera: { composeStory() })
                 }
                 .buttonStyle(.plain)
@@ -694,6 +707,9 @@ struct StoriesTabView: View {
                                      blurThumb: g.stories.last?.blurThumb ?? "",
                                      title: g.name,
                                      subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                                     authorName: g.name,
+                                     authorPhoto: g.photoUrl,
+                                     seen: !g.hasUnseen,
                                      rectKey: g.id)
                     }
                     .buttonStyle(.plain)
