@@ -329,7 +329,7 @@ struct StoryPeoplePicker: View {
         } label: {
             HStack(spacing: 12) {
                 AvatarView(name: c.name, photoUrl: c.photo, size: 40)
-                Text(c.name).foregroundStyle(.primary).lineLimit(1)
+                Text(c.name).foregroundStyle(Color.primary).lineLimit(1)   // the label colour, not the button tint
                 Spacer(minLength: 8)
                 StoryTick(on: selected.contains(c.id))
             }
@@ -401,7 +401,7 @@ struct SelectViewersView: View {
                         } label: {
                             HStack(spacing: 12) {
                                 AvatarView(name: c.name, photoUrl: c.photo, size: 40)
-                                Text(c.name).foregroundStyle(.primary).lineLimit(1)
+                                Text(c.name).foregroundStyle(Color.primary).lineLimit(1)   // the label colour, not the button tint
                                 Spacer(minLength: 8)
                                 StoryTick(on: selected.contains(c.id))
                             }
