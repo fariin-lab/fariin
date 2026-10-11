@@ -302,8 +302,10 @@ struct GlowStoryCardView: View {
                     // ⛔ 13, DOWN FROM 15 — owner, 2026-09-09, with two names ringed on the Glowing
                     // grid: "now is looks big make small". Two lines of 13 is 32 points inside the
                     // 90pt scrim, so it still clears and nothing around it moves.
+                    // ⛔ 15 AGAIN — owner, 2026-10-10, names ringed on the Stories tab: "font size
+                    // of the story names ... too small".
                     Text(name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -349,6 +351,10 @@ struct GlowStoryCardView: View {
                     // ⚠️ CENTRED, NOT BOTTOM-TRAILING, AND THAT IS THE FIX ITSELF. See the badge.
                     ZStack {
                         AvatarView(name: name, photoUrl: authorPhoto, size: face)
+                            // ⛔ SOLID — owner, 2026-10-10: the no-photo face is a see-through
+                            // system fill, so the story picture showed through it. The page colour
+                            // under it gives the same grey it has on a plain page, but opaque.
+                            .background(Circle().fill(Color(uiColor: .systemBackground)))
                             .overlay {
                                 // Watched draws the strip's own spent grey, and THINNER, exactly as
                                 // `StoryRingView` does: "already seen" is said by being quieter than
