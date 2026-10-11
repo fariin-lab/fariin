@@ -189,6 +189,24 @@ struct StoriesTabView: View {
         .alert(AppLimits.storiesOffMessage, isPresented: $storiesOff) {
             Button("OK", role: .cancel) {}
         }
+        // ⛔ A FAILED POST SAYS SO — owner, 2026-10-11: "I can't upload story". The strip was the
+        // only thing that showed this alert, and with Glow hidden the strip is not on screen, so a
+        // failure was dead silent. Same words and buttons as the strip's; only when it is not here.
+        .alert("Couldn't post story", isPresented: Binding(
+            get: { !hasGlowGrid && storyBudget.uploadError != nil },
+            set: { if !$0 { storyBudget.uploadError = nil } })) {
+            if StoryOutbox.hasWaiting(for: AuthService.shared.uid ?? "") {
+                Button("Try Again") {
+                    storyBudget.uploadError = nil
+                    StoryOutbox.retry(for: AuthService.shared.uid ?? "")
+                }
+            }
+            Button("OK", role: .cancel) { storyBudget.uploadError = nil }
+        } message: {
+            Text(StoryOutbox.hasWaiting(for: AuthService.shared.uid ?? "")
+                 ? (storyBudget.uploadError ?? "") + "\n\nIt will be tried again automatically when you're back online."
+                 : storyBudget.uploadError ?? "")
+        }
         .alert("That's today's limit", isPresented: $storyLimitReached) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -664,7 +682,19 @@ struct StoriesTabView: View {
     @ViewBuilder private func friendsList() -> some View {
         let groups = visibleFriends
         VStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
-            if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
+            if storyBudget.uploading {
+                // A post in the air: its picture and a spinner, tap opens the live upload viewer —
+                // what the strip's uploading card does. See `StoryListRow.isUploading`.
+                Button { openUploadingStory() } label: {
+                    StoryListRow(thumbUrl: "", title: "My Story",
+                                 subtitle: storyBudget.uploadPhase == .preparing ? "Preparing…" : "Uploading…",
+                                 showsFace: false,
+                                 isUploading: true,
+                                 uploadingImage: storyBudget.uploadingImage,
+                                 onCamera: { composeStory() })
+                }
+                .buttonStyle(.plain)
+            } else if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
                 Button { openStoryFromRow(mine) } label: {
                     StoryListRow(thumbUrl: newest.thumbUrl.isEmpty ? newest.mediaUrl : newest.thumbUrl,
                                  blurThumb: newest.blurThumb,

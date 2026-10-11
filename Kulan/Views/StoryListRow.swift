@@ -34,6 +34,10 @@ struct StoryListRow: View {
     /// wears the + badge instead of the face. The badge is the grid card's own (black, white bold
     /// plus), not the reference's blue.
     var addBadge = false
+    /// ⛔ A POST IN THE AIR — owner, 2026-10-11, "uploading is not happening": the picture being
+    /// posted, dimmed, with a spinner over it. Before this the list had no uploading state at all.
+    var isUploading = false
+    var uploadingImage: UIImage? = nil
     var seen = false
     /// ⛔ THE STACK — owner, 2026-10-11, as the reference app draws My Story with more than one
     /// story: the previous picture peeks out behind the newest one. Empty = no stack.
@@ -105,7 +109,14 @@ struct StoryListRow: View {
 
     @ViewBuilder private var thumb: some View {
         Group {
-            if thumbUrl.isEmpty, addBadge, let photo = authorPhoto, !photo.isEmpty {
+            if isUploading {
+                Group {
+                    if let uploadingImage { Image(uiImage: uploadingImage).resizable().scaledToFill() }
+                    else { Color(uiColor: .secondarySystemFill) }
+                }
+                .overlay(Color.black.opacity(0.35))
+                .overlay(ProgressView().tint(.white))
+            } else if thumbUrl.isEmpty, addBadge, let photo = authorPhoto, !photo.isEmpty {
                 StoryImage(url: photo, maxPixels: StoryImage.cardPixels)
             } else if thumbUrl.isEmpty, addBadge {
                 shape.fill(Color(uiColor: .secondarySystemFill))
