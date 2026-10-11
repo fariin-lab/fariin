@@ -71,10 +71,13 @@ private extension MessageView {
         Button {
             NotificationCenter.default.post(name: .init("storyRepostTapped"), object: story.id)
         } label: {
-            // The two-looping-arrows mark, and it is the system's own — `arrow.2.squarepath` is what
-            // iOS draws for "post this again", so it needs no drawing of ours.
-            Image(systemName: "arrow.2.squarepath")
-                .font(.title2)
+            // His own repost mark (owner, 2026-10-11: "use this icon"), an outline drawn at 1.5 on a
+            // 24 grid, from the app's assets. 26pt so it stands as tall as the `.title2` heart beside it.
+            Image("ic_repost", bundle: .main)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 26, height: 26)
                 .foregroundColor(.white)
                 .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
                 .frame(width: 44, height: 44)      // the heart's target, so the two sit evenly

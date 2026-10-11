@@ -135,8 +135,12 @@ struct UserView: View {
             // nobody can take it back — so the one audience it belongs to is the one that is already
             // public. Forward had the same shape with none of the excuse, so it is gone.
             if isPublicStory {
+                // ⛔ THE APP'S OWN SHARE SHEET (owner, 2026-10-11: "open the sheet like when I tap
+                // Share on a profile, also with Copy Link"). This handed the picture to the system
+                // share sheet; it now opens the same sheet a profile's Share and another person's
+                // Share Story open: the chats to send the story link to, and Copy Link.
                 out.append(.init(title: "Share", systemImage: "square.and.arrow.up") {
-                    NotificationCenter.default.post(name: .init("storyActionShare"), object: nil)
+                    NotificationCenter.default.post(name: .init("storyActionShareLink"), object: nil)
                 })
             }
         } else {
