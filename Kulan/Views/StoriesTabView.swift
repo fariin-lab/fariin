@@ -686,6 +686,26 @@ struct StoriesTabView: View {
     @ViewBuilder private func friendsList() -> some View {
         let groups = visibleFriends
         VStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+            // ⛔ "MY STORY ›" OPENS POSTED STORIES — owner, 2026-10-11, with the reference: a
+            // heading over my own row, and tapping it opens the page of everything I have posted.
+            Button {
+                path.append(GlowRoute.postedStories(StoriesRepository.shared.mine?.name
+                                                    ?? profile.me?.name ?? "My Story"))
+            } label: {
+                HStack(spacing: 6) {
+                    Text("My Story")
+                        .font(.system(size: 17, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, StoryListRow.margin)
+                .padding(.top, 8)
+                .padding(.bottom, 0)   // the row below brings its own 12
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Posted Stories")
             if storyBudget.uploading {
                 // A post in the air: its picture and a spinner, tap opens the live upload viewer —
                 // what the strip's uploading card does. See `StoryListRow.isUploading`.
