@@ -741,6 +741,7 @@ struct StoriesTabView: View {
                                  authorName: profile.me?.name ?? "You",
                                  authorPhoto: profile.me?.photoUrl,
                                  seen: !mine.hasUnseen,
+                                 seenFlags: StoryPrefs.seenFlags(mine.stories, upTo: mine.lastViewedAt),
                                  // The stack, once there are two or more stories.
                                  backThumbUrl: mine.stories.count > 1
                                      ? mine.stories[mine.stories.count - 2].thumbUrl.isEmpty
@@ -835,6 +836,7 @@ struct StoriesTabView: View {
                          authorName: g.name,
                          authorPhoto: g.photoUrl,
                          seen: !g.hasUnseen,
+                         seenFlags: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt),
                          rectKey: g.id,
                          pressKey: StoryListRow.pressKey(g.id))
         }

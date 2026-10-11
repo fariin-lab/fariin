@@ -56,6 +56,10 @@ struct StoryListRow: View {
     var isUploading = false
     var uploadingImage: UIImage? = nil
     var seen = false
+    /// ⛔ ONE ARC PER STORY — owner, 2026-10-11: "use my story ring system, the one the chat list
+    /// uses". Per story, oldest → newest, from `StoryPrefs.seenFlags`; drawn by `StoryRingView`, the
+    /// chat list's own ring. Empty = the single ring below (Add Story).
+    var seenFlags: [Bool] = []
     /// ⛔ THE STACK — owner, 2026-10-11, as the reference app draws My Story with more than one
     /// story: the previous picture peeks out behind the newest one. Empty = no stack.
     var backThumbUrl: String = ""
@@ -225,6 +229,8 @@ struct StoryListRow: View {
                     withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spin = true }
                 }
                 .onDisappear { spin = false }
+        } else if !seenFlags.isEmpty {
+            StoryRingView(seen: seenFlags, lineWidth: Self.ring)
         } else {
             Circle().strokeBorder(
                 seen
