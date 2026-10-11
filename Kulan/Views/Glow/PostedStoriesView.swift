@@ -1,5 +1,5 @@
 import SwiftUI
-import UIKit   // `UIPasteboard`, for Copy Story Link
+import UIKit
 
 /// POSTED STORIES, FULL PAGE — his requirement 6: a header, a Filter button top right, and filter
 /// options for My Friends / Custom / Glowers.
@@ -177,16 +177,13 @@ struct PostedStoriesView: View {
                     Button {
                         // The story's address, not the storage file's — see
                         // `shareSelected` for what that used to hand out.
+                        // The app's own share sheet: chats to send it to, and Copy Link
+                        // (owner, 2026-10-11 — which is why there is no Copy Story Link row).
                         if let u = URL(string: KulanApp.storyLink(id: full.id)) {
-                            shareURLs = ShareURLs(urls: [u])
+                            sendLink = StoryLinkPayload(url: u)
                         }
                     } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        UIPasteboard.general.string = KulanApp.storyLink(id: full.id)
-                    } label: {
-                        Label("Copy Story Link", systemImage: "link")
                     }
                 }
                 Button(role: .destructive) {
@@ -222,6 +219,8 @@ struct PostedStoriesView: View {
     /// The system share sheet's payload, held rather than built inline so the sheet has something
     /// stable to present. Identifiable through its own wrapper — an array is not.
     @State private var shareURLs: ShareURLs?
+    /// One story's link, for the app's own share sheet (the hold menu's Share).
+    @State private var sendLink: StoryLinkPayload?
     /// One story whose audience is being edited, from the long-press menu.
     @State private var editViewersFor: Story?
     @Environment(\.dismiss) private var dismiss
@@ -359,6 +358,7 @@ struct PostedStoriesView: View {
                 Text("This cannot be undone. People who already saw them keep what they saw.")
             }
             .sheet(item: $shareURLs) { SystemShareSheet(items: $0.urls) }
+            .sheet(item: $sendLink) { SendContactSheet(contactText: $0.url.absoluteString) }
             .sheet(item: $editViewersFor) { story in
                 // The same sheet the viewer's own "Edit Viewers" raises, with the same completion —
                 // one door, so a story's audience cannot be edited two different ways.

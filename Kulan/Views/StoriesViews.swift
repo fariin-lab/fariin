@@ -2103,11 +2103,6 @@ struct StoryViewer: View {
                   let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
             shareURL = StoryLinkPayload(url: url)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionCopyLink"))) { _ in
-            guard let s = currentStory, StoryShareRights.allows(s) else { return }
-            UIPasteboard.general.string = KulanApp.storyLink(id: s.id)
-            flashSentToast("Link copied")
-        }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
         }

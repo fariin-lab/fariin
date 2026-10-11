@@ -153,9 +153,7 @@ struct UserView: View {
                 out.append(.init(title: "Share Story", systemImage: "square.and.arrow.up") {
                     NotificationCenter.default.post(name: .init("storyActionShareLink"), object: nil)
                 })
-                out.append(.init(title: "Copy Story Link", systemImage: "link") {
-                    NotificationCenter.default.post(name: .init("storyActionCopyLink"), object: nil)
-                })
+                // No Copy Story Link (owner, 2026-10-11): Share's sheet has Copy Link.
             }
             out.append(.init(title: "Hide Stories", systemImage: "eye.slash") {
                 NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
