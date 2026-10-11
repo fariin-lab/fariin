@@ -778,7 +778,7 @@ struct StoriesTabView: View {
             let viewed = groups.filter { g in viewedHold.map { held in held.contains(g.id) } ?? !g.hasUnseen }
             let recent = groups.filter { g in !viewed.contains { $0.id == g.id } }
             if !recent.isEmpty {
-                listHeading("Recent updates")
+                listHeading("Recent Stories")
                 LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
                     ForEach(recent) { g in friendListRow(g) }
                 }
@@ -788,7 +788,7 @@ struct StoriesTabView: View {
                     withAnimation(.easeInOut(duration: 0.25)) { viewedCollapsed.toggle() }
                 } label: {
                     HStack {
-                        listHeading("Viewed updates")
+                        listHeading("Viewed Stories")
                         Spacer()
                         Image(systemName: "chevron.up")
                             .font(.system(size: 15, weight: .semibold))
@@ -799,7 +799,7 @@ struct StoriesTabView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(viewedCollapsed ? "Show viewed updates" : "Hide viewed updates")
+                .accessibilityLabel(viewedCollapsed ? "Show viewed stories" : "Hide viewed stories")
                 if !viewedCollapsed {
                     LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
                         ForEach(viewed) { g in friendListRow(g) }
