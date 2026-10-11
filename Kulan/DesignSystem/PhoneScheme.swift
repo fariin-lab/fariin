@@ -61,6 +61,7 @@ extension View {
 /// re-coloured and re-checked on every bounds change and every light/dark change.
 /// Same colour as before: `tertiarySystemFill`, the system search field's own grey, which is also
 /// what the reference app's chat list shows, since it keeps the system field.
+@MainActor
 enum SearchFieldFill {
     private static var key = 0
 
@@ -79,9 +80,12 @@ enum SearchFieldFill {
         owned.fill.cornerCurve = .continuous
         owned.fill.zPosition = -1
         field.layer.insertSublayer(owned.fill, at: 0)
+        // KVO calls back on the thread that changed the bounds, which for a view's layer is main.
         owned.watch = field.layer.observe(\.bounds, options: [.new]) { [weak field, weak owned] _, _ in
-            guard let field, let owned else { return }
-            apply(owned, to: field)
+            MainActor.assumeIsolated {
+                guard let field, let owned else { return }
+                apply(owned, to: field)
+            }
         }
         if #available(iOS 17.0, *) {
             owned.traits = field.registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
