@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (859): STORIES AS A LIST, SEPARATE CALL BUTTONS.
+            THIS BUILD (860): STORIES LIST POLISH, UPLOAD FIX, VIEWED UPDATES.
+            Each story picture wears the person's face with a ring; corners are smoother and pictures 2pt bigger. My Story shows a stack when you have 2 or more stories, and Add Story shows your photo with a + badge. Bell and add-story are off the header; your row has a glass add-story button. Posting now shows "Uploading..." on your row, and a failed post says why. Watched people move to a folding "Viewed updates" list. Long press works on the whole row, including your own. Glowers is hidden from story privacy.
+            PLEASE TEST: post a story and watch your row; post a second one and check the stack; long-press any row and your own; watch someone's stories, leave the tab and come back, check Viewed updates.
+
+            EARLIER (859): STORIES AS A LIST, SEPARATE CALL BUTTONS.
             The Stories page is now one person per row: tall picture on the left, name and time beside it, "Recent updates" over friends, a camera button on your own row. The old two-column grid is kept in the code. On a contact's profile, Voice call and Video call are two buttons again.
             PLEASE TEST: open stories from the list; long-press a picture; tap the camera on your row; on a profile tap Voice call and Video call.
 
