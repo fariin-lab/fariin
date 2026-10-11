@@ -66,6 +66,104 @@ struct PostedStoriesView: View {
         }
     }
 
+    /// One folder of the All view: an audience and its stories, newest first as `rows` already is.
+    struct PostedFolder: Identifiable {
+        let id: String
+        let name: String
+        var rows: [PostedStory]
+    }
+
+    /// Stories grouped by the audience they were posted to. A custom list is named by what it was
+    /// called when the story went out (`StoryPrefs.audienceName`, kept on this phone), so two lists
+    /// are two folders; a custom story whose name this phone never saw goes under "Custom".
+    static func folders(_ rows: [PostedStory]) -> [PostedFolder] {
+        var out: [PostedFolder] = []
+        var at: [String: Int] = [:]
+        for s in rows {
+            let name: String
+            switch s.audience {
+            case "everyone": name = "Everyone"
+            case "friends":  name = "My Chats"
+            case "glowers":  name = "Glowers"
+            case "custom":   name = StoryPrefs.audienceName(storyId: s.id) ?? "Custom"
+            default:         name = "My Chats"
+            }
+            let key = s.audience + ":" + name
+            if let i = at[key] { out[i].rows.append(s) }
+            else { at[key] = out.count; out.append(PostedFolder(id: key, name: name, rows: [s])) }
+        }
+        return out
+    }
+
+    /// One posted story's tile, with its tap, its select tick and its hold menu. One builder for
+    /// the flat grid and for the folders, so the two cannot drift.
+    @ViewBuilder private func postedTile(_ s: PostedStory) -> some View {
+        // ⛔ THE CELL OPENS THE STORY — owner, 2026-09-02: "when I click a story
+        // it is not opening". Same omission as the profile's rail: the tile was
+        // drawn and never wired to anything.
+        // ⛔ `PostedStoryTile`, THE PROFILE'S OWN TILE — owner, 2026-09-11: "the
+        // views count is pointing centre of the image". This page had a SECOND tile
+        // of its own, `PostedStoryGridTile`, drawn from the same description, and
+        // the two disagreed about one thing: the profile's stacks its badge in a
+        // `ZStack(alignment: .bottomLeading)` and this one laid it on with
+        // `.overlay(alignment: .bottomLeading)` carrying TWO conditional children —
+        // a scrim that fills the height and a label. The label came out centred.
+        //
+        // The profile's card has always drawn it in the right corner, which is the
+        // proof of which of the two forms to keep. So the duplicate is gone rather
+        // than repaired: the design pass on 2026-09-11 had already named these two
+        // as the same tile at different sizes, and one tile cannot drift from
+        // itself. It brings its own Button, so the wrapper here goes with it.
+        PostedStoryTile(story: s, rectKey: Self.tileKey(s.id)) {
+            // In select mode the tap CHOOSES rather than opens. Two meanings
+            // for one gesture, told apart by the mode the bar is announcing.
+            if editing { withAnimation(.snappy(duration: 0.18)) { toggle(s.id) } }
+            else { openStory(s) }
+        }
+        .overlay(alignment: .topLeading) {
+            if editing { tick(on: selected.contains(s.id)) }
+        }
+        // ⛔ THE HOLD MENU — owner, 2026-09-11: "when I long press show a
+        // context menu: Edit viewers, Share, Delete". Mine only, and off in
+        // select mode: a hold while ticking is a hold on a thing that is
+        // already being chosen for one of these very actions.
+        .contextMenu {
+            if isMe, !editing, let full = myStory(s.id) {
+                Button { editViewersFor = full } label: {
+                    Label("Edit Viewers", systemImage: "person.2")
+                }
+                // ⛔ AND NOT EVERY STORY MAY BE PASSED ON — his spec,
+                // 2026-09-11. `StoryShareRights` is the one place that answers
+                // it, so this menu, the story viewer's footer and anything added
+                // later cannot disagree. Here it is my own story, so what it
+                // rules out is the pair of flags that say "do not copy this":
+                // one-time, and capture-protected.
+                if StoryShareRights.allows(full) {
+                    Button {
+                        // The story's address, not the storage file's — see
+                        // `shareSelected` for what that used to hand out.
+                        if let u = URL(string: KulanApp.storyLink(id: full.id)) {
+                            shareURLs = ShareURLs(urls: [u])
+                        }
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        UIPasteboard.general.string = KulanApp.storyLink(id: full.id)
+                    } label: {
+                        Label("Copy Story Link", systemImage: "link")
+                    }
+                }
+                Button(role: .destructive) {
+                    selected = [s.id]
+                    confirmDelete = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+    }
+
     @State private var loader = PostedStoriesLoader()
     /// The person, for the door below. Fetched with the page rather than passed in, because this
     /// screen can be reached with nothing but a uid.
@@ -396,78 +494,38 @@ struct PostedStoriesView: View {
                     // Row spacing is the SAME gutter as the columns, so the air between two cards
                     // reads the same in both directions — the rule the Glowing grid already
                     // follows.
-                    LazyVGrid(columns: columns, spacing: PostedGrid.gap) {
-                        // ⛔ THE CELL OPENS THE STORY — owner, 2026-09-02: "when I click a story
-                        // it is not opening". Same omission as the profile's rail: the tile was
-                        // drawn and never wired to anything.
-                        // ⛔ `PostedStoryTile`, THE PROFILE'S OWN TILE — owner, 2026-09-11: "the
-                        // views count is pointing centre of the image". This page had a SECOND tile
-                        // of its own, `PostedStoryGridTile`, drawn from the same description, and
-                        // the two disagreed about one thing: the profile's stacks its badge in a
-                        // `ZStack(alignment: .bottomLeading)` and this one laid it on with
-                        // `.overlay(alignment: .bottomLeading)` carrying TWO conditional children —
-                        // a scrim that fills the height and a label. The label came out centred.
-                        //
-                        // The profile's card has always drawn it in the right corner, which is the
-                        // proof of which of the two forms to keep. So the duplicate is gone rather
-                        // than repaired: the design pass on 2026-09-11 had already named these two
-                        // as the same tile at different sizes, and one tile cannot drift from
-                        // itself. It brings its own Button, so the wrapper here goes with it.
-                        ForEach(rows) { s in
-                            PostedStoryTile(story: s, rectKey: Self.tileKey(s.id)) {
-                                // In select mode the tap CHOOSES rather than opens. Two meanings
-                                // for one gesture, told apart by the mode the bar is announcing.
-                                if editing { withAnimation(.snappy(duration: 0.18)) { toggle(s.id) } }
-                                else { openStory(s) }
-                            }
-                            .overlay(alignment: .topLeading) {
-                                if editing { tick(on: selected.contains(s.id)) }
-                            }
-                            // ⛔ THE HOLD MENU — owner, 2026-09-11: "when I long press show a
-                            // context menu: Edit viewers, Share, Delete". Mine only, and off in
-                            // select mode: a hold while ticking is a hold on a thing that is
-                            // already being chosen for one of these very actions.
-                            .contextMenu {
-                                if isMe, !editing, let full = myStory(s.id) {
-                                    Button { editViewersFor = full } label: {
-                                        Label("Edit Viewers", systemImage: "person.2")
-                                    }
-                                    // ⛔ AND NOT EVERY STORY MAY BE PASSED ON — his spec,
-                                    // 2026-09-11. `StoryShareRights` is the one place that answers
-                                    // it, so this menu, the story viewer's footer and anything added
-                                    // later cannot disagree. Here it is my own story, so what it
-                                    // rules out is the pair of flags that say "do not copy this":
-                                    // one-time, and capture-protected.
-                                    if StoryShareRights.allows(full) {
-                                        Button {
-                                            // The story's address, not the storage file's — see
-                                            // `shareSelected` for what that used to hand out.
-                                            if let u = URL(string: KulanApp.storyLink(id: full.id)) {
-                                                shareURLs = ShareURLs(urls: [u])
-                                            }
-                                        } label: {
-                                            Label("Share", systemImage: "square.and.arrow.up")
-                                        }
-                                        Button {
-                                            UIPasteboard.general.string = KulanApp.storyLink(id: full.id)
-                                        } label: {
-                                            Label("Copy Story Link", systemImage: "link")
-                                        }
-                                    }
-                                    Button(role: .destructive) {
-                                        selected = [s.id]
-                                        confirmDelete = true
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
+                    // ⛔ FOLDERS — owner, 2026-10-11: "show all posted stories together, but each in its own
+                    // folder, with the folder's name above it". My own page, the All filter: one block
+                    // per audience (Everyone, My Chats, each custom list by its own name), in the order
+                    // their newest story was posted. Anyone else's page, or a single filter, stays one
+                    // grid: who another person posted to is not mine to see.
+                    let folders = isMe && filter == .all ? Self.folders(rows) : []
+                    if !folders.isEmpty {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(folders) { f in
+                                Text(f.name)
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, PostedGrid.margin + 6)
+                                    .padding(.top, 18)
+                                    .padding(.bottom, 10)
+                                LazyVGrid(columns: columns, spacing: PostedGrid.gap) {
+                                    ForEach(f.rows) { s in postedTile(s) }
                                 }
+                                .padding(.horizontal, PostedGrid.margin)
                             }
                         }
+                        .padding(.top, 8)
+                    } else {
+                        LazyVGrid(columns: columns, spacing: PostedGrid.gap) {
+                            ForEach(rows) { s in postedTile(s) }
+                        }
+                        // The tiles sit tight against each other and the PAGE keeps its edge — see the
+                        // note on `StoryTileGrid.margin` for why those are two separate numbers.
+                        .padding(.horizontal, PostedGrid.margin)
+                        .padding(.top, 8)
                     }
-                    // The tiles sit tight against each other and the PAGE keeps its edge — see the
-                    // note on `StoryTileGrid.margin` for why those are two separate numbers.
-                    .padding(.horizontal, PostedGrid.margin)
-                    .padding(.top, 8)
                 }
                 .refreshable {
                     await loader.load(uid: uid, force: true)
