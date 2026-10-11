@@ -298,6 +298,10 @@ struct StoryPeoplePicker: View {
         // with its ✕, and `.avoidHidingContent` keeps the title and the button while it is active.
         .searchable(text: $search, prompt: "Name or username")
         .searchPresentationToolbarBehavior(.avoidHidingContent)
+        // ⛔ ALWAYS AT THE BOTTOM (owner, 2026-10-11). Left to the system, the field goes to the
+        // bottom in a sheet (Add People) but to the top of a pushed page (Everyone, before anybody
+        // is picked). Placed in the bottom bar, it is the same in both.
+        .toolbar { DefaultToolbarItem(kind: .search, placement: .bottomBar) }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -442,6 +446,10 @@ struct SelectViewersView: View {
         // with its ✕, and `.avoidHidingContent` keeps the title and the button while it is active.
         .searchable(text: $search, prompt: "Name or username")
         .searchPresentationToolbarBehavior(.avoidHidingContent)
+        // ⛔ ALWAYS AT THE BOTTOM (owner, 2026-10-11). Left to the system, the field goes to the
+        // bottom in a sheet (Add People) but to the top of a pushed page (Everyone, before anybody
+        // is picked). Placed in the bottom bar, it is the same in both.
+        .toolbar { DefaultToolbarItem(kind: .search, placement: .bottomBar) }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
