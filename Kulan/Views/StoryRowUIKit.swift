@@ -44,6 +44,8 @@ import StoryUI
 struct StoryRowCounts: Equatable {
     let views: Int
     let likes: Int
+    /// The author's own strip only: the counts come from the author-only counter.
+    var reposts: Int = 0
     static let zero = StoryRowCounts(views: 0, likes: 0)
 }
 
@@ -222,6 +224,9 @@ final class StoryRowCountView: UIView {
     private let views = UILabel()
     private let heart = UIImageView()
     private let likes = UILabel()
+    /// Reposts, after the heart (owner, 2026-10-11). Hidden at zero, as the heart is.
+    private let repost = UIImageView()
+    private let reposts = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -239,7 +244,11 @@ final class StoryRowCountView: UIView {
         // reading — a red heart made the number look like an alert rather than a count, and it was
         // the only coloured mark on a strip that is otherwise white over a photograph.
         heart.tintColor = .white
-        for l in [views, likes] {
+        repost.image = UIImage(systemName: "arrow.2.squarepath", withConfiguration: symbol)
+        repost.tintColor = .white
+        repost.isHidden = true
+        reposts.isHidden = true
+        for l in [views, likes, reposts] {
             l.font = font
             l.textColor = .white
         }
@@ -253,7 +262,7 @@ final class StoryRowCountView: UIView {
         // next pass, so for one frame the stack is sized for the old text. Required resistance means
         // that frame can be wrong without the icon paying for it, and `.center` keeps the drawn
         // glyph its own size whatever box it ends up in.
-        for icon in [eye, heart] {
+        for icon in [eye, heart, repost] {
             icon.contentMode = .center
             icon.setContentCompressionResistancePriority(.required, for: .horizontal)
             icon.setContentHuggingPriority(.required, for: .horizontal)
@@ -265,6 +274,8 @@ final class StoryRowCountView: UIView {
         stack.addArrangedSubview(views)
         stack.addArrangedSubview(heart)
         stack.addArrangedSubview(likes)
+        stack.addArrangedSubview(repost)
+        stack.addArrangedSubview(reposts)
         addSubview(stack)
         // The soft shadow the SwiftUI row drew with `.shadow(color: .black.opacity(0.5), radius: 3)`.
         // On the layer rather than per glyph, which is what a SwiftUI shadow on a stack resolves to
@@ -286,7 +297,7 @@ final class StoryRowCountView: UIView {
     /// to answer with. A blank space for a fraction of a second is honest, and a wrong count is not.
     ///
     /// A story that genuinely has no views still shows its 0 — that is a real answer and it stays.
-    func set(views v: Int, likes l: Int, known: Bool = true) {
+    func set(views v: Int, likes l: Int, reposts r: Int = 0, known: Bool = true) {
         isHidden = !known
         guard known else { return }
         views.text = Self.compact(v)
@@ -297,6 +308,12 @@ final class StoryRowCountView: UIView {
         likes.isHidden = !showLikes
         // `.padding(.leading, 4)` on the heart, which a stack expresses as custom spacing.
         stack.setCustomSpacing(showLikes ? 11 : 7, after: views)
+        reposts.text = Self.compact(r)
+        let showReposts = r > 0
+        repost.isHidden = !showReposts
+        reposts.isHidden = !showReposts
+        // The same gap before the repost mark as before the heart.
+        stack.setCustomSpacing(11, after: showLikes ? likes : views)
         setNeedsLayout()
         // ⚠️ AND THE CARD, because the card is what sets this view's FRAME from `fittedSize()`.
         // Asking only ourselves to lay out re-flows the stack inside a box that is still measured for
@@ -696,7 +713,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         if countsChanged {
             for (id, item) in items {
                 let c = counts[id]
-                item.count.set(views: c?.views ?? 0, likes: c?.likes ?? 0, known: c != nil)
+                item.count.set(views: c?.views ?? 0, likes: c?.likes ?? 0, reposts: c?.reposts ?? 0, known: c != nil)
             }
         }
 
@@ -1702,7 +1719,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         view.addSubview(item)
         item.host.didMove(toParent: self)
         let c = counts[story.id]
-        item.count.set(views: c?.views ?? 0, likes: c?.likes ?? 0, known: c != nil)
+        item.count.set(views: c?.views ?? 0, likes: c?.likes ?? 0, reposts: c?.reposts ?? 0, known: c != nil)
         items[story.id] = item
         // Their `contentTintLayer`, black at alpha 1 and revealed by its opacity — a sibling of the
         // card, added to the same container, so it can cover a card or the live story without

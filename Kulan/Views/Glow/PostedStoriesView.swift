@@ -104,7 +104,9 @@ struct PostedStoriesView: View {
         }
     }
 
-    static func folders(_ rows: [PostedStory]) -> [PostedFolder] {
+    /// `mergeCustom`: every custom list in ONE "Custom" folder. The All filter asks for that, and
+    /// All Custom does not, so that one is where the lists are told apart (owner, 2026-10-11).
+    static func folders(_ rows: [PostedStory], mergeCustom: Bool = false) -> [PostedFolder] {
         var out: [PostedFolder] = []
         var at: [String: Int] = [:]
         for s in rows {
@@ -113,7 +115,7 @@ struct PostedStoriesView: View {
             case "everyone": name = "Everyone"
             case "friends":  name = "My Chats"
             case "glowers":  name = "Glowers"
-            case "custom":   name = StoryPrefs.audienceName(storyId: s.id) ?? "Custom"
+            case "custom":   name = mergeCustom ? "Custom" : (StoryPrefs.audienceName(storyId: s.id) ?? "Custom")
             default:         name = "My Chats"
             }
             let key = s.audience + ":" + name
@@ -534,7 +536,10 @@ struct PostedStoriesView: View {
                     // their newest story was posted. Anyone else's page, or a single filter, stays one
                     // grid: who another person posted to is not mine to see.
                     // ...and "All Custom" the same way, one folder per custom list (owner, same day).
-                    let folders = isMe && (filter == .all || filter == .custom) ? Self.folders(rows) : []
+                    // (owner, later the same day: All shows the custom lists as one "Custom" folder;
+                    // All Custom is where each list gets its own.)
+                    let folders = isMe && (filter == .all || filter == .custom)
+                        ? Self.folders(rows, mergeCustom: filter == .all) : []
                     if !folders.isEmpty {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(folders) { f in
@@ -550,7 +555,9 @@ struct PostedStoriesView: View {
                                         .lineLimit(1)
                                 }
                                     .padding(.horizontal, PostedGrid.margin + 6)
-                                    .padding(.top, 18)
+                                    // The first heading sits just under the bar (owner, 2026-10-11:
+                                    // "top header has more empty space"); the rest keep their air.
+                                    .padding(.top, f.id == folders.first?.id ? 4 : 18)
                                     .padding(.bottom, 10)
                                 LazyVGrid(columns: columns, spacing: PostedGrid.gap) {
                                     ForEach(f.rows) { s in postedTile(s) }
@@ -558,7 +565,6 @@ struct PostedStoriesView: View {
                                 .padding(.horizontal, PostedGrid.margin)
                             }
                         }
-                        .padding(.top, 8)
                     } else {
                         LazyVGrid(columns: columns, spacing: PostedGrid.gap) {
                             ForEach(rows) { s in postedTile(s) }

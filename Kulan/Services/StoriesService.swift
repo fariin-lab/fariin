@@ -361,6 +361,9 @@ struct StoryViewSummary {
     /// Up to three, newest first. Faces only — the sheet is where a viewer becomes a row with a
     /// time and a reaction on it.
     var recent: [StoryViewerInfo]
+    /// How many times it was reposted. On the author-only counter document, so only the author
+    /// ever reads it (owner, 2026-10-11). Zero for a summary counted from the receipts.
+    var repostCount: Int = 0
 
     /// The same summary worked out the old way, for a story whose counter does not exist yet.
     static func counted(from viewers: [StoryViewerInfo]) -> StoryViewSummary {
@@ -454,6 +457,8 @@ enum StoryCountCache {
         /// Up to three viewer UIDS, newest first — see the note on the type for why it is these and
         /// not the faces themselves.
         var recent: [String]
+        /// Optional so an entry written before reposts were counted still decodes.
+        var reposts: Int?
     }
 
     /// JSON rather than a plist dictionary because the entry is no longer all one type. Read and
@@ -481,7 +486,8 @@ enum StoryCountCache {
     static func summary(for storyId: String) -> StoryViewSummary? {
         guard let e = store[storyId] else { return nil }
         return StoryViewSummary(count: e.count, reactionCount: e.reactions,
-                                recent: StoriesService.faces(for: e.recent))
+                                recent: StoriesService.faces(for: e.recent),
+                                repostCount: e.reposts ?? 0)
     }
 
     /// Drop one story's remembered numbers. Used when the thing they were counted against has
@@ -495,11 +501,11 @@ enum StoryCountCache {
         UserDefaults.standard.set(order, forKey: orderKey)
     }
 
-    static func put(_ storyId: String, count: Int, reactions: Int, recent: [String]) {
+    static func put(_ storyId: String, count: Int, reactions: Int, recent: [String], reposts: Int = 0) {
         var s = store
         var order = UserDefaults.standard.stringArray(forKey: orderKey) ?? []
         if s[storyId] == nil { order.append(storyId) }
-        s[storyId] = Entry(count: count, reactions: reactions, recent: recent)
+        s[storyId] = Entry(count: count, reactions: reactions, recent: recent, reposts: reposts)
         // Oldest first, and only ever a few at a time — this runs on a story change, not in a loop.
         while order.count > capacity {
             let dropped = order.removeFirst()
@@ -2070,7 +2076,8 @@ final class StoriesService {
         guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return nil }
         let snap = try? await db.collection("stories").document(storyId)
             .collection("meta").document("views").getDocument()
-        guard let data = snap?.data(), let count = data["count"] as? Int else { return nil }
+        guard let data = snap?.data(),
+              let count = data["count"] as? Int ?? (data["repostCount"] is Int ? 0 : nil) else { return nil }
         let recentUids = (data["recent"] as? [String] ?? []).prefix(3)
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         // Same resolution as `fetchViewers`, so a face in the footer and the same face in the sheet
@@ -2079,7 +2086,8 @@ final class StoriesService {
         let recent = recentUids.map { Self.face(uid: $0, convs: convs, me: me) }
         return StoryViewSummary(count: count,
                                 reactionCount: data["reactionCount"] as? Int ?? 0,
-                                recent: Array(recent))
+                                recent: Array(recent),
+                                repostCount: data["repostCount"] as? Int ?? 0)
     }
 
     // Who viewed a story I posted (author-only per rules) → for the "Seen by" sheet.
@@ -2103,13 +2111,16 @@ final class StoriesService {
         return db.collection("stories").document(storyId)
             .collection("meta").document("views")
             .addSnapshotListener { snap, _ in
-                guard let data = snap?.data(), let count = data["count"] as? Int else { return }
+                // A counter holding only a repost count (nobody has watched yet) is zero views.
+                guard let data = snap?.data(),
+                      let count = data["count"] as? Int ?? (data["repostCount"] is Int ? 0 : nil) else { return }
                 // The same resolution the one-shot read uses, so a face that arrives live and the
                 // same face fetched a moment earlier cannot come out differently named.
                 let recent = (data["recent"] as? [String] ?? []).prefix(3).map { Self.faces(for: [$0])[0] }
                 onChange(StoryViewSummary(count: count,
                                           reactionCount: data["reactionCount"] as? Int ?? 0,
-                                          recent: Array(recent)))
+                                          recent: Array(recent),
+                                          repostCount: data["repostCount"] as? Int ?? 0))
             }
     }
 

@@ -5074,7 +5074,7 @@ struct StoryViewer: View {
                     // chance the cache gets to be right about the stories he has not reached yet,
                     // so the NEXT visit opens on a number AND on faces for all of them.
                     StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
-                                        recent: v.recent.map(\.id))
+                                        recent: v.recent.map(\.id), reposts: v.repostCount)
                     // The one on screen paints as soon as ITS answer lands, whichever order they
                     // arrive in — the group is not awaited as a batch for exactly that reason.
                     if id == currentStoryId { barViewers = v; publishOwnerBar() }
@@ -5157,7 +5157,7 @@ struct StoryViewer: View {
         viewersByStory[id] = v
         countsTick &+= 1
         StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
-                            recent: v.recent.map(\.id))
+                            recent: v.recent.map(\.id), reposts: v.repostCount)
         if id == currentStoryId { barViewers = v; publishOwnerBar() }
     }
 
@@ -5880,7 +5880,7 @@ struct MyStoriesCarousel: View {
         // remembering what it already knows instead of asking twice.
         for st in stories where counts[st.id] == nil {
             if let v = StoryCountCache.summary(for: st.id) {
-                counts[st.id] = StoryRowCounts(views: v.count, likes: v.reactionCount)
+                counts[st.id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount)
             }
         }
         // The owner bar stays as the fallback for the CURRENT story, and it is not redundant: on the
@@ -5900,7 +5900,7 @@ struct MyStoriesCarousel: View {
             // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.
             for await (id, answer) in group {
                 guard let v = answer else { continue }
-                counts[id] = StoryRowCounts(views: v.count, likes: v.reactionCount)
+                counts[id] = StoryRowCounts(views: v.count, likes: v.reactionCount, reposts: v.repostCount)
             }
         }
     }
