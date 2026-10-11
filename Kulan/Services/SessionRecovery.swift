@@ -70,6 +70,8 @@ enum SessionRecovery {
     /// Stall recoveries: the gap before the 2nd, the 3rd, the 4th, and every later one in the episode.
     private static let stallGaps: [Double] = [20, 60, 120, 300]
     private static let tokenTimeout: Double = 10
+    /// The most a stall recovery waits for each half of Firestore's network switch.
+    private static let switchTimeout: Double = 15
 
     @MainActor private static var attempt = 0
     @MainActor private static var scheduled = false
@@ -292,9 +294,26 @@ enum SessionRecovery {
             return
         }
         // ⚠️ BOTH CALLS, ALWAYS: a network left switched off would be far worse than the stall.
+        //
+        // ⛔ AND NEITHER IS WAITED ON FOR EVER (owner, 2026-10-11: "the whole app stops until I
+        // restart it"). These were plain awaits. A Firestore client that has stopped answering can
+        // leave this switch unanswered too, and then this function never returned: `stallRunning`
+        // stayed true, `noteStall` refused every later stall at its first guard, and the app never
+        // tried to recover again in that process. Only a restart started it over, which is exactly
+        // what he saw. Each half now gets `switchTimeout`; an unanswered switch is logged, the
+        // enable is still sent (it queues behind the disable, so the network is never left off),
+        // and the next stall is free to try again at its spaced time.
         let db = Firestore.firestore()
-        do { try await db.disableNetwork() } catch { print("[Recovery] disableNetwork failed:", error) }
-        do { try await db.enableNetwork() } catch { print("[Recovery] enableNetwork failed:", error) }
+        let offAnswered = await answered(within: switchTimeout) {
+            do { try await db.disableNetwork() } catch { print("[Recovery] disableNetwork failed:", error) }
+        }
+        let onAnswered = await answered(within: switchTimeout) {
+            do { try await db.enableNetwork() } catch { print("[Recovery] enableNetwork failed:", error) }
+        }
+        guard offAnswered, onAnswered else {
+            print("[Recovery] stall: the network switch did not answer in \(Int(switchTimeout))s, trying again later")
+            return
+        }
         guard Auth.auth().currentUser?.uid == uid else { return }
         if passedToken {
             unrecovered = false
@@ -357,6 +376,34 @@ enum SessionRecovery {
                 try? await Task.sleep(nanoseconds: UInt64(tokenTimeout * 1_000_000_000))
                 once.finish(.timedOut)
             }
+        }
+    }
+
+    /// Runs `work` and answers true if it finished within `seconds`, false if the timer won. The work
+    /// is left running either way (Firestore's switch cannot be cancelled); a late finish is ignored.
+    /// Same one-shot shape as `freshToken`, and for the same reason a task group will not do.
+    @MainActor private static func answered(within seconds: Double,
+                                            _ work: @escaping @MainActor () async -> Void) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = OnceBool(continuation)
+            Task { @MainActor in
+                await work()
+                once.finish(true)
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                once.finish(false)
+            }
+        }
+    }
+
+    /// `Once`, for a yes/no answer.
+    private final class OnceBool {
+        private var continuation: CheckedContinuation<Bool, Never>?
+        init(_ c: CheckedContinuation<Bool, Never>) { continuation = c }
+        func finish(_ done: Bool) {
+            continuation?.resume(returning: done)
+            continuation = nil
         }
     }
 
