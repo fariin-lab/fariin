@@ -103,8 +103,12 @@ enum DataExport {
             .filter { !$0.isCleared(uid) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
         out += "Chats: \(convs.count)\n"
-        out += "Glowers: \(me?.glowerCount ?? 0)\n"
-        out += "Glowing: \(me?.glowingCount ?? 0)\n\n"
+        // Glow is hidden (2026-10-10); its counts go with it.
+        if AppFeatures.glow {
+            out += "Glowers: \(me?.glowerCount ?? 0)\n"
+            out += "Glowing: \(me?.glowingCount ?? 0)\n"
+        }
+        out += "\n"
 
         out += "Messages are not in this file. Messages are end-to-end encrypted and only your phones "
         out += "can read them. To save a conversation, open the chat, tap the name at the top, and "
