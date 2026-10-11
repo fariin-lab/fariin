@@ -113,7 +113,7 @@ struct SettingsView: View {
                         .listRowSeparator(.hidden)
                 }
 
-                Section {
+                if AppFeatures.myProfileCard { Section {
                     // MY PROFILE, its own card directly under the header (2026-09-11, above).
                     // Destination is unchanged: `GlowProfileView` on his OWN uid, the page that
                     // already exists for photo, name, handle, bio, the Glow stats card and Posted
@@ -127,7 +127,7 @@ struct SettingsView: View {
                     } label: {
                         SettingsRowLabel("My Profile", "ic_account")
                     }
-                }
+                } }   // hidden 2026-10-11 — see `AppFeatures.myProfileCard`
 
                 Section {
                     // Account is data + session actions only — no profile fields here, they all

@@ -30,4 +30,7 @@ enum AppFeatures {
     /// Stories tab layout (owner 2026-10-11): true = one person per row (`StoryListRow`), false =
     /// the original two-column card grid, kept whole.
     static let storyList = true
+    /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
+    /// opens is kept; this is only its door in Settings.
+    static let myProfileCard = false
 }
