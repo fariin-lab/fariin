@@ -49,6 +49,10 @@ struct StoriesTabView: View {
     @AppStorage("storiesOptedOut") private var storiesOptedOut = false
     /// The header's search field — his reference, 2026-09-02, has one sitting under the title.
     @State private var search = ""
+    /// The list layout's "Viewed updates" fold, remembered (owner 2026-10-11).
+    @AppStorage("stories.viewedCollapsed") private var viewedCollapsed = false
+    /// Who sat under "Viewed updates" when the hold began — see `friendsList`. nil = not held.
+    @State private var viewedHold: Set<String>?
     /// The person a long press asked to hide, and the alert that asks before it happens. The strip
     /// puts up a `UIAlertController` from its own presenter; a SwiftUI grid says it this way, with
     /// the same title, the same message and the same destructive button.
@@ -727,33 +731,74 @@ struct StoriesTabView: View {
                 .buttonStyle(.plain)
             }
 
-            if !groups.isEmpty {
-                Text("Recent updates")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, StoryListRow.margin)
-                    .padding(.top, 4)
-                    .padding(.bottom, -8)
+            // ⛔ VIEWED UPDATES, A SECOND LIST — owner, 2026-10-11, with the reference: a person
+            // moves under "Viewed updates" once every story of theirs is watched, and the section
+            // only exists while somebody is in it. It folds on its chevron.
+            // ⚠️ THE SPLIT IS HELD WHILE A STORY IS OPEN AND FOR THE SESSION, the same rule the strip
+            // keeps (`StoryDoorState.orderHeldForSession`): closing a story greys its ring and moves
+            // nothing; the row changes section when he leaves the tab and comes back.
+            let viewed = groups.filter { viewedHold.map { held in held.contains($0.id) } ?? !$0.hasUnseen }
+            let recent = groups.filter { g in !viewed.contains { $0.id == g.id } }
+            if !recent.isEmpty {
+                listHeading("Recent updates")
+                LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+                    ForEach(recent) { g in friendListRow(g) }
+                }
             }
-            LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
-                ForEach(groups) { g in
-                    Button { openStoryFromRow(g) } label: {
-                        StoryListRow(thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
-                                     blurThumb: g.stories.last?.blurThumb ?? "",
-                                     title: g.name,
-                                     subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
-                                     authorName: g.name,
-                                     authorPhoto: g.photoUrl,
-                                     seen: !g.hasUnseen,
-                                     rectKey: g.id)
+            if !viewed.isEmpty {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) { viewedCollapsed.toggle() }
+                } label: {
+                    HStack {
+                        listHeading("Viewed updates")
+                        Spacer()
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(viewedCollapsed ? 180 : 0))
+                            .padding(.trailing, StoryListRow.margin)
                     }
-                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(viewedCollapsed ? "Show viewed updates" : "Hide viewed updates")
+                if !viewedCollapsed {
+                    LazyVStack(alignment: .leading, spacing: StoryListRow.rowSpacing) {
+                        ForEach(viewed) { g in friendListRow(g) }
+                    }
                 }
             }
         }
         .padding(.top, 12)
         .padding(.bottom, 24)
+        .onChange(of: storyDoorState.isOpen || storyDoorState.orderHeldForSession, initial: true) { _, held in
+            // Latched at the OPEN, so it holds the split as it stood before the story was watched.
+            viewedHold = held ? Set(visibleFriends.filter { !$0.hasUnseen }.map(\.id)) : nil
+        }
         .glowCardLongPress { friendsGridTarget(at: $0, corner: StoryListRow.corner) }
+    }
+
+    private func listHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, StoryListRow.margin)
+            .padding(.top, 4)
+            .padding(.bottom, -8)
+    }
+
+    private func friendListRow(_ g: StoryGroup) -> some View {
+        Button { openStoryFromRow(g) } label: {
+            StoryListRow(thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
+                         blurThumb: g.stories.last?.blurThumb ?? "",
+                         title: g.name,
+                         subtitle: g.stories.last.map { StoryListRow.ago($0.createdAt) } ?? "",
+                         authorName: g.name,
+                         authorPhoto: g.photoUrl,
+                         seen: !g.hasUnseen,
+                         rectKey: g.id)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Glow
