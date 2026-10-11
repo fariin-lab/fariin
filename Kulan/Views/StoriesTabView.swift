@@ -390,7 +390,12 @@ struct StoriesTabView: View {
             }
             .onChange(of: storyDoorState.activeSourceKey) { _, key in
                 guard AppFeatures.storyList, storyDoorState.isOpen, let key, !key.isEmpty else { return }
-                listProxy.scrollTo(key, anchor: .center)
+                // ⛔ NO ANCHOR (owner, 2026-10-11, build 866: "after the story the page jumps down
+                // and I get empty space"). `.center` centred the row even on a list shorter than the
+                // screen, which pushed the whole list down under the search bar. Without an anchor
+                // the scroll is the smallest that brings the row on screen, and a row already on
+                // screen does not move the list at all.
+                listProxy.scrollTo(key)
             }
             }
             // ⚠️ NO `contentMargins` DANCE HERE, AND THAT IS THE POINT OF THE MOVE. In the chat list
