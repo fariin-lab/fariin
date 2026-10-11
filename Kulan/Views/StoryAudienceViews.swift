@@ -288,6 +288,10 @@ struct StoryPeoplePicker: View {
             }
         }
         .listStyle(.insetGrouped)
+        // The people already picked, as the reference app shows them, see `SelectedPeopleBar`.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SelectedPeopleBar(people: people, selected: $selected)
+        }
         // ⛔ THE FIELD AT THE BOTTOM, THE BAR KEPT — owner, 2026-10-11, with the reference screenshot:
         // searching moved the pinned drawer field up into the navigation bar, where it sat over the
         // title and the action button. iOS 26's own bottom search field stays above the keyboard
@@ -427,6 +431,10 @@ struct SelectViewersView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        // The people already picked, as the reference app shows them, see `SelectedPeopleBar`.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            SelectedPeopleBar(people: contacts, selected: $selected)
         }
         // ⛔ THE FIELD AT THE BOTTOM, THE BAR KEPT — owner, 2026-10-11, with the reference screenshot:
         // searching moved the pinned drawer field up into the navigation bar, where it sat over the
@@ -1369,5 +1377,85 @@ private struct DidAppear: UIViewControllerRepresentable {
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
         override func loadView() { view = UIView(); view.isUserInteractionEnabled = false }
         override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); action() }
+    }
+}
+
+/// ⛔ THE PICKED PEOPLE, AS CHIPS — owner, 2026-10-11: "read the reference app, copy how the
+/// selected users look, and use it on every page where I pick users". Rebuilt from its
+/// `NewMembersBar` (its numbers, our code):
+///   • a Liquid Glass capsule per person: the 32pt face flush at the leading edge, then the name in
+///     15pt regular, then a small ✕ that un-picks them
+///   • 4 between face and name, 8 between name and ✕, 8 after the ✕, 6 above and below
+///   • 8 between chips, 12 at each end, one sideways-scrolling row that follows the newest pick
+///   • the row opens and closes with a 0.25s fade as the first person is picked or the last removed
+/// Chips are in the order people were picked; the first batch (an edit page opening with a list
+/// already chosen) is alphabetical.
+struct SelectedPeopleBar: View {
+    let people: [StoryContact]
+    @Binding var selected: Set<String>
+    @State private var order: [String] = []
+
+    private var chips: [StoryContact] {
+        let byId = Dictionary(people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return order.compactMap { byId[$0] }
+    }
+
+    var body: some View {
+        let shown = chips
+        Group {
+            if !shown.isEmpty {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(shown) { c in chip(c).id(c.id) }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    }
+                    .onChange(of: order.last) { _, last in
+                        guard let last else { return }
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last, anchor: .trailing) }
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: shown.isEmpty)
+        .onChange(of: selected, initial: true) { _, now in
+            let added = people.filter { now.contains($0.id) && !order.contains($0.id) }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                .map(\.id)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                order = order.filter { now.contains($0) } + added
+            }
+        }
+    }
+
+    private func chip(_ c: StoryContact) -> some View {
+        HStack(spacing: 0) {
+            AvatarView(name: c.name, photoUrl: c.photo, size: 32)
+            HStack(spacing: 8) {
+                Text(c.name)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { _ = selected.remove(c.id) }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(c.name)")
+            }
+            .padding(.leading, 4)
+            .padding(.trailing, 8)
+            .padding(.vertical, 6)
+        }
+        .glassEffect(.regular, in: .capsule)
+        .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 }
