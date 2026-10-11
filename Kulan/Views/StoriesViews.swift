@@ -4810,7 +4810,10 @@ struct StoryViewer: View {
     private func openRepostOriginal(of storyId: String) {
         guard let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
               let r = s.repostOf else { return }
-        if StoryDoor.reopen(onStory: r.storyId, by: r.authorUid) { return }
+        // ⛔ THE CREDIT OPENS THE AUTHOR'S PROFILE, NOT THEIR STORY (owner, 2026-10-11: "when I tap
+        // the repost's name or face, open the profile; now it opens the other story"). The same
+        // profile sheet the header's own tap uses, so the story underneath is held while it is up.
+        // `StoryDoor.reopen` stays for any other caller.
         profileSheet = groups.first(where: { $0.authorUid == r.authorUid })
             ?? StoryGroup(authorUid: r.authorUid, name: r.authorName,
                           photoUrl: authorPhoto(r.authorUid), stories: [],
