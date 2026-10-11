@@ -219,7 +219,12 @@ struct PostedStory: Identifiable, Equatable, Codable {
         // also instant where the query was a round trip.
         if uid == (AuthService.shared.uid ?? ""), let mine = StoriesRepository.shared.mine {
             state = .loaded(mine.stories.reversed().map { s in
-                PostedStory(id: s.id,
+                // A custom story whose name this phone lost gets it back here, before the folders
+                // read it (see `recoveredAudienceName`).
+                if s.audienceLabel == "custom", StoryPrefs.audienceName(storyId: s.id) == nil {
+                    _ = recoveredAudienceName(s)
+                }
+                return PostedStory(id: s.id,
                             thumbUrl: s.thumbUrl.isEmpty ? s.mediaUrl : s.thumbUrl,
                             blurThumb: s.blurThumb,
                             createdAt: s.createdAt,

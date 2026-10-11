@@ -147,6 +147,10 @@ struct Story: Identifiable, Hashable, Codable {
     var recipientsLeft: Int = -1
     /// ⛔ THE STORY THIS ONE WAS REPOSTED FROM, or nil for an ordinary post — see `StoryRepost`.
     var repostOf: StoryRepost? = nil
+    /// My own story only: who it went to, as the hashed tokens the document holds. Lets the header
+    /// find a custom list's name when this phone has lost it (see `storyAudienceTitle`). Optional so
+    /// a story cached before this existed still decodes.
+    var recipientTokens: [String]? = nil
 
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
@@ -2615,7 +2619,8 @@ final class StoriesRepository {
                             ? ((data["recipientUids"] as? [String])?.count ?? -1)
                             : -1,
                          // Absent on every story that is not a repost, which is nearly all of them.
-                         repostOf: StoryRepost.from(data["repostOf"]))
+                         repostOf: StoryRepost.from(data["repostOf"]),
+                         recipientTokens: author == me ? data["recipientUids"] as? [String] : nil)
         }
     }
 

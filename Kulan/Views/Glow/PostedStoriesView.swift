@@ -246,7 +246,12 @@ struct PostedStoriesView: View {
     private typealias PostedGrid = StoryTileGrid
 
     var body: some View {
-        content
+        // ⛔ ONE STABLE VIEW UNDER THE BAR (owner, 2026-10-11: "first seconds the title and Edit are
+        // not appearing"). `content` swaps loading -> loaded, and with the toolbar on it the title
+        // menu and Edit were torn down and rebuilt in that swap, blank for the first moments. On a
+        // ZStack that never changes they are installed once, with the push.
+        ZStack { content }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationBarTitleDisplayMode(.inline)
             // A pushed page is not a tab — see the note in `GlowNotificationsView`.
             .toolbar(.hidden, for: .tabBar)

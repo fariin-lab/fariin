@@ -759,8 +759,10 @@ struct StoriesTabView: View {
                 HStack(spacing: 6) {
                     Text("My Story")
                         .font(.system(size: 17, weight: .semibold))
+                    // Grey, the Viewed Stories arrow's colour (owner, 2026-10-11).
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
                 .foregroundStyle(Self.listHeadingColor)
                 .padding(.horizontal, StoryListRow.margin)
@@ -859,19 +861,20 @@ struct StoriesTabView: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.25)) { viewedCollapsed.toggle() }
                 } label: {
-                    HStack {
-                        listHeading("Viewed Stories")
-                        Spacer()
+                    // The arrow right after the words, as My Story's is (owner, 2026-10-11).
+                    HStack(spacing: 6) {
+                        Text("Viewed Stories")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Self.listHeadingColor)
                         Image(systemName: "chevron.up")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(viewedCollapsed ? 180 : 0))
-                            .padding(.trailing, StoryListRow.margin)
-                            // Audit #17: the heading text carries 16 above and 4 below; the same here
-                            // so the two centre on the same line.
-                            .padding(.top, 16)
-                            .padding(.bottom, 4)
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, StoryListRow.margin)
+                    .padding(.top, 16)
+                    .padding(.bottom, 4)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

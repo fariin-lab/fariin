@@ -6010,6 +6010,27 @@ struct StoryForwardSheet: View {
 ///
 /// `oneTime` is tested FIRST because a View Once story carries the audience it was posted to AND its
 /// own rule, and the rule is the narrower of the two.
+/// ⛔ THE NAME BACK, WHEN THIS PHONE LOST IT (owner, 2026-10-11: "the name I gave always says
+/// Custom"). The name lives only on this phone, so a reinstall, a sign-out or another phone leaves
+/// it behind. My own story still holds who it went to (hashed), and my custom lists hold who is in
+/// them: the list that covers everybody the story went to, with the fewest others, is the one it was
+/// posted to. Remembered once found, so the match runs once per story. Several lists posted together
+/// go to their union, which no single list covers, and keep reading "Custom".
+func recoveredAudienceName(_ s: Story) -> String? {
+    guard let sent = s.recipientTokens, !sent.isEmpty else { return nil }
+    let story = Set(sent)
+    var best: (name: String, extra: Int)?
+    for list in StoryAudienceStore.shared.custom where !list.name.isEmpty {
+        let tokens = Set(StoryAudienceToken.tokens(list.members))
+        guard story.isSubset(of: tokens) else { continue }
+        let extra = tokens.count - story.count
+        if best == nil || extra < best!.extra { best = (list.name, extra) }
+    }
+    guard let name = best?.name else { return nil }
+    StoryPrefs.rememberAudienceName(storyId: s.id, tag: StoryAudienceTag(label: "custom", name: name))
+    return name
+}
+
 func storyAudienceTitle(for s: Story) -> String {
     if s.oneTime { return "View once" }
     switch s.audienceLabel {
@@ -6029,7 +6050,7 @@ func storyAudienceTitle(for s: Story) -> String {
         // reads the one the post in flight was given.
         let name = StoriesService.isPending(s.id)
             ? StoriesService.shared.uploadingAudienceName(for: s.id)
-            : (StoryPrefs.audienceName(storyId: s.id) ?? "")
+            : (StoryPrefs.audienceName(storyId: s.id) ?? recoveredAudienceName(s) ?? "")
         return name.isEmpty ? "Custom" : name
     default: return "My Chats"
     }
