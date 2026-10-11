@@ -141,8 +141,12 @@ struct StoriesTabView: View {
                 // capsule in his mockup because iOS groups adjacent trailing items that way.
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { moreMenu }
-                    ToolbarItem(placement: .topBarTrailing) { notificationsButton }
-                    ToolbarItem(placement: .topBarTrailing) { addStoryButton }
+                    // Owner 2026-10-11: bell and add-story taken off the header ("I don't need
+                    // it"); the camera on My Story's row posts now. Both views are kept below.
+                    if !AppFeatures.storyList {
+                        ToolbarItem(placement: .topBarTrailing) { notificationsButton }
+                        ToolbarItem(placement: .topBarTrailing) { addStoryButton }
+                    }
                 }
                 .connectionTitle()   // 2026-09-24 fix-all #173: "Connecting" / "Waiting for network" here too
                 // ⛔ THE SAME CALL THE CHAT LIST AND THE CALLS PAGE MAKE, placement and all — owner,

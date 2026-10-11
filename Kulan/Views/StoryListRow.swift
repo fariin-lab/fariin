@@ -60,14 +60,16 @@ struct StoryListRow: View {
             }
             Spacer(minLength: 8)
             if let onCamera {
+                // Owner 2026-10-11: the add-story mark, on Liquid Glass.
                 Button(action: onCamera) {
-                    Image(systemName: "camera")
-                        .font(.system(size: 18, weight: .regular))
+                    Image("ic_new_story").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 22, height: 22)
                         .foregroundStyle(.primary)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(Color(uiColor: .secondarySystemFill)))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
                 .accessibilityLabel("Add Story")
             }
         }
