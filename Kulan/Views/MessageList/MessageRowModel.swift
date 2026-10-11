@@ -301,6 +301,9 @@ enum BubbleBody: Equatable {
             /// the message text, not from a stored preview, so every call link ever sent gets the
             /// card. The bubble adds a "Join Call" button under the words.
             case call(key: String)
+            /// One of our story links (fariin.com/<username>/s/<id>): the author's name, the
+            /// picture, the caption and a View Story button, which opens it in the app.
+            case story(id: String, handle: String?)
         }
         var shape: Shape
         var url: String

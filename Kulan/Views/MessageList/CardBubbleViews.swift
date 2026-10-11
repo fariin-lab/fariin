@@ -160,6 +160,15 @@ final class LinkPreviewBubbleView: UIView {
         if let rect = plan.hero {
             hero.isHidden = false
             hero.frame = rect
+            // A story card's picture sits inside the card with its own corners; an article's runs
+            // edge to edge and the card clips it.
+            if case .story = p.shape {
+                hero.layer.cornerRadius = 8
+                hero.layer.cornerCurve = .continuous
+                hero.clipsToBounds = true
+            } else {
+                hero.layer.cornerRadius = 0
+            }
             // `smallSync` in the SwiftUI card's terms: a preview picture is small and is read
             // synchronously off disk, so it is there on the first frame instead of a beat late.
             hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid)

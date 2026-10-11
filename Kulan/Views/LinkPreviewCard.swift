@@ -43,6 +43,8 @@ struct LinkPreviewCard: View {
     var body: some View {
         if let handle = profileHandle {
             profileCard(handle)
+        } else if let link = URL(string: preview.url).flatMap({ LinkPreviewService.storyLink(in: $0) }) {
+            storyCard(id: link.id, handle: link.handle)
         } else {
             articleCard
         }
@@ -112,6 +114,61 @@ struct LinkPreviewCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(fg.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: - A story
+
+    /// The UIKit list's story card (`MessageRowLayout.linkPreview`, `.story`) for this path: name,
+    /// picture, caption, View Story. The whole card opens it, as the button does.
+    @ViewBuilder private func storyCard(id: String, handle: String?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(preview.title.isEmpty ? "Story" : preview.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(fg).lineLimit(1)
+                if let img = preview.imageUrl {
+                    Group {
+                        if let enc = preview.imageEnc {
+                            SecureImageView(imageUrl: img, enc: enc, cid: cid, smallSync: true)
+                        } else if let ui = DiskImageCache.shared.smallImageSync(img) {
+                            Image(uiImage: ui).resizable().scaledToFill()
+                        } else {
+                            Rectangle().fill(fg.opacity(0.10))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(0.8, contentMode: .fit)
+                    .frame(maxHeight: 320)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                if !preview.desc.isEmpty {
+                    Text(preview.desc)
+                        .font(.system(size: 13))
+                        .foregroundStyle(fg.opacity(0.75))
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider().overlay(fg.opacity(0.12))
+            Text(openFailure ?? "View Story")
+                .font(.system(size: 14, weight: openFailure == nil ? .semibold : .regular))
+                .foregroundStyle(openFailure == nil ? fg : fg.opacity(0.75))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity).frame(height: 40)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(fg.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture {
+            Task { @MainActor in
+                if !(await StoryDoor.openLink(storyId: id, handle: handle)) {
+                    showOpenFailure("Story unavailable")
+                }
+            }
+        }
     }
 
     private func cardImage(_ key: String) -> UIImage? {

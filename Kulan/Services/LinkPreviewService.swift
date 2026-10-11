@@ -49,6 +49,9 @@ actor LinkPreviewService {
             if let handle = Self.profileHandle(in: url) {
                 return await Self.profileDraft(url: url, handle: handle)
             }
+            if let link = Self.storyLink(in: url) {
+                return await Self.storyDraft(url: url, id: link.id, handle: link.handle)
+            }
             return await Self.fetch(url)
         }
         inFlight[key] = task
@@ -85,6 +88,73 @@ actor LinkPreviewService {
         guard parts.count == 2, parts[0] == "u" else { return nil }
         let handle = parts[1].trimmingCharacters(in: .whitespaces)
         return handle.isEmpty ? nil : handle
+    }
+
+    /// The story in one of OUR story links: fariin.com/<username>/s/<id>, or the older /s/<id>.
+    static func storyLink(in url: URL) -> (id: String, handle: String?)? {
+        guard let host = url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
+              host == "fariin.com" else { return nil }
+        let parts = url.path.split(separator: "/").map(String.init)
+        if parts.count == 3, parts[1] == "s", !parts[0].isEmpty, !parts[2].isEmpty {
+            return (parts[2], parts[0])
+        }
+        if parts.count == 2, parts[0] == "s", !parts[1].isEmpty { return (parts[1], nil) }
+        return nil
+    }
+
+    /// THE CARD FOR A STORY LINK (owner, 2026-10-11, the reference app's card): the author's name,
+    /// the picture, the caption. Built on the sender's phone from the story it already holds, or from
+    /// the author's public stories, and sent as a snapshot like every other preview. A video's length
+    /// is drawn onto the picture, so the card needs no new field in the message. Nil when the story
+    /// cannot be found: the link stays a plain link, which still opens it.
+    private static func storyDraft(url: URL, id: String, handle: String?) async -> LinkDraft? {
+        let held: (String, Story)? = await MainActor.run {
+            let repo = StoriesRepository.shared
+            for g in repo.others + [repo.mine].compactMap({ $0 }) {
+                if let s = g.stories.first(where: { $0.id == id }) {
+                    return (g.isMine ? (ProfileStore.shared.me?.name ?? g.name) : g.name, s)
+                }
+            }
+            return nil
+        }
+        var found = held
+        if found == nil, let handle, let user = await ChatService.findByHandle(handle, allowSelf: true),
+           let g = await StoriesRepository.shared.publicStoryGroup(for: user.id, name: user.name,
+                                                                   photoUrl: user.photoUrl),
+           let s = g.stories.first(where: { $0.id == id }) {
+            found = (user.name, s)
+        }
+        guard let hit = found else { return nil }
+        let (name, story) = hit
+        let picture = story.isVideo ? story.thumbUrl : story.mediaUrl
+        var image = await StoryViewer.storyImage(picture)
+        if let img = image { image = storyCardImage(img, duration: story.isVideo ? story.duration : nil) }
+        return LinkDraft(url: url, title: name.trimmingCharacters(in: .whitespaces),
+                         desc: story.caption, image: image)
+    }
+
+    /// The story picture at most 600 points tall, and for a video its length in a small dark pill in
+    /// the lower left corner, the way the reference card marks one.
+    private static func storyCardImage(_ img: UIImage, duration: Double?) -> UIImage {
+        let scale = min(1, 600 / max(img.size.height, 1))
+        let size = CGSize(width: (img.size.width * scale).rounded(), height: (img.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
+            guard let d = duration, d > 0 else { return }
+            let secs = Int(d.rounded())
+            let text = String(format: "%d:%02d", secs / 60, secs % 60) as NSString
+            let font = UIFont.systemFont(ofSize: max(14, size.height * 0.04), weight: .semibold)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
+            let t = text.size(withAttributes: attrs)
+            let pad = font.pointSize * 0.5
+            let pill = CGRect(x: pad, y: size.height - pad - t.height - pad * 0.6,
+                              width: t.width + pad * 1.4, height: t.height + pad * 0.6)
+            UIColor.black.withAlphaComponent(0.5).setFill()
+            UIBezierPath(roundedRect: pill, cornerRadius: pill.height / 2).fill()
+            text.draw(at: CGPoint(x: pill.minX + pad * 0.7, y: pill.minY + pad * 0.3), withAttributes: attrs)
+        }
     }
 
     /// The card for a profile link. `title` carries the name, `desc` the @handle, and the image is

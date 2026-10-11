@@ -687,6 +687,14 @@ final class StoriesService {
     static let uploadingStoryId = "story.uploading.placeholder"
     static func isPending(_ storyId: String) -> Bool { storyId.hasPrefix(uploadingStoryId) }
 
+    /// A NEW STORY'S ID: 10 random letters and digits, not a 36-character UUID, so its link is short
+    /// (owner, 2026-10-11). 62^10 is about 8e17, far past any collision a 24-hour story could meet.
+    static func newStoryId() -> String {
+        let chars = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+        var rng = SystemRandomNumberGenerator()
+        return String((0..<10).map { _ in chars[Int(rng.next(upperBound: UInt64(chars.count)))] })
+    }
+
     /// The newest post's picture — what the story ROW draws on its single "Uploading…" card. The row
     /// has one slot for my story whatever is happening behind it; the viewer is where they are all
     /// visible.
@@ -1380,7 +1388,7 @@ final class StoriesService {
         // then reads a number lower than the truth. That direction is already the designed one: the
         // limit exists to stop a runaway loop, and it fails open everywhere else for the same reason.
         Task.detached { [weak self] in await self?.countStoryAgainstBudget() }
-        let storyId = UUID().uuidString
+        let storyId = Self.newStoryId()
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
         // THE PHOTO STARTS MOVING FIRST. Everything below used to be strictly serial — resolve the
@@ -1713,7 +1721,7 @@ final class StoriesService {
         try Task.checkCancellation()
 
         Task.detached { [weak self] in await self?.countStoryAgainstBudget() }   // never in front of the post
-        let storyId = UUID().uuidString
+        let storyId = Self.newStoryId()
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,

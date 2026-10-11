@@ -238,6 +238,31 @@ enum StoryDoor {
     /// The original is looked for among the stories THIS viewer can see, which is the audience test
     /// itself: a story that expired, was deleted, or was never sent to me is not in the repository,
     /// and the answer is false so the caller can fall back to the author's profile.
+    /// A STORY LINK, OPENED IN THE APP (owner, 2026-10-11: tapping one in a chat asked "Open link?").
+    ///
+    /// First among the stories this phone already holds, which covers my own and everything sent to
+    /// me. Then, when the link names its author, that author's public stories, which is the only
+    /// other way a link can exist: Share is offered on Everyone stories alone. False means it has
+    /// expired, was deleted, or was never mine to see, and the caller says so.
+    static func openLink(storyId: String, handle: String?) async -> Bool {
+        guard !StoryZoomPresenter.isActive else { return false }
+        let repo = StoriesRepository.shared
+        if var group = (repo.others + [repo.mine].compactMap { $0 })
+            .first(where: { $0.stories.contains { $0.id == storyId } }) {
+            group.stories = group.stories.filter { $0.id == storyId }
+            open(group, from: "", deliveredToMe: !group.isMine)
+            return true
+        }
+        guard let handle, !handle.isEmpty,
+              let user = await ChatService.findByHandle(handle, allowSelf: false),
+              var group = await repo.publicStoryGroup(for: user.id, name: user.name,
+                                                      photoUrl: user.photoUrl),
+              let one = group.stories.first(where: { $0.id == storyId }) else { return false }
+        group.stories = [one]
+        open(group, from: "")
+        return true
+    }
+
     @discardableResult
     static func reopen(onStory storyId: String, by authorUid: String) -> Bool {
         let repo = StoriesRepository.shared

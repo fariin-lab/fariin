@@ -1748,6 +1748,52 @@ enum MessageRowLayout {
                                     divider: divider, button: button,
                                     buttonLabel: buttonLabel, buttonAttr: buttonAttr))
 
+        case .story:
+            // The reference app's story card: the author's name, the picture with its own rounded
+            // corners, the caption, then the profile card's divider and button, worded View Story.
+            y = 8
+            let titleAttr = NSAttributedString(string: p.title.isEmpty ? "Story" : p.title, attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: textColor])
+            let tH = lineSizeOf(titleAttr, cap: inner).height
+            let title = CGRect(x: pad, y: y, width: inner, height: tH)
+            y += tH + 6
+            var hero: CGRect?
+            if p.imageUrl != nil {
+                let h = min(320, (inner * 1.25).rounded())
+                hero = CGRect(x: pad, y: y, width: inner, height: h)
+                y += h + 6
+            }
+            var subtitle: CGRect?
+            var subtitleAttr: NSAttributedString?
+            if !p.desc.isEmpty {
+                let attr = NSAttributedString(string: p.desc, attributes: [
+                    .font: UIFont.systemFont(ofSize: 13),
+                    .foregroundColor: textColor.withAlphaComponent(0.75)])
+                let h = cappedHeight(attr, width: inner, lines: 2)
+                subtitle = CGRect(x: pad, y: y, width: inner, height: h)
+                subtitleAttr = attr
+                y += h + 6
+            }
+            y += 2
+            let divider = CGRect(x: 0, y: y, width: width, height: BubbleMetrics.hairline)
+            y += BubbleMetrics.hairline
+            let attr = NSAttributedString(string: "View Story", attributes: [
+                .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
+            let size = lineSizeOf(attr)
+            let b = CGRect(x: 0, y: y, width: width, height: 40)
+            y = b.maxY
+
+            return (CGSize(width: width, height: y),
+                    LinkPreviewPlan(card: .zero, hero: hero, avatar: nil,
+                                    title: title, titleAttr: titleAttr,
+                                    subtitle: subtitle, subtitleAttr: subtitleAttr,
+                                    host: nil, hostAttr: nil,
+                                    divider: divider, button: b,
+                                    buttonLabel: CGRect(x: b.midX - size.width / 2,
+                                                        y: b.midY - size.height / 2,
+                                                        width: size.width, height: size.height),
+                                    buttonAttr: attr))
+
         case .call:
             // The profile card's row, with a tinted circle and a video glyph where the photo sits,
             // and a third line for the domain. The Join button is NOT in the card; the bubble

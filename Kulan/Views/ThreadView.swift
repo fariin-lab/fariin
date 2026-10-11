@@ -3709,6 +3709,7 @@ struct ThreadView: View {
             openProfileHandle(handle)
             return
         }
+        if openStoryLink(url) { return }
         guard url.scheme == "kulan", url.host == "u" else {
             tappedLink = url
             return
@@ -3724,6 +3725,19 @@ struct ThreadView: View {
     /// refuses yourself). You are already where it leads, so it opens the keyboard. Anyone else's
     /// chat slides in over this one, from the lookup made when the card was drawn
     /// (`ProfileCardDoor`). A name nobody holds says so.
+    /// ⛔ A STORY LINK OPENS THE STORY, NOT "Open link?" (owner, 2026-10-11). The link, its card and
+    /// the card's View Story button all come here. One that cannot be found says so.
+    private func openStoryLink(_ url: URL) -> Bool {
+        guard let link = LinkPreviewService.storyLink(in: url) else { return false }
+        inputFocused = false
+        Task { @MainActor in
+            if !(await StoryDoor.openLink(storyId: link.id, handle: link.handle)) {
+                statusUnavailable = true
+            }
+        }
+        return true
+    }
+
     private func openProfileHandle(_ handle: String) {
         let mine = (ProfileStore.shared.me?.handle ?? "").lowercased()
         let asked = handle.trimmingCharacters(in: .whitespaces).lowercased()
@@ -3894,6 +3908,7 @@ struct ThreadView: View {
                     openProfileHandle(handle)
                     return
                 }
+                if openStoryLink(u) { return }
                 WebLink.open(u)   // the in-app Safari sheet, not a trip out to Safari
             },
             onTapLinkProfile: { id in
@@ -9094,6 +9109,13 @@ struct MessageBubble: View, Equatable {
         // door as `routeThreadURL` on the UIKit rows.
         if case .call(let key)? = KulanApp.route(from: url) {
             CallLinkDoor.open(key: key)
+            return .handled
+        }
+        // A story link: the story, same as `routeThreadURL`. Not found falls back to the confirm.
+        if let link = LinkPreviewService.storyLink(in: url) {
+            Task { @MainActor in
+                if !(await StoryDoor.openLink(storyId: link.id, handle: link.handle)) { onConfirmLink(url) }
+            }
             return .handled
         }
         if url.scheme == "kulan", url.host == "u" {

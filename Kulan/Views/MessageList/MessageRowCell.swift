@@ -467,6 +467,11 @@ final class MessageRowCell: UICollectionViewCell {
                 delegate?.rowCellDidTapCallJoin(self)
                 return
             }
+            // A story card: its button and its body both open the story, which the card tap does.
+            if rowView.hitsLinkCard(p), case .text(let t) = b.body, case .story? = t.linkPreview?.shape {
+                delegate?.rowCellDidTapLinkCard(self)
+                return
+            }
             // The card's BUTTON before the card, for the same reason the contact card's is.
             if rowView.hitsLinkButton(p) {
                 delegate?.rowCellDidTapLinkProfile(self)

@@ -112,11 +112,16 @@ struct KulanApp: App {
             AppRouter.shared.pendingUserHandle = handle
         case .call(let key):
             joinCallLink(key: key)
-        case .story:
-            // Deliberately nothing yet, and the shape is still parsed on purpose — see `DeepLink`.
-            // Doing nothing is the right behaviour until the site serves these: a half-built handler
-            // that opened the wrong screen would be worse than the link being inert.
-            return
+        case .story(let id, let handle):
+            // Opened in the app (owner, 2026-10-11). A launch from the link lands before sign-in has
+            // finished, so it waits for the uid the way a call link does.
+            Task { @MainActor in
+                for _ in 0..<40 where AuthService.shared.uid == nil {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+                guard AuthService.shared.uid != nil else { return }
+                _ = await StoryDoor.openLink(storyId: id, handle: handle)
+            }
         }
     }
 
@@ -144,7 +149,7 @@ struct KulanApp: App {
     /// serve `/s/<id>` and the apple-app-site-association file on fariin.com to claim that path, and
     /// neither is done. Parsed now so a link shared today is a link the app already understands the
     /// day those two land, rather than one it has to be taught to recognise afterwards.
-    enum DeepLink: Equatable { case user(String), group(String), story(String), call(key: String) }
+    enum DeepLink: Equatable { case user(String), group(String), story(String, handle: String?), call(key: String) }
 
     /// The web host every shared link points at. One constant, because the entitlement, the
     /// apple-app-site-association file on fariin.com and the parser below must all name the same
@@ -174,8 +179,23 @@ struct KulanApp: App {
     /// for ever, with no account, after the story has expired and after it has been deleted. Sharing
     /// a story must hand over a reference the app and the site can decide about, not a key to the
     /// bucket.
-    static func storyLink(id: String) -> String {
-        "\(linkHost)/s/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)"
+    ///
+    /// ⛔ SHORT, AND IT NAMES THE AUTHOR (owner, 2026-10-11, "make it short"): fariin.com/<username>/s/<id>,
+    /// the reference app's shape. The username is what lets someone the story was never sent to find
+    /// it on the author's public stories. No username yet: the old /s/<id> form, still understood.
+    static func storyLink(id: String, handle: String? = nil) -> String {
+        let i = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let h = (handle ?? ProfileStore.shared.me?.handle ?? "").trimmingCharacters(in: .whitespaces)
+        guard !h.isEmpty, let he = h.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            return "\(linkHost)/s/\(i)"
+        }
+        return "\(linkHost)/\(he)/s/\(i)"
+    }
+
+    /// One path piece that is safe to use as a Firestore document id (see the note in `route`).
+    static func safeSegment(_ value: String) -> Bool {
+        !value.isEmpty && !value.contains("/") && value != "." && value != ".."
+            && !(value.hasPrefix("__") && value.hasSuffix("__")) && value.count <= 128
     }
 
     /// Reads either link shape into one answer. Static and pure so it can be tested without a
@@ -218,6 +238,12 @@ struct KulanApp: App {
                       let key = CallLinkKey(text: String(raw)) else { return nil }
                 return .call(key: key.text)
             }
+            // The short story link: /<username>/s/<id>.
+            if parts.count == 3, parts[1] == "s" {
+                let h = parts[0], id = parts[2]
+                guard Self.safeSegment(h), Self.safeSegment(id) else { return nil }
+                return .story(id, handle: h)
+            }
             guard parts.count >= 2 else { return nil }
             kind = parts[0]
             value = parts[1]
@@ -232,14 +258,12 @@ struct KulanApp: App {
         // (`findByHandle` → `usernames/<value>`). `document(_:)` does not fail on a bad id, it raises
         // an ObjC exception nothing can catch, so a hostile link crashed the app on tap. Refused here,
         // once, for all three shapes; no real handle, invite code or story id looks like these.
-        guard !value.contains("/"), value != ".", value != "..",
-              !(value.hasPrefix("__") && value.hasSuffix("__")),
-              value.count <= 128 else { return nil }
+        guard Self.safeSegment(value) else { return nil }
         let custom = url.scheme?.lowercased() == "kulan"
         switch kind {
         case "u": return .user(value)
         case "g": return .group(value)
-        case "s": return .story(value)
+        case "s": return .story(value, handle: nil)
         // The web landing page's "Open in Kulan" button, for a phone that had the app but did not
         // get the universal link: kulan://video/<22-char id>, kulan://voice/<id>, and
         // kulan://call/<bcdf-ghkm-…> for the old form. Custom scheme only; the https shapes were

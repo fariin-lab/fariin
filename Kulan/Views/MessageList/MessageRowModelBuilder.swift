@@ -582,6 +582,8 @@ enum MessageRowModelBuilder {
             // Looked up now, so the card's Send Message has nothing left to wait for.
             ProfileCardDoor.prewarm(handle)
             shape = .profile(handle: handle)
+        } else if let link = URL(string: p.url).flatMap({ LinkPreviewService.storyLink(in: $0) }) {
+            shape = .story(id: link.id, handle: link.handle)
         } else {
             shape = .article
         }
