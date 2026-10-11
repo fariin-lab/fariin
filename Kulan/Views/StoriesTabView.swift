@@ -715,7 +715,8 @@ struct StoriesTabView: View {
                                      : "",
                                  backBlurThumb: mine.stories.count > 1 ? mine.stories[mine.stories.count - 2].blurThumb : "",
                                  rectKey: mine.id,
-                                 onCamera: { composeStory() })
+                                 onCamera: { composeStory() },
+                                 pressKey: StoryListRow.pressKey(mine.id))
                 }
                 .buttonStyle(.plain)
             } else {
@@ -769,13 +770,13 @@ struct StoriesTabView: View {
                 }
             }
         }
-        .padding(.top, 12)
-        .padding(.bottom, 24)
+        .padding(.top, 12 - StoryListRow.rowPad)
+        .padding(.bottom, 24 - StoryListRow.rowPad)
         .onChange(of: storyDoorState.isOpen || storyDoorState.orderHeldForSession, initial: true) { _, held in
             // Latched at the OPEN, so it holds the split as it stood before the story was watched.
             viewedHold = held ? Set(visibleFriends.filter { !$0.hasUnseen }.map(\.id)) : nil
         }
-        .glowCardLongPress { friendsGridTarget(at: $0, corner: StoryListRow.corner) }
+        .glowCardLongPress { listRowTarget(at: $0) }
     }
 
     private func listHeading(_ title: String) -> some View {
@@ -783,8 +784,10 @@ struct StoriesTabView: View {
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, StoryListRow.margin)
-            .padding(.top, 4)
-            .padding(.bottom, -8)
+            // The rows carry 12 of padding each side now (`StoryListRow.rowPad`) and the stack
+            // has no spacing; 16 above and 4 below put the heading exactly where it was.
+            .padding(.top, 16)
+            .padding(.bottom, 4)
     }
 
     private func friendListRow(_ g: StoryGroup) -> some View {
@@ -796,9 +799,25 @@ struct StoriesTabView: View {
                          authorName: g.name,
                          authorPhoto: g.photoUrl,
                          seen: !g.hasUnseen,
-                         rectKey: g.id)
+                         rectKey: g.id,
+                         pressKey: StoryListRow.pressKey(g.id))
         }
         .buttonStyle(.plain)
+    }
+
+    /// The list's long press: the WHOLE ROW under the finger, not just its picture. Same menus as
+    /// the grid and the strip.
+    private func listRowTarget(at p: CGPoint) -> StoryMenuTarget? {
+        if let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty,
+           let t = GlowCardPress.target(StoryListRow.pressKey(mine.id), at: p,
+                                        actions: myStoryActions(mine), corner: StoryListRow.pressCorner) {
+            return t
+        }
+        for g in visibleFriends {
+            if let t = GlowCardPress.target(StoryListRow.pressKey(g.id), at: p, actions: friendActions(g),
+                                            corner: StoryListRow.pressCorner) { return t }
+        }
+        return nil
     }
 
     // MARK: - Glow

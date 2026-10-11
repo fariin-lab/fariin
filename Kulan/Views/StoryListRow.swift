@@ -16,7 +16,16 @@ struct StoryListRow: View {
     /// continuous (squircle) curve at a slightly larger radius, the shape the system draws.
     static let corner: CGFloat = 14
     static let margin: CGFloat = 20
-    static let rowSpacing: CGFloat = 24
+    /// ⛔ THE GAP BETWEEN ROWS LIVES INSIDE EACH ROW NOW — owner, 2026-10-11: "long press works
+    /// only on the image, make it the whole line". Half the old 24 above and below, so the row's
+    /// press area is the full band between its neighbours and the page looks exactly the same.
+    static let rowSpacing: CGFloat = 0
+    static let rowPad: CGFloat = 12
+    /// The corner the lifted row is cut with.
+    static let pressCorner: CGFloat = 20
+    /// The key the whole row registers for the long press. The picture keeps the group's own id
+    /// for the open/close morph, so the two never collide.
+    static func pressKey(_ id: String) -> String { "listrow-\(id)" }
     /// The author's face on the picture's bottom-right corner, ring included.
     static let face: CGFloat = 26
     static let ring: CGFloat = 2
@@ -48,6 +57,8 @@ struct StoryListRow: View {
     var rectKey: String? = nil
     /// The camera circle on the right of my own row.
     var onCamera: (() -> Void)? = nil
+    /// The whole row's press key (`pressKey(_:)`). nil = no long press on this row.
+    var pressKey: String? = nil
 
     @Environment(\.colorScheme) private var scheme
 
@@ -82,7 +93,9 @@ struct StoryListRow: View {
             }
         }
         .padding(.horizontal, Self.margin)
+        .padding(.vertical, Self.rowPad)
         .contentShape(Rectangle())
+        .modifier(MediaRectReporter(id: pressKey ?? "", scope: .storyRow, cornerRadius: Self.pressCorner))
     }
 
     /// Back picture (if any) → front picture → face. The face hangs past the picture's corner, so
