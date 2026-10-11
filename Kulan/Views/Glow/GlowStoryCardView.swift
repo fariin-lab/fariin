@@ -201,7 +201,10 @@ struct GlowStoryCardView: View {
     /// tracks the corner: text inset by `d` from two edges only clears a corner of radius `r` when
     /// `d > r(1 - 1/√2)`, about `0.293r`. The floor of 10 keeps the tighter tile cards from pushing
     /// the name flat against the picture's edge.
-    private var nameInset: CGFloat { max(10, ceil(0.41 * corner)) }
+    /// ⛔ 0.47, UP FROM 0.41 — owner, 2026-10-10, names ringed: keep the name inside the card's
+    /// safe area, away from the edge. On the 34pt card that is 16, the system content margin
+    /// (was 14).
+    private var nameInset: CGFloat { max(10, ceil(0.47 * corner)) }
 
     /// The face's diameter on a card of this width — see `Self.avatarRatio` for why it is a
     /// fraction and not the typed 48 it used to be.
