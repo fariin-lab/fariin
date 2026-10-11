@@ -28,6 +28,10 @@ struct StoryListRow: View {
     static func pressKey(_ id: String) -> String { "listrow-\(id)" }
     /// Where the name and time sit, so the long press can lift them with the picture.
     static func textKey(_ id: String) -> String { "listtext-\(id)" }
+    /// The face circle's own rect, for the flying avatar. The photo inside it is inset by
+    /// `gap + ring` on every side (`faceView`).
+    static func faceKey(_ id: String) -> String { "listface-\(id)" }
+    static var facePhotoInset: CGFloat { gap + ring }
     /// The face (or + badge) as drawn: its diameter and how far it hangs past the picture's
     /// bottom-trailing corner. The lift cuts its shape from these.
     static var faceDiameter: CGFloat { face + 2 * (gap + ring) }
@@ -168,7 +172,20 @@ struct StoryListRow: View {
             // leave and return on the same frame, and nothing is moved or re-parented.
             Group {
                 if addBadge { plusBadge.offset(x: 6, y: 6) }
-                else if showsFace { faceView.offset(x: 7, y: 5) }
+                else if showsFace {
+                    faceView
+                        // Where the face is, for the flying avatar to leave from and land on
+                        // (`StoryViewer.placeFlightAvatar`). Measured inside the offset, so it is
+                        // the face as drawn.
+                        .background(GeometryReader { g in
+                            Color.clear.onChange(of: g.frame(in: .global), initial: true) { _, f in
+                                guard let id = rectKey, !id.isEmpty else { return }
+                                MediaOpenRects.capture(MediaOpenRects.key(.storyRow, Self.faceKey(id)), f,
+                                                       cornerRadius: f.width / 2)
+                            }
+                        })
+                        .offset(x: 7, y: 5)
+                }
             }
             .modifier(HidesWithSource(id: rectKey ?? ""))
         }

@@ -648,6 +648,13 @@ struct StoryDetailView: View {
                             // part of the phone rather than part of the story. This is what he circled.
                             .overlay(
                                 getUserInfoAndProgressBar(with: index)
+                                    // The header avatar is measured in this block's own space, and
+                                    // the block's width places it in the card — both for the flying
+                                    // avatar (`StoryCardMorph.headerAvatarLocal`).
+                                    .coordinateSpace(name: StoryCardMorph.headerSpace)
+                                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                                        StoryCardMorph.headerBlockWidth = $0
+                                    }
                                     // Chrome-only fades: on a real hold, AND while the viewers sheet is
                                     // engaged (host posts storyChromeHidden). ONLY these overlays
                                     // animate — the story image itself must never fade, flash, or

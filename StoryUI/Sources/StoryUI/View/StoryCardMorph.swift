@@ -440,6 +440,25 @@ public final class StoryCardMorph {
     /// is every arrival and every teardown, so it can never outlive the flight that raised it.
     public static var flightChromeHidden = false
 
+    /// ⛔ THE HEADER AVATAR'S PLACE, FOR THE FLYING AVATAR — owner, 2026-10-11 ("the avatar like the
+    /// reference app when I open a story"). Written by the header itself (`UserView`), measured in
+    /// the header block's own coordinate space, so no flight transform can bend it. `headerBlockWidth`
+    /// is that block's width, so the host can place it inside the card (the block is centred at the
+    /// card's top). Read by the app's hero flight to land a floating copy exactly on this circle.
+    public static var headerAvatarLocal: CGRect?
+    public static var headerBlockWidth: CGFloat = 0
+    /// The coordinate space the two numbers above are measured in.
+    public static let headerSpace = "storyHeaderBlock"
+    /// While a floating copy stands in for the header avatar, the real one is hidden (the same
+    /// seed-at-mount + notification pattern as `flightChromeHidden`, for the same reason: a page is
+    /// born mid-open and would otherwise miss the "hide").
+    public static var headerAvatarHidden = false {
+        didSet {
+            guard headerAvatarHidden != oldValue else { return }
+            NotificationCenter.default.post(name: .storyHeaderAvatarHidden, object: headerAvatarHidden)
+        }
+    }
+
     /// Identity-checked for the same reason `detach` is: a teardown must never clear a successor's
     /// registration.
     public func detachFlight(_ view: UIView?) {
@@ -501,6 +520,8 @@ public final class StoryCardMorph {
     /// be solid black, or a friend's full-bleed story would show the chat list through its own
     /// letterbox.
     public func resetFlight() {
+        // The flying avatar's stand-in is over with the flight (`headerAvatarHidden`).
+        StoryCardMorph.headerAvatarHidden = false
         // The flight is over: nothing the caches describe is on screen any more, and a stale key
         // would let the next flight skip a rebuild it needs. See `lastCutKey`.
         lastCutKey = nil
@@ -1451,4 +1472,9 @@ public final class StoryCardMorph {
         // which means the thing that grows out of the row reads as one card end to end.
         surround.cornerRadius = max(0, min(outsideRadius, min(card.bounds.width, card.bounds.height) / 2))
     }
+}
+
+public extension Notification.Name {
+    /// object = Bool, the new `StoryCardMorph.headerAvatarHidden`.
+    static let storyHeaderAvatarHidden = Notification.Name("storyHeaderAvatarHidden")
 }

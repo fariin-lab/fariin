@@ -54,6 +54,17 @@ enum StoryZoomPresenter {
     /// the cover photographed at tap time is a picture of somebody else — which forced the close
     /// after a swipe onto a second, fade-style landing he reported as "a different transition".
     /// The door photographs the new card and swaps it in here; the same landing can then wear it.
+    /// ⛔ THE FLYING AVATAR — owner, 2026-10-11, the reference app's story transition: the row's face
+    /// circle flies into the story header's avatar on the open, and back on the close. A plain
+    /// circular image view on the presented container, ABOVE the transformed flight view, so the
+    /// card's transform and mask never touch it; the hero flight places it every frame
+    /// (`StoryViewer.placeFlightAvatar`). Removed with the container on teardown.
+    static func flightAvatar(image: UIImage) -> UIImageView? {
+        guard let vc = container, vc.isViewLoaded else { return nil }
+        return vc.flightAvatarView(image)
+    }
+    static func removeFlightAvatar() { container?.removeFlightAvatarView() }
+
     static func retargetCover(_ image: UIImage, sourceKey: String) {
         guard let vc = container else { return }
         vc.retargetCover(image)
@@ -246,6 +257,27 @@ final class StoryZoomContainerVC: UIViewController {
     /// A `StoryCoverView`, not a bare UIImageView — see its note for the corner bleed it exists
     /// to hide, on the open and the close alike.
     private var coverView: StoryCoverView?
+    /// See `StoryZoomPresenter.flightAvatar`.
+    private var flightAvatar: UIImageView?
+
+    func flightAvatarView(_ image: UIImage) -> UIImageView {
+        if let v = flightAvatar {
+            if v.image !== image { v.image = image }
+            return v
+        }
+        let v = UIImageView(image: image)
+        v.contentMode = .scaleAspectFill
+        v.clipsToBounds = true
+        v.isUserInteractionEnabled = false
+        view.addSubview(v)      // above flightView: added last, and nothing is added after it
+        flightAvatar = v
+        return v
+    }
+
+    func removeFlightAvatarView() {
+        flightAvatar?.removeFromSuperview()
+        flightAvatar = nil
+    }
 
     init() {
         super.init(nibName: nil, bundle: nil)

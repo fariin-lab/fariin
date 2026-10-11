@@ -9,6 +9,8 @@ import SwiftUI
 import UIKit   // UIMenu + UIAction.subtitle - see StoryMoreMenu
 
 struct UserView: View {
+    /// Seeded at mount — a page born mid-open must start hidden. See `StoryCardMorph.headerAvatarHidden`.
+    @State private var avatarHidden = StoryCardMorph.headerAvatarHidden
 
     var image: String
     var name: String
@@ -176,6 +178,15 @@ struct UserView: View {
             // Tappable header block (avatar 38pt + name 14pt + timestamp 12pt) → profile.
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
+                    // The flying avatar lands here and stands in for this one while it flies —
+                    // see `StoryCardMorph.headerAvatarLocal` / `headerAvatarHidden`.
+                    .opacity(avatarHidden ? 0 : 1)
+                    .onGeometryChange(for: CGRect.self) {
+                        $0.frame(in: CoordinateSpace.named(StoryCardMorph.headerSpace))
+                    } action: { StoryCardMorph.headerAvatarLocal = $0 }
+                    .onReceive(NotificationCenter.default.publisher(for: .storyHeaderAvatarHidden)) {
+                        avatarHidden = ($0.object as? Bool) ?? false
+                    }
                 VStack(alignment: .leading, spacing: 2) {
                     // TWO SHAPES, AND THE AUDIENCE DECIDES WHICH. With a line to fit underneath,
                     // the name and the time share the top row: the time is a detail about the name,
