@@ -163,9 +163,11 @@ struct StoryListRow: View {
     private var plusBadge: some View {
         Image(systemName: "plus")
             .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(.white)
+            // Owner 2026-10-11: light mode is right as it is (black disc, white +); in dark mode the
+            // black disc vanished into the page, so it turns white with a black +.
+            .foregroundStyle(scheme == .dark ? Color.black : Color.white)
             .frame(width: 24, height: 24)
-            .background(Color.black, in: Circle())
+            .background(scheme == .dark ? Color.white : Color.black, in: Circle())
             .padding(2)
             .background(Circle().fill(scheme == .dark ? Color.black : Color.white))
             .allowsHitTesting(false)
