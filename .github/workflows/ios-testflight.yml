@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (862): SMOOTHER STORY SWIPE, STORY LIST POLISH.
+            THIS BUILD (863): NEW REPOSTS, STORY FIXES.
+            Reposts are rebuilt: photo and video reposts open as a rounded card with the original creator's photo and name over a gradient; tap the picture in the editor to switch to full screen and back. Tapping the middle of a repost pauses it and shows the creator's photo and name; tap it to open their profile. Story pictures are 66x94. The back picture of My Story hides with the front while a story is open. Long-press menu uses the app's own icons. Message from a profile opened on a story now opens the chat in Chats, so it scrolls and closes normally.
+            PLEASE TEST: repost a photo and a video, switch card / full screen, post, view from another account, tap the middle and both edges; open a story, tap the profile, tap Message, scroll and go back.
+
+            EARLIER (862): SMOOTHER STORY SWIPE, STORY LIST POLISH.
             The 3D swipe between people no longer lags: the background story download no longer decodes pictures while you watch, and the swipe asks for 120Hz while your finger is down. Story pictures are 56x84. Long press lifts the picture with its face, name and time. The picture you are posting shows at once while "Preparing...". The face ring has one segment per story, like the chat list. Headings are soft white and read My Story, Recent Stories, Viewed Stories.
             PLEASE TEST: swipe between several people in the viewer and check it feels smooth; long-press a row; post a story and check the picture shows at once; post 2-3 stories and check the ring segments.
 
