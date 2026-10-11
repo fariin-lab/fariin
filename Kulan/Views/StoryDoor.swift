@@ -372,9 +372,9 @@ enum StoryDoor {
                                       finish()
                                   },
                                   onProfile: { grp in
-                                      StoryZoomPresenter.finish()
+                                      // Same order as the viewer's own `profile` exit below.
                                       finish()
-                                      DispatchQueue.main.async { onProfile(grp) }
+                                      StoryZoomPresenter.finish { onProfile(grp) }
                                   }),
             coverFrom: liveView(sourceKey), coverRadius: sourceRadius(sourceKey),
             coverKey: sourceKey)
@@ -498,9 +498,11 @@ enum StoryDoor {
         // this is the belt for the paths that do.)
         let profile: (StoryGroup) -> Void = { grp in
             let onProfile = req.onProfile
-            StoryZoomPresenter.finish()
+            // `closed()` first and the profile once the screen is really gone — the repost-credit
+            // freeze's fix (`reopen`), for the same reason: on iOS 26 the stage is still leaving a
+            // tick later, and a presentation made then lands on it.
             closed()
-            DispatchQueue.main.async { onProfile(grp) }
+            StoryZoomPresenter.finish { onProfile(grp) }
         }
         if let idx = req.siblings.firstIndex(where: { $0.id == req.group.id }), req.siblings.count > 1 {
             StoryViewer(groups: req.siblings, startIndex: idx, startStoryId: req.startStoryId,
