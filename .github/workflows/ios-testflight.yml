@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (872): STORY FREEZE AFTER A REPOST, STORY LINK CARD, CONNECTION RECOVERY.
+            THIS BUILD (873): VIEW ONCE IN POSTED STORIES.
+            Posted Stories puts your View once stories in their own View once folder, and the filter menu has a View once option. There is one My Chats folder instead of two.
+            PLEASE TEST: post a View once story, open Posted Stories, look at All and at the View once filter.
+
+            EARLIER (872): STORY FREEZE AFTER A REPOST, STORY LINK CARD, CONNECTION RECOVERY.
             Tapping the original poster's name on a repost no longer freezes the Stories page: the original opens and every story still opens after it. View Story on a story link card now grows out of the card's picture, and pulling down flies back onto the card where it is now. When the connection to the server gets stuck, the app keeps trying to reconnect instead of giving up until a restart. Reposting draws the card without pausing the app. The Chats search field keeps its grey. Hidden Stories starts folded each time the app opens. The story cube turns like the reference app: a tap turns as fast as a swipe, on the same curve, and the turn is played by the system so it does not drop frames.
             PLEASE TEST: the Chats search field in dark and light mode, and after a back swipe; repost a story full screen, open it while it uploads, tap the original poster's name, then open other stories; tap View Story on a link card, scroll a little, pull down; if messages stop sending, wait a minute without restarting and tell us if they go through.
 
