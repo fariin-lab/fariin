@@ -711,7 +711,7 @@ struct StoriesTabView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Self.listHeadingColor)
                 .padding(.horizontal, StoryListRow.margin)
                 .padding(.top, 8)
                 .padding(.bottom, 0)   // the row below brings its own 12
@@ -816,10 +816,14 @@ struct StoriesTabView: View {
         .glowCardLongPress { listRowTarget(at: $0) }
     }
 
+    /// Owner 2026-10-11: the section headings were grey; "white but not too white, soft white".
+    /// The primary text colour at 85%, so dark mode gets a soft white and light mode a soft black.
+    private static let listHeadingColor = Color.primary.opacity(0.85)
+
     private func listHeading(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Self.listHeadingColor)
             .padding(.horizontal, StoryListRow.margin)
             // The rows carry 12 of padding each side now (`StoryListRow.rowPad`) and the stack
             // has no spacing; 16 above and 4 below put the heading exactly where it was.
