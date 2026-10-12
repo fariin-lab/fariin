@@ -380,7 +380,6 @@ final class StoryItemVideoView: UIView {
         let streamed: AVURLAsset? = (localFile == storyURL && !didRetryRemote)
             ? StoryVideoStream.asset(for: file) : nil
         let item = streamed.map { AVPlayerItem(asset: $0) }
-            ?? StoryItemPreloader.take(file)
             ?? AVPlayerItem(url: file)
         streamedAsset = streamed
         let p = AVPlayer(playerItem: item)

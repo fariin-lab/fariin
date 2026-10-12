@@ -269,37 +269,6 @@ public enum StoryPrefetcher {
                 })
             return
         }
-        videoCache.loadVideo(from: url, speculative: true, allowsCellular: allowsCellular,
-                             onTask: { task in
-            lock.lock(); running[urlString] = (task, window); lock.unlock()
-        }) { result in
-            release(urlString)
-            lock.lock(); running.removeValue(forKey: urlString); lock.unlock()
-            // ON DISK IS ONLY HALF OF IT. Building the asset, parsing the container, loading the
-            // tracks and filling the render pipeline all still happen when you ARRIVE unless they are
-            // done in advance, and all of it is visible as a wait. See StoryItemPreloader.
-            if case .success(let file) = result {
-                StoryItemPreloader.warm(file)
-                // ⚠️ AND THE CLIP'S OWN FIRST FRAME, AS A PICTURE, BEFORE ANYBODY REACHES IT.
-                //
-                // This is the reference app's `CachedVideoFirstFrameRepresentation`, which its
-                // preloader asks for on every item in its lookahead window alongside the poster and
-                // the byte prefix. It is the cover a video story is guaranteed to be able to show:
-                // a thumbnail upload can fail or still be in flight, but the clip on disk always
-                // contains its own opening frame.
-                //
-                // Ours generated this only on arrival, and only as a last resort once the poster
-                // had already missed — a decode started at the very moment the item went on screen,
-                // with a black card in front of it while it ran. Asking here makes it a cache hit
-                // by the time the item is built. `opening` de-duplicates and caps its own
-                // generators, so a fast tapper cannot pile these up.
-                //
-                // ⚠️ THE HOP IS NOT OPTIONAL. This completion is a download callback on a background
-                // queue and `StoryVideoFrames` is main-actor: it keeps its cache, its in-flight set
-                // and its landings in plain statics guarded by nothing but that isolation.
-                Task { @MainActor in StoryVideoFrames.warmOpening(file) }
-            }
-        }
     }
 
     /// `poster` is the few-KB cover, and it keeps cellular. Everything else is the story itself and

@@ -169,13 +169,6 @@ public struct StoryView: View {
             .onAppear { startStory() }
             .onDisappear {
                 stopVideo()
-                // ⚠️ THE PREPARED ITEMS GO WITH THE VIEWER. `StoryItemPreloader.clear()` existed and
-                // had NO caller anywhere in the app, so up to three `AVPlayerItem` plus their
-                // `AVURLAsset`s stayed resident for the life of the process — decoded buffers for
-                // stories nobody is watching any more, held while the user is back in a chat.
-                // Closing the viewer is precisely when the lookahead they belong to stops meaning
-                // anything, and the next open warms its own.
-                StoryItemPreloader.clear()
                 // ⚠️ AND THE TRANSFERS THEMSELVES, which nothing anywhere in the app could stop.
                 // `cancelStaleWindow` only ever ran from inside the viewer, on an item change, so
                 // closing a ring right after its last item — the moment the lookahead has just
