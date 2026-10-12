@@ -2403,7 +2403,7 @@ struct StoryEditorView: View {
         .offset(y: captionFocused && keyboard.inBlink ? captionRestY - captionLayoutY : 0)
         // The layout moves on the keyboard's curve, so the hold moves on the same curve and the two
         // cancel frame by frame instead of only at the end.
-        .animation(keyboard.systemAnimation, value: captionLayoutY)
+        .animation(keyboard.inBlink ? keyboard.systemAnimation : nil, value: captionLayoutY)
         // ⚠️ AND THIS PADDING MOVES ON THE KEYBOARD'S CLOCK, NOT INSTANTLY. THAT IS HIS JUMP.
         //
         // His report: while the keyboard is open the bar is right, and dismissing it makes the bar
