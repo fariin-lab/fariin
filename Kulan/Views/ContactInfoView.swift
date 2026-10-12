@@ -399,13 +399,30 @@ struct ContactInfoView: View {
     /// notification tap uses) takes the story viewer and this sheet away, switches to Chats and
     /// opens the chat full screen, where both scrolling and Back work normally. Every other source
     /// still pushes inside the profile, unchanged.
+    /// ⛔ THE CHAT IS CREATED BEFORE IT OPENS (owner, 2026-10-12: from a reposted story's original
+    /// author, Message, the first "Hi" failed, Retry sent it, and the header said "User"). This
+    /// button only navigated. With no chat document yet, the first send had to create one itself,
+    /// and the send's seed is `users` + the request stamp only: no `names`, no `photos`, no badge
+    /// seeds, so the title fell back to "User" for good. `openConversation` is the one write that
+    /// creates a 1:1 whole, and the rules are written assuming every route into a chat runs it
+    /// first; `ProfileCardDoor` (a username link) already does. A chat that already exists opens
+    /// at once, as before.
     private func goToChat() {
-        guard source == .story else { openChat = true; return }
-        let router = AppRouter.shared
-        router.pendingChatName = name
-        router.pendingChatPhoto = photoUrl
-        router.pendingChatPush = false
-        router.pendingChatId = cid
+        let open: () -> Void = {
+            guard source == .story else { openChat = true; return }
+            let router = AppRouter.shared
+            router.pendingChatName = name
+            router.pendingChatPhoto = photoUrl
+            router.pendingChatPush = false
+            router.pendingChatId = cid
+        }
+        guard !isSelf, !isPreview, !otherUid.isEmpty,
+              !ConversationsRepository.shared.conversations.contains(where: { $0.id == cid })
+        else { open(); return }
+        Task { @MainActor in
+            await ChatService.openConversation(uid: otherUid)
+            open()
+        }
     }
 
     private func tapMessage() {
