@@ -1005,12 +1005,15 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
-                tag: tag, captureProtected: captureProtected)
+                tag: tag, captureProtected: captureProtected,
+                // A repost sent to a custom list keeps its credit (it was dropped on this path).
+                repostOf: repostOf)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
-                tag: tag, captureProtected: captureProtected)
+                tag: tag, captureProtected: captureProtected,
+                repostOf: repostOf)
         }
         // ⚠️ `stickers:` HAS TO BE PASSED ON EVERY CALL IN EVERY ONE OF THE THREE POST PATHS — the
         // first item's as well as the extras'. It defaults to empty, so an omission is silent: the
@@ -1066,12 +1069,14 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: [], included: people, everyone: false,
-                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
+                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected,
+                repostOf: repostOf)   // a repost sent one-time keeps its credit too
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: [], included: people, everyone: false,
-                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
+                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected,
+                repostOf: repostOf)
         }
         for extra in extras {
             if let v = extra.video {
