@@ -361,7 +361,9 @@ final class StoryItemVideoView: UIView {
 
         // Stories are sound-on media: `.playback` plays through the ringer switch. The default
         // muted every story video on a silenced phone.
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        // Borrowed for the viewer and given back when it closes, so the user's music resumes
+        // (`StoryAudioSession`; it also stays out of a call's way).
+        StoryAudioSession.claim()
 
         // ⚠️ THE STREAM IS TRIED FIRST AND ONLY WHEN THE WHOLE FILE IS NOT ALREADY HERE. A clip that
         // is fully cached has nothing to gain from a reader and everything to lose — a local file is

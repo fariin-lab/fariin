@@ -117,5 +117,7 @@ public enum StoryVideoHost {
         // a chat list is not a thing to leave to an edge.
         StoryItemViewStore.releaseAll()
         StoryVideoFrames.clearAll()
+        // The players are gone: give the audio session back so other apps' audio resumes.
+        StoryAudioSession.release()
     }
 }
