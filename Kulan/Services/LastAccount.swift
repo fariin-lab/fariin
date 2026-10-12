@@ -19,6 +19,11 @@ enum LastAccount {
         /// `AuthService.SignInMethod.rawValue`
         let method: String
         let email: String?
+        /// 2026-10-12, owner: "the account list on the log-in page doesn't show the verified badge".
+        /// Signed out, nothing can ask the server, so the card shows what this phone last knew while
+        /// that account was signed in. Optional so cards saved by older builds still decode (no badge
+        /// until that account signs in once).
+        var verified: Bool? = nil
         var id: String { uid }
     }
 
@@ -79,8 +84,11 @@ enum LastAccount {
     static func remember() {
         guard let user = Auth.auth().currentUser, let me = ProfileStore.shared.me, me.id == user.uid,
               !me.handle.isEmpty, let method = doorOf(user) else { return }
+        // The live index first (it follows a badge granted or removed while signed in), then the
+        // profile as loaded.
+        let verified = VerificationIndex.of(user.uid)?.showsBadge ?? me.verification?.showsBadge ?? false
         let info = Info(uid: user.uid, name: me.name, handle: me.handle, method: method.rawValue,
-                        email: method == .email ? user.email : nil)
+                        email: method == .email ? user.email : nil, verified: verified)
         var list = all()
         if list.first != info {
             list.removeAll { $0.uid == info.uid }

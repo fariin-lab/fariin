@@ -130,6 +130,8 @@ final class ProfileStore {
             if let snap, snap.exists, Auth.auth().currentUser?.uid == uid {
                 VerificationIndex.record(uid: uid, verification: Verification(snap.data()?["verification"] as? [String: Any]),
                                          fresh: !snap.metadata.isFromCache)
+                // And the saved-account card on the log-in page, so it shows the badge after sign-out.
+                Task { @MainActor in LastAccount.remember() }
             }
             // Same account still signed in: a late snapshot must not write one account's choices
             // into the next account's prefs.

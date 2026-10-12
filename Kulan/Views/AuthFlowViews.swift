@@ -508,8 +508,16 @@ struct AuthMethodView: View {
                 }
                 .frame(width: 48, height: 48).clipShape(Circle())
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(info.name.isEmpty ? "@\(info.handle)" : info.name)
-                        .font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(info.name.isEmpty ? "@\(info.handle)" : info.name)
+                            .font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                        // The same seal VerifiedMark draws, from what the phone saved (signed out,
+                        // there is no server to ask).
+                        if info.verified == true {
+                            Image(uiImage: VerifiedMark.badge(size: 15, blue: UIColor(Color(hex: 0x3DA1FD)), weight: .regular))
+                                .accessibilityLabel("Verified")
+                        }
+                    }
                     Text("@\(info.handle)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
