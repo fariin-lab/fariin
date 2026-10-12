@@ -4726,13 +4726,12 @@ struct StoryViewer: View {
             let avatar: UIImage? = if let photo, !photo.isEmpty {
                 await DiskImageCache.shared.image(for: photo)
             } else { nil }
-            // ⚠️ DRAWN OFF THE MAIN THREAD (owner, 2026-10-11: "Repost freezes"). The card is a
-            // 1080x1920 render with a 40pt blurred shadow and a colour sample of the whole picture;
-            // on the main thread it froze the screen between the tap and the composer. Image
-            // rendering is safe off the main thread; the result is the same picture.
-            let card: UIImage? = await Task.detached(priority: .userInitiated) {
-                image.map { RepostCard.render($0, name: authorName, avatar: avatar) }
-            }.value
+            // ⛔ NO CARD IS DRAWN AT THE TAP ANY MORE (reference-app research, 2026-10-12). Since the
+            // photo repost became a zoom with the frame drawn over it (`StoryEditorView.isRepostPhoto`)
+            // the editor shows the ORIGINAL; the 1080x1920 shadowed card made here was only a backup
+            // for a failed final render, and it was the slowest step between the tap and the
+            // composer. `flatten` draws that backup itself, only if it is ever needed.
+            let card: UIImage? = image
             // The ground the card is shown and posted on: the card itself is transparent around
             // the picture now (owner, 2026-10-12: the "third blur"), and the editor draws this.
             let ground = image.map { RepostCard.edgeColours($0) }

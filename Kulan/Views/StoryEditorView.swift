@@ -4247,11 +4247,20 @@ struct StoryEditorView: View {
         // The render is the story. There is no crop-back any more (see the note below), so the only
         // fallback left is the untouched photo, for a renderer that returned nothing at all.
         // ONE encode either way, through the ladder that answers for the byte budget.
-        if let img = r.uiImage { return StoryPhoto.encode(img) }
-        // A card that could not be drawn falls back to the card as it was rendered at the tap
-        // (`source`), never to the bare original: that would post full screen still marked a card,
-        // with no credit on it anywhere.
-        return StoryPhoto.encode(repostCardBake ? source : base)
+        // ⛔ THE JPEG LADDER RUNS OFF THE MAIN THREAD (reference-app research, 2026-10-12): up to
+        // four encodes plus resamples of a 1080-wide picture used to run here on main, right as
+        // Post was tapped, which is a stutter on the button and the dismiss. The render above has
+        // to stay on main; the encode does not.
+        if let img = r.uiImage {
+            return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(img) }.value
+        }
+        // A card that could not be drawn falls back to a card drawn now by the plain renderer,
+        // never to the bare original: that would post full screen still marked a card, with no
+        // credit on it anywhere. (The card is no longer drawn at the tap; see `beginRepost`.)
+        let fallback = repostCardBake
+            ? RepostCard.render(base, name: repostOf?.authorName ?? "", avatar: repostAvatar)
+            : base
+        return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(fallback) }.value
     }
 
     // `flattenBackdrop` lived here: the photo aspect-filled into an eighth-size canvas and darkened
