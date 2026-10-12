@@ -1194,11 +1194,16 @@ struct StoryViewer: View {
             runEpsilon = settle ?? settleEpsilon
             current = from; target = to; velocity = initialVelocity
             self.write = write; self.completion = completion
+            lastTime = nil
             let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            // The open, close and spring-back at the panel's real rate: on a ProMotion phone this
+            // asked for nothing and could run at 60 while the cube runs at 120.
+            l.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
             l.add(to: .main, forMode: .common)
             link = l
         }
         func cancel() { link?.invalidate(); link = nil; write = nil; completion = nil }
+        private var lastTime: CFTimeInterval?
 
         /// IS A SPRING ACTUALLY RUNNING RIGHT NOW.
         ///
@@ -1210,13 +1215,25 @@ struct StoryViewer: View {
         /// whether the thing they describe is still happening.
         var isRunning: Bool { link != nil }
         @objc private func tick(_ l: CADisplayLink) {
-            let dt = CGFloat(min(l.targetTimestamp - l.timestamp, 1.0 / 30.0))
+            // ⛔ REAL ELAPSED TIME, NOT ONE NOMINAL FRAME (reference-app research, 2026-10-12). This
+            // stepped by `targetTimestamp - timestamp`, the length of ONE frame, so every frame the
+            // main thread dropped made the flight run longer instead of catching up: the "late"
+            // close when the phone is busy. Now the step is the time since the last tick (capped),
+            // integrated in sub-steps of at most 1/240s so a long step stays stable.
+            let now = l.targetTimestamp
+            let elapsed = lastTime.map { now - $0 } ?? (l.targetTimestamp - l.timestamp)
+            lastTime = now
+            let total = CGFloat(min(max(elapsed, 0), 1.0 / 20.0))
             // Critically damped, so it arrives without overshooting. `k` is per animator now — see
             // the property. 340 is interactiveSpring(response: ~0.34); 631 is another mainstream
             // messenger's own story transition spring, `response: 0.25, damping: 1`, which expands to stiffness (2π/0.25)².
             let k = runK, settleEpsilon = runEpsilon
-            velocity += (k * (target - current) - 2 * sqrt(k) * velocity) * dt
-            current += velocity * dt
+            let steps = max(1, Int((total * 240).rounded(.up)))
+            let dt = total / CGFloat(steps)
+            for _ in 0..<steps {
+                velocity += (k * (target - current) - 2 * sqrt(k) * velocity) * dt
+                current += velocity * dt
+            }
             if abs(target - current) < settleEpsilon, abs(velocity) < settleEpsilon * 20 {
                 current = target
                 write?(current)
@@ -4127,7 +4144,9 @@ struct StoryViewer: View {
         hero.exiting = false
         // No cover on a spring-back: there is nothing to exchange, the story is going back to being
         // the whole screen. It was already 0 through the drag and stays there.
-        runHero(to: 0, center: hero.rest, alpha: 1, velocity: -abs(vy) / remaining,
+        // Speed TOWARD home only, capped as the commit is (the old `-abs(vy)` pushed a flick back up
+        // the wrong way first: the card dipped further down before it came back).
+        runHero(to: 0, center: hero.rest, alpha: 1, velocity: min(6, max(0, -vy) / remaining),
                 settle: Self.heroSettle(remaining: remaining),
                 cover: { _ in 0 }, crop: { _ in 0 }) {
             hero.live = false
