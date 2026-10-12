@@ -1489,8 +1489,11 @@ struct StoryEditorView: View {
                             // 2026-10-11): the clip shrunk to the card's width, centred.
                             items[0].zoom = RepostVideoCard.scale
                             repostVideoCard = true
-                            // It does NOT play on its own (owner 2026-10-12): it started at the
-                            // viewer's second with sound, so he heard the story "still playing".
+                            // It plays on its own (owner 2026-10-12, reversing his no-autoplay ask
+                            // the same day): on a repost the tap switches card / full screen.
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                if !previewPlaying { togglePreview() }
+                            }
                         }
                         restoreCurrent()   // the SAME door every other arrival uses — see below
                         Task { await resolveSourceVideo(v.url) }
@@ -2161,8 +2164,7 @@ struct StoryEditorView: View {
             // and the pan live. So the circle goes back to being what it says it is: a sign that
             // this can be played. (It was `allowsHitTesting(false)` once before and that WAS a bug,
             // because back then nothing else took the tap. Now the frame does.)
-            // Not on a repost clip: its tap switches card / full screen, so a play sign would lie.
-            if !previewPlaying, !isRepostVideo {
+            if !previewPlaying {
                 Image(systemName: "play.fill")
                     .font(.system(size: 26))
                     .foregroundStyle(.white.opacity(0.9))
@@ -3794,7 +3796,8 @@ struct StoryEditorView: View {
         items[index].offset = .zero
         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { restoreCurrent() }
         Haptics.impact(.light)
-        // The tap is the shape switch only; a repost clip stays still (owner 2026-10-12).
+        // A repost clip plays on its own (the tap is the shape switch, not play/pause).
+        if isRepostVideo, !previewPlaying { togglePreview() }
     }
 
     /// Where the card's clip is drawn on a canvas of `size`: its fitted size at the card scale,

@@ -63,21 +63,19 @@ final class RepostEditorRenderTests: XCTestCase {
         shoot("video-open")
         XCTAssertTrue(log.contains { $0.contains("canvas: items=1") }, "canvas never rebuilt after load")
         XCTAssertGreaterThan(visibleFrames(), 0, "name + avatar frame missing on open")
-        XCTAssertFalse(clipPlaying(), "repost clip started on its own")
+        XCTAssertTrue(log.contains { $0.contains("playing=true") }, "repost clip did not start on its own")
 
-        // The tap: card -> full screen, then back. Neither tap may start the clip.
+        // The tap: card -> full screen, then back.
         tapCanvas("video tap 1")
         try await Task.sleep(for: .seconds(1.5))
         dumpFrames("video, after tap 1")
         shoot("video-after-tap1")
         XCTAssertEqual(visibleFrames(), 0, "full screen still shows the card frame")
-        XCTAssertFalse(clipPlaying(), "tap 1 started the clip")
         tapCanvas("video tap 2")
         try await Task.sleep(for: .seconds(1.5))
         dumpFrames("video, after tap 2")
         shoot("video-after-tap2")
         XCTAssertGreaterThan(visibleFrames(), 0, "card frame did not come back")
-        XCTAssertFalse(clipPlaying(), "tap 2 started the clip")
     }
 
     // MARK: Photo repost
@@ -209,11 +207,6 @@ final class RepostEditorRenderTests: XCTestCase {
     private func visibleFrames() -> Int {
         guard let w = window else { return 0 }
         return all(w).compactMap { $0 as? RepostCardFrameView }.filter { !$0.isHidden && $0.alpha > 0 }.count
-    }
-
-    private func clipPlaying() -> Bool {
-        guard let w = window else { return false }
-        return all(w).compactMap { $0 as? StoryVideoPreviewView }.contains { ($0.player?.rate ?? 0) > 0 }
     }
 
     private func largestImage() -> UIImage? {
