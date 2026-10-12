@@ -416,9 +416,17 @@ struct ContactInfoView: View {
             router.pendingChatPush = false
             router.pendingChatId = cid
         }
-        guard !isSelf, !isPreview, !otherUid.isEmpty,
-              !ConversationsRepository.shared.conversations.contains(where: { $0.id == cid })
-        else { open(); return }
+        guard !isSelf, !isPreview, !otherUid.isEmpty else { open(); return }
+        if let existing = ConversationsRepository.shared.conversations.first(where: { $0.id == cid }) {
+            open()
+            // A chat born the old way (by a send) has no name for the other person and reads
+            // "User"; the same write fills it in, in the background.
+            if existing.names[otherUid] == nil {
+                let other = otherUid
+                Task { await ChatService.openConversation(uid: other) }
+            }
+            return
+        }
         Task { @MainActor in
             await ChatService.openConversation(uid: otherUid)
             open()
