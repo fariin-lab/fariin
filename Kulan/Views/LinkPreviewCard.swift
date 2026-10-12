@@ -137,8 +137,8 @@ struct LinkPreviewCard: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .aspectRatio(0.8, contentMode: .fit)
-                    .frame(maxHeight: 320)
+                    .aspectRatio(1 / 1.2, contentMode: .fit)
+                    .frame(maxHeight: 300)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 if !preview.desc.isEmpty {
@@ -158,7 +158,8 @@ struct LinkPreviewCard: View {
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity).frame(height: 40)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Same size as the list's own story card (`MessageRowLayout`, 240 wide): not the bubble cap.
+        .frame(maxWidth: 240, alignment: .leading)
         .background(fg.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

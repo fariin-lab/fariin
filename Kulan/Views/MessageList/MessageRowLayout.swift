@@ -687,7 +687,12 @@ enum MessageRowLayout {
         // reference app's `contentWidth + statusWidth`. `build` already checked it is within the cap.
         else { contentW = max(contentW, inlineMinW) }
         // A link card does not hug: it is drawn full-width, so it takes the bubble to the cap.
-        if linkCard != nil { contentW = maxContent }
+        if let lc = linkCard {
+            // ⛔ A STORY LINK IS A CARD OF ITS OWN SIZE, NOT THE BUBBLE CAP (owner, 2026-10-12: "the
+            // story link preview looks big; not too small, just fix it"). Full width with a 1.25
+            // portrait picture made it most of the screen; 240 wide keeps it readable and tappable.
+            if case .story = lc.shape { contentW = min(maxContent, 240) } else { contentW = maxContent }
+        }
         contentW = min(maxContent, ceil(contentW))
 
         var innerY: CGFloat = vPad
@@ -1771,7 +1776,7 @@ enum MessageRowLayout {
             y += tH + 6
             var hero: CGRect?
             if p.imageUrl != nil {
-                let h = min(320, (inner * 1.25).rounded())
+                let h = min(300, (inner * 1.2).rounded())
                 hero = CGRect(x: pad, y: y, width: inner, height: h)
                 y += h + 6
             }
