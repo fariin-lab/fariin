@@ -26,9 +26,15 @@ public enum StoryAudioSession {
     /// Before a clip plays. Takes `.playback` once per viewer sitting.
     public static func claim() {
         let s = AVAudioSession.sharedInstance()
-        guard s.category != .playAndRecord else { return }   // a call or a recording owns it
+        // ⛔ A CAMERA'S LEFTOVER IS NOT A CALL (owner 2026-10-12: video stories stopped playing after
+        // the story camera, photos did not). A capture session leaves `.playAndRecord` with mode
+        // `.videoRecording` behind; nothing that really owns the session (our calls, voice notes)
+        // runs in that mode, so it is taken over like any idle session. See the app's `CameraAudio`.
+        let cameraLeftover = s.category == .playAndRecord && s.mode == .videoRecording
+        guard s.category != .playAndRecord || cameraLeftover else { return }   // a call or a recording owns it
         if !claimed {
-            previous = (s.category, s.mode, s.categoryOptions)
+            // Hand back the system default, not the leftover, when the viewer closes.
+            previous = cameraLeftover ? (.soloAmbient, .default, []) : (s.category, s.mode, s.categoryOptions)
             claimed = true
         }
         if s.category != .playback { try? s.setCategory(.playback) }

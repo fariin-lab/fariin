@@ -261,6 +261,9 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     private func configureIfNeeded() {
         guard session.inputs.isEmpty else { return }
+        // ⛔ OFF: the automatic setting left the app's audio session in `.playAndRecord` after the
+        // camera closed and every video story after it stopped playing. `CameraAudio` owns it now.
+        session.automaticallyConfiguresApplicationAudioSession = false
         session.beginConfiguration()
         // `.high`, not `.photo`, because this session now does BOTH. The photo preset is tuned for
         // stills and is the wrong shape to hand a movie output; `.high` is what a camera that shoots
@@ -418,6 +421,8 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         guard audioInput == nil,
               let dev = AVCaptureDevice.default(for: .audio),
               let input = try? AVCaptureDeviceInput(device: dev) else { return }
+        // The mic needs a recording session; the camera takes it here and gives it back in `stop`.
+        CameraAudio.take()
         session.beginConfiguration()
         if session.canAddInput(input) { session.addInput(input); audioInput = input }
         session.commitConfiguration()
@@ -522,7 +527,10 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             guard granted else { return }
             self.sessionQueue.async {
                 self.configureIfNeeded()
-                if !self.session.isRunning { self.session.startRunning() }
+                guard !self.session.isRunning else { return }
+                // A mic attached on an earlier start is still attached; it needs the session again.
+                if self.audioInput != nil { CameraAudio.take() }
+                self.session.startRunning()
             }
         }
     }
@@ -536,6 +544,8 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             self.setTorch(false)
             guard self.session.isRunning else { return }
             self.session.stopRunning()
+            // And the audio session goes back to what it was before the camera (see `CameraAudio`).
+            CameraAudio.giveBack()
         }
     }
 
