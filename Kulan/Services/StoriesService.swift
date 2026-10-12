@@ -685,6 +685,9 @@ final class StoriesService {
         // The caption rides on the placeholder from frame one (his report: a caption typed before
         // posting only appeared once the upload finished — the synthetic item simply never carried it).
         let caption: String
+        /// A repost carries its credit from frame one too, so the uploading card shows whose story
+        /// it is instead of gaining the credit only when the post lands (2026-10-12).
+        var repostOf: StoryRepost? = nil
     }
     /// Oldest first, which is the order stories are read in — so the placeholders sit at the end of
     /// my bucket in the same order they will land as real stories.
@@ -724,11 +727,13 @@ final class StoriesService {
     var uploadingStories: [Story] {
         inFlight.compactMap { p in
             guard p.image != nil else { return nil }
-            return Story(id: p.id, authorUid: uid, createdAt: p.startedAt,
+            var s = Story(id: p.id, authorUid: uid, createdAt: p.startedAt,
                          expiresAt: p.startedAt.addingTimeInterval(24 * 3600),
                          mediaUrl: p.url, allowsReplies: false,
                          caption: p.caption,
                          audienceLabel: p.tag.label, oneTime: p.tag.oneTime)
+            s.repostOf = p.repostOf
+            return s
         }
     }
 
@@ -749,7 +754,8 @@ final class StoriesService {
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
                                     tag: tag,   // the header says the chosen audience from frame one
-                                    caption: caption)
+                                    caption: caption,
+                                    repostOf: repostOf)
         let pendingId = pending.id
         let pendingURL = pending.url
         let me = uid
@@ -1591,7 +1597,8 @@ final class StoriesService {
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
                                     tag: tag,
-                                    caption: caption)
+                                    caption: caption,
+                                    repostOf: repostOf)
         // ⚠️ THE SAME BYTES, or the composed picture above is wasted. StoryUI's ImageLoader reads
         // URLCache FIRST, so seeding the raw poster here would win over `pending.image` and put the
         // black-letterboxed frame back on screen.
