@@ -61,7 +61,6 @@ final class StoryVideoPreviewView: MTKView {
     private var isPlaying = false
     /// Screen refreshes in a row that found no new frame while the clip was meant to be moving.
     /// See `currentBuffer`.
-    private var staleFrames = 0
 
     private(set) var player: AVPlayer? {
         didSet { attachOutput() }
@@ -111,10 +110,15 @@ final class StoryVideoPreviewView: MTKView {
 
     /// Told whether the clip is running, so the display link only exists while there is motion to
     /// follow. A paused editor costs nothing.
+    /// ⛔ THE FRAME CLOCK NO LONGER FOLLOWS THIS FLAG (owner, 2026-10-12: "the repost video plays
+    /// sound but the picture does not move"; the reference app's editor, `UniversalTextureSource`).
+    /// The link used to run only while SwiftUI said "playing", so a late or missed update left a
+    /// playing player that nobody read, and an unread output stops vending: sound on, picture still.
+    /// The reference keeps its link for as long as there is a video and reads every tick. So does
+    /// this now (`startLinkIfNeeded`); the flag only decides whether a stop lands on its frame.
     func setPlaying(_ playing: Bool) {
         guard isPlaying != playing else { return }
         isPlaying = playing
-        playing ? startLink() : stopLink()
         if !playing { requestRedraw() }   // land on the frame it stopped at
     }
 
@@ -153,6 +157,7 @@ final class StoryVideoPreviewView: MTKView {
         // gesture ahead of the next Play, and it happens while the view is still on screen. What
         // shows through is the item's own poster, sitting under this view in the same container,
         // which is the picture that should be there.
+        stopLink()   // restarted below once there is a new output to read
         draw()
         guard let item = player?.currentItem else { return }
         // Their settings, and the pixel format matters: a Metal-compatible buffer is what lets the
@@ -164,26 +169,30 @@ final class StoryVideoPreviewView: MTKView {
         // ⛔ THE PLAYER STOPS DRAWING FOR ITSELF. Without this it goes on decoding for a layer that
         // is not there, which is the cost we came here to remove.
         out.suppressesPlayerRendering = true
-        // ⛔ THE OUTPUT CAN FALL ASLEEP, AND THIS IS HOW IT IS WOKEN — owner, 2026-10-12, a video
-        // repost: "the audio is running but the video is not". An `AVPlayerItemVideoOutput` that
-        // goes unread for about a second SUSPENDS itself: the player keeps decoding and the sound
-        // keeps playing, but `hasNewPixelBuffer` answers no for ever after, and the view goes on
-        // showing the poster underneath. Apple's own sample pairs the output with this delegate and
-        // `requestNotificationOfMediaDataChange`, which is the documented way to resume it. Asked
-        // for at the attach, and again from `currentBuffer` whenever a moving clip has given this
-        // view nothing for a while.
-        out.setDelegate(self, queue: .main)
-        out.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
+        // ⛔ READ EVERY TICK, NOT WOKEN (owner, 2026-10-12, a video repost: "the audio is running
+        // but the video is not", still on 877 with the delegate wake that used to be here). The
+        // reference app's editor never asks the output to resume: it simply reads it on every
+        // refresh for as long as there is a video (`startLinkIfNeeded`, `tick`), so it is never
+        // left unread long enough to stop vending.
         item.add(out)
         output = out
         observedItem = item
-        staleFrames = 0
+        // An output added to an item that is ALREADY playing (the repost starts its clip the same
+        // turn the player is made; this view only hears about it on the next update) may never get
+        // a first frame. An exact seek to where it is makes the item deliver one to the new output.
+        if let p = player, p.rate != 0 {
+            p.seek(to: p.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        startLinkIfNeeded()
         requestRedraw()
     }
 
-    private func startLink() {
-        guard link == nil else { return }
-        let l = CADisplayLink(target: self, selector: #selector(tick))
+    /// The link lives while there is a video and the view is on screen (the reference's lifetime),
+    /// not while a flag says "playing". Weakly proxied: a display link retains its target.
+    private func startLinkIfNeeded() {
+        guard link == nil, output != nil, window != nil else { return }
+        let l = CADisplayLink(target: LinkProxy(self), selector: #selector(LinkProxy.fire))
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         l.add(to: .main, forMode: .common)
         link = l
     }
@@ -193,7 +202,29 @@ final class StoryVideoPreviewView: MTKView {
         link = nil
     }
 
-    @objc private func tick() { setNeedsDisplay() }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stopLink() } else { startLinkIfNeeded() }
+    }
+
+    /// Every tick: take the newest frame for NOW on the host clock, and draw only if one came.
+    /// Paused, nothing new arrives and nothing is drawn; a seek while paused delivers one and it
+    /// lands on screen by itself.
+    fileprivate func tick() {
+        if pullFrame() { setNeedsDisplay() }
+    }
+
+    /// The reference app's pull: `itemTime(forHostTime:)`, then `copyPixelBuffer`; nil keeps the
+    /// last frame. Returns whether a new one was taken.
+    @discardableResult
+    private func pullFrame() -> Bool {
+        guard let output else { return false }
+        let t = output.itemTime(forHostTime: CACurrentMediaTime())
+        guard t.isValid, t.seconds >= 0,
+              let buf = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: nil) else { return false }
+        lastBuffer = buf
+        return true
+    }
 
     /// One redraw, now. Used by the dial while paused — their own throttle is 30fps for the same job;
     /// ours is bounded by the fact that a touch cannot arrive faster than the screen refreshes.
@@ -201,38 +232,19 @@ final class StoryVideoPreviewView: MTKView {
 
     // MARK: - Frames
 
-    /// The newest frame for the player's current time, or the last one we were given.
+    /// What `draw` paints: the last frame taken by `tick`, or one taken now (a redraw asked for
+    /// before the first tick, e.g. the brightness dial on a fresh item).
     private func currentBuffer() -> CVPixelBuffer? {
-        guard let output, let item = observedItem else { return lastBuffer }
-        let time = item.currentTime()
-        if output.hasNewPixelBuffer(forItemTime: time),
-           let buf = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
-            lastBuffer = buf
-            staleFrames = 0
-            return buf
-        }
-        // A clip that is really playing and has handed over nothing for half a second is an output
-        // that has suspended itself (see `attachOutput`): ask it to resume. A paused or buffering
-        // player is not asked — it has nothing new to give and that is not a fault.
-        if isPlaying, player?.timeControlStatus == .playing {
-            staleFrames += 1
-            if staleFrames >= 30 {
-                staleFrames = 0
-                output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
-            }
-        }
+        if lastBuffer == nil { pullFrame() }
         return lastBuffer
     }
 }
 
-extension StoryVideoPreviewView: AVPlayerItemOutputPullDelegate {
-    /// The output has frames again (after a suspension, or for a fresh item): take one now, and keep
-    /// taking them if the clip is moving.
-    func outputMediaDataWillChange(_ sender: AVPlayerItemOutput) {
-        staleFrames = 0
-        if isPlaying { startLink() }
-        requestRedraw()
-    }
+/// Breaks the display link's strong hold on its target, so the view can go away while linked.
+@MainActor private final class LinkProxy: NSObject {
+    weak var view: StoryVideoPreviewView?
+    init(_ view: StoryVideoPreviewView) { self.view = view }
+    @objc func fire() { view?.tick() }
 }
 
 extension StoryVideoPreviewView: MTKViewDelegate {
