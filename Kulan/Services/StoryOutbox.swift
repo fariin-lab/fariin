@@ -21,7 +21,9 @@ import StoryUI
 /// that is worse than none: a resumed video post that silently drops the text he wrote on it is a
 /// bug wearing the costume of a feature. Video keeps the in-memory queue it has today.
 ///
-/// ⚠️ A RESUMED POST CAN LEAVE ONE ORPHAN, AND IT IS INVISIBLE. If the app died between the document
+/// (2026-10-12: no longer. The ticket now carries the story id, and a resume deletes its own
+/// half-written document before writing it again; see `Ticket.storyDocId`. History below.)
+/// ⚠️ A RESUMED POST COULD LEAVE ONE ORPHAN, AND IT WAS INVISIBLE. If the app died between the document
 /// being created and the media landing, that document has an empty `mediaUrl` — `parse` skips those,
 /// so nobody ever sees it, and `cleanupStories` collects it at expiry. The resumed post writes a new
 /// story rather than trying to adopt the old one, because adopting it would mean trusting a document
@@ -60,6 +62,10 @@ enum StoryOutbox {
         /// "Reposted" line and the original author gone. Optional for the reason `ownerUid` is: an
         /// older ticket has no such key and must still decode, as an ordinary post, which it was.
         var repostOf: StoryRepost?
+        /// The story document id this post writes, fixed when the ticket is made, so a resume fills
+        /// the SAME story instead of leaving a half-written one behind (reference-app research,
+        /// 2026-10-12: its pending item carries a stable id). Optional so older tickets still decode.
+        var storyDocId: String?
     }
 
     /// Beside the story media cache rather than in `Caches`: the OS empties `Caches` under pressure,
@@ -90,7 +96,7 @@ enum StoryOutbox {
     static func remember(image: Data, caption: String, stickers: [StoryTapTarget],
                          excluded: Set<String>, included: Set<String>, everyone: Bool,
                          allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
-                         ownerUid: String, repostOf: StoryRepost? = nil) -> String {
+                         ownerUid: String, repostOf: StoryRepost? = nil, storyDocId: String? = nil) -> String {
         let id = UUID().uuidString
         lock.lock(); liveIds.insert(id); lock.unlock()
         let t = Ticket(id: id, caption: caption, stickers: stickers,
@@ -100,7 +106,8 @@ enum StoryOutbox {
                        captureProtected: captureProtected,
                        startedAt: Date().timeIntervalSince1970,
                        ownerUid: ownerUid,
-                       repostOf: repostOf)
+                       repostOf: repostOf,
+                       storyDocId: storyDocId)
         try? image.write(to: bytes(id), options: .atomic)
         if let d = try? JSONEncoder().encode(t) { try? d.write(to: meta(id), options: .atomic) }
         return id
@@ -219,7 +226,8 @@ enum StoryOutbox {
                 everyone: t.everyone, allowsReplies: t.allowsReplies,
                 tag: StoryAudienceTag(label: t.tagLabel, name: t.tagName, listIds: t.tagListIds ?? []),
                 captureProtected: t.captureProtected,
-                repostOf: t.repostOf)   // 2026-09-24 audit: a repost resumes as a repost
+                repostOf: t.repostOf,   // 2026-09-24 audit: a repost resumes as a repost
+                storyDocId: t.storyDocId, resumed: true)
         }
     }
 }

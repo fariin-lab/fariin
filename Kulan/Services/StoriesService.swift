@@ -733,7 +733,9 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false, repostOf: StoryRepost? = nil, storyDocId: String? = nil, resumed: Bool = false) {
+        // One id for this post from the start, kept in the ticket, so a resume writes the same story.
+        let docId = storyDocId ?? Self.newStoryId()
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -782,7 +784,8 @@ final class StoriesService {
                                               ownerUid: me,
                                               // 2026-09-24 audit: and whose story it reposts, so a
                                               // resumed repost keeps its credit.
-                                              repostOf: repostOf)
+                                              repostOf: repostOf,
+                                              storyDocId: docId)
             // The card's thumbnail is NOT made here any more — see `quick` below.
             return (nil, ticket)
         }
@@ -824,7 +827,7 @@ final class StoriesService {
             var failure: String?
             var cancelled = false
             do {
-                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf)
+                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf, storyId: docId, replaceExisting: resumed)
                 StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
             }
             catch is CancellationError {
@@ -1387,7 +1390,8 @@ final class StoriesService {
     func postStory(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                    excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
                    captureProtected: Bool = false,
-                   repostOf: StoryRepost? = nil) async throws {
+                   repostOf: StoryRepost? = nil,
+                   storyId fixedId: String? = nil, replaceExisting: Bool = false) async throws {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -1401,7 +1405,14 @@ final class StoriesService {
         // then reads a number lower than the truth. That direction is already the designed one: the
         // limit exists to stop a runaway loop, and it fails open everywhere else for the same reason.
         Task.detached { [weak self] in await self?.countStoryAgainstBudget() }
-        let storyId = Self.newStoryId()
+        let storyId = fixedId ?? Self.newStoryId()
+        // ⛔ A RESUMED POST TAKES BACK ITS OWN HALF-WRITTEN STORY (outbox, 2026-10-12). The id was
+        // fixed when the ticket was made, so a post the app died in the middle of may already have
+        // its document here with an empty `mediaUrl`. Deleting it first (the author may delete
+        // their own story) means the write below is a clean CREATE, and no orphan is left behind.
+        if replaceExisting {
+            try? await db.collection("stories").document(storyId).delete()
+        }
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
         // THE PHOTO STARTS MOVING FIRST. Everything below used to be strictly serial — resolve the
@@ -1818,7 +1829,18 @@ final class StoriesService {
             }()
             async let videoPut: Void = {
                 let videoMeta = StorageMetadata(); videoMeta.contentType = "video/mp4"
-                _ = try await videoRef.putDataAsync(prepared.data, metadata: videoMeta)
+                // ⛔ FROM A FILE, NOT FROM MEMORY (reference-app research, 2026-10-12). A data upload
+                // starts over from zero after any drop; the SDK's file-backed upload can resume the
+                // same session from where it got to, which is what a story on a weak network needs.
+                // The bytes are written once to a private file and removed when the put is done.
+                let file = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("story-up-\(UUID().uuidString).mp4")
+                if (try? prepared.data.write(to: file, options: .atomic)) != nil {
+                    defer { try? FileManager.default.removeItem(at: file) }
+                    _ = try await videoRef.putFileAsync(from: file, metadata: videoMeta)
+                } else {
+                    _ = try await videoRef.putDataAsync(prepared.data, metadata: videoMeta)
+                }
             }()
             _ = try await (thumbPut, videoPut)
             try Task.checkCancellation()
