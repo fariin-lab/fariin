@@ -256,9 +256,13 @@ enum VerificationIndex {
             } else {
                 records[peer.key] = verification
             }
-        } else {
+        } else if before?.lastUpdated == nil {
             records.removeValue(forKey: peer.key)
         }
+        // Audit 2026-10-12: a fresh read with NO verification map is never allowed to erase a record
+        // that has a change time. The server never deletes the map (removing a badge writes
+        // status: revoked), so "no map" after we have seen one can only be a reply that left before
+        // the grant and arrived after it.
         let after = records[peer.key]
         lock.unlock()
         if before?.showsBadge != after?.showsBadge || before?.status != after?.status || before?.kind != after?.kind {
