@@ -4711,8 +4711,14 @@ struct StoryViewer: View {
         // the footer belongs to whichever page is up, and pages change under a swipe.
         guard let story = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
               StoryShareRights.allows(story) else { return }
-        let authorName = groups.first(where: { $0.authorUid == story.authorUid })?.name ?? ""
-        if story.isVideo { beginVideoRepost(story, authorName: authorName); return }
+        // ⛔ A REPOST OF A REPOST CREDITS THE ORIGINAL (reference-app research, 2026-10-12: the
+        // reference carries the first author forward). Crediting the story in hand named the person
+        // who reposted it, not the person whose picture it is.
+        let creditUid = story.repostOf?.authorUid ?? story.authorUid
+        let creditStoryId = story.repostOf?.storyId ?? story.id
+        let authorName = story.repostOf?.authorName
+            ?? groups.first(where: { $0.authorUid == story.authorUid })?.name ?? ""
+        if story.isVideo { beginVideoRepost(story, authorName: authorName, creditUid: creditUid, creditStoryId: creditStoryId); return }
         repostLoading = true
         Task {
             // The viewer has almost always cached this already — it is the picture on screen — so
@@ -4722,7 +4728,7 @@ struct StoryViewer: View {
             // author's face and name, over its own colours. Built here, before the composer opens,
             // so the composer edits exactly what will be posted. The face is best effort: no
             // picture reachable draws the letter circle.
-            let photo = authorPhoto(story.authorUid)
+            let photo = authorPhoto(creditUid)
             let avatar: UIImage? = if let photo, !photo.isEmpty {
                 await DiskImageCache.shared.image(for: photo)
             } else { nil }
@@ -4743,11 +4749,11 @@ struct StoryViewer: View {
                 }
                 let draft = StoryRepostDraft(
                     image: card,
-                    info: StoryRepost(authorUid: story.authorUid,
+                    info: StoryRepost(authorUid: creditUid,
                                       // Stored, not looked up later: an account can be deleted and a
                                       // story can go, and the credit line has to survive both.
                                       authorName: authorName,
-                                      storyId: story.id,
+                                      storyId: creditStoryId,
                                       card: true))
                 // ⚠️ FULL SCREEN, NOT A SHEET — the composer is a full-screen editor everywhere else
                 // it opens from — and OVER THE STAGE, NOT INSTEAD OF IT: a `fullScreenCover` took
@@ -4771,7 +4777,7 @@ struct StoryViewer: View {
     /// own cache when it has it, which is almost always, else downloaded) and the composer opens on
     /// it like any picked video: trim, mute, text and stickers are the reposter's. It opens as the
     /// card (`RepostVideoCard`) and a tap switches it to full screen, exactly like a photo repost.
-    private func beginVideoRepost(_ story: Story, authorName: String) {
+    private func beginVideoRepost(_ story: Story, authorName: String, creditUid: String, creditStoryId: String) {
         guard let remote = URL(string: story.mediaUrl), !story.mediaUrl.isEmpty else { return }
         repostLoading = true
         // Where the viewer is in this clip, read before anything moves, so the composer opens on the
@@ -4807,7 +4813,7 @@ struct StoryViewer: View {
             }.value
             let poster = await Self.storyImage(story.previewUrl)
             // The card chip's face, best effort, the same lookup the photo card uses.
-            let photo = authorPhoto(story.authorUid)
+            let photo = authorPhoto(creditUid)
             let avatar: UIImage? = if let photo, !photo.isEmpty {
                 await DiskImageCache.shared.image(for: photo)
             } else { nil }
@@ -4820,11 +4826,11 @@ struct StoryViewer: View {
                 repostUp = true
                 StoryComposerPresenter.present(
                     StoryEditorView(source: poster ?? UIImage(),
-                                    repostOf: StoryRepost(authorUid: story.authorUid,
+                                    repostOf: StoryRepost(authorUid: creditUid,
                                                           authorName: authorName,
                                                           // The composer decides: card by
                                                           // default, full screen on a tap.
-                                                          storyId: story.id, card: true),
+                                                          storyId: creditStoryId, card: true),
                                     repostAvatar: avatar,
                                     onPosted: { flashSentToast("Reposted") },
                                     sourceVideo: .init(url: local),
