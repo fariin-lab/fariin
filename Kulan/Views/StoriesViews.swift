@@ -4728,16 +4728,12 @@ struct StoryViewer: View {
             // author's face and name, over its own colours. Built here, before the composer opens,
             // so the composer edits exactly what will be posted. The face is best effort: no
             // picture reachable draws the letter circle.
-            let photo = authorPhoto(creditUid)
-            let avatar: UIImage? = if let photo, !photo.isEmpty {
-                await DiskImageCache.shared.image(for: photo)
-            } else { nil }
-            // ⛔ NO CARD IS DRAWN AT THE TAP ANY MORE (reference-app research, 2026-10-12). Since the
-            // photo repost became a zoom with the frame drawn over it (`StoryEditorView.isRepostPhoto`)
-            // the editor shows the ORIGINAL; the 1080x1920 shadowed card made here was only a backup
-            // for a failed final render, and it was the slowest step between the tap and the
-            // composer. `flatten` draws that backup itself, only if it is ever needed.
-            let card: UIImage? = image
+            let avatar = await resolveAuthorAvatar(creditUid)
+            // ⛔ THE CARD IS DRAWN AT THE TAP AGAIN (2026-10-12 later): the photo repost is back on its
+            // baked card (see `StoryEditorView.isRepostPhoto`). Off the main thread, as before.
+            let card: UIImage? = await Task.detached(priority: .userInitiated) {
+                image.map { RepostCard.render($0, name: authorName, avatar: avatar) }
+            }.value
             // The ground the card is shown and posted on: the card itself is transparent around
             // the picture now (owner, 2026-10-12: the "third blur"), and the editor draws this.
             let ground = image.map { RepostCard.edgeColours($0) }
@@ -4813,10 +4809,7 @@ struct StoryViewer: View {
             }.value
             let poster = await Self.storyImage(story.previewUrl)
             // The card chip's face, best effort, the same lookup the photo card uses.
-            let photo = authorPhoto(creditUid)
-            let avatar: UIImage? = if let photo, !photo.isEmpty {
-                await DiskImageCache.shared.image(for: photo)
-            } else { nil }
+            let avatar = await resolveAuthorAvatar(creditUid)
             await MainActor.run {
                 repostLoading = false
                 guard let local = wrote else {
@@ -4863,6 +4856,21 @@ struct StoryViewer: View {
             ?? StoryGroup(authorUid: uid, name: r?.authorName ?? "",
                           photoUrl: authorPhoto(uid), stories: [],
                           lastViewedAt: nil, isMine: uid == me)
+    }
+
+    /// ⛔ THE AUTHOR'S FACE, ACTUALLY LOADED, BEFORE A REPOST'S CARD OR CHIP IS MADE (owner, 2026-10-12:
+    /// "the credit chip shows a letter because the photo had not loaded"). `authorPhoto` answers
+    /// from what is already on hand and can be nil the first time (the profile fetch is async), and
+    /// the chip is baked into the post, so a nil at that moment is a letter for ever. This awaits
+    /// the profile when the url is not on hand, then the image itself (both bounded by their own
+    /// network timeouts): only a picture that genuinely cannot be had falls back to the letter.
+    private func resolveAuthorAvatar(_ uid: String) async -> UIImage? {
+        var url = authorPhoto(uid)
+        if url == nil || url?.isEmpty == true {
+            url = await ProfileStore.shared.fetch(uid)?.photoUrl
+        }
+        guard let url, !url.isEmpty else { return nil }
+        return await DiskImageCache.shared.image(for: url)
     }
 
     /// The picture for a uid this viewer may not have a group for: the groups on screen first, then

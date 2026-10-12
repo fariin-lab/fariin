@@ -720,11 +720,17 @@ struct StoryEditorView: View {
     /// `RepostCardFrameView`, the tap is `toggleRepostVideoShape`, and `flatten` bakes the card.
     /// The REPOSTED picture only, the first item: a photo added with + is the reposter's own and
     /// must never be framed or credited as the original author's.
-    private var isRepostPhoto: Bool {
-        repostOf != nil && repostFullSource != nil && index == 0 && !currentIsVideo
-    }
-    /// A photo repost showing as the card (not the original full screen).
-    private var isRepostPhotoCard: Bool { isRepostPhoto && repostVideoCard }
+    ///
+    /// ⛔⛔ REVERSED THE SAME DAY (owner, 2026-10-12 later): on the build that still swapped the
+    /// picture, he reported the card/full-screen tap "is working good", and the live UIKit frame
+    /// this path depends on is exactly what does not show on his phone (the video repost's missing
+    /// name and avatar). So the photo is back on the baked card it was on: `source` is the card with
+    /// the author's face and name drawn in, the tap swaps it with the original (`toggleRepostShape`),
+    /// and nothing here draws a frame. `isRepostPhoto` stays as a name so the call sites read the
+    /// same; it is simply never true.
+    private var isRepostPhoto: Bool { false }
+    /// A photo repost showing its baked card (not the original full screen).
+    private var isRepostPhotoCard: Bool { repostOf != nil && repostFullSource != nil && !repostFullScreen }
     @State private var index = 0
     @State private var showAddPicker = false
 
@@ -1482,15 +1488,8 @@ struct StoryEditorView: View {
                         //
                         // The same trap `appendPicked` fell into and carries a note about; this is
                         // the third and last door into the item list, closed the same way.
-                        if repostOf != nil, let full = repostFullSource {
-                            // A photo repost: the ORIGINAL, opened as the card by zoom, exactly like
-                            // a video repost. See `isRepostPhoto`.
-                            items = [DraftItem(image: full, assetID: nil)]
-                            items[0].zoom = RepostVideoCard.scale
-                            repostVideoCard = true
-                        } else {
-                            items = [DraftItem(image: source, assetID: sourceAssetID)]
-                        }
+                        // A photo repost opens on its baked card (`source`); see `isRepostPhoto`.
+                        items = [DraftItem(image: source, assetID: sourceAssetID)]
                         index = 0
                         restoreCurrent()
                     } else {
@@ -1618,7 +1617,8 @@ struct StoryEditorView: View {
                             repostOf: repostOf.map { r in
                                 var r = r
                                 // A card only when there IS one: a video repost has no card copy.
-                                r.card = repostVideoCard
+                                r.card = (repostFullSource != nil && !repostFullScreen)
+                                    || (repostFullSource == nil && repostVideoCard)
                                 return r
                             },
                             onPosted: { onPosted(); dismiss() })
@@ -4229,7 +4229,9 @@ struct StoryEditorView: View {
         // indistinguishable. Forcing the file to 9:16 instead would buy nothing visible and would
         // cost this editor its WYSIWYG on exactly the devices with the least room to spare.
         let colours = canvasColours
-        let repostCardBake = isRepostPhotoCard
+        // The photo repost is its baked card again (see `isRepostPhoto`): nothing is baked here, the
+        // composition below draws that card over its ground exactly as the editor showed it.
+        let repostCardBake = false
         let composed = ZStack(alignment: .bottom) {
             LinearGradient(colors: [Color(uiColor: colours.top), Color(uiColor: colours.bottom)],
                            startPoint: .top, endPoint: .bottom)
