@@ -39,7 +39,7 @@ final class StoryVideoEncoderTests: XCTestCase {
     func testSixtyFpsPlainClipKeepsFrameRateAndAudio() async throws {
         let src = try await Self.makeClip(size: CGSize(width: 1080, height: 1920), fps: 60, seconds: 3,
                                           colour: .systemGreen, audio: true)
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true))
+        let p = try unwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true))
         let info = try await Self.inspect(p.data)
         note(info.description)
         XCTAssertEqual(info.size.width, 720, accuracy: 2)
@@ -56,7 +56,7 @@ final class StoryVideoEncoderTests: XCTestCase {
                                           colour: .systemBlue, audio: true)
         let range = CMTimeRange(start: CMTime(seconds: 1, preferredTimescale: 600),
                                 duration: CMTime(seconds: 2, preferredTimescale: 600))
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, range: range, storyBackdrop: true))
+        let p = try unwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, range: range, storyBackdrop: true))
         let info = try await Self.inspect(p.data)
         note(info.description)
         XCTAssertEqual(info.duration, 2, accuracy: 0.15)
@@ -67,7 +67,7 @@ final class StoryVideoEncoderTests: XCTestCase {
         let grey = UIColor(white: 0.4, alpha: 1)
         let src = try await Self.makeClip(size: CGSize(width: 720, height: 1280), fps: 30, seconds: 2,
                                           colour: grey, audio: false)
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true, brightness: 0.5))
+        let p = try unwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true, brightness: 0.5))
         let url = try Self.write(p.data)
         let px = try await Self.pixel(url, at: CGPoint(x: 0.5, y: 0.5))
         note("centre after brightness \(px)")
@@ -82,7 +82,7 @@ final class StoryVideoEncoderTests: XCTestCase {
         let overlay = UIGraphicsImageRenderer(size: canvas, format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = false; return f }())
             .image { ctx in UIColor.magenta.setFill(); ctx.fill(CGRect(x: 54, y: 96, width: 216, height: 192)) }
         let backdrop = Self.solid(.yellow, size: canvas)
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, overlay: overlay,
+        let p = try unwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, overlay: overlay,
                                                             canvasAspect: 9.0 / 16.0, contentScale: 0.8,
                                                             backdrop: backdrop, storyBackdrop: true,
                                                             holeCorner: 0.04))
@@ -101,7 +101,7 @@ final class StoryVideoEncoderTests: XCTestCase {
     func testLandscapeClipGetsGradientCanvas() async throws {
         let src = try await Self.makeClip(size: CGSize(width: 1280, height: 720), fps: 30, seconds: 2,
                                           colour: .red, audio: false)
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true))
+        let p = try unwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true))
         let info = try await Self.inspect(p.data)
         note(info.description)
         XCTAssertEqual(info.size.width / info.size.height, 9.0 / 16.0, accuracy: 0.01)
@@ -115,13 +115,20 @@ final class StoryVideoEncoderTests: XCTestCase {
         let src = try await Self.makeClip(size: CGSize(width: 1080, height: 1920), fps: 30, seconds: 2,
                                           colour: .orange, audio: false)
         // A pinched card makes it a composed (edited) repost, which is always encoded.
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, hd: true, canvasAspect: 9.0 / 16.0,
+        let p = try unwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, hd: true, canvasAspect: 9.0 / 16.0,
                                                             contentScale: 0.8, backdrop: Self.solid(.gray, size: CGSize(width: 1080, height: 1920)),
                                                             storyBackdrop: true, holeCorner: 0.04))
         let info = try await Self.inspect(p.data)
         note(info.description)
         XCTAssertEqual(info.size.height, 1920, accuracy: 2)
     }
+
+    struct Missing: Error {}
+    static func unwrap<T>(_ v: T?, _ what: String = "value") throws -> T {
+        guard let v else { XCTFail("missing (what)"); throw Missing() }
+        return v
+    }
+    func unwrap<T>(_ v: T?) throws -> T { try Self.unwrap(v) }
 
     // MARK: Inspection
 
@@ -140,7 +147,7 @@ final class StoryVideoEncoderTests: XCTestCase {
 
     static func inspect(_ data: Data) async throws -> Info {
         let asset = AVURLAsset(url: try write(data))
-        let v = try XCTUnwrap(try await asset.loadTracks(withMediaType: .video).first)
+        let v = try unwrap(try await asset.loadTracks(withMediaType: .video).first)
         let size = try await v.load(.naturalSize).applying(try await v.load(.preferredTransform))
         let fps = Double(try await v.load(.nominalFrameRate))
         let dur = try await asset.load(.duration).seconds
