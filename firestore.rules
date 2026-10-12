@@ -387,12 +387,11 @@ service cloud.firestore {
         && linksOk()
         && profileTextOk(request.resource.data.diff(resource.data).affectedKeys());
 
-      // A moderator may set the ban flag on ANY account, and may touch nothing else on it. The
-      // hasOnly list is what keeps this from being a general "edit any profile" power: a moderator
-      // cannot rename somebody, change their photo, or alter their privacy settings.
-      allow update: if adminCan('moderate')
-        && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['banned', 'bannedAt', 'bannedBy', 'banReason']);
+      // ⛔ 2026-10-12: NO CLIENT SETS A BAN ANY MORE. Until today a moderator could write the four ban
+      // fields straight from the browser, which never reached the admin audit log. Bans now go only
+      // through the adminApi function (functions-admin), which checks the permission, requires a
+      // reason and a fresh sign-in, and records the action in the hash-chained audit log. The Admin
+      // SDK it uses does not pass through these rules, so nothing here needs to allow it.
 
       // VERIFICATION. A separate capability from `moderate` on purpose: banning somebody and marking
       // an account as genuine are different powers and should be grantable separately. `hasOnly` is
@@ -483,14 +482,16 @@ service cloud.firestore {
           request.auth.uid == uid
           || !isBlockedByUser(uid)
         );
-        // ⛔ A MODERATOR CAN TAKE THE MIRROR DOWN, AND UNTIL NOW ONLY THE AUTHOR COULD.
+        // HISTORY (superseded 2026-10-12, see below): a moderator could take the mirror down.
         //
         // `stories/{id}` already allows a moderator to delete a reported story. This document is a
         // SEPARATE copy in the author's own subcollection and its write rule named the author alone,
         // so a moderator could remove the story everywhere except the one place a stranger reads it:
         // the author's public profile. That is precisely the surface the story rules' own comment
         // calls the App Store risk — the takedown looked complete and was not.
-        allow delete: if signedIn() && adminCan('moderate');
+        // ⛔ 2026-10-12: a moderator's takedown of this mirror now happens on the server: adminApi
+        // storyRemove deletes it in the same transaction as the story (and onStoryDeleted does too).
+        // The client-side moderator delete is gone so every takedown lands in the audit log.
         allow write: if signedIn() && request.auth.uid == uid
           && (request.method == 'delete'
               // ⚠️ `blurThumb` HAS TO BE ON THIS LIST OR NOTHING IS MIRRORED AT ALL. The list is a
@@ -945,11 +946,9 @@ service cloud.firestore {
       // Readable by moderators, and by nobody else - a report names the person who filed it, and a
       // reported user being able to look up who reported them is how reporting stops being used.
       allow read: if adminCan('moderate');
-      // Only the handled flag and who closed it. A moderator cannot rewrite what was reported, so the
-      // record of what happened stays the record.
-      allow update: if adminCan('moderate')
-        && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['handled', 'handledBy', 'handledAt', 'outcome']);
+      // ⛔ 2026-10-12: closing a report is the adminApi function's job (audited), not a client write.
+      // No client may change a report once filed.
+      allow update: if false;
       allow delete: if false;
     }
 
@@ -2876,8 +2875,9 @@ service cloud.firestore {
       // makes it the one place Apple could be shown somebody else's illegal post. Being able to take
       // it down in seconds is the whole point - Telegram was pulled from the App Store on
       // 2026-08-04 over a single user's post and restored the same day once they removed it.
-      allow delete: if signedIn()
-        && (request.auth.uid == resource.data.authorUid || adminCan('moderate'));
+      // ⛔ 2026-10-12: the moderator half moved to the adminApi function (storyRemove), which records
+      // every takedown in the audit log. Here, only the author deletes their own story.
+      allow delete: if signedIn() && request.auth.uid == resource.data.authorUid;
 
       // THE VIEW COUNT, KEPT BY THE SERVER, READ BY THE AUTHOR ALONE.
       //

@@ -141,7 +141,9 @@ const cases = [
     [...notBanned(A), ...notAdmin(A)]],
 
   // ---- 3. the public mirror
-  ['a moderator deletes the public mirror', 'ALLOW', MOD,
+  // 2026-10-12: now DENY. A moderator's takedown goes through the adminApi function (audited), which
+  // deletes the mirror with Admin SDK access; see admin-writes-1012.test.js.
+  ['a moderator deletes the public mirror from the browser', 'DENY', MOD,
     `${D}/users/${A}/publicStories/${SID}`, 'delete', null, { authorUid: A },
     [...isModerator(MOD)]],
   ['a stranger deletes the public mirror', 'DENY', C,
