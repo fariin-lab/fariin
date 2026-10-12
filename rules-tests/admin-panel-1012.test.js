@@ -12,7 +12,7 @@ const OWNER = 'ownerUID01';
 const STRANGER = 'strangerUID';
 
 const paths = ['adminAudit/0000000001', 'adminAuditHead/head', 'adminSuspensions/someUser01', 'adminNotes/someUser01/items/n1',
-  'adminSessions/ownerUID01'];
+  'adminSessions/ownerUID01', 'adminUserIds/someUser01', 'numericIds/1234567890', 'adminConfig/verification'];
 const cases = [];
 for (const p of paths) {
   for (const who of [OWNER, STRANGER, null]) {
