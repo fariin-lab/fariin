@@ -68,6 +68,9 @@ struct CallView: View {
     @State private var headerHeight: CGFloat = 0
     /// Owner, 2026-10-10: their shared screen opened full screen from the share card's expand button.
     @State private var shareFullscreen = false
+    /// Where the share card sits on screen, so full screen grows out of it and shrinks back into it
+    /// (owner, 2026-10-12: "no animation, it pops; add a zoom in from that screen").
+    @State private var shareCardRect: CGRect = .zero
     @State private var cameraLineHeight: CGFloat = 0
     /// r2 H9d: one prepared generator for every button, swap and flip (the reference app keeps one).
     @MainActor private static let haptic = UIImpactFeedbackGenerator(style: .medium)
@@ -482,7 +485,9 @@ struct CallView: View {
                 ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleChrome() })
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
-                    .transition(.opacity)
+                    // A ZOOM OUT OF THE CARD, NOT A FADE: scaled down to the card's width and
+                    // anchored on the card's centre, so the picture grows from where it was.
+                    .transition(shareZoom(in: geo.size))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: stageShown)
@@ -1114,7 +1119,7 @@ struct CallView: View {
                 ScreenShareStageView(track: call.remoteShareTrack, onSingleTap: { toggleControls() })
                 Button {
                     buzz()
-                    withAnimation(.easeInOut(duration: 0.25)) { shareFullscreen = true }
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { shareFullscreen = true }
                 } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
@@ -1128,6 +1133,18 @@ struct CallView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { shareCardRect = $0 }
+    }
+
+    /// Full screen in and out of the share card: a scale from the card's width, anchored on its
+    /// centre, with a short fade so the two video views never show doubled. Falls back to a plain
+    /// fade before the card has been measured.
+    private func shareZoom(in size: CGSize) -> AnyTransition {
+        let r = shareCardRect
+        guard r.width > 1, size.width > 1, size.height > 1 else { return .opacity }
+        let anchor = UnitPoint(x: r.midX / size.width, y: r.midY / size.height)
+        let zoom = AnyTransition.scale(scale: max(0.2, min(1, r.width / size.width)), anchor: anchor)
+        return zoom.combined(with: .opacity)
     }
 
     private func shareTile(track: RTCVideoTrack?, mirror: Bool, name: String, photo: String?,
@@ -1152,7 +1169,7 @@ struct CallView: View {
     private var shareCollapseButton: some View {
         Button {
             buzz()
-            withAnimation(.easeInOut(duration: 0.25)) { shareFullscreen = false }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { shareFullscreen = false }
         } label: {
             Image(systemName: "arrow.down.right.and.arrow.up.left")
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
