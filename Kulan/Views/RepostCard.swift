@@ -169,9 +169,13 @@ struct RepostChipView: View {
     let name: String
     let avatar: UIImage?
     let width: CGFloat
+    /// The card's width, when known: the name is cut short to stay on the card, as the editor's
+    /// `RepostCardFrameView` cuts it. Nil keeps the old unbounded chip.
+    var cardWidth: CGFloat? = nil
 
     var body: some View {
         let d = width * RepostVideoCard.face
+        let nameMax = cardWidth.map { max(0, $0 - 2 * width * RepostVideoCard.inset - d * 1.28) }
         HStack(spacing: d * 0.28) {
             Group {
                 if let avatar { Image(uiImage: avatar).resizable().scaledToFill() }
@@ -192,8 +196,10 @@ struct RepostChipView: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: nameMax, alignment: .leading)
         }
-        .fixedSize()
+        .fixedSize(horizontal: nameMax == nil, vertical: true)
     }
 }
 

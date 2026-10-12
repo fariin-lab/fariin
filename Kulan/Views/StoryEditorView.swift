@@ -672,7 +672,11 @@ struct StoryEditorView: View {
     /// with the frame drawn in UIKit over the clip, has always worked on his phone. So the photo
     /// takes that path: the item IS the original, the card is `RepostVideoCard.scale` plus
     /// `RepostCardFrameView`, the tap is `toggleRepostVideoShape`, and `flatten` bakes the card.
-    private var isRepostPhoto: Bool { repostOf != nil && repostFullSource != nil && !currentIsVideo }
+    /// The REPOSTED picture only, the first item: a photo added with + is the reposter's own and
+    /// must never be framed or credited as the original author's.
+    private var isRepostPhoto: Bool {
+        repostOf != nil && repostFullSource != nil && index == 0 && !currentIsVideo
+    }
     /// A photo repost showing as the card (not the original full screen).
     private var isRepostPhotoCard: Bool { isRepostPhoto && repostVideoCard }
     @State private var index = 0
@@ -1616,14 +1620,14 @@ struct StoryEditorView: View {
                               scale: $photoZoom, offset: $photoOffset,
                               // The card is ONE size: pinned so a pinch cannot pull the clip out
                               // from under its rounded frame. Full screen frames as it always did.
-                              maxScale: repostVideoCard ? RepostVideoCard.scale : 4,
+                              maxScale: repostVideoCard && (isRepostVideo || isRepostPhoto) ? RepostVideoCard.scale : 4,
                               // A photo repost's card pinches like any picture again (owner,
                               // 2026-10-12: "I can't zoom in or out"). The floor of 1 it wore for a
                               // day hid a second box that the card itself drew — its own baked
                               // surround. That surround is transparent now (`RepostCard.render`), so
                               // a shrunken card sits on the one canvas gradient, drawn from the same
                               // colours (`repostCanvas`).
-                              minScale: repostVideoCard ? RepostVideoCard.scale : 0.4,
+                              minScale: repostVideoCard && (isRepostVideo || isRepostPhoto) ? RepostVideoCard.scale : 0.4,
                               interactive: !isDrawing && editingID == nil,
                               relay: photoTransform,
                               // The dial's value and whether the clip is running — both plain inputs
@@ -3668,7 +3672,9 @@ struct StoryEditorView: View {
         guard isRepostVideo || isRepostPhoto, items.indices.contains(index) else { return }
         stashCurrent()
         repostVideoCard.toggle()
-        items[index].zoom = repostVideoCard ? RepostVideoCard.scale : 1
+        // Full screen: a clip at 1 (its pinch is the crop); a photo at 0, so `restoreCurrent` fills a
+        // portrait original the way any photo opens, as the old photo toggle did.
+        items[index].zoom = repostVideoCard ? RepostVideoCard.scale : (isRepostPhoto ? 0 : 1)
         items[index].offset = .zero
         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { restoreCurrent() }
         Haptics.impact(.light)
@@ -3999,7 +4005,8 @@ struct StoryEditorView: View {
                 // The repost card's chip, under everything he added, at the same place the editor
                 // drew it (`RepostCardFrame`), on the same canvas.
                 if card {
-                    RepostChipView(name: repostOf?.authorName ?? "", avatar: repostAvatar, width: size.width)
+                    RepostChipView(name: repostOf?.authorName ?? "", avatar: repostAvatar, width: size.width,
+                                   cardWidth: repostClipRect(in: size).width)
                         .offset(x: repostClipRect(in: size).minX + size.width * RepostVideoCard.inset,
                                 y: repostClipRect(in: size).minY + size.width * RepostVideoCard.inset)
                         .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -4150,10 +4157,10 @@ struct StoryEditorView: View {
                     .frame(width: clip.width, height: clip.height)
                     .clipShape(RoundedRectangle(cornerRadius: clip.width * RepostVideoCard.corner,
                                                 style: .continuous))
-                    .shadow(color: .black.opacity(0.35), radius: 20, y: 6)
                     .position(x: clip.midX, y: clip.midY)
                     .frame(width: size.width, height: size.height)
-                RepostChipView(name: repostOf?.authorName ?? "", avatar: repostAvatar, width: size.width)
+                RepostChipView(name: repostOf?.authorName ?? "", avatar: repostAvatar, width: size.width,
+                               cardWidth: clip.width)
                     .offset(x: clip.minX + size.width * RepostVideoCard.inset,
                             y: clip.minY + size.width * RepostVideoCard.inset)
                     .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -4235,7 +4242,11 @@ struct StoryEditorView: View {
         // The render is the story. There is no crop-back any more (see the note below), so the only
         // fallback left is the untouched photo, for a renderer that returned nothing at all.
         // ONE encode either way, through the ladder that answers for the byte budget.
-        return r.uiImage.map { StoryPhoto.encode($0) } ?? StoryPhoto.encode(base)
+        if let img = r.uiImage { return StoryPhoto.encode(img) }
+        // A card that could not be drawn falls back to the card as it was rendered at the tap
+        // (`source`), never to the bare original: that would post full screen still marked a card,
+        // with no credit on it anywhere.
+        return StoryPhoto.encode(repostCardBake ? source : base)
     }
 
     // `flattenBackdrop` lived here: the photo aspect-filled into an eighth-size canvas and darkened
