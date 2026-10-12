@@ -704,6 +704,8 @@ struct StoryEditorView: View {
     @State private var repostVideoCard = false
     /// Test hook: told the editor's state each time the canvas is built. nil in the app.
     nonisolated(unsafe) static var renderProbe: ((String) -> Void)? = nil
+    /// Test hook: pieces of the editor a render test switches off to find what freezes the canvas. Empty in the app.
+    nonisolated(unsafe) static var renderSkip: Set<String> = []
     /// `repostStartSecond` has been used (once per editor; a later player starts where it is told).
     @State private var repostStartApplied = false
     /// Any keyboard is on screen, and when one last went down: a canvas tap while typing (or the
@@ -1371,7 +1373,7 @@ struct StoryEditorView: View {
             let cardH = card.height
             ZStack {
                 Color.black.ignoresSafeArea()
-                cardContent(card: card)
+                Group { if Self.renderSkip.contains("content") { Color.clear } else { cardContent(card: card) } }
                     .frame(width: card.width, height: card.height)
                     // The card ALWAYS has the rounded story shape (reference). Display-only:
                     // the flatten renders the same space unrounded, and the viewer rounds its
@@ -1382,9 +1384,10 @@ struct StoryEditorView: View {
                     // presenter sets `initialContentInsets` before presenting for exactly this; see
                     // `ChatCropView.initialContentRect`. Read in global coordinates because the crop
                     // canvas sits under a bar whose height it is not told.
-                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { cardRect = $0 }
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { if !Self.renderSkip.contains("cardRect") { cardRect = $0 } }
 
                 // Top controls — stay put when the keyboard opens (don't ride up with it).
+                if !Self.renderSkip.contains("controls") {
                 VStack {
                     HStack {
                         Button { closeEditor() } label: {
@@ -1460,6 +1463,7 @@ struct StoryEditorView: View {
                 // the same reason and the crop screen was simply missed when it grew a bar of its own.
                 .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !showCrop && !isDrawing ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
+                }   // renderSkip "controls"
 
                 // The bottom bars and the crop overlay are siblings of the canvas, in `body`,
                 // which is what lets the keyboard move one without touching the other.
@@ -2418,6 +2422,7 @@ struct StoryEditorView: View {
         // offset back to that spot, in the same pass the layout moved it, so nothing visibly moves.
         // Outside a blink the offset is zero and SwiftUI's own keyboard avoidance is untouched.
         .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { y in
+            guard !Self.renderSkip.contains("caption") else { return }
             captionLayoutY = y
             if !(captionFocused && keyboard.inBlink) { captionRestY = y }
         }

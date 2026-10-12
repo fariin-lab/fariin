@@ -102,6 +102,34 @@ final class RepostEditorRenderTests: XCTestCase {
         shoot("photo-after-tap2")
     }
 
+    // MARK: Bisect: which piece stops the canvas from rebuilding
+
+    func testBisectNone() async throws { try await bisect([]) }
+    func testBisectCardRect() async throws { try await bisect(["cardRect"]) }
+    func testBisectCaption() async throws { try await bisect(["caption"]) }
+    func testBisectControls() async throws { try await bisect(["controls"]) }
+    func testBisectContent() async throws { try await bisect(["content"]) }
+    func testBisectAll() async throws { try await bisect(["cardRect", "caption", "controls", "content"]) }
+
+    private func bisect(_ skip: Set<String>) async throws {
+        StoryEditorView.renderSkip = skip
+        defer { StoryEditorView.renderSkip = [] }
+        let clip = try await Self.makeClip()
+        let editor = StoryEditorView(source: Self.solid(.systemTeal, size: CGSize(width: 540, height: 960)),
+                                     repostOf: StoryRepost(authorUid: "u1", authorName: "Abdi",
+                                                           storyId: "s1", modified: false, card: true),
+                                     repostAvatar: Self.solid(.systemOrange, size: CGSize(width: 120, height: 120)),
+                                     onPosted: {},
+                                     sourceVideo: .init(url: clip))
+        show(editor)
+        try await Task.sleep(for: .seconds(3))
+        let rebuilt = log.contains { $0.contains("canvas: items=1") }
+        let summary = "BISECT skip=\(skip.sorted()) canvasRebuiltAfterLoad=\(rebuilt)"
+        log.append(summary)
+        print(summary)
+        flushLog()
+    }
+
     // MARK: Helpers
 
     private func show<V: View>(_ view: V) {
