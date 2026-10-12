@@ -2441,6 +2441,17 @@ struct StoryViewer: View {
                                                 object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
             }
         }
+        // ⛔ THE REPOST BUBBLE'S FACE — owner 2026-10-12, second report of the letter "A" (f01fa0af
+        // fetched the author's profile but the bubble never showed it). The bubble's photo is baked
+        // into the item's tap area when the pages are fed, and the pages are only re-fed on an ID
+        // change above. A profile landing a moment after the viewer opened changed `models` and
+        // reached nobody. Re-feed the buckets that carry a repost when one lands.
+        .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in
+            for m in models where m.stories.contains(where: { $0.taps.contains { $0.person != nil } }) {
+                NotificationCenter.default.post(name: .storyItemsReconciled,
+                                                object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
+            }
+        }
         // ⚠️ THE STORY UNDERNEATH MOVES THE INSTANT THE ROW DOES, AND BOTH HALVES OF WHY THAT WAS
         // EVER A PROBLEM ARE NOW GONE.
         //
