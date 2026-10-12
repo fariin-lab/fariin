@@ -227,7 +227,8 @@ struct WallpaperPickerSheet: View {
         // out of the wallpaper strip rather than added to the sheet — which is the half of his
         // 2026-09-02 report about the tiles being cut off, and the same arithmetic as the +26 that
         // note records.
-        .presentationDetents([.height((hasPendingChange && !globalOnly ? 399 : 355) + Self.bottomInset)])
+        // One height now: the in-chat sheet has no second row under Apply (see the button block).
+        .presentationDetents([.height(355 + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         // ⛔ CLEAR — owner, 2026-09-11: "Chat Wallpaper sheet looks different colors top header and
         // bottom ... that sheet make clear". The system's glass sheet was tinting the two bar bands
@@ -478,16 +479,9 @@ struct WallpaperPickerSheet: View {
                             .liquidGlass(Capsule(), interactive: true, tint: applyTint)
                             .animation(.spring(response: 0.35, dampingFraction: 0.8), value: applyTint)
                     }
-                    if !globalOnly && showAllChatsRow {
-                        Button { applyForAllChats() } label: {
-                            Text("Apply For All Chats").font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity).frame(height: 34)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.opacity)
-                    }
+                    // ⛔ NO "APPLY FOR ALL CHATS" FROM INSIDE A CHAT (owner, 2026-10-12: "if a user wants
+                    // a wallpaper for all chats they can use Settings; don't show it in this sheet").
+                    // Settings opens this same sheet with `globalOnly`, whose one button IS that.
                 }
                 .transition(.opacity)
             } else {
