@@ -158,6 +158,15 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         }
     }
 
+    /// Whether a clip's opening (512KB, or the whole clip if shorter) is already in its partial file.
+    /// Reads the small range map only. See `StoryItemVideoView.initializeVideoIfReady`.
+    static func holdsOpening(_ remote: URL) -> Bool {
+        guard enabled else { return false }
+        let partial = StoryPartialFile(remote: remote)
+        let want = min(512 * 1024, partial.total ?? 512 * 1024)
+        return want > 0 && partial.holds(0 ..< want)
+    }
+
     /// FETCH ONLY THE FIRST `bytes` OF A CLIP, for the lookahead. Nothing plays from this directly;
     /// it fills the same partial file the reader serves from, so arriving at the story finds the
     /// opening already here and starts on it while the rest streams in behind.

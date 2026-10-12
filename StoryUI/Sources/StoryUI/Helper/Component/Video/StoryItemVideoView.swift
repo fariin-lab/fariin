@@ -394,6 +394,16 @@ final class StoryItemVideoView: UIView {
         // asked whether or not a frame is buffered, so on anything less than a good connection a
         // story began by stuttering. Holding a moment longer on a picture beats starting on one.
         p.automaticallyWaitsToMinimizeStalling = true
+        // ⛔ EXCEPT FOR THE START OF A CLIP WHOSE OPENING IS ALREADY HERE — owner 2026-10-12, "still a
+        // small late, make it like the reference". The reference app prepares nothing but data for
+        // the next story either (opening bytes + a first-frame picture), builds its player on the
+        // tap, and its own player starts as soon as it has frames. AVFoundation instead spends the
+        // start evaluating a network it cannot see through our reader, with the opening already on
+        // disk. So a warmed clip starts without that wait; `noteTimeControl(.playing)` turns the
+        // waiting back on, so a stall LATER in the clip is still held the safe way.
+        if streamed != nil, StoryVideoStream.holdsOpening(file) {
+            p.automaticallyWaitsToMinimizeStalling = false
+        }
         player = p
 
         let pl = AVPlayerLayer(player: p)
@@ -535,6 +545,11 @@ final class StoryItemVideoView: UIView {
         case .playing:
             didBeginPlayback = true
             kickedThisWait = false   // a later stall may be kicked once again
+            // The warmed-start exception ends here (see `initializeVideoIfReady`). Not inline in
+            // the KVO: setting it is a player property change, so it goes on the next turn.
+            if player?.automaticallyWaitsToMinimizeStalling == false {
+                DispatchQueue.main.async { [weak self] in self?.player?.automaticallyWaitsToMinimizeStalling = true }
+            }
             setBuffering(false)
         case .waitingToPlayAtSpecifiedRate:
             // ⚠️ INITIAL BUFFERING IS NOT A STALL. The reference app counts only
