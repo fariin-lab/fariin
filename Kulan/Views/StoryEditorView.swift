@@ -2385,7 +2385,12 @@ struct StoryEditorView: View {
                         // (Sound is NOT here any more — it is beside the ✕ at the top, on his
                         // instruction. Everything left in this capsule opens something; sound was
                         // the one entry that silently flipped a state.)
-                        capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
+                        // ⛔ NOT ON A REPOSTED CLIP (owner, 2026-10-12: "a repost is someone else's
+                        // video, he can repost it but not cut it"). The reposted clip is the first
+                        // item; a video of his own added with + can still be cut.
+                        if !(repostOf != nil && index == 0) {
+                            capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
+                        }
                     } else if Self.cropEnabled {
                         capsuleTool("crop", active: croppedSource != nil) {
                             withAnimation(.easeInOut(duration: 0.3)) { showCrop = true }
