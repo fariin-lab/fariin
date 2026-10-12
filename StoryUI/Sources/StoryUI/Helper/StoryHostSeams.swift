@@ -104,6 +104,12 @@ public enum StoryVideoHost {
     ///
     /// The row calls this whenever its answer changes, which is the same invariant without the
     /// per-frame cost of walking the table sixty times a second.
+    /// Where a story's clip is in the viewer right now (or was last paused), for a repost to open
+    /// its editor at the same second, as the reference app does (`initialVideoPosition`).
+    public static func playbackSecond(of storyId: String) -> Double? {
+        StoryItemViewStore.pausedSecond(of: storyId)
+    }
+
     public static func central(_ storyId: String) {
         guard !storyId.isEmpty else { return }
         StoryItemViewStore.pauseAllExcept(storyId)

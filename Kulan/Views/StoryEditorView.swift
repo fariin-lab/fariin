@@ -204,6 +204,10 @@ struct StoryEditorView: View {
     /// wrong for the FIRST item: every part of this view reads `items[index]`, so an empty `items`
     /// for the length of that load is a composer drawn on nothing. See `resolveSourceVideo`.
     var sourceVideo: SourceVideo? = nil
+    /// A video repost opens at the second the viewer was on, not at zero (reference-app research,
+    /// 2026-10-12: `initialVideoPosition` + `seek(..., andPlay: true)`). Applied once, to the
+    /// reposted clip, when its player is made. See `ensurePreviewPlayer`.
+    var repostStartSecond: Double? = nil
 
     /// The clip a video-first post opens on. A struct rather than a tuple so it can be `Equatable`
     /// and carried in a `@State`-driven presentation without the compiler having to infer it.
@@ -662,6 +666,8 @@ struct StoryEditorView: View {
     /// A VIDEO repost is showing as the card: the clip at `RepostVideoCard.scale` with the rounded
     /// surround and the chip over it. Off = full screen. See `RepostVideoCard`.
     @State private var repostVideoCard = false
+    /// `repostStartSecond` has been used (once per editor; a later player starts where it is told).
+    @State private var repostStartApplied = false
     /// A repost of a clip, the only time the card is drawn live rather than baked.
     private var isRepostVideo: Bool { repostOf != nil && repostFullSource == nil && currentIsVideo }
     /// ⛔ A PHOTO REPOST WORKS EXACTLY LIKE A VIDEO REPOST NOW (owner, 2026-10-12, fifth report: "in
@@ -2106,6 +2112,11 @@ struct StoryEditorView: View {
         // The clip's own sound setting, from the moment it can make a sound. A player built AFTER
         // the button was pressed would otherwise start unmuted on a clip already marked silent.
         p.isMuted = items[index].muted
+        if repostOf != nil, index == 0, !repostStartApplied, let s = repostStartSecond, s > 0.2 {
+            repostStartApplied = true
+            p.seek(to: CMTime(seconds: s, preferredTimescale: 600),
+                   toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         previewPlayer = p
         // Back to the start when it finishes, so a second press replays rather than doing nothing.
         // The TOKEN is kept: see `previewEndObserver`.

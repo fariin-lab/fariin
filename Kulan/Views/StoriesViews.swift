@@ -4774,6 +4774,9 @@ struct StoryViewer: View {
     private func beginVideoRepost(_ story: Story, authorName: String) {
         guard let remote = URL(string: story.mediaUrl), !story.mediaUrl.isEmpty else { return }
         repostLoading = true
+        // Where the viewer is in this clip, read before anything moves, so the composer opens on the
+        // same second (reference-app research, 2026-10-12).
+        let startSecond = StoryVideoHost.playbackSecond(of: story.id)
         Task {
             // ⛔ OFF THE MAIN THREAD, AND NOT A SECOND DOWNLOAD (owner, 2026-10-11: "when I click
             // repost the app freezes for seconds"). This read the whole clip into memory and wrote
@@ -4781,6 +4784,16 @@ struct StoryViewer: View {
             // when the viewer had just played it. The viewer's finished copy is copied file to file
             // now; only a clip that is not on the phone is fetched, straight to a file.
             let wrote: URL? = await Task.detached(priority: .userInitiated) { () -> URL? in
+                // Earlier reposts' copies are not needed once an hour has passed (their posts have
+                // long been exported); nothing else ever removed them.
+                let tmp = FileManager.default.temporaryDirectory
+                if let old = try? FileManager.default.contentsOfDirectory(
+                    at: tmp, includingPropertiesForKeys: [.contentModificationDateKey]) {
+                    for f in old where f.lastPathComponent.hasPrefix("repost-") {
+                        let m = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                        if let m, Date().timeIntervalSince(m) > 3600 { try? FileManager.default.removeItem(at: f) }
+                    }
+                }
                 let local = FileManager.default.temporaryDirectory
                     .appendingPathComponent("repost-\(UUID().uuidString).mp4")
                 if let cached = StoryVideoFile.cached(for: remote),
@@ -4814,7 +4827,8 @@ struct StoryViewer: View {
                                                           storyId: story.id, card: true),
                                     repostAvatar: avatar,
                                     onPosted: { flashSentToast("Reposted") },
-                                    sourceVideo: .init(url: local)),
+                                    sourceVideo: .init(url: local),
+                                    repostStartSecond: startSecond),
                     onDismissed: { repostUp = false })
             }
         }
