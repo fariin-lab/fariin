@@ -1039,6 +1039,7 @@ struct StoryEditorView: View {
     }
 
     var body: some View {
+        let _ = Self.renderProbe?("body: items=\(items.count) full=\(repostFullScreen) card=\(repostVideoCard)")
         // TWO LAYERS, AND THE SPLIT IS THE POINT. The canvas ignores the keyboard so it can never be
         // squished or re-measured (the pen bakes strokes against `geo`, so a canvas that moves puts
         // the line somewhere other than the finger). The bottom bar is a SIBLING of it, outside that
@@ -1358,6 +1359,7 @@ struct StoryEditorView: View {
 
     private var canvasLayer: some View {
         GeometryReader { geo in
+            let _ = Self.renderProbe?("canvas: items=\(items.count) geo=\(geo.size)")
             // THE CARD IS THE STORY FRAME (owner: "use the real Story frame… the editor accurately
             // matches the final Story layout"). Full width, from just under the status bar down to
             // the tool band — a CONSTANT of screen geometry, so nothing that appears or disappears
