@@ -3681,7 +3681,7 @@ enum ChatService {
             // this whole read fail instead of skipping the row.
             if u.isAwaitingDeletion { return nil }
             if !allowSelf { guard u.id != uid else { return nil } }   // never "find" yourself
-            return ProfileStore.indexed(u)          // warms photo / call-privacy / verification
+            return ProfileStore.indexed(u, fresh: !d.metadata.isFromCache)   // warms photo / call-privacy / verification
         } catch {
             print("findByHandle failed:", error)
             return nil
@@ -3720,20 +3720,21 @@ enum ChatService {
         }
         let uids = rows.compactMap { $0["uid"] as? String }.filter { $0 != uid }
         // In the server's order (exact handle first), fetched together.
-        let found = await withTaskGroup(of: (Int, UserProfile?).self) { group in
+        let found = await withTaskGroup(of: (Int, UserProfile?, Bool).self) { group in
             for (i, owner) in uids.enumerated() {
                 group.addTask {
                     guard let d = try? await db.collection("users").document(owner).getDocument(),
-                          let data = d.data() else { return (i, nil) }
+                          let data = d.data() else { return (i, nil, false) }
                     let u = UserProfile(id: d.documentID, data: data)
-                    return (i, u.isAwaitingDeletion ? nil : u)
+                    return (i, u.isAwaitingDeletion ? nil : u, !d.metadata.isFromCache)
                 }
             }
-            var out = [(Int, UserProfile)]()
-            for await (i, u) in group { if let u { out.append((i, u)) } }
-            return out.sorted { $0.0 < $1.0 }.map(\.1)
+            var out = [(Int, UserProfile, Bool)]()
+            for await (i, u, fresh) in group { if let u { out.append((i, u, fresh)) } }
+            return out.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
         }
-        return found.map { ProfileStore.indexed($0) }   // warms photo / privacy / verification, as findByHandle does
+        // warms photo / privacy / verification, as findByHandle does; a cached copy never overrules
+        return found.map { ProfileStore.indexed($0.0, fresh: $0.1) }
     }
 }
 

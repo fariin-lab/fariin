@@ -5429,6 +5429,9 @@ struct ThreadView: View {
         // Who you are actually talking to. The header is the surface that matters most for this
         // mark: it is on screen for the whole conversation, and it is the last thing somebody sees
         // before they answer a stranger.
+        // Read the signal so the header redraws when the badge becomes known (2026-10-12: the header
+        // was built before the other profile loaded and never showed the mark it should have).
+        let _ = VerificationSignal.shared.tick
         if !isGroup, VerificationIndex.of(otherUid)?.showsBadge == true {
             m.titleIcon = ChatHeaderModel.verifiedMark()
         }

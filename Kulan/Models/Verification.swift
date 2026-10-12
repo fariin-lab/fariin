@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import Observation
 
 // MARK: - Who a verification is about
 
@@ -232,15 +233,42 @@ enum VerificationIndex {
 
     /// Takes the DECODED value, not the raw map: the profile has already parsed it once, and parsing
     /// it a second time here would be a second place for the two answers to differ.
-    static func record(_ peer: PeerRef, _ verification: Verification?) {
+    ///
+    /// ⛔ 2026-10-12, owner: "I give @kream verification, sometimes it appears, sometimes not." Two
+    /// causes, both fixed here:
+    ///  1. A profile is read TWICE when a page opens: `cachedPeer` from the phone's on-disk copy (which
+    ///     can predate the badge) and `fetch` from the server. Both landed here and the LAST one won, so
+    ///     an old cached copy finishing second wiped a badge the server had just delivered. Now a copy
+    ///     that is not fresh from the server (`fresh: false`) may only fill a gap: it never removes or
+    ///     replaces what is known. And between two records, the one changed later (`lastUpdated`) wins,
+    ///     so two server answers arriving out of order cannot undo each other either.
+    ///  2. `VerifiedMark` read this table once and never redrew, so a row drawn before its profile
+    ///     arrived stayed bare. Every change now bumps `VerificationSignal`, which the mark observes.
+    static func record(_ peer: PeerRef, _ verification: Verification?, fresh: Bool = true) {
         guard !peer.id.isEmpty else { return }
-        lock.lock(); defer { lock.unlock() }
-        if let verification { records[peer.key] = verification } else { records.removeValue(forKey: peer.key) }
+        lock.lock()
+        let before = records[peer.key]
+        if !fresh {
+            if before == nil, let verification { records[peer.key] = verification }
+        } else if let verification {
+            if let b = before, let bt = b.lastUpdated, let nt = verification.lastUpdated, nt < bt {
+                // An older answer arriving late: keep the newer one.
+            } else {
+                records[peer.key] = verification
+            }
+        } else {
+            records.removeValue(forKey: peer.key)
+        }
+        let after = records[peer.key]
+        lock.unlock()
+        if before?.showsBadge != after?.showsBadge || before?.status != after?.status || before?.kind != after?.kind {
+            VerificationSignal.bump()
+        }
     }
 
     /// Convenience for the user path, which is every caller today.
-    static func record(uid: String, verification: Verification?) {
-        record(.user(uid), verification)
+    static func record(uid: String, verification: Verification?, fresh: Bool = true) {
+        record(.user(uid), verification, fresh: fresh)
     }
 
     /// The record for a peer, or nil. Cheap enough to call from a row body.
@@ -260,6 +288,19 @@ enum VerificationIndex {
     /// Sign-out: the next account must not inherit a map of who was verified.
     static func clear() {
         lock.lock(); records.removeAll(); lock.unlock()
+        VerificationSignal.bump()
+    }
+}
+
+/// The redraw signal for every `VerifiedMark`. The index itself is a plain locked table (it is read
+/// from layout passes on any thread); this is the one observable thing a mark reads, so SwiftUI
+/// redraws the marks when a badge appears, changes or goes. Bumped on the main actor.
+@MainActor @Observable
+final class VerificationSignal {
+    static let shared = VerificationSignal()
+    private(set) var tick = 0
+    nonisolated static func bump() {
+        Task { @MainActor in shared.tick &+= 1 }
     }
 }
 
@@ -297,6 +338,8 @@ struct VerifiedMark: View {
     }
 
     var body: some View {
+        // Read so this mark redraws when the index changes (see VerificationSignal).
+        let _ = VerificationSignal.shared.tick
         if let record = VerificationIndex.of(peer), record.showsBadge {
             mark
                 .accessibilityLabel("Verified")

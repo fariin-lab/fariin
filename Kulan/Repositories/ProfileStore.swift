@@ -125,6 +125,12 @@ final class ProfileStore {
                 }
                 return
             }
+            // 2026-10-12: my OWN badge rides this same live listener, so a badge granted or taken
+            // away from the admin panel shows on my profile at once instead of after a restart.
+            if let snap, snap.exists, Auth.auth().currentUser?.uid == uid {
+                VerificationIndex.record(uid: uid, verification: Verification(snap.data()?["verification"] as? [String: Any]),
+                                         fresh: !snap.metadata.isFromCache)
+            }
             // Same account still signed in: a late snapshot must not write one account's choices
             // into the next account's prefs.
             guard let snap, snap.exists, Auth.auth().currentUser?.uid == uid,
@@ -173,6 +179,8 @@ final class ProfileStore {
         let cached = UserProfile(id: uid, data: data)
         guard !cached.handle.isEmpty else { return false }
         me = cached
+        // My own badge on the first frame; a cached copy only fills the gap (see VerificationIndex).
+        VerificationIndex.record(uid: uid, verification: cached.verification, fresh: false)
         // The boot fast path reaches the app before loadMine's network round trip, so the settings
         // screen would show defaults for that whole moment. The cached doc already carries them.
         Self.adoptServerPrivacy(cached.privacy)
@@ -187,7 +195,8 @@ final class ProfileStore {
         guard !uid.isEmpty, !uid.contains("/"),   // see `fetch`
               let snap = try? await db.collection("users").document(uid).getDocument(source: .cache),
               let data = snap.data() else { return nil }
-        return Self.indexed(UserProfile(id: uid, data: data))
+        // fresh: false — an on-disk copy may predate a badge; it must never undo the server's answer.
+        return Self.indexed(UserProfile(id: uid, data: data), fresh: false)
     }
 
     // MARK: - Last good copy + re-fetch after recovery (owner, 2026-10-08)
@@ -269,7 +278,8 @@ final class ProfileStore {
                 return nil
             }
             markFetch(uid, failed: false)
-            return Self.indexed(UserProfile(id: uid, data: data))
+            // Offline, getDocument() answers from the disk cache: that copy is not fresh.
+            return Self.indexed(UserProfile(id: uid, data: data), fresh: !snap.metadata.isFromCache)
         } catch {
             print("profile fetch failed:", error)
             markFetch(uid, failed: true)
@@ -296,7 +306,10 @@ final class ProfileStore {
     /// the indexes only fed a photo, and stopped being invisible the moment a verified badge
     /// depended on one — search is the single place impersonation is actually attempted, and it was
     /// the one list that could never draw a mark.
-    static func indexed(_ p: UserProfile) -> UserProfile {
+    /// `fresh`: the profile came from the SERVER just now. A disk-cache copy passes false, so it can
+    /// fill a gap in the verification index but never overrule what the server said (see
+    /// VerificationIndex.record).
+    static func indexed(_ p: UserProfile, fresh: Bool = true) -> UserProfile {
         ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
                                  thumb: p.photoThumb, privacy: p.privacy)
         shared.remember(p)   // 2026-10-08: the in-memory last-good copy `fetch` falls back on
@@ -306,7 +319,7 @@ final class ProfileStore {
         // And verification, for the same reason and through the same door: a badge is drawn during a
         // layout pass and cannot await anything. Every profile the app already reads warms it, so no
         // screen ever fetches to find out whether to draw one. See VerificationIndex.
-        VerificationIndex.record(uid: p.id, verification: p.verification)
+        VerificationIndex.record(uid: p.id, verification: p.verification, fresh: fresh)
         return p
     }
 
