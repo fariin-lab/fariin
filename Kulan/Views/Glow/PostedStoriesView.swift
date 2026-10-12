@@ -281,7 +281,7 @@ struct PostedStoriesView: View {
             // the grid blurs into under it both go; the count pill and the bin sit straight on the
             // page.
             .toolbarBackground(.hidden, for: .bottomBar)
-            .scrollEdgeEffectStyle(.hidden, for: .bottom)
+            .scrollEdgeEffectHidden(true, for: .bottom)
             .toolbar {
                 // ⛔ THE FILTER IS THE TITLE — his reference: "Posted stories ⌄", a menu hanging off
                 // the heading rather than an icon in the corner. That is better than my first pass
