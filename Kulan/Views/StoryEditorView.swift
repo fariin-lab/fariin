@@ -2417,22 +2417,11 @@ struct StoryEditorView: View {
         // remembered whenever no blink is on; during one (`KeyboardWatcher.inBlink`) the bar is
         // offset back to that spot, in the same pass the layout moved it, so nothing visibly moves.
         // Outside a blink the offset is zero and SwiftUI's own keyboard avoidance is untouched.
-        //
-        // ⛔ MEASURED OUTSIDE THE OFFSET (2026-10-12, found with the simulator render test). The
-        // first version measured the bar itself and then offset it by that measurement: the offset
-        // moved the measured frame, the frame moved the offset, and SwiftUI logged "AttributeGraph:
-        // cycle detected" on every editor open. Breaking that cycle left the editor's canvas built
-        // once and never rebuilt, which is why the repost tap, the video card's name and avatar and
-        // the editor video all stopped showing. The background below sits AFTER `.offset`, so it is
-        // laid out where the bar was laid out, and the offset can no longer feed back into it.
-        .offset(y: captionFocused && keyboard.inBlink ? captionRestY - captionLayoutY : 0)
-        .background {
-            Color.clear
-                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { y in
-                    captionLayoutY = y
-                    if !(captionFocused && keyboard.inBlink) { captionRestY = y }
-                }
+        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { y in
+            captionLayoutY = y
+            if !(captionFocused && keyboard.inBlink) { captionRestY = y }
         }
+        .offset(y: captionFocused && keyboard.inBlink ? captionRestY - captionLayoutY : 0)
         // The layout moves on the keyboard's curve, so the hold moves on the same curve and the two
         // cancel frame by frame instead of only at the end.
         .animation(keyboard.inBlink ? keyboard.systemAnimation : nil, value: captionLayoutY)
