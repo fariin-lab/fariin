@@ -109,6 +109,10 @@ final class RepostEditorRenderTests: XCTestCase {
     func testBisectCaption() async throws { try await bisect(["caption"]) }
     func testBisectControls() async throws { try await bisect(["controls"]) }
     func testBisectContent() async throws { try await bisect(["content"]) }
+    func testBisectGlass() async throws { try await bisect(["glass"]) }
+    func testBisectPad() async throws { try await bisect(["pad"]) }
+    func testBisectOpacity() async throws { try await bisect(["opacity"]) }
+    func testBisectKeyboardRule() async throws { try await bisect(["ikb"]) }
     func testBisectAll() async throws { try await bisect(["cardRect", "caption", "controls", "content"]) }
 
     private func bisect(_ skip: Set<String>) async throws {

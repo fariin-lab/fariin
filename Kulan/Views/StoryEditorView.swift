@@ -1409,7 +1409,7 @@ struct StoryEditorView: View {
                                 // Same trap as the 2026-08-18 batch; stated colours cannot fall into it.
                                 .foregroundStyle(.white)
                                 .shadow(color: .black.opacity(0.35), radius: 2)
-                                .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
+                                .frame(width: 40, height: 40).contentShape(Circle()).editorProbeGlass()
                         }
                         Spacer()
                         // (The "Done" that used to sit here while drawing is GONE. The pen carries
@@ -1439,13 +1439,13 @@ struct StoryEditorView: View {
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.primary)
                                     .shadow(color: .black.opacity(0.35), radius: 2)
-                                    .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
+                                    .frame(width: 40, height: 40).contentShape(Circle()).editorProbeGlass()
                             }
                         }
                     }
                     // HIG: inside the safe area, 16pt leading, 12pt below the Dynamic Island / notch.
                     // Higher up, into the top-left corner (clear of the centred Dynamic Island) per request.
-                    .padding(.horizontal, 16).padding(.top, max(windowSafeTop - 22, 10))
+                    .padding(.horizontal, 16).padding(.top, Self.renderSkip.contains("pad") ? 25 : max(windowSafeTop - 22, 10))
                     Spacer()
                 }
                 // …and out of the way while a stroke is under the finger, same as the pen bar below.
@@ -1461,8 +1461,8 @@ struct StoryEditorView: View {
                 // this button sat in the top-left corner of the picture for the whole entry — his
                 // screenshot, circled, half-cut by the card's corner. `showTrim` is here for exactly
                 // the same reason and the crop screen was simply missed when it grew a bar of its own.
-                .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !showCrop && !isDrawing ? 1 : 0)
-                .ignoresSafeArea(.keyboard, edges: .bottom)
+                .opacity(Self.renderSkip.contains("opacity") ? 1 : (draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !showCrop && !isDrawing ? 1 : 0))
+                .ignoresSafeArea(Self.renderSkip.contains("ikb") ? [] : .keyboard, edges: .bottom)
                 }   // renderSkip "controls"
 
                 // The bottom bars and the crop overlay are siblings of the canvas, in `body`,
@@ -5796,3 +5796,15 @@ private struct BrightnessDial: View {
     }
 }
 
+
+extension View {
+    /// The editor's top buttons' glass, with a test-only switch (`StoryEditorView.renderSkip`
+    /// "glass") that draws a plain dark circle instead. In the app the switch is never set.
+    @ViewBuilder func editorProbeGlass() -> some View {
+        if StoryEditorView.renderSkip.contains("glass") {
+            self.background(Color.black.opacity(0.3), in: Circle())
+        } else {
+            self.liquidGlass(Circle())
+        }
+    }
+}
