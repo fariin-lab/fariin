@@ -74,10 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (876): REPOST ICON, SHARE SHEET, CREDIT OPENS PROFILE.
+            THIS BUILD (877): EIGHT STORY REPORTS.
+            Video repost editor: the author's face and name and the rounded frame are drawn by UIKit now, and a clip whose picture froze while the sound played is woken up. Photo repost: the card no longer carries its own background, so pinching it smaller shows one gradient, not a second box, and zoom in and out work. The uploading card for a video repost wears the card shape and chip from the start. After the upload finishes, pulling the story down flies it back into My Story. Story to profile to the chat button opens a real chat. The story's share sheet is white in light mode and dark in dark mode. Posted Stories select bar: no Share button, the count is a pill, no blur. The + in the editor reopens the folder your last picture came from.
+            STILL OPEN: tapping a photo repost card to go full screen (the code path reads right; a screen recording would help).
+            PLEASE TEST: repost a video and look before Next; repost a photo and pinch; open your story while it uploads, wait, then pull down; story > name > chat; Share on your story in light mode; select stories in Posted Stories; pick from a folder, then tap +.
+
+            EARLIER (876): REPOST ICON, SHARE SHEET, CREDIT OPENS PROFILE.
             The repost mark is the new outline icon everywhere: the button by the heart, the credit line under a name, and the count on a story card. Share on your own story opens the app's share sheet (your chats and Copy Link), the same one a profile's Share opens. Tapping the original poster's name or face on a repost opens their profile.
-            STILL OPEN: video repost editor (no author face and name, picture frozen while the sound plays) and photo repost tap to full screen.
-            PLEASE TEST: the repost icon in all three places; Share on your own Everyone story and Copy Link; tap the credit on a repost.
 
             EARLIER (875): CHAT FROM A STORY PROFILE.
             Opening a story, then the profile, then the chat button now opens the chat with its messages instead of an empty page.
