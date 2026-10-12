@@ -729,6 +729,17 @@ struct StoryEditorView: View {
     /// and nothing here draws a frame. `isRepostPhoto` stays as a name so the call sites read the
     /// same; it is simply never true.
     private var isRepostPhoto: Bool { false }
+    /// Anything on the reposted item that makes the posted media differ from the original's: drawn,
+    /// written, stuck on, cropped, filtered, reframed, trimmed, muted, brightened, or more than one
+    /// item. Read at Next for `StoryRepost.modified` (see `StoriesService.serverCopySource`).
+    private var repostHasEdits: Bool {
+        guard items.count == 1, let it = items.first else { return true }
+        if !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty { return true }
+        if croppedSource != nil || cropRect != nil || filterIndex != 0 { return true }
+        if abs(photoZoom - 1) > 0.01 || photoOffset != .zero { return true }
+        if it.isVideo { return it.muted || it.isTrimmed || it.brightness != 0 }
+        return false
+    }
     /// A photo repost showing its baked card (not the original full screen).
     private var isRepostPhotoCard: Bool { repostOf != nil && repostFullSource != nil && !repostFullScreen }
     @State private var index = 0
@@ -1619,6 +1630,10 @@ struct StoryEditorView: View {
                                 // A card only when there IS one: a video repost has no card copy.
                                 r.card = (repostFullSource != nil && !repostFullScreen)
                                     || (repostFullSource == nil && repostVideoCard)
+                                // Whether the posted media differs from the original's. Only an
+                                // unchanged repost may be copied on the server; anything unsure counts
+                                // as changed and is uploaded as before.
+                                r.modified = r.modified || repostHasEdits
                                 return r
                             },
                             onPosted: { onPosted(); dismiss() })

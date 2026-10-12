@@ -4750,6 +4750,9 @@ struct StoryViewer: View {
                                       // story can go, and the credit line has to survive both.
                                       authorName: authorName,
                                       storyId: creditStoryId,
+                                      // A repost of a repost carries the reposter's media, not the
+                                      // original's: never copied on the server.
+                                      modified: story.repostOf != nil,
                                       card: true))
                 // ⚠️ FULL SCREEN, NOT A SHEET — the composer is a full-screen editor everywhere else
                 // it opens from — and OVER THE STAGE, NOT INSTEAD OF IT: a `fullScreenCover` took
@@ -4823,7 +4826,8 @@ struct StoryViewer: View {
                                                           authorName: authorName,
                                                           // The composer decides: card by
                                                           // default, full screen on a tap.
-                                                          storyId: creditStoryId, card: true),
+                                                          storyId: creditStoryId,
+                                                          modified: story.repostOf != nil, card: true),
                                     repostAvatar: avatar,
                                     onPosted: { flashSentToast("Reposted") },
                                     sourceVideo: .init(url: local),

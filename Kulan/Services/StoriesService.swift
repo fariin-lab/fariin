@@ -6,6 +6,7 @@ import ImageIO   // CGImageSourceCreateThumbnailAtIndex, for the embedded story 
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
+import FirebaseFunctions   // copyRepostMedia — an unchanged repost is copied on the server
 import CryptoKit   // audienceToken — see `StoryAudienceToken.token`
 import StoryUI   // StoryVideoSeed / StoryImageSeed — the uploader warms the viewer's caches
 
@@ -707,6 +708,28 @@ final class StoriesService {
 
     /// A NEW STORY'S ID: 10 random letters and digits, not a 36-character UUID, so its link is short
     /// (owner, 2026-10-11). 62^10 is about 8e17, far past any collision a 24-hour story could meet.
+    /// ⛔ AN UNCHANGED REPOST IS COPIED ON THE SERVER, NOT UPLOADED AGAIN (owner, 2026-10-12; the
+    /// reference app sends an unmodified repost by reference). The original story to copy from,
+    /// when this repost carries its media untouched: not edited, not a card (a card is a new
+    /// picture), and not a repost of a repost (the editor marks those modified). Nil otherwise.
+    static func serverCopySource(_ r: StoryRepost?) -> String? {
+        guard let r, !r.modified, r.card != true, !r.storyId.isEmpty else { return nil }
+        return r.storyId
+    }
+
+    /// Ask the server to copy the original's media files into `stories/{to}/`. The server checks the
+    /// original is public and unprotected and that `to` is this account's story. False on any
+    /// failure, and the caller then uploads as it always did.
+    func copyRepostMedia(from: String, to: String) async -> Bool {
+        do {
+            _ = try await Functions.functions(region: "me-central1")
+                .httpsCallable("copyRepostMedia").call(["from": from, "to": to])
+            return true
+        } catch {
+            return false
+        }
+    }
+
     static func newStoryId() -> String {
         let chars = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
         var rng = SystemRandomNumberGenerator()
@@ -1466,7 +1489,11 @@ final class StoriesService {
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
                                                      applyHiddenFrom: everyone, tag: tag)
 
+        // An unchanged repost is copied on the server after the doc exists (see `serverCopySource`);
+        // only if that copy fails are the bytes sent from here.
+        let copyFrom = Self.serverCopySource(repostOf)
         async let uploadedJPEG: Void = {
+            guard copyFrom == nil else { return }
             try Task.checkCancellation()
             let meta = StorageMetadata(); meta.contentType = "image/jpeg"
             _ = try await ref.putDataAsync(jpeg, metadata: meta)
@@ -1536,6 +1563,10 @@ final class StoriesService {
             // URL. If the doc write above threw, this child task is cancelled and awaited on the way
             // out, and the catch deletes whatever reached Storage.
             try await uploadedJPEG   // `jpeg` is already in scope; this only waits for the transfer
+            if let copyFrom, !(await copyRepostMedia(from: copyFrom, to: storyId)) {
+                let meta = StorageMetadata(); meta.contentType = "image/jpeg"
+                _ = try await ref.putDataAsync(jpeg, metadata: meta)
+            }
             try Task.checkCancellation()   // cancelled during upload → undo
             let url = try await ref.downloadURL().absoluteString
             try await docRef.updateData(["mediaUrl": url])
@@ -1892,6 +1923,13 @@ final class StoriesService {
             // happened, so recipients' listeners still see either the full story or nothing.
             let thumbRef = Storage.storage().reference().child(thumbPath)
             let videoRef = Storage.storage().reference().child(videoPath)
+            // An unchanged full-screen repost (no burn-in, no mute, whole clip) is copied on the
+            // server: its original video and poster land in this story's folder with no upload.
+            var copied = false
+            if let from = Self.serverCopySource(repostOf), burn == nil, !muted, range == nil {
+                copied = await copyRepostMedia(from: from, to: storyId)
+            }
+            if !copied {
             async let thumbPut: Void = {
                 let thumbMeta = StorageMetadata(); thumbMeta.contentType = "image/jpeg"
                 _ = try await thumbRef.putDataAsync(prepared.thumbnail, metadata: thumbMeta)
@@ -1912,6 +1950,7 @@ final class StoriesService {
                 }
             }()
             _ = try await (thumbPut, videoPut)
+            }
             try Task.checkCancellation()
             async let tURL = thumbRef.downloadURL()
             async let vURL = videoRef.downloadURL()
