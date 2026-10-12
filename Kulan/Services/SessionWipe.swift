@@ -131,6 +131,7 @@ enum SessionWipe {
         SendQueue.removeAll()                   // queued unsent plaintext
         PendingOutbox.removeAll()               // forwarded bubbles waiting for a chat to be opened
         StoryOutbox.removeAll()                 // unfinished story posts — never inherited
+        VideoStoryOutbox.removeAll()            // and unfinished video posts, clips included
         // ⛔ THE RECEIVED MEDIA IS THE ONLY COPY — owner, 2026-09-26: "when I log out and log in
         // again I lose my messages. Never lose my messages." Under the mailman model the server
         // deletes a delivered 1:1 photo, video or voice note once this phone has it, so these three

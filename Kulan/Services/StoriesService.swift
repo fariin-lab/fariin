@@ -1582,7 +1582,27 @@ final class StoriesService {
                                              stickers: [StoryTapTarget] = [],
                                              excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
                                              captureProtected: Bool = false,
-                                             repostOf: StoryRepost? = nil) {
+                                             repostOf: StoryRepost? = nil,
+                                             resumeTicket: String? = nil, storyIds resumeIds: [String]? = nil,
+                                             done: Set<String> = []) {
+        // ⛔ A VIDEO POST SURVIVES THE APP BEING KILLED (owner, 2026-10-12). The clip, its burn-in and
+        // every setting go to `VideoStoryOutbox` before the first byte moves, with one fixed story id
+        // per part; a resume comes back here with those ids and the parts already landed.
+        let ticketId: String
+        let partIds: [String]
+        let replaceExisting: Bool
+        if let resumeTicket, let resumeIds {
+            VideoStoryOutbox.claim(resumeTicket)
+            ticketId = resumeTicket; partIds = resumeIds; replaceExisting = true
+        } else {
+            let r = VideoStoryOutbox.remember(videoURL: videoURL, thumbnail: thumbnail, muted: muted, burn: burn,
+                                              trim: trim, caption: caption, stickers: stickers,
+                                              excluded: excluded, included: included, everyone: everyone,
+                                              allowsReplies: allowsReplies, tag: tag,
+                                              captureProtected: captureProtected, repostOf: repostOf,
+                                              ownerUid: uid)
+            ticketId = r.ticket; partIds = r.storyIds; replaceExisting = false
+        }
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         // Its own entry in the queue, exactly as a photo post takes one — see `PendingUpload`.
@@ -1618,9 +1638,19 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf) }
-            catch is CancellationError { cancelled = true }
-            catch { failure = Self.friendlyPostError(error) }   // video keeps no ticket to tear up
+            do {
+                try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected, repostOf: repostOf,
+                                         storyIds: partIds, done: done, replaceExisting: replaceExisting,
+                                         onPartDone: { VideoStoryOutbox.markDone(ticketId, storyId: $0) })
+                VideoStoryOutbox.forget(ticketId)          // it landed; nothing to resume
+            }
+            catch is CancellationError { cancelled = true; VideoStoryOutbox.forget(ticketId) }
+            catch {
+                failure = Self.friendlyPostError(error)
+                // A refusal that will never succeed is dropped; anything else waits for next launch.
+                if Self.isPermanentPostFailure(error) { VideoStoryOutbox.forget(ticketId) }
+                else { VideoStoryOutbox.release(ticketId) }
+            }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
@@ -1655,7 +1685,11 @@ final class StoriesService {
                         caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                         excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
                         captureProtected: Bool = false,
-                        repostOf: StoryRepost? = nil) async throws {
+                        repostOf: StoryRepost? = nil,
+                        storyIds: [String] = [], done: Set<String> = [], replaceExisting: Bool = false,
+                        onPartDone: @escaping (String) -> Void = { _ in }) async throws {
+        // Part i posts under storyIds[i] when given (`VideoStoryOutbox`); a part already landed is skipped.
+        func partId(_ i: Int) -> String? { i < storyIds.count ? storyIds[i] : nil }
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
         // A hand trim decides where the material starts and how much of it there is; the split then
         // works on THAT, not on the original file. Trim to 20s and you get one story, not the first
@@ -1669,11 +1703,14 @@ final class StoriesService {
                             duration: CMTime(seconds: total, preferredTimescale: 600))
             }
             // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
+            if let id = partId(0), done.contains(id) { return }
             try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
                                        stickers: stickers,
                                        expiryHours: expiryHours, excluded: excluded,
                                        included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
-                                       captureProtected: captureProtected, repostOf: repostOf)
+                                       captureProtected: captureProtected, repostOf: repostOf,
+                                       fixedId: partId(0), replaceExisting: replaceExisting)
+            if let id = partId(0) { onPartDone(id) }
             return
         }
 
@@ -1683,6 +1720,7 @@ final class StoriesService {
             let start = offset + Double(i) * cap
             let len = min(cap, (offset + total) - start)
             guard len > 0.05 else { break }
+            if let id = partId(i), done.contains(id) { continue }   // landed before the app died
             let range = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
                                     duration: CMTime(seconds: len, preferredTimescale: 600))
             // The caption belongs to the story, not to every slice of it: repeating it on all seven
@@ -1698,7 +1736,11 @@ final class StoriesService {
                                                stickers: i == 0 ? stickers : [],
                                                expiryHours: expiryHours, excluded: excluded,
                                                included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
-                                               captureProtected: captureProtected, repostOf: repostOf)
+                                               captureProtected: captureProtected, repostOf: repostOf,
+                                               fixedId: partId(i),
+                                               // A retry of the same part may find its own half-written doc.
+                                               replaceExisting: replaceExisting || attempt > 0)
+                    if let id = partId(i) { onPartDone(id) }
                     lastError = nil
                     break
                 } catch is CancellationError {
@@ -1726,7 +1768,8 @@ final class StoriesService {
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
                                   everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag,
                                   captureProtected: Bool = false,
-                                  repostOf: StoryRepost? = nil) async throws {
+                                  repostOf: StoryRepost? = nil,
+                                  fixedId: String? = nil, replaceExisting: Bool = false) async throws {
         let me = uid
         // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
         guard !me.isEmpty else { throw PostRefusal.signedOut }
@@ -1772,7 +1815,9 @@ final class StoriesService {
         try Task.checkCancellation()
 
         Task.detached { [weak self] in await self?.countStoryAgainstBudget() }   // never in front of the post
-        let storyId = Self.newStoryId()
+        let storyId = fixedId ?? Self.newStoryId()
+        // A resumed or retried part takes back its own half-written story first (see the photo path).
+        if replaceExisting { try? await db.collection("stories").document(storyId).delete() }
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
@@ -2753,7 +2798,10 @@ final class StoriesRepository {
             // ⚠️ FOR THIS ACCOUNT ONLY. The outbox folder is shared by every account that signs in on
             // the phone and survives a sign-out, so an unqualified resume published one person's
             // failed post as the next person to sign in. See `Ticket.ownerUid`.
-            Task { @MainActor in StoryOutbox.resume(for: me) }
+            Task { @MainActor in
+                StoryOutbox.resume(for: me)
+                VideoStoryOutbox.resume(for: me)   // unfinished video posts too (2026-10-12)
+            }
             await MainActor.run {
                 start(me)          // first call, or the signed-in user changed
             }
