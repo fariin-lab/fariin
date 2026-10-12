@@ -59,6 +59,9 @@ final class StoryVideoPreviewView: MTKView {
     /// ask for a frame and be given nothing.
     private var lastBuffer: CVPixelBuffer?
     private var isPlaying = false
+    /// Screen refreshes in a row that found no new frame while the clip was meant to be moving.
+    /// See `currentBuffer`.
+    private var staleFrames = 0
 
     private(set) var player: AVPlayer? {
         didSet { attachOutput() }
@@ -161,9 +164,20 @@ final class StoryVideoPreviewView: MTKView {
         // ⛔ THE PLAYER STOPS DRAWING FOR ITSELF. Without this it goes on decoding for a layer that
         // is not there, which is the cost we came here to remove.
         out.suppressesPlayerRendering = true
+        // ⛔ THE OUTPUT CAN FALL ASLEEP, AND THIS IS HOW IT IS WOKEN — owner, 2026-10-12, a video
+        // repost: "the audio is running but the video is not". An `AVPlayerItemVideoOutput` that
+        // goes unread for about a second SUSPENDS itself: the player keeps decoding and the sound
+        // keeps playing, but `hasNewPixelBuffer` answers no for ever after, and the view goes on
+        // showing the poster underneath. Apple's own sample pairs the output with this delegate and
+        // `requestNotificationOfMediaDataChange`, which is the documented way to resume it. Asked
+        // for at the attach, and again from `currentBuffer` whenever a moving clip has given this
+        // view nothing for a while.
+        out.setDelegate(self, queue: .main)
+        out.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
         item.add(out)
         output = out
         observedItem = item
+        staleFrames = 0
         requestRedraw()
     }
 
@@ -194,9 +208,30 @@ final class StoryVideoPreviewView: MTKView {
         if output.hasNewPixelBuffer(forItemTime: time),
            let buf = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
             lastBuffer = buf
+            staleFrames = 0
             return buf
         }
+        // A clip that is really playing and has handed over nothing for half a second is an output
+        // that has suspended itself (see `attachOutput`): ask it to resume. A paused or buffering
+        // player is not asked — it has nothing new to give and that is not a fault.
+        if isPlaying, player?.timeControlStatus == .playing {
+            staleFrames += 1
+            if staleFrames >= 30 {
+                staleFrames = 0
+                output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
+            }
+        }
         return lastBuffer
+    }
+}
+
+extension StoryVideoPreviewView: AVPlayerItemOutputPullDelegate {
+    /// The output has frames again (after a suspension, or for a fresh item): take one now, and keep
+    /// taking them if the clip is moving.
+    func outputMediaDataWillChange(_ sender: AVPlayerItemOutput) {
+        staleFrames = 0
+        if isPlaying { startLink() }
+        requestRedraw()
     }
 }
 

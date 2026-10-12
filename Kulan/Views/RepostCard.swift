@@ -34,23 +34,22 @@ enum RepostCard {
     /// they always did.
     static let tapRect = CGRect(x: 0.30, y: 0.12, width: 0.40, height: 0.76)
 
+    /// ⛔ THE CARD ALONE, ON NOTHING — owner, 2026-10-12: "I see three layers of blur: the original
+    /// has its own background, my story adds another, and there is an unwanted third between them",
+    /// which appeared the moment he pinched the card smaller. This used to bake its own gradient
+    /// surround into the whole 9:16 frame, so a shrunken card carried a second page inside the
+    /// page. Now the surround is TRANSPARENT: the editor draws its canvas gradient from the same two
+    /// colours (`edgeColours`, handed over as `StoryEditorView.repostCanvas`) and bakes it under the
+    /// card at post time, so the card can be pinched to any size over one continuous ground.
     static func render(_ image: UIImage, name: String, avatar: UIImage?) -> UIImage {
         let size = image.size
         let card = cardRect(aspect: size.height > 0 ? size.width / size.height : 0)
-        let (top, bottom) = edgeColours(image)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        format.opaque = true
+        format.opaque = false
         return UIGraphicsImageRenderer(size: canvas, format: format).image { ctx in
             let cg = ctx.cgContext
-            // The backdrop: the picture's own top and bottom colours, darkened so the card and the
-            // white name always stand off it.
             let space = CGColorSpaceCreateDeviceRGB()
-            if let g = CGGradient(colorsSpace: space,
-                                  colors: [top.cgColor, bottom.cgColor] as CFArray,
-                                  locations: [0, 1]) {
-                cg.drawLinearGradient(g, start: .zero, end: CGPoint(x: 0, y: canvas.height), options: [])
-            }
             // The card, with a soft shadow under it.
             let radius = card.width * 0.04
             let path = UIBezierPath(roundedRect: card, cornerRadius: radius)
@@ -124,8 +123,9 @@ enum RepostCard {
                                 attributes: attrs, context: nil)
     }
 
-    /// The average colour of the picture's top and bottom halves, darkened by a third.
-    private static func edgeColours(_ image: UIImage) -> (UIColor, UIColor) {
+    /// The average colour of the picture's top and bottom halves, darkened by a third: the ground
+    /// the card is shown and posted on (see `render`).
+    static func edgeColours(_ image: UIImage) -> (top: UIColor, bottom: UIColor) {
         let fallback = (UIColor(white: 0.18, alpha: 1), UIColor(white: 0.06, alpha: 1))
         guard let cgImage = image.cgImage else { return fallback }
         var px = [UInt8](repeating: 0, count: 8)
@@ -197,7 +197,105 @@ struct RepostChipView: View {
     }
 }
 
+/// What the editor's live card frame draws, in the card's own coordinate space. Plain values, so the
+/// UIKit view can tell an unchanged frame from a new one without redrawing.
+struct RepostCardFrameSpec: Equatable {
+    let clip: CGRect
+    let top: UIColor
+    let bottom: UIColor
+    let name: String
+    let avatar: UIImage?
+
+    static func == (l: RepostCardFrameSpec, r: RepostCardFrameSpec) -> Bool {
+        l.clip == r.clip && l.top == r.top && l.bottom == r.bottom && l.name == r.name && l.avatar === r.avatar
+    }
+}
+
+/// ⛔ THE VIDEO CARD'S FRAME AND CHIP, IN UIKIT — owner, 2026-10-12, third report: "before Next the
+/// avatar and name are not appearing". Two SwiftUI drawings of this (`RepostCardFrame`, first as a
+/// sibling of the canvas and then hosted inside it) never showed on his phone. This is layers and
+/// labels on a plain `UIView` that sits in the canvas above the clip: nothing to host, nothing to
+/// re-render, and its order in the view tree cannot lose. It does not move with the pinch; only
+/// the picture and the clip are transformed.
+final class RepostCardFrameView: UIView {
+    private let surround = CAGradientLayer()
+    private let hole = CAShapeLayer()
+    private let face = UIImageView()
+    private let letter = UILabel()
+    private let name = UILabel()
+    private var spec: RepostCardFrameSpec?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        // The page-coloured surround with the clip cut out of it (even-odd), so its corners round.
+        hole.fillRule = .evenOdd
+        hole.fillColor = UIColor.black.cgColor
+        surround.mask = hole
+        layer.addSublayer(surround)
+        face.contentMode = .scaleAspectFill
+        face.clipsToBounds = true
+        face.layer.borderColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        face.backgroundColor = UIColor(white: 0.45, alpha: 1)
+        addSubview(face)
+        letter.textColor = .white
+        letter.textAlignment = .center
+        face.addSubview(letter)
+        name.textColor = .white
+        name.lineBreakMode = .byTruncatingTail
+        name.layer.shadowColor = UIColor.black.withAlphaComponent(0.45).cgColor
+        name.layer.shadowRadius = 3
+        name.layer.shadowOpacity = 1
+        name.layer.shadowOffset = CGSize(width: 0, height: 1)
+        addSubview(name)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func apply(_ s: RepostCardFrameSpec?) {
+        guard s != spec else { return }
+        spec = s
+        isHidden = s == nil
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let s = spec, bounds.width > 1 else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surround.frame = bounds
+        surround.colors = [s.top.cgColor, s.bottom.cgColor]
+        let path = UIBezierPath(rect: bounds)
+        path.append(UIBezierPath(roundedRect: s.clip, cornerRadius: s.clip.width * RepostVideoCard.corner))
+        hole.frame = bounds
+        hole.path = path.cgPath
+        CATransaction.commit()
+
+        let w = bounds.width
+        let d = w * RepostVideoCard.face
+        let inset = w * RepostVideoCard.inset
+        face.frame = CGRect(x: s.clip.minX + inset, y: s.clip.minY + inset, width: d, height: d)
+        face.layer.cornerRadius = d / 2
+        face.layer.borderWidth = max(1, d * 0.047)
+        face.image = s.avatar
+        letter.isHidden = s.avatar != nil
+        letter.frame = face.bounds
+        letter.font = .systemFont(ofSize: d * 0.47, weight: .semibold)
+        letter.text = String(s.name.prefix(1)).uppercased()
+        name.font = .systemFont(ofSize: w * RepostVideoCard.font, weight: .semibold)
+        name.text = s.name.isEmpty ? "Story" : s.name
+        let x = face.frame.maxX + d * 0.28
+        let maxW = max(0, s.clip.maxX - inset - x)
+        let fit = name.sizeThatFits(CGSize(width: maxW, height: d))
+        name.frame = CGRect(x: x, y: face.frame.midY - fit.height / 2, width: min(maxW, fit.width), height: fit.height)
+    }
+}
+
 /// The page-coloured surround with a rounded hole over the clip, plus the chip in its corner.
+/// (SwiftUI; the export's chip still comes from `RepostChipView`. The editor draws
+/// `RepostCardFrameView` instead — see its note.)
 struct RepostCardFrame: View {
     let canvas: CGSize
     let clip: CGRect

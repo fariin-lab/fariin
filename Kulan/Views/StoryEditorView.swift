@@ -161,6 +161,9 @@ struct StoryEditorView: View {
     /// card bakes its chip into `source`; a clip cannot be baked, so the chip is drawn live here and
     /// burned in by the export.
     var repostAvatar: UIImage? = nil
+    /// The ground a PHOTO repost's card is shown and posted on (`RepostCard.edgeColours`): the card
+    /// is transparent around the picture, so the editor cannot sample it and is told instead.
+    var repostCanvas: (top: UIColor, bottom: UIColor)? = nil
     var onPosted: () -> Void = {}
     /// A WHOLE POST ARRIVING FROM THE VIDEO EDITOR. When a picture joins a video-first post, that
     /// screen cannot hold it (its model is a list of clips, each of which IS a video), so it hands
@@ -933,7 +936,11 @@ struct StoryEditorView: View {
     /// story viewer also read. Falls back to the untouched source for the instant before
     /// `recomputeEdited` first runs, so the card never draws a frame of the wrong backdrop.
     private var canvasColours: (top: UIColor, bottom: UIColor) {
-        canvasCache ?? StoryCanvas.colours(of: current)
+        // A photo repost's card is transparent around the picture, so sampling it would answer for
+        // nothing; the card hands over the ground it was designed on (`RepostCard.edgeColours`),
+        // and the editor shows and bakes that. Full screen is the original's own frame, sampled.
+        if isRepostPhotoCard, let repostCanvas { return repostCanvas }
+        return canvasCache ?? StoryCanvas.colours(of: current)
     }
 
     // The photo's aspect-fit size inside the frame ("always-cover" clamp basis).
@@ -1594,14 +1601,13 @@ struct StoryEditorView: View {
                               // The card is ONE size: pinned so a pinch cannot pull the clip out
                               // from under its rounded frame. Full screen frames as it always did.
                               maxScale: repostVideoCard ? RepostVideoCard.scale : 4,
-                              // ⛔ A PHOTO REPOST'S CARD DOES NOT SHRINK (owner, 2026-10-11: "when I
-                              // repost an image then zoom out it has another blur"). The card is one
-                              // baked picture that carries its own page-coloured surround
-                              // (`RepostCard.render`), so pinching it smaller drew that surround as a
-                              // second box over the page. It fills the frame exactly at 1; zooming in
-                              // stays as it was.
-                              minScale: repostVideoCard ? RepostVideoCard.scale
-                                  : (isRepostPhotoCard ? 1 : 0.4),
+                              // A photo repost's card pinches like any picture again (owner,
+                              // 2026-10-12: "I can't zoom in or out"). The floor of 1 it wore for a
+                              // day hid a second box that the card itself drew — its own baked
+                              // surround. That surround is transparent now (`RepostCard.render`), so
+                              // a shrunken card sits on the one canvas gradient, drawn from the same
+                              // colours (`repostCanvas`).
+                              minScale: repostVideoCard ? RepostVideoCard.scale : 0.4,
                               interactive: !isDrawing && editingID == nil,
                               relay: photoTransform,
                               // The dial's value and whether the clip is running — both plain inputs
@@ -1661,17 +1667,17 @@ struct StoryEditorView: View {
                                   captionFocused = false
                                   withAnimation(.snappy(duration: 0.22)) { select(next) }
                               },
-                              topOverlay: (repostVideoCard && isRepostVideo)
-                                  ? AnyView(RepostCardFrame(canvas: card, clip: repostClipRect(in: card),
-                                                            top: canvasColours.top,
-                                                            bottom: canvasColours.bottom,
-                                                            name: repostOf?.authorName ?? "",
-                                                            avatar: repostAvatar))
+                              cardFrame: (repostVideoCard && isRepostVideo)
+                                  ? RepostCardFrameSpec(clip: repostClipRect(in: card),
+                                                        top: canvasColours.top,
+                                                        bottom: canvasColours.bottom,
+                                                        name: repostOf?.authorName ?? "",
+                                                        avatar: repostAvatar)
                                   : nil)
                 .frame(width: card.width, height: card.height)
 
-            // The video repost's card frame is drawn INSIDE the zoomable view now, above the clip
-            // — see `ZoomableImageView.topOverlay`.
+            // The video repost's card frame is drawn INSIDE the zoomable view, above the clip, in
+            // UIKit — see `ZoomableImageView.cardFrame`.
 
             videoMark
 
@@ -4946,11 +4952,12 @@ struct ZoomableImageView: UIViewRepresentable {
     /// It belongs HERE and not on a SwiftUI gesture over the top, because this view's own pan
     /// recogniser is what was eating the swipe. Nothing to do with the strip.
     var onSwipe: (Int) -> Void = { _ in }
-    /// Drawn ABOVE the clip, inside this same UIKit view (the video repost's card frame and author
-    /// chip). As a SwiftUI sibling it was hidden under the video (owner, 2026-10-11: "before Next
-    /// the name and avatar are not showing"); here the order is the subview order and cannot lose.
-    /// It does not move with the pinch: only the picture and the clip are transformed.
-    var topOverlay: AnyView? = nil
+    /// Drawn ABOVE the clip, inside this same UIKit view: the video repost's card frame and author
+    /// chip, as plain UIKit (`RepostCardFrameView`). A SwiftUI drawing of it, first as a sibling of
+    /// the canvas and then hosted inside it, never showed on his phone (owner, 2026-10-11 and
+    /// 2026-10-12: "before Next the name and avatar are not showing"). It does not move with the
+    /// pinch: only the picture and the clip are transformed.
+    var cardFrame: RepostCardFrameSpec? = nil
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -4989,14 +4996,18 @@ struct ZoomableImageView: UIViewRepresentable {
         clip.setPlayer(player)
         clip.isHidden = player == nil
 
-        let overlay = UIHostingController(rootView: topOverlay ?? AnyView(EmptyView()))
-        overlay.view.backgroundColor = .clear
-        overlay.view.isUserInteractionEnabled = false
-        overlay.view.frame = container.bounds
-        overlay.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        overlay.view.isHidden = topOverlay == nil
-        container.addSubview(overlay.view)
-        context.coordinator.overlay = overlay
+        // The card frame, last so it is on top, pinned to the container the same way the clip is.
+        let frame = RepostCardFrameView(frame: .zero)
+        frame.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(frame)
+        NSLayoutConstraint.activate([
+            frame.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            frame.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            frame.topAnchor.constraint(equalTo: container.topAnchor),
+            frame.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        frame.apply(cardFrame)
+        context.coordinator.frameView = frame
 
         context.coordinator.container = container
         context.coordinator.imageView = iv
@@ -5052,8 +5063,7 @@ struct ZoomableImageView: UIViewRepresentable {
         // Hidden rather than removed: a photo item has no clip and must not have an empty player
         // layer sitting over its picture, but the view stays so the constraints never rebuild.
         c.clipView?.isHidden = player == nil
-        c.overlay?.rootView = topOverlay ?? AnyView(EmptyView())
-        c.overlay?.view.isHidden = topOverlay == nil
+        c.frameView?.apply(cardFrame)
         c.pinch?.isEnabled = interactive
         c.pan?.isEnabled = interactive
         if !c.active {   // adopt external scale/offset (e.g. a reset) only when not mid-gesture
@@ -5085,8 +5095,7 @@ struct ZoomableImageView: UIViewRepresentable {
         weak var container: UIView?
         weak var imageView: UIImageView?
         weak var clipView: StoryVideoPreviewView?
-        /// Held strongly: its view is in the container, the controller itself is not parented.
-        var overlay: UIHostingController<AnyView>?
+        weak var frameView: RepostCardFrameView?
         var pinch: UIPinchGestureRecognizer?
         var pan: UIPanGestureRecognizer?
         var curScale: CGFloat
