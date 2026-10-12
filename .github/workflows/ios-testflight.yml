@@ -75,7 +75,7 @@ jobs:
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
             THIS BUILD: VERIFIED BADGE NO LONGER COMES AND GOES.
-            A badge given or removed on admin.fariin.com now shows the same way every time: on profiles, in search, in the chat header and on your own profile, without restarting the app.
+            A badge given or removed on admin.fariin.com now shows the same way every time: on profiles, in search, in the chat header and on your own profile, without restarting the app. The account cards on the log-in page show the badge too (each account needs to sign in once on this build first).
             PLEASE TEST: open @kream's profile, a chat with @kream and search for kream several times; the blue mark should be there every time. Then remove the badge on the panel and check it disappears within a few seconds.
 
             ALSO IN THIS BUILD: FEATURE SWITCHES FROM THE ADMIN PANEL.
