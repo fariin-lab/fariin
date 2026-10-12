@@ -12,6 +12,11 @@ name: iOS Tests
 #     branches: [experiment/custom-long-press]
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: 'Run just this test (e.g. KulanTests/RepostEditorRenderTests)'
+        required: false
+        default: ''
   pull_request:
     paths:
       - 'Kulan/**'
@@ -73,4 +78,14 @@ jobs:
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -skipPackagePluginValidation \
             -skipMacroValidation \
+            ${{ inputs.only && format('-only-testing:{0}', inputs.only) || '' }} \
             CODE_SIGNING_ALLOWED=NO
+
+      # Screenshots and logs a render test leaves behind (RepostEditorRenderTests).
+      - name: Upload render shots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repost-shots
+          path: /tmp/repost-shots
+          if-no-files-found: ignore
