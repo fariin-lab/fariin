@@ -307,7 +307,18 @@ struct StoryDetailView: View {
     // story MID-PAN and iOS cancelled the pan ~20pt in, so a slow swipe-down bounced back every time
     // (fast flicks survived only via the velocity commit). Nothing in `body` reads this flag — only
     // the timer tick and the resume gate do — so a non-invalidating box is safe and kills the bounce.
-    private final class HostPauseBox { var paused = false }
+    /// ⛔ THE HOST'S PAUSE IS A SET OF REASONS, NOT ONE SWITCH (owner, 2026-10-12, from the
+    /// reference-app research). It was one Bool that ~24 places could clear, so any stray
+    /// `resumeStory` (a pager's cancelled pan, a cube turn, a tap) woke a story that a sheet or an
+    /// upload still wanted held. The reference app derives "paused" from every input each time;
+    /// this is the same idea for the notification seam: a post carries its reason as `object`, a
+    /// resume removes only its own reason, and the story is paused while any reason stands.
+    /// Untagged posts share one "legacy" reason, so every existing pair behaves exactly as before.
+    private final class HostPauseBox {
+        var reasons: Set<String> = []
+        var paused: Bool { !reasons.isEmpty }
+    }
+    static let legacyPauseReason = "legacy"
     @State private var hostPause = HostPauseBox()  // @State keeps the SAME box across re-renders
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
     @State private var isFolding: Bool = false   // true while this page is mid-cube-fold (pause timer)
@@ -970,7 +981,7 @@ struct StoryDetailView: View {
             setSceneActive(true)
         }
         // Host shows/hides a sheet over the viewer (viewers list, share, menu) → freeze/resume.
-        .onReceive(NotificationCenter.default.publisher(for: .pauseStory)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .pauseStory)) { note in
             // ⚠️ NOTHING IS PHOTOGRAPHED HERE ANY MORE. This used to call `bankCurrentState()`
             // FIRST, because a paused item's video output hands its buffer over exactly once and
             // this was the last instant it could be caught — the sheet coming up over a story was
@@ -982,10 +993,13 @@ struct StoryDetailView: View {
             // as long as the sheet is up), so the card asks for the picture when it wants one and
             // gets it from the file at the second the player is actually paused on. There is no
             // instant to catch, so there is nothing to do here but stop.
-            hostPause.paused = true; syncVideoMode()
+            hostPause.reasons.insert((note.object as? String) ?? Self.legacyPauseReason); syncVideoMode()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in
-            hostPause.paused = false
+        .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { note in
+            hostPause.reasons.remove((note.object as? String) ?? Self.legacyPauseReason)
+            // Another reason still holds the story (a sheet, an upload): this resume lifts only its
+            // own, and nothing below may restart a story that is still meant to be held.
+            guard !hostPause.paused else { syncVideoMode(); return }
             // The host's axis has changed, so the answer is re-taken here as well as after the flag
             // clear below — the `pressPhase` guard can return early, and a mode that is only ever
             // re-derived past a guard is a mode that can be left stale. Re-deriving cannot start a
@@ -2346,7 +2360,7 @@ private extension StoryDetailView {
         // menu releases its pause on two public window notifications and could in principle miss
         // both — and a missed release used to mean the bar advanced on the tap and then froze for
         // good, because nothing but `resumeStory` ever cleared `hostPause`. Now the next tap heals it.
-        if hostPause.paused { hostPause.paused = false; syncVideoMode() }
+        if hostPause.reasons.remove(Self.legacyPauseReason) != nil { syncVideoMode() }
         // A POISONED PROGRESS IS RECOVERED HERE, not trapped on. Same reason as `getCurrentIndex`:
         // `Int(_:)` kills the process on infinity or NaN. Found by auditing the 463 crash rather than
         // by another report — these three sites had the identical hazard and only the layout one had
@@ -2369,7 +2383,7 @@ private extension StoryDetailView {
         if isPaused || isHolding { isPaused = false; isHolding = false; syncVideoMode() }   // see tapNextStory
         configureTapScreen()
         guard !isTapDisabled else { return }
-        if hostPause.paused { hostPause.paused = false; syncVideoMode() }   // see tapNextStory
+        if hostPause.reasons.remove(Self.legacyPauseReason) != nil { syncVideoMode() }   // see tapNextStory
         if !timerProgress.isFinite { timerProgress = 0 }   // see tapNextStory
         if (timerProgress - 1) < 0 {
             guard !isAdvancing else { return }

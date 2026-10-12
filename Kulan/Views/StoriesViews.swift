@@ -1629,9 +1629,12 @@ struct StoryViewer: View {
     /// would mean finding and pairing every pause with its resume across this file and the library,
     /// and an unpaired one leaves a story frozen with no way back — a worse failure than the one
     /// being fixed, and not something to attempt without being able to run the app.
-    private func resumeStoryIfAllowed() {
-        guard !isUploadingItem else { return }
-        NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+    private func resumeStoryIfAllowed(reason: String? = nil) {
+        // A TAGGED resume lifts only its own reason (StoryUI's host pause is a set now), so it
+        // needs no gate: an upload holds the story under its own "upload" reason. Untagged resumes
+        // keep the old gate.
+        guard reason != nil || !isUploadingItem else { return }
+        NotificationCenter.default.post(name: .init("resumeStory"), object: reason)
     }
     // Home-indicator inset (the story ignoresSafeArea, so overlays must add it back themselves).
     private var bottomInset: CGFloat {
@@ -2172,7 +2175,8 @@ struct StoryViewer: View {
             _ = await DiskImageCache.shared.image(for: url)
         }
         .onChange(of: isUploadingItem) { _, up in
-            NotificationCenter.default.post(name: .init(up ? "pauseStory" : "resumeStory"), object: nil)
+            // Its own reason, so no other resume can start a story still being posted.
+            NotificationCenter.default.post(name: .init(up ? "pauseStory" : "resumeStory"), object: "upload")
         }
         // (The arbiter's finger-beats-spring hook lives in the sheet's onDragActive now.)
         // Safety net: the sheet unmounting must NEVER leave a stray progress value behind
@@ -2329,6 +2333,10 @@ struct StoryViewer: View {
             // with nothing left to start it. A stuck pause is worse than an early resume, and there
             // is no story left on screen here for an early resume to disturb.
             NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
+            // And every tagged reason this viewer can raise, for the same "a stuck pause is worse"
+            // rule: nothing this viewer held may outlive it.
+            NotificationCenter.default.post(name: .init("resumeStory"), object: "sheet")
+            NotificationCenter.default.post(name: .init("resumeStory"), object: "upload")
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
             // Same reason the chrome is restored here: a viewer torn down with the sheet still up
             // must not hand the next one a caption that is already faded out.
@@ -2360,8 +2368,11 @@ struct StoryViewer: View {
         .onChange(of: sheetUp) { _, up in
             // The resume half goes through the gate — an upload in flight outranks a sheet closing.
             // See `resumeStoryIfAllowed`.
-            if up { NotificationCenter.default.post(name: .init("pauseStory"), object: nil) }
-            else { resumeStoryIfAllowed() }
+            // Tagged "sheet": a share sheet, the repost composer (from the tap, `repostLoading`),
+            // a profile, a delete confirm. No pager pan, cube turn or tap can lift it now; only the
+            // sheet going away does.
+            if up { NotificationCenter.default.post(name: .init("pauseStory"), object: "sheet") }
+            else { resumeStoryIfAllowed(reason: "sheet") }
         }
         // Viewers sheet: pause the moment it starts opening (progress > 0), resume only once fully
         // closed. This keeps the story frozen the entire time the sheet is up (fixes the auto-close).
