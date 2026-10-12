@@ -1925,6 +1925,13 @@ struct StoryViewer: View {
         // through. Sent into a chat, the link carries its story card (`SendContactSheet` builds it).
         .sheet(item: $shareURL) { p in
             SendContactSheet(contactText: p.url.absoluteString, onSent: { flashSentToast($0) })
+                // ⛔ THE PHONE'S OWN COLOURS, NOT THE STAGE'S (owner, 2026-10-12: "use normal
+                // colour: white in light mode, dark in dark mode"). The story stage is always dark,
+                // so a sheet it presents inherits dark and its glass shows the photo through. This
+                // one reads the window's scheme, the same the sheet wears on a profile, and sits on
+                // an opaque pane of that scheme's background.
+                .environment(\.colorScheme, AppWindowScheme.colorScheme)
+                .presentationBackground(AppWindowScheme.background)
         }
         // ⛔ REPOST — his spec, 2026-09-11, and the reference's own flow: the mark opens the
         // COMPOSER, it does not post. The reposter adds their own text, drawing and stickers there
@@ -4684,6 +4691,9 @@ struct StoryViewer: View {
             let card: UIImage? = await Task.detached(priority: .userInitiated) {
                 image.map { RepostCard.render($0, name: authorName, avatar: avatar) }
             }.value
+            // The ground the card is shown and posted on: the card itself is transparent around
+            // the picture now (owner, 2026-10-12: the "third blur"), and the editor draws this.
+            let ground = image.map { RepostCard.edgeColours($0) }
             await MainActor.run {
                 repostLoading = false
                 guard let card else {
@@ -4707,6 +4717,7 @@ struct StoryViewer: View {
                 StoryComposerPresenter.present(
                     StoryEditorView(source: draft.image, repostOf: draft.info,
                                     repostFullSource: image,
+                                    repostCanvas: ground,
                                     onPosted: { flashSentToast("Reposted") }),
                     onDismissed: { repostUp = false })
             }
@@ -5380,6 +5391,13 @@ struct UploadingStoryHandoff: View {
     @State private var svc = StoriesService.shared
     /// Is the card flying? While it is, this view's own backdrop steps aside — see `body`.
     @State private var flightActive = false
+    /// ⛔ WHERE THE CLOSE LANDS ONCE THE UPLOAD IS OVER — owner, 2026-10-12: "after the upload
+    /// finishes, I swipe down and release, and the story does not return to its original position".
+    /// This door is pinned to the uploading card, and that card leaves the row the moment the post
+    /// lands: the real My Story card takes its place under its own key (`mine.id`). The pinned key
+    /// followed nobody, so the pull-down had nowhere to fly and fell back to the drift. It follows
+    /// the hand-over now: the cover and the hole move to the real card, and the landing with them.
+    @State private var landedKey: String?
 
     // My stories + one synthetic item per post still in the air. Once they finish (the list empties),
     // this is just my real stories, which now include the just-posted one.
@@ -5443,7 +5461,7 @@ struct UploadingStoryHandoff: View {
                 // anchor cannot follow the way the row's door lets it. One card, one landing.
                 StoryViewer(groups: siblings, startIndex: 0,
                             heroDismiss: !heroSourceKey.isEmpty,
-                            heroSourceKey: heroSourceKey, heroSourcePinned: true,
+                            heroSourceKey: landedKey ?? heroSourceKey, heroSourcePinned: true,
                             // ⛔ AND THEY REACHED ME, WHICH THIS DOOR NEVER SAID — his "while my
                             // story is uploading, swiping to the next person says You can only reply
                             // to people you chat with, and after the upload the same person lets me
@@ -5474,6 +5492,16 @@ struct UploadingStoryHandoff: View {
             } else {
                 // Nothing to show (no stories and no upload) → just close.
                 Color.clear.onAppear { onClose() }
+            }
+        }
+        .onChange(of: svc.uploading) { _, up in
+            guard !up, !heroSourceKey.isEmpty else { return }
+            // The row swaps the uploading card for the real one on its next pass; give it that pass,
+            // then point the flight at the real card. See `landedKey`.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard !svc.uploading, let mine = repo.mine else { return }
+                landedKey = mine.id
+                StoryDoor.retarget(to: mine.id)
             }
         }
     }
@@ -5968,6 +5996,23 @@ struct StoryImagePayload: Identifiable {
 struct StoryLinkPayload: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+/// The scheme the app is really in — the WINDOW's — for a sheet presented from inside the story
+/// stage, which is dark whatever the phone is set to. The window carries the Appearance setting
+/// (`KulanApp` applies it there), so this is light or dark exactly as the chat list is.
+enum AppWindowScheme {
+    @MainActor static var style: UIUserInterfaceStyle {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return window?.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+    }
+    @MainActor static var colorScheme: ColorScheme { style == .dark ? .dark : .light }
+    /// `systemBackground` resolved for that scheme: the sheet is inside a dark trait, so the
+    /// dynamic colour on its own would answer black in light mode.
+    @MainActor static var background: Color {
+        Color(uiColor: UIColor.systemBackground.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)))
+    }
 }
 
 /// A repost waiting for the composer: the original's picture, and where it came from.
