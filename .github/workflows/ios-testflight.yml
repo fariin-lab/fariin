@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: RESTRICTED CHAT REQUEST BUTTONS.
+            THIS BUILD: STORY AND REPOST AUDIT.
+            Repost editor video reads a fresh frame every refresh (the "sound but frozen picture" fix). Stories give the sound back when closed so your music resumes. A share sheet, the repost editor or an upload holds the story so nothing else restarts it. Flicking a story back up no longer dips first; open/close animations keep time when the phone is busy.
+            Photo repost is back on the baked card (name and face drawn in); the author's photo is loaded before the card is made. Reposts keep quality (video 1080p up to ~6 Mbps, photos JPEG 0.93). Unchanged full-screen reposts are copied on the server, not uploaded. Video posts survive the app being killed and continue next launch. Repost of a repost credits the original; custom-list and one-time reposts keep the credit; the uploading card shows it.
+            Video repost opens at the second you were watching; no cut button on a reposted clip. Caption arrow no longer switches the repost; caption bar holds still through a screenshot. Story link card in chat is smaller.
+            PLEASE TEST: repost a photo and a video (tap card/full, mute, post); repost something unedited full screen; post a long video and force-quit the app mid-upload, reopen; take a screenshot while typing a caption; open a video story with music playing, close it.
+
+            EARLIER: RESTRICTED CHAT REQUEST BUTTONS.
             When someone asks you to turn off Restricted Chat, the request in the chat has Reject and Accept under it. Accept asks "Enable Sharing / Are you sure you want to enable sharing?" first; Reject asks to keep it on first. The buttons go once you answer or after a day. The person who asked sees the request without buttons.
             PLEASE TEST: turn Restricted Chat on from one phone, ask to turn it off from the other, then Accept (and another time Reject) on the first phone.
 
