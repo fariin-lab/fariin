@@ -380,8 +380,13 @@ struct StoryLibraryPicker: View {
     @State private var reopenedAlbum = false
 
     private func reopenLastAlbum() {
+        // ⛔ THE ONE FOLDER, FETCHED ON ITS OWN AT THE OPEN (owner, 2026-10-12, on 877: "it shows
+        // Recents for seconds, then goes to the folder"). Waiting for the album list meant waiting
+        // for `load` and then `loadAlbums`, which counts every album on the phone. PhotoKit finds one
+        // album by its id at once, so the picker lands in it on its first frame.
         guard allowsMultiple, !reopenedAlbum, !lastAlbumID.isEmpty,
-              let album = (store.pinned + store.albums).first(where: { $0.id == lastAlbumID }) else { return }
+              let album = (store.pinned + store.albums).first(where: { $0.id == lastAlbumID })
+                ?? store.album(id: lastAlbumID) else { return }
         reopenedAlbum = true
         tab = 1
         // Straight into the folder, not a push animation on a sheet that has just appeared.
@@ -529,6 +534,8 @@ struct StoryLibraryPicker: View {
             // ⚠️ `loadAlbums()` IS NOT CALLED HERE ANY MORE. It used to start beside `load()` and
             // race it through PhotoKit for the tab nobody is looking at; `load()` chains it once the
             // grid has its list. See both.
+            // Before the first frame, so the + never shows Recents first. See `reopenLastAlbum`.
+            .onAppear { reopenLastAlbum() }
             .task { store.load(); seedFromPost() }
             // The albums arrive after the grid (`load` chains `loadAlbums`); the + lands in the last
             // folder the moment they are here.
@@ -1237,6 +1244,23 @@ final class PhotoGridStore: ObservableObject {
     /// same PhotoKit machinery the grid is waiting on. Started together, the tab nobody is looking
     /// at delays the tab they are. Collections is one tap away and this is finished long before that
     /// tap; the Photos grid is on screen the instant the sheet opens.
+    /// One album by its id, straight from PhotoKit, for the + reopening the last folder without
+    /// waiting for `loadAlbums`. Nil when access has not been granted yet, the album is gone, or
+    /// it holds nothing this picker can post (the same rule `loadAlbums` applies).
+    func album(id: String) -> AlbumInfo? {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited,
+              let coll = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
+        else { return nil }
+        let opts = PHFetchOptions()
+        opts.predicate = Self.mediaPredicate
+        let assets = PHAsset.fetchAssets(in: coll, options: opts)
+        guard assets.count > 0 else { return nil }
+        return AlbumInfo(id: coll.localIdentifier, collection: coll,
+                         title: coll.localizedTitle ?? "Album",
+                         count: assets.count, cover: assets.firstObject)
+    }
+
     func loadAlbums() {
         guard pinned.isEmpty, albums.isEmpty else { return }
         Self.authorized { ok in
