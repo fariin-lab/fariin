@@ -3507,7 +3507,14 @@ struct StoryViewer: View {
     private func heroKeyNow() -> String {
         guard heroDismiss else { return "" }
         // A pinned door has one anchor and it does not move — see `heroSourcePinned`.
-        guard !heroSourcePinned else { return heroSourceKey }
+        guard !heroSourcePinned else {
+            // The uploading door's post has landed: its card is the real My Story card now. Read
+            // from shared state, not `heroSourceKey`, because the multi-person pager calls the drag
+            // on a frozen copy of this view. See `StoryDoorState.uploadingLandedKey`.
+            if StoryDoorState.shared.uploadingOpen,
+               let landed = StoryDoorState.shared.uploadingLandedKey, !landed.isEmpty { return landed }
+            return heroSourceKey
+        }
         if let key = StoryDoorState.shared.activeSourceKey, !key.isEmpty { return key }
         // Only before the library has reported a first person — the same instant `currentBucketUid`
         // is still empty. That IS the opening person, so it is not a special case for him, it is the
@@ -5501,6 +5508,9 @@ struct UploadingStoryHandoff: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 guard !svc.uploading, let mine = repo.mine else { return }
                 landedKey = mine.id
+                // The drag reads this one (see `StoryDoorState.uploadingLandedKey`); set before the
+                // retarget so the cover and the landing name the same card from the same moment.
+                StoryDoorState.shared.uploadingLandedKey = mine.id
                 StoryDoor.retarget(to: mine.id)
             }
         }

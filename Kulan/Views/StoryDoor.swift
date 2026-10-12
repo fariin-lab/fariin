@@ -35,6 +35,14 @@ import StoryUI
     /// The uploading-story viewer, which has no posted group of its own to name yet.
     var uploadingOpen = false
     var isOpen: Bool { openGroup != nil || uploadingOpen }
+    /// ⛔ THE REAL MY STORY CARD, once the post this uploading viewer was opened on has landed
+    /// (owner, 2026-10-12, second report: after the upload, pull down and release, the story does
+    /// not go back into its card). The handoff's own `landedKey` never reached the drag: with other
+    /// people's stories in the row the viewer runs on `StoryPager`, whose coordinator keeps the
+    /// FIRST copy of the viewer and never refreshes it, so the drag kept aiming at the uploading
+    /// card while the cover had moved to the real one. Kept here, the drag reads it live. Read only
+    /// while `uploadingOpen`, and cleared at every uploading open, so no other door ever sees it.
+    @ObservationIgnored var uploadingLandedKey: String?
 
     /// ⛔ THE ROW'S ORDER IS HELD FOR THE WHOLE STORIES SESSION, NOT JUST WHILE A STORY IS UP —
     /// owner, 2026-09-11, with the reference app's behaviour written out: "closing the story should
@@ -349,6 +357,7 @@ enum StoryDoor {
         // reach a later one. See `StoryDoorState.keyPrefix`.
         StoryDoorState.shared.setKeyNamespace(openedWith: "", groupId: "")
         StoryDoorState.shared.uploadingOpen = true
+        StoryDoorState.shared.uploadingLandedKey = nil
         let finish: () -> Void = {
             StoryDoorState.shared.uploadingOpen = false
             MediaSourceVisibility.shared.reveal()
