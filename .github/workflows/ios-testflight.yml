@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY AND REPOST AUDIT.
+            THIS BUILD: TWO STORY CHANGES.
+            A repost cannot be reposted again; the original author's own stories still can be. Story videos are encoded once at the clip's own frame rate (720p HEVC, steady bitrate, normal colour).
+            STILL OPEN: the repost editor canvas not updating (card frame, name and face, the card/full tap). Narrowed to the editor's top buttons; the fix comes in the next build.
+            PLEASE TEST: try to repost a repost; post a video story and check it looks right.
+
+            EARLIER: STORY AND REPOST AUDIT.
             Repost editor video reads a fresh frame every refresh (the "sound but frozen picture" fix). Stories give the sound back when closed so your music resumes. A share sheet, the repost editor or an upload holds the story so nothing else restarts it. Flicking a story back up no longer dips first; open/close animations keep time when the phone is busy.
             Photo repost is back on the baked card (name and face drawn in); the author's photo is loaded before the card is made. Reposts keep quality (video 1080p up to ~6 Mbps, photos JPEG 0.93). Unchanged full-screen reposts are copied on the server, not uploaded. Video posts survive the app being killed and continue next launch. Repost of a repost credits the original; custom-list and one-time reposts keep the credit; the uploading card shows it.
             Video repost opens at the second you were watching; no cut button on a reposted clip. Caption arrow no longer switches the repost; caption bar holds still through a screenshot. Story link card in chat is smaller.
