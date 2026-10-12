@@ -664,8 +664,17 @@ struct StoryEditorView: View {
     @State private var repostVideoCard = false
     /// A repost of a clip, the only time the card is drawn live rather than baked.
     private var isRepostVideo: Bool { repostOf != nil && repostFullSource == nil && currentIsVideo }
-    /// A photo repost showing its baked card (not the original full screen). See `minScale` above.
-    private var isRepostPhotoCard: Bool { repostOf != nil && repostFullSource != nil && !repostFullScreen }
+    /// ⛔ A PHOTO REPOST WORKS EXACTLY LIKE A VIDEO REPOST NOW (owner, 2026-10-12, fifth report: "in
+    /// the editor tapping the picture changes nothing; I only see full screen after posting"). The
+    /// photo used to swap its PICTURE (baked card <-> original) on a tap. The swap reached the post
+    /// but never reached the editor's screen on his phone, through three different fixes and a
+    /// five-agent read that found no fault in the code. The video repost, which switches by ZOOM
+    /// with the frame drawn in UIKit over the clip, has always worked on his phone. So the photo
+    /// takes that path: the item IS the original, the card is `RepostVideoCard.scale` plus
+    /// `RepostCardFrameView`, the tap is `toggleRepostVideoShape`, and `flatten` bakes the card.
+    private var isRepostPhoto: Bool { repostOf != nil && repostFullSource != nil && !currentIsVideo }
+    /// A photo repost showing as the card (not the original full screen).
+    private var isRepostPhotoCard: Bool { isRepostPhoto && repostVideoCard }
     @State private var index = 0
     @State private var showAddPicker = false
 
@@ -1415,7 +1424,15 @@ struct StoryEditorView: View {
                         //
                         // The same trap `appendPicked` fell into and carries a note about; this is
                         // the third and last door into the item list, closed the same way.
-                        items = [DraftItem(image: source, assetID: sourceAssetID)]
+                        if repostOf != nil, let full = repostFullSource {
+                            // A photo repost: the ORIGINAL, opened as the card by zoom, exactly like
+                            // a video repost. See `isRepostPhoto`.
+                            items = [DraftItem(image: full, assetID: nil)]
+                            items[0].zoom = RepostVideoCard.scale
+                            repostVideoCard = true
+                        } else {
+                            items = [DraftItem(image: source, assetID: sourceAssetID)]
+                        }
                         index = 0
                         restoreCurrent()
                     } else {
@@ -1543,8 +1560,7 @@ struct StoryEditorView: View {
                             repostOf: repostOf.map { r in
                                 var r = r
                                 // A card only when there IS one: a video repost has no card copy.
-                                r.card = (repostFullSource != nil && !repostFullScreen)
-                                    || (repostFullSource == nil && repostVideoCard)
+                                r.card = repostVideoCard
                                 return r
                             },
                             onPosted: { onPosted(); dismiss() })
@@ -1643,7 +1659,7 @@ struct StoryEditorView: View {
                                   //
                                   // One view owns tap, pinch and pan now, at every moment, and the
                                   // circle stays as the thing that SAYS it can be played.
-                                  if isRepostVideo, !isDrawing, editingID == nil {
+                                  if isRepostVideo || isRepostPhoto, !isDrawing, editingID == nil {
                                       toggleRepostVideoShape()
                                   } else if currentIsVideo, !isDrawing, editingID == nil {
                                       togglePreview()
@@ -1667,7 +1683,7 @@ struct StoryEditorView: View {
                                   captionFocused = false
                                   withAnimation(.snappy(duration: 0.22)) { select(next) }
                               },
-                              cardFrame: (repostVideoCard && isRepostVideo)
+                              cardFrame: (repostVideoCard && (isRepostVideo || isRepostPhoto))
                                   ? RepostCardFrameSpec(clip: repostClipRect(in: card),
                                                         top: canvasColours.top,
                                                         bottom: canvasColours.bottom,
@@ -3649,7 +3665,7 @@ struct StoryEditorView: View {
     /// Card / full screen for a VIDEO repost: the clip's scale is the whole difference, and the
     /// text, drawings and stickers stay where they are.
     @MainActor private func toggleRepostVideoShape() {
-        guard isRepostVideo, items.indices.contains(index) else { return }
+        guard isRepostVideo || isRepostPhoto, items.indices.contains(index) else { return }
         stashCurrent()
         repostVideoCard.toggle()
         items[index].zoom = repostVideoCard ? RepostVideoCard.scale : 1
@@ -3657,7 +3673,7 @@ struct StoryEditorView: View {
         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { restoreCurrent() }
         Haptics.impact(.light)
         // A repost clip plays on its own (the tap is the shape switch, not play/pause).
-        if !previewPlaying { togglePreview() }
+        if isRepostVideo, !previewPlaying { togglePreview() }
     }
 
     /// Where the card's clip is drawn on a canvas of `size`: its fitted size at the card scale,
@@ -4120,14 +4136,33 @@ struct StoryEditorView: View {
         // indistinguishable. Forcing the file to 9:16 instead would buy nothing visible and would
         // cost this editor its WYSIWYG on exactly the devices with the least room to spare.
         let colours = canvasColours
+        let repostCardBake = isRepostPhotoCard
         let composed = ZStack(alignment: .bottom) {
             LinearGradient(colors: [Color(uiColor: colours.top), Color(uiColor: colours.bottom)],
                            startPoint: .top, endPoint: .bottom)
                 .frame(width: size.width, height: size.height)
-            // Foreground photo with the SAME fit + zoom + pan as the editor → WYSIWYG.
-            Image(uiImage: base).resizable().scaledToFit()
-                .scaleEffect(photoZoom).offset(photoOffset)
-                .frame(width: size.width, height: size.height).clipped()
+            if repostCardBake {
+                // A PHOTO REPOST AS THE CARD: the original at the card's size, rounded, lifted off
+                // the ground, with the author chip in its top-left corner. The same rectangle, corner
+                // and chip the editor's `RepostCardFrameView` draws over it. See `isRepostPhoto`.
+                let clip = repostClipRect(in: size)
+                Image(uiImage: base).resizable().scaledToFill()
+                    .frame(width: clip.width, height: clip.height)
+                    .clipShape(RoundedRectangle(cornerRadius: clip.width * RepostVideoCard.corner,
+                                                style: .continuous))
+                    .shadow(color: .black.opacity(0.35), radius: 20, y: 6)
+                    .position(x: clip.midX, y: clip.midY)
+                    .frame(width: size.width, height: size.height)
+                RepostChipView(name: repostOf?.authorName ?? "", avatar: repostAvatar, width: size.width)
+                    .offset(x: clip.minX + size.width * RepostVideoCard.inset,
+                            y: clip.minY + size.width * RepostVideoCard.inset)
+                    .frame(width: size.width, height: size.height, alignment: .topLeading)
+            } else {
+                // Foreground photo with the SAME fit + zoom + pan as the editor → WYSIWYG.
+                Image(uiImage: base).resizable().scaledToFit()
+                    .scaleEffect(photoZoom).offset(photoOffset)
+                    .frame(width: size.width, height: size.height).clipped()
+            }
             // Stickers, in the same order the canvas draws them: above the photo, under the pen and
             // the text. Same builder (`storyStickerImage`) and same three transforms as on screen →
             // WYSIWYG, which is the whole contract of this function.

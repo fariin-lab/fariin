@@ -4724,6 +4724,8 @@ struct StoryViewer: View {
                 StoryComposerPresenter.present(
                     StoryEditorView(source: draft.image, repostOf: draft.info,
                                     repostFullSource: image,
+                                    // The card is drawn live now, as a video repost's is: it needs the face.
+                                    repostAvatar: avatar,
                                     repostCanvas: ground,
                                     onPosted: { flashSentToast("Reposted") }),
                     onDismissed: { repostUp = false })
