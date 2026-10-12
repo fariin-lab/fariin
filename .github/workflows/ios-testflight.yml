@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SIX FIXES ON TOP OF 879.
+            THIS BUILD: RESTRICTED CHAT REQUEST BUTTONS.
+            When someone asks you to turn off Restricted Chat, the request in the chat has Reject and Accept under it. Accept asks "Enable Sharing / Are you sure you want to enable sharing?" first; Reject asks to keep it on first. The buttons go once you answer or after a day. The person who asked sees the request without buttons.
+            PLEASE TEST: turn Restricted Chat on from one phone, ask to turn it off from the other, then Accept (and another time Reject) on the first phone.
+
+            EARLIER: SIX FIXES ON TOP OF 879.
             Messaging someone from a story's profile creates the chat properly first: the first message sends, and the name shows instead of "User". An existing chat that says "User" gets the name when you open it from the profile.
             Photo groups: the download button and the dot menu offer Save All and Save This.
             A posted photo repost keeps its blurred background instead of white.
