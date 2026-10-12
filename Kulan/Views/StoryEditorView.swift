@@ -82,6 +82,7 @@ final class KeyboardWatcher: ObservableObject {
                 guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
                 self.height = max(0, UIScreen.main.bounds.height - f.origin.y)
                 self.topOnScreen = f.origin.y
+                self.noteFrame(f)
         })
         tokens.append(NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillHideNotification, object: nil, queue: nil) { [weak self] n in
@@ -89,7 +90,39 @@ final class KeyboardWatcher: ObservableObject {
                 self.readClock(from: n)
                 self.height = 0
                 self.topOnScreen = .infinity
+                if self.editing > 0 { self.inBlink = true }
         })
+        for name in [UITextField.textDidBeginEditingNotification, UITextView.textDidBeginEditingNotification] {
+            tokens.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                self?.editing += 1
+            })
+        }
+        for name in [UITextField.textDidEndEditingNotification, UITextView.textDidEndEditingNotification] {
+            tokens.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                guard let self else { return }
+                self.editing = max(0, self.editing - 1)
+                if self.editing == 0, self.inBlink { self.inBlink = false }
+            })
+        }
+    }
+
+    /// ⛔ A KEYBOARD "BLINK" (owner, 2026-10-12: "taking a screenshot hides the keyboard and the
+    /// caption bar jumps up, then back"). While a field is still being edited, the system can take
+    /// the keyboard away or report an odd frame for a moment (a screenshot does) and give it back.
+    /// SwiftUI's keyboard avoidance follows those frames, so the caption bar jumped. This only
+    /// REPORTS the blink; the caption bar holds its place while it lasts (`captionLayer`). Outside a
+    /// blink nothing reads it, so every ordinary keyboard move is untouched.
+    @Published private(set) var inBlink = false
+    private var editing = 0
+    private func noteFrame(_ f: CGRect) {
+        let screen = UIScreen.main.bounds
+        let docked = f.origin.y < screen.height - 1 && f.maxY >= screen.height - 1
+            && f.height > 100 && f.height < screen.height * 0.6
+        if docked {
+            if inBlink { inBlink = false }   // a normal keyboard is back
+        } else if editing > 0 {
+            if !inBlink { inBlink = true }   // gone or shuffled while still typing
+        }
     }
 
     /// Run `body` once the keyboard has FINISHED leaving the screen, not once it has been told to go.
@@ -497,6 +530,9 @@ struct StoryEditorView: View {
     /// Two motions of one bar on two curves is his "not smooth". The watcher now carries the
     /// notification's duration and curve so the second motion can be run on the first one's clock.
     @StateObject private var keyboard = KeyboardWatcher()
+    /// The caption layer's laid-out bottom edge, and where it rested before a keyboard blink.
+    @State private var captionLayoutY: CGFloat = 0
+    @State private var captionRestY: CGFloat = 0
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
@@ -2355,6 +2391,19 @@ struct StoryEditorView: View {
         // higher than that, and a pill measured from the screen would hang below it on the black.
         // Focused, the keyboard is the floor and a small gap is enough.
         .padding(.bottom, captionFocused ? 8 : cardBottomGap + 14)
+        // ⛔ THE BAR HOLDS ITS PLACE THROUGH A KEYBOARD BLINK (owner, 2026-10-12: a screenshot while
+        // typing hid the keyboard and the bar jumped up, then back). Its laid-out position is
+        // remembered whenever no blink is on; during one (`KeyboardWatcher.inBlink`) the bar is
+        // offset back to that spot, in the same pass the layout moved it, so nothing visibly moves.
+        // Outside a blink the offset is zero and SwiftUI's own keyboard avoidance is untouched.
+        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { y in
+            captionLayoutY = y
+            if !(captionFocused && keyboard.inBlink) { captionRestY = y }
+        }
+        .offset(y: captionFocused && keyboard.inBlink ? captionRestY - captionLayoutY : 0)
+        // The layout moves on the keyboard's curve, so the hold moves on the same curve and the two
+        // cancel frame by frame instead of only at the end.
+        .animation(keyboard.systemAnimation, value: captionLayoutY)
         // ⚠️ AND THIS PADDING MOVES ON THE KEYBOARD'S CLOCK, NOT INSTANTLY. THAT IS HIS JUMP.
         //
         // His report: while the keyboard is open the bar is right, and dismissing it makes the bar
