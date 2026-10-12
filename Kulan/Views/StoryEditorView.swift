@@ -668,6 +668,10 @@ struct StoryEditorView: View {
     @State private var repostVideoCard = false
     /// `repostStartSecond` has been used (once per editor; a later player starts where it is told).
     @State private var repostStartApplied = false
+    /// Any keyboard is on screen, and when one last went down: a canvas tap while typing (or the
+    /// caption arrow, which sits over the canvas) must not switch the repost shape or play a clip.
+    @State private var anyKeyboardUp = false
+    @State private var keyboardWentDownAt = Date.distantPast
     /// A repost of a clip, the only time the card is drawn live rather than baked.
     private var isRepostVideo: Bool { repostOf != nil && repostFullSource == nil && currentIsVideo }
     /// ⛔ A PHOTO REPOST WORKS EXACTLY LIKE A VIDEO REPOST NOW (owner, 2026-10-12, fifth report: "in
@@ -1217,6 +1221,14 @@ struct StoryEditorView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
             if editingID == nil { textToolKeyboardUp = false }
         }
+        // Any keyboard (the caption's, or Aa) is up, and when it last went down. See the canvas tap.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            anyKeyboardUp = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            anyKeyboardUp = false
+            keyboardWentDownAt = Date()
+        }
         // A CALL THAT ARRIVES WHILE THE CLIP IS RUNNING STOPS IT, and until now nothing said so.
         // The system pauses the player itself and posts this; `previewPlaying` stayed true, so the
         // play mark — which hangs off that flag — stayed hidden over a clip that was not moving, and
@@ -1653,7 +1665,16 @@ struct StoryEditorView: View {
                               // arrived at — which is the finger's own rate.
                               videoPlaying: previewPlaying || trimDragging,
                               onTap: {
+                                  // ⛔ A TAP WHILE TYPING ONLY PUTS THE KEYBOARD AWAY (owner,
+                                  // 2026-10-12: "I write a caption, tap the arrow, and the repost
+                                  // switches full screen / small"). The arrow beside the caption sits
+                                  // over the canvas and its tap reached this recogniser too. With a
+                                  // keyboard up, or within half a second of it going down (the arrow
+                                  // itself closes it), the tap does nothing else.
+                                  let typing = captionFocused || anyKeyboardUp
+                                      || Date().timeIntervalSince(keyboardWentDownAt) < 0.5
                                   captionFocused = false; selectedID = nil
+                                  if typing { return }
                                   // ⚠️ PLAY AND PAUSE ARE BOTH THE WHOLE FRAME, AND BOTH BELONG TO
                                   // THIS ONE RECOGNISER — his 2026-08-14 report ("pause is working
                                   // all frame video, play must work all the frame like how it works
