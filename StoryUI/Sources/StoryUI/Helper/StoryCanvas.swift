@@ -228,10 +228,21 @@ public enum StoryCanvas {
     /// wrong paints the poster at a different zoom from the media that replaces it, which is a jump
     /// at first frame.
     public static func loadingVeil(of poster: UIImage, covering: CGSize) -> UIImage {
-        let small = CGSize(width: max(8, covering.width / 8), height: max(8, covering.height / 8))
+        // ⛔ WHOLE PIXELS, OPAQUE (owner, 2026-10-12, an old bug: "while a story loads, a blurred
+        // line down the right side and along the bottom"). An eighth of a 393x699 card is 49.1x87.4.
+        // At scale 1 the bitmap rounds UP to 50x88, but every draw stopped at 49.1 and 87.4, so the
+        // last column and the last row were only partly painted and stayed see-through. Stretched
+        // back up eight times by the image view, that one column and one row became soft bands the
+        // full height of the right edge and the full width of the bottom. Rounded up here, every
+        // pixel is painted; opaque, nothing behind can show through even if one is not.
+        let small = CGSize(width: max(8, (covering.width / 8).rounded(.up)),
+                           height: max(8, (covering.height / 8).rounded(.up)))
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = 1
+        fmt.opaque = true
         return UIGraphicsImageRenderer(size: small, format: fmt).image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(origin: .zero, size: small))
             let s = max(small.width / max(poster.size.width, 1), small.height / max(poster.size.height, 1))
             let w = poster.size.width * s, h = poster.size.height * s
             poster.draw(in: CGRect(x: (small.width - w) / 2, y: (small.height - h) / 2, width: w, height: h))
