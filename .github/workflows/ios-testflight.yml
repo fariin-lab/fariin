@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (877): EIGHT STORY REPORTS.
+            THIS BUILD (878): PHOTO REPOST TAP TO FULL SCREEN.
+            Tapping a photo repost card now rebuilds the picture when it switches between the card and the original full screen. In 877 the tap gave the haptic but the picture did not change.
+            PLEASE TEST: repost a photo, tap the card, tap again. Everything from 877 below is in this build too.
+
+            EARLIER (877): EIGHT STORY REPORTS.
             Video repost editor: the author's face and name and the rounded frame are drawn by UIKit now, and a clip whose picture froze while the sound played is woken up. Photo repost: the card no longer carries its own background, so pinching it smaller shows one gradient, not a second box, and zoom in and out work. The uploading card for a video repost wears the card shape and chip from the start. After the upload finishes, pulling the story down flies it back into My Story. Story to profile to the chat button opens a real chat. The story's share sheet is white in light mode and dark in dark mode. Posted Stories select bar: no Share button, the count is a pill, no blur. The + in the editor reopens the folder your last picture came from.
             STILL OPEN: tapping a photo repost card to go full screen (the code path reads right; a screen recording would help).
             PLEASE TEST: repost a video and look before Next; repost a photo and pinch; open your story while it uploads, wait, then pull down; story > name > chat; Share on your story in light mode; select stories in Posted Stories; pick from a folder, then tap +.
