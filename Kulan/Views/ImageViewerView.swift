@@ -606,7 +606,14 @@ struct ImageViewerView: View {
                 // viewer (this item, and Share, the pen and Save in `bottomBar`) is absent for one,
                 // and `save()` and `share()` refuse it themselves.
                 if !savingLocked {
-                    Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
+                    if albumSiblings.count > 1 {
+                        Button { saveAll() } label: {
+                            Label("Save All (\(albumSiblings.count))", systemImage: "square.and.arrow.down.on.square")
+                        }
+                        Button { save() } label: { Label("Save This", systemImage: "square.and.arrow.down") }
+                    } else {
+                        Button { save() } label: { Label("Save Image", systemImage: "square.and.arrow.down") }
+                    }
                 }
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
             } label: {
@@ -694,7 +701,27 @@ struct ImageViewerView: View {
             if isMine {
                 barButton("trash", tint: .red) { confirmDelete = true }
             } else if !savingLocked {
-                barButton("square.and.arrow.down") { save() }   // received photo → Save instead of Delete
+                if albumSiblings.count > 1 {
+                    // ⛔ AN ALBUM ASKS WHICH (owner, 2026-10-12: "a group of images can only be saved one
+                    // by one; on the down button or the dot menu show Save All / Save This"). Same
+                    // glass circle as the plain button; a tap opens the two choices.
+                    Menu {
+                        Button { saveAll() } label: {
+                            Label("Save All (\(albumSiblings.count))", systemImage: "square.and.arrow.down.on.square")
+                        }
+                        Button { save() } label: { Label("Save This", systemImage: "square.and.arrow.down") }
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 48, height: 48)
+                            .liquidGlass(Circle(), interactive: true)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    barButton("square.and.arrow.down") { save() }   // received photo → Save instead of Delete
+                }
             }
         }
         .padding(.horizontal, 20)
@@ -773,6 +800,48 @@ struct ImageViewerView: View {
     private func share() {
         guard !savingLocked, let image = currentImage else { return }
         shareItems = [image]
+    }
+
+    /// The album a page belongs to: album pages carry synthetic "<parentId>-<index>" ids, parsed the
+    /// way `ChatService.deleteMessage` parses them (a pending UUID's tail is never all digits).
+    private static func albumParent(_ id: String) -> String? {
+        guard let dash = id.firstIndex(of: "-"), Int(id[id.index(after: dash)...]) != nil else { return nil }
+        return String(id[..<dash])
+    }
+
+    /// Every page of the album the shown photo came from, in order. Empty when it is not an album.
+    private var albumSiblings: [Message] {
+        guard let parent = Self.albumParent(current) else { return [] }
+        return gallery.filter { Self.albumParent($0.id) == parent }
+    }
+
+    /// Save every photo of the album in one go, one Photos change for all of them.
+    private func saveAll() {
+        guard !savingLocked else { return }
+        let pages = albumSiblings
+        Task {
+            var images: [UIImage] = []
+            for m in pages {
+                if let img = await MainActor.run(body: { loaded[m.id] ?? cachedImage(m) }) {
+                    images.append(img); continue
+                }
+                await load(m)
+                if let img = await MainActor.run(body: { loaded[m.id] }) { images.append(img) }
+            }
+            guard !images.isEmpty else { await MainActor.run { saveError = true }; return }
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else { await MainActor.run { saveError = true }; return }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    for img in images { PHAssetChangeRequest.creationRequestForAsset(from: img) }
+                }
+                await MainActor.run {
+                    // A page that could not be decrypted is reported, not skipped silently.
+                    if images.count < pages.count { saveError = true } else { withAnimation { saved = true } }
+                    UINotificationFeedbackGenerator().notificationOccurred(images.count < pages.count ? .warning : .success)
+                }
+            } catch { await MainActor.run { saveError = true } }
+        }
     }
 
     private func save() {
