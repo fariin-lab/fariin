@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: FEATURE SWITCHES FROM THE ADMIN PANEL.
+            THIS BUILD: VERIFIED BADGE NO LONGER COMES AND GOES.
+            A badge given or removed on admin.fariin.com now shows the same way every time: on profiles, in search, in the chat header and on your own profile, without restarting the app.
+            PLEASE TEST: open @kream's profile, a chat with @kream and search for kream several times; the blue mark should be there every time. Then remove the badge on the panel and check it disappears within a few seconds.
+
+            ALSO IN THIS BUILD: FEATURE SWITCHES FROM THE ADMIN PANEL.
             Glow, Insights, profile links, the My Profile card and the stories list layout now follow the switches on admin.fariin.com (Feature controls). Group chats, group calls, call links and the two-step row can only be switched off there. A change shows the next time the app is opened. Nothing else in the app changes.
             PLEASE TEST: the app opens and looks the same as before. Then flip one switch on the panel (for example Glow on), close the app fully, open it again, and check that it appears; flip it back.
 
