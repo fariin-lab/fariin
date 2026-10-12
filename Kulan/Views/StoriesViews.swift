@@ -1912,6 +1912,9 @@ struct StoryViewer: View {
         // The modifier chain outgrew the Swift type-checker (CI: "unable to type-check in
         // reasonable time") — body is now three separately-checked pieces. Purely structural.
         lifecycleGlue(sheetsAndMenus(coreLayers))
+            // Here, not inside `lifecycleGlue`: one more modifier there put that chain past the
+            // type checker's time limit (StoriesViews:2179, twice).
+            .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in refeedRepostBuckets() }
     }
 
     private var coreLayers: some View {
@@ -2445,8 +2448,8 @@ struct StoryViewer: View {
         // fetched the author's profile but the bubble never showed it). The bubble's photo is baked
         // into the item's tap area when the pages are fed, and the pages are only re-fed on an ID
         // change above. A profile landing a moment after the viewer opened changed `models` and
-        // reached nobody. Re-feed the buckets that carry a repost when one lands.
-        .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in refeedRepostBuckets() }
+        // reached nobody. Re-feed the buckets that carry a repost when one lands — the `.onChange`
+        // for that sits on `body`, outside this chain (type-check limit).
         // ⚠️ THE STORY UNDERNEATH MOVES THE INSTANT THE ROW DOES, AND BOTH HALVES OF WHY THAT WAS
         // EVER A PROBLEM ARE NOW GONE.
         //
