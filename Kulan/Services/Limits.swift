@@ -79,7 +79,7 @@ enum Limits {
     // Stories
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
-    static let storyUploadBytes = 25 * 1024 * 1024               // 25 MB — storage.rules stories/
+    static let storyUploadBytes = 50 * 1024 * 1024               // 50 MB — storage.rules stories/ (StoryVideoEncoder sizes under it)
     /// How long ONE story can be. 90s is the reference app's status-feature number and the owner's spec (2026-08-04).
     /// A longer pick is no longer truncated to this — it is SPLIT into consecutive segments, each its
     /// own story, so nothing the user chose is thrown away.

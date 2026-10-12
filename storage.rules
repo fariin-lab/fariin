@@ -288,11 +288,12 @@ service firebase.storage {
       // object (the vandalism hole). No firestore.get() — that lookup is unreliable in this
       // project's Storage rules and was denying every legitimate upload.
       //
-      // 25 MB: a story video may be 90 seconds, and 90 seconds at the 540p we export to is roughly
-      // 17 MB. Matches the chat limit, which is the same kind of media.
+      // 50 MB (was 25, 2026-10-12): story video is 720p HEVC at the clip's own frame rate now
+      // (`StoryVideoEncoder`), up to 90 seconds. A 90 second 60 fps segment at ~4.5 Mbps is about
+      // 50 MB, so the encoder sizes against 47 MB. The 25 MB cap is what forced the old 540p.
       allow write: if request.auth != null
         && (resource == null || sameBytesRetry())   // 2026-09-24 fix-all: a lost-answer retry
-        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.size < 50 * 1024 * 1024
         && (
              (file == 'photo.jpg' && request.resource.contentType.matches('image/.*'))
           || (file == 'thumb.jpg' && request.resource.contentType.matches('image/.*'))

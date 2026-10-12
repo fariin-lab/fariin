@@ -72,6 +72,16 @@ enum VideoTranscoder {
                         brightness: Double = 0,
                         holeCorner: CGFloat = 0,
                         bytesPerSecond rate: Double? = nil) async -> Prepared? {
+        // A STORY goes through its own encoder (`StoryVideoEncoder`): one encode, the clip's own frame
+        // rate, HEVC, an explicit bitrate, SDR colour. Anything it cannot do falls through to the
+        // export-session path below, which is unchanged and is still the only path for chat videos.
+        if storyBackdrop,
+           let story = await prepareStory(url, maxSeconds: maxSeconds, stripAudio: stripAudio, hd: hd,
+                                          range: range, overlay: overlay, cropRect: cropRect,
+                                          canvasAspect: canvasAspect, contentScale: contentScale,
+                                          backdrop: backdrop, brightness: brightness, holeCorner: holeCorner) {
+            return story
+        }
         // ⛔ BRIGHTNESS IS A PRE-PASS, AND IT HAS TO BE (owner, 2026-08-20 — the trim page's Adjust
         // tab). It cannot ride the composition the export already uses: `burnIn` composites with
         // LAYER INSTRUCTIONS and a Core Animation tool, which has nowhere to hang a Core Image
@@ -312,7 +322,7 @@ enum VideoTranscoder {
     ///
     /// Everything that renders `previewUrl` is affected: row cards, chat rings, reply thumbnails,
     /// the carousel. Whichever asset it comes from, the poster and the file agree by construction.
-    private static func finish(data: Data, asset: AVAsset, duration: Double,
+    static func finish(data: Data, asset: AVAsset, duration: Double,
                                canvasAspect: CGFloat? = nil, startAt: Double = 0,
                                posted: AVAsset? = nil) async -> Prepared? {
         let nudge = min(0.1, duration / 2)
@@ -490,7 +500,10 @@ enum VideoTranscoder {
 
         let comp = AVMutableVideoComposition()
         comp.renderSize = render
-        comp.frameDuration = CMTime(value: 1, timescale: 30)
+        // The clip's own frame rate (up to 60), not a fixed 30 that dropped every other frame of a
+        // 60 fps clip.
+        comp.frameDuration = CMTime(seconds: 1 / (await StoryVideoEncoder.frameRate(of: track)),
+                                    preferredTimescale: 60_000)
         comp.instructions = [instruction]
 
         // WHAT SITS AROUND A SHRUNKEN CLIP. Only for `contentScale`, and deliberately only for that:
@@ -750,7 +763,7 @@ enum VideoTranscoder {
     /// The instant sampled is the same just-after-zero one every poster in this file uses: frame
     /// zero is very often black on a real recording, and a black gradient IS the bug wearing a
     /// different hat.
-    private static func gradientColours(of asset: AVAsset) async -> (top: CIColor, bottom: CIColor) {
+    static func gradientColours(of asset: AVAsset) async -> (top: CIColor, bottom: CIColor) {
         let fallback = (top: CIColor(red: 0.13, green: 0.13, blue: 0.15),
                         bottom: CIColor(red: 0.05, green: 0.05, blue: 0.06))
         let gen = AVAssetImageGenerator(asset: asset)
@@ -787,7 +800,7 @@ enum VideoTranscoder {
     /// flat colour is still a canvas. The one thing this must never do is hand back something that
     /// does not cover the frame, because whatever it does not cover is composited as BLACK — which
     /// is the exact bug this whole rewrite exists to end.
-    private static func gradientBackdrop(size: CGSize, top: CIColor, bottom: CIColor) -> CIImage {
+    static func gradientBackdrop(size: CGSize, top: CIColor, bottom: CIColor) -> CIImage {
         let canvas = CGRect(origin: .zero, size: size)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = 1
