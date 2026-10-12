@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY VIDEO AND REPOST FIXES.
+            THIS BUILD: STORY SOUND AND CHAT TAP FIXES.
+            Story videos play through the loudspeaker, not the call earpiece, after you have opened a chat or made a call. Video stories play again after you open and close the story camera while on a call in another app. Tapping the name or the repost line in a story header now presses like a button before the profile opens. Tapping the empty strip under a chat's header no longer flies the chat to its first message.
+            PLEASE TEST: open a chat, then watch a video story (sound from the bottom speaker); on a call in another app, open the story camera, close it, play a video story; tap a story header's name and repost line; in a chat, tap just under the header.
+
+            EARLIER: STORY VIDEO AND REPOST FIXES.
             Video stories start sooner: they play once half a second is loaded, and the opening of each person's first story is downloaded ahead (about 3.5 seconds, on Wi-Fi and now on mobile data for the first 10 people). A reposted video plays by itself again in the repost editor. Tapping a repost shows the original author's real photo in the bubble, not a letter.
             Message requests: the name and blurred photo block under the chat header is gone, and with it the black band above the messages. Someone whose message request you have not accepted no longer sees your stories, and you no longer see theirs; accepting shares them as normal.
             PLEASE TEST: open video stories on Wi-Fi and on mobile data and check how fast they start; repost a video (it plays, name and face show); tap a posted repost and check the bubble photo; open a message request from someone new.
