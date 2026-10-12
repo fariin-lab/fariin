@@ -671,6 +671,49 @@ enum VideoTranscoder {
         }
     }
 
+    /// ⛔ THE UPLOADING CARD WEARS WHAT THE EXPORT IS ABOUT TO BAKE — owner, 2026-10-12: a video
+    /// repost chosen as the card showed full screen, with no frame and no chip, for the whole
+    /// upload ("the uploading repost story is using a different UI"), then changed shape when the
+    /// file landed. The placeholder drew the raw poster; the export draws the burn: the backdrop
+    /// with the clip shrunk inside it (`contentScale`), its corners rounded for the card
+    /// (`holeCorner`), and the text, stickers and chip over the top (`overlay`). Same composition
+    /// here, on the poster, so the card in the air and the story that lands are one picture.
+    ///
+    /// A clip the editor cropped keeps the plain poster: the overlay was placed against the cropped
+    /// frame and would land in the wrong place on an uncropped one, and a crop and a shrink never
+    /// travel together (`videoBurnIn`).
+    static func storyPlaceholderPoster(_ poster: UIImage, burn: StoryBurnIn?) -> UIImage {
+        let plain = storyCanvasPoster(poster)
+        guard let burn, burn.cropRect == nil else { return plain }
+        let shrunk = burn.contentScale < 0.999 && burn.backdrop != nil
+        guard shrunk || burn.overlay != nil, let cg = poster.cgImage else { return plain }
+        let canvas = plain.size
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        guard canvas.width > 1, canvas.height > 1, w > 1, h > 1 else { return plain }
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
+        return UIGraphicsImageRenderer(size: canvas, format: fmt).image { ctx in
+            let full = CGRect(origin: .zero, size: canvas)
+            if shrunk, let backdrop = burn.backdrop {
+                backdrop.draw(in: full)
+                // Fitted and centred, then shrunk about the centre — the export's own placement.
+                let s = min(canvas.width / w, canvas.height / h) * min(1, max(0.05, burn.contentScale))
+                let box = CGRect(x: (canvas.width - w * s) / 2, y: (canvas.height - h * s) / 2,
+                                 width: w * s, height: h * s)
+                ctx.cgContext.saveGState()
+                if burn.holeCorner > 0 {
+                    ctx.cgContext.addPath(UIBezierPath(roundedRect: box,
+                                                       cornerRadius: box.width * burn.holeCorner).cgPath)
+                    ctx.cgContext.clip()
+                }
+                poster.draw(in: box)
+                ctx.cgContext.restoreGState()
+            } else {
+                plain.draw(in: full)
+            }
+            burn.overlay?.draw(in: full)
+        }
+    }
+
     /// THE CANVAS ALONE, with no clip drawn on it, for the EDITOR to show behind its live preview.
     ///
     /// The editor used to wash its card with a blurred, desaturated, darkened copy of the poster,

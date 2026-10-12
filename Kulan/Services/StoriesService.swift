@@ -1572,7 +1572,9 @@ final class StoriesService {
         // better". The uploading card drew the raw poster, which letterboxes BLACK, while the file
         // that lands carries the gradient — so the story visibly changed colour at the hand-over.
         // Same sampler, same gradient, one function; a 9:16 clip is returned untouched.
-        let placeholder = UIImage(data: thumbnail).map { VideoTranscoder.storyCanvasPoster($0) }
+        // ...and the burn with it (owner, 2026-10-12): a shrunken or card-shaped clip, and the text
+        // and chip over it, show on the placeholder as they will on the posted story.
+        let placeholder = UIImage(data: thumbnail).map { VideoTranscoder.storyPlaceholderPoster($0, burn: burn) }
         let pending = PendingUpload(id: "\(Self.uploadingStoryId).\(UUID().uuidString)",
                                     image: placeholder,
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
