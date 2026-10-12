@@ -453,8 +453,24 @@ struct PostedStoriesView: View {
     /// that stops. Whatever did go leaves the selection, so a retry only re-sends what is left.
     private func deleteSelected() async {
         deleting = true
-        for id in selected {
-            if await StoriesService.shared.deleteStory(id) { selected.remove(id) }
+        // ⛔ SIX AT A TIME, NOT ONE BY ONE (owner, 2026-10-12: "deleting selected stories takes a long
+        // time"). Each delete is several round trips (the mirror, the media, the document), and 28 of
+        // them in a row was minutes. They are independent, so they run side by side, at most six in
+        // flight so a large selection does not open dozens of connections at once. Each one is still
+        // the same careful single delete, and only the ones that succeeded leave the selection.
+        let ids = Array(selected)
+        await withTaskGroup(of: (String, Bool).self) { group in
+            var next = 0
+            func addNext() {
+                guard next < ids.count else { return }
+                let id = ids[next]; next += 1
+                group.addTask { (id, await StoriesService.shared.deleteStory(id)) }
+            }
+            for _ in 0..<min(6, ids.count) { addNext() }
+            while let (id, ok) = await group.next() {
+                if ok { selected.remove(id) }
+                addNext()
+            }
         }
         deleting = false
         loader.invalidate()
