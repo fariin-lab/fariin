@@ -1886,13 +1886,13 @@ final class StoriesService {
             // sloppy: a story expires in 24 hours, so a field first written on the day the reader
             // ships would have no story to describe. `preloadPrefix` is the byte count worth
             // fetching to start playback — our exports are `shouldOptimizeForNetworkUse`, so the
-            // moov atom is at the FRONT and a prefix is genuinely playable. Half a megabyte is a
-            // couple of seconds at the bitrates the transcoder produces, and the whole file when
-            // the file is smaller than that.
+            // moov atom is at the FRONT and a prefix is genuinely playable. 1.5MB is ~3.5 seconds
+            // at the ~3.4 Mbps the encoder produces (512KB was one second; owner 2026-10-12, "video
+            // stories take time"), and the whole file when the file is smaller than that.
             "width": prepared.width,
             "height": prepared.height,
             "bytes": prepared.data.count,
-            "preloadPrefix": min(prepared.data.count, 512 * 1024),
+            "preloadPrefix": min(prepared.data.count, 1536 * 1024),
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
             // The label only — the custom name stays on this device. See StoryAudienceTag.
@@ -3145,8 +3145,8 @@ final class StoriesRepository {
             let unseen = g.stories.filter {
                 !StoryPrefs.isStorySeen($0.id) && $0.createdAt > (g.lastViewedAt ?? .distantPast)
             }
-            for s in unseen.prefix(3) where !s.mediaUrl.isEmpty {
-                items.append(.init(media: s.mediaUrl, poster: s.previewUrl, isVideo: s.isVideo))
+            for (n, s) in unseen.prefix(3).enumerated() where !s.mediaUrl.isEmpty {
+                items.append(.init(media: s.mediaUrl, poster: s.previewUrl, isVideo: s.isVideo, leading: n == 0))
             }
         }
         let key = items.map(\.media).joined(separator: "|")

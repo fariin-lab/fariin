@@ -125,8 +125,9 @@ public enum StoryPrefetcher {
                     guard offset < videoDepth else { continue }
                     // The clip's OWN prefix when the uploader recorded one, this file's default when
                     // it did not. Only read when range streaming is on — see `warmVideo`.
+                    // Never below the default: stories posted before 2026-10-12 recorded 512KB.
                     warmVideo(story.mediaURL, allowsCellular: true, window: true,
-                              prefixBytes: story.preloadPrefix > 0 ? story.preloadPrefix : nil)
+                              prefixBytes: max(story.preloadPrefix, StoryVideoStream.defaultPrefix))
                 default:     warmImage(story.mediaURL, poster: false)
                 }
             }
@@ -179,10 +180,21 @@ public enum StoryPrefetcher {
         public let media: String
         public let poster: String?
         public let isVideo: Bool
-        public init(media: String, poster: String?, isVideo: Bool) {
-            self.media = media; self.poster = poster; self.isVideo = isVideo
+        /// The first unseen story of its person: the one a tap on their card opens.
+        public let leading: Bool
+        public init(media: String, poster: String?, isVideo: Bool, leading: Bool = false) {
+            self.media = media; self.poster = poster; self.isVideo = isVideo; self.leading = leading
         }
     }
+
+    /// ⛔ MOBILE DATA GETS THE OPENING OF THE FIRST STORY OF THE FIRST TEN PEOPLE — owner 2026-10-12.
+    /// The reference app's arrival preload: one item per person (first unseen), ten people, and its
+    /// default auto-download settings keep stories ON for cellular. Ours sent no video at all on
+    /// cellular, so every tap on mobile data started from nothing. Only the prefix goes (see
+    /// `StoryVideoStream.defaultPrefix`), so the worst case is ten prefixes, not ten clips.
+    private static let cellularLeadingVideos = 10
+    /// A person's second and third stories, warmed on arrival: the opening only, as before.
+    private static let trailingPrefix: Int64 = 512 * 1024
 
     /// - Parameter decode: false = bytes to disk only, no decoded pixels. For the app's arrival
     ///   download (owner 2026-10-11, cube lag): decoding dozens of full-size pictures for stories
@@ -191,10 +203,22 @@ public enum StoryPrefetcher {
     public static func prefetchFirsts(_ firsts: [Item], mediaDepth: Int = 2, decode: Bool = true) {
         guard !firsts.isEmpty else { return }
         queue.async {
+            let cellular = Net.isExpensive
+            var cellularVideos = 0
             for (i, item) in firsts.enumerated() {
                 warmImage(item.poster, poster: true, decode: decode)
                 guard i < mediaDepth else { continue }
-                if item.isVideo { warmVideo(item.media) } else { warmImage(item.media, poster: false, decode: decode) }
+                guard item.isVideo else { warmImage(item.media, poster: false, decode: decode); continue }
+                if Net.isConstrained { continue }
+                // Wi-Fi: every one, but only a person's first story gets the full opening; the ones
+                // behind it keep the old 512KB, or twenty people x three is ~90MB per arrival.
+                if !cellular {
+                    warmVideo(item.media, prefixBytes: item.leading ? nil : Self.trailingPrefix)
+                    continue
+                }
+                guard item.leading, cellularVideos < cellularLeadingVideos else { continue }
+                cellularVideos += 1
+                warmVideo(item.media, allowsCellular: true)
             }
         }
     }

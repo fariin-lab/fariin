@@ -111,6 +111,7 @@ final class StoryItemVideoView: UIView {
     private var sizeObservation: NSKeyValueObservation?
     private var statusObservation: NSKeyValueObservation?
     private var rateObservation: NSKeyValueObservation?
+    private var bufferObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var endToken: NSObjectProtocol?
 
@@ -226,6 +227,7 @@ final class StoryItemVideoView: UIView {
         sizeObservation?.invalidate()
         statusObservation?.invalidate()
         rateObservation?.invalidate()
+        bufferObservation?.invalidate()
         if let endToken { NotificationCenter.default.removeObserver(endToken) }
     }
 
@@ -463,6 +465,13 @@ final class StoryItemVideoView: UIView {
             else { DispatchQueue.main.async { self.noteTimeControl(s) } }
         }
 
+        // Every new run of buffered bytes is a chance to start: see `startIfBuffered`.
+        bufferObservation = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
+            guard let self else { return }
+            if Thread.isMainThread { self.startIfBuffered() }
+            else { DispatchQueue.main.async { self.startIfBuffered() } }
+        }
+
         // ⚠️ THE BAR READS THE PLAYER, so the player has to publish. Twenty times a second, which is
         // the rate the viewer's own tick already runs at — the reference app polls its player at 60
         // and interpolates between them, and a bar drawn at 20Hz cannot show the difference.
@@ -516,11 +525,34 @@ final class StoryItemVideoView: UIView {
             // LOADING, which the spinner already says; calling it a stall froze the progress bar
             // before there was anything for it to measure.
             setBuffering(isStalled)
+            startIfBuffered()
         default:
             setBuffering(false)
         }
         publishStatus()
         updateSpinner()
+    }
+
+    /// ⛔ START ON HALF A SECOND, THE REFERENCE APP'S STORY RULE — owner 2026-10-12, "videos start
+    /// instantly". Its player runs stories on (stall 0.25, low water 0.5, high water 1.0) seconds
+    /// where other media gets (1, 2, 3). Ours left the decision to `automaticallyWaitsToMinimizeStalling`,
+    /// which holds a streamed clip until AVFoundation believes the WHOLE rest will keep up — on a
+    /// prefix plus a live fetch that is seconds of frozen cover with the bytes already here. The
+    /// waiting stays on (it still guards a clip with nothing buffered); this only overrides it once
+    /// half a second, or the rest of the clip if shorter, is in hand.
+    private func startIfBuffered() {
+        guard mode == .play, window != nil, let p = player,
+              p.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+              p.reasonForWaitingToPlay == .toMinimizeStalls,
+              let item = p.currentItem, item.status == .readyToPlay else { return }
+        let now = item.currentTime().seconds
+        guard now.isFinite else { return }
+        let ahead = item.loadedTimeRanges.map(\.timeRangeValue).reduce(0.0) { best, r in
+            let start = r.start.seconds, end = (r.start + r.duration).seconds
+            return (start <= now + 0.05 && end > now) ? max(best, end - now) : best
+        }
+        let rest = knownDuration > 0 ? knownDuration - now : .infinity
+        if ahead >= min(0.5, max(0.05, rest)) { p.playImmediately(atRate: 1) }
     }
 
     private func setBuffering(_ on: Bool) {
@@ -926,6 +958,7 @@ final class StoryItemVideoView: UIView {
         sizeObservation?.invalidate(); sizeObservation = nil
         statusObservation?.invalidate(); statusObservation = nil
         rateObservation?.invalidate(); rateObservation = nil
+        bufferObservation?.invalidate(); bufferObservation = nil
         if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
         // ⚠️ BOUND TO A DIFFERENT NAME, and the shorthand is why. `if let endToken { … }` shadows the

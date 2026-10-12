@@ -1803,7 +1803,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         let items: [StoryPrefetcher.Item] = ordered.compactMap { g in
             let s = g.stories.first(where: { !StoryPrefs.isStorySeen($0.id) }) ?? g.stories.first
             guard let s, !s.mediaUrl.isEmpty else { return nil }
-            return StoryPrefetcher.Item(media: s.mediaUrl, poster: s.previewUrl, isVideo: s.isVideo)
+            return StoryPrefetcher.Item(media: s.mediaUrl, poster: s.previewUrl, isVideo: s.isVideo, leading: true)
         }
         StoryPrefetcher.prefetchFirsts(items)
     }

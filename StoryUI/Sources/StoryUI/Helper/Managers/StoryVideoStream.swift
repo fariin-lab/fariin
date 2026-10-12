@@ -62,7 +62,11 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     /// How much of a neighbour is worth having before it is watched. The reference app takes this
     /// per file from the server (`preload_prefix_size`); ours is written onto the story document at
     /// post time (`preloadPrefix`), and this is the floor for anything posted before that existed.
-    static let defaultPrefix: Int64 = 512 * 1024
+    /// ⛔ 1.5MB, NOT 512KB — owner 2026-10-12, "video stories take time". Our clips run ~3.4 Mbps
+    /// (720p, `StoryVideoEncoder.videoBitrate`), so 512KB was about one second: the player met the
+    /// network almost at once. 1.5MB is ~3.5s, enough for the live fetch to get ahead. It is also the
+    /// FLOOR over a story's own recorded prefix (stories posted before this recorded 512KB).
+    static let defaultPrefix: Int64 = 1536 * 1024
 
     private let remote: URL
     private let partial: StoryPartialFile
