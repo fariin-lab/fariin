@@ -1442,7 +1442,9 @@ struct StoryEditorView: View {
                             } label: {
                                 Image(systemName: items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                     .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.primary)
+                                    // ⛔ WHITE, STATED — owner, 2026-10-12: it drew BLUE. The same
+                                    // `.primary`-inside-a-Button trap as the ✕ above (2026-08-24).
+                                    .foregroundStyle(.white)
                                     .shadow(color: .black.opacity(0.35), radius: 2)
                                     .frame(width: 40, height: 40).contentShape(Circle()).editorProbeGlass()
                             }
