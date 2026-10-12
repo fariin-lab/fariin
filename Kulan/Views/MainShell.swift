@@ -2819,7 +2819,14 @@ struct ChatsView: View {
     /// SLICE TWO: the presentations and the two navigation destinations. See homeStackA.
     private var homeStackB: some View {
         AnyView(homeStackA)
-            .sheet(item: $profileGroup) { g in
+            .sheet(item: $profileGroup, onDismiss: {
+                // ⛔ A CHAT ASKED FOR FROM THIS SHEET OPENS ONCE THE SHEET HAS GONE (owner,
+                // 2026-10-12, third report: story > profile > the chat button > a page with the
+                // big title, the tab bar still up and no messages). `openPendingChat` takes the
+                // sheet down and stops; the push happens from HERE, after the dismissal, so the
+                // chat is pushed onto a settled stack and gets its own appearance pass.
+                if router.pendingChatId != nil { openPendingChat() }
+            }) { g in
                 NavigationStack {
                     // .story source: no chat underneath → no Search/Wallpaper dead buttons (audit).
                     ContactInfoView(cid: storyCid(g.authorUid), name: g.name, photoUrl: g.photoUrl,
@@ -2943,15 +2950,25 @@ struct ChatsView: View {
         showNew = false
         // The camera is not a cover any more, so a binding cannot take it away — the door does.
         StoryCameraDoor.close()
-        // The story viewer is not a cover any more, so it cannot be dismissed by clearing a binding:
-        // it is a presented screen and the door takes it away. Same job, one call.
-        profileGroup = nil
-        // ⛔ AND THE CHAT OPENS ONCE IT HAS GONE (owner, 2026-10-11: story > profile > the chat
-        // button showed an empty chat page with only its big title). The path was rebuilt in the
-        // same breath as the dismissal, and on iOS 26 the story stage is still leaving then: the
-        // chat was pushed under it and never got its appearance, so its list never drew. When no
-        // story is up this runs at once, exactly as before.
-        StoryDoor.dismiss { openPendingChatTarget(cid) }
+        // ⛔ THE PROFILE SHEET COMES DOWN FIRST, AND THE PUSH WAITS FOR IT (owner, 2026-10-12,
+        // third report of the blank chat with the big title). The 2026-10-11 fix waited for the
+        // STORY to leave, but by the time this profile is up the story has already gone (the door
+        // opens it in the stage's dismiss completion), so that wait returned at once and the path
+        // was rebuilt in the same update as `profileGroup = nil` — a chat pushed under a sheet that
+        // was still sliding away, which never got its toolbar preferences or its appearance. The
+        // sheet's `onDismiss` (see `homeStackB`) calls back here once it is really gone.
+        if profileGroup != nil {
+            profileGroup = nil
+            return
+        }
+        // ⛔ AND THE CHAT OPENS ONCE THE STORY HAS GONE (owner, 2026-10-11): on iOS 26 the stage is
+        // still leaving a tick after a non-animated dismissal, and a chat pushed under it never got
+        // its appearance. The viewer's own profile sheet rides down with the stage. One more turn
+        // after that, so the tab switch made for this same id (`tab = 2`, on the shell) is on
+        // screen before the path changes under it. When nothing is up this is one hop, as before.
+        StoryDoor.dismiss {
+            DispatchQueue.main.async { openPendingChatTarget(cid) }
+        }
     }
 
     private func openPendingChatTarget(_ cid: String) {
