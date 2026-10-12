@@ -1774,6 +1774,8 @@ struct StoryViewer: View {
                     // Videos too since 2026-10-11 (owner: "user repost video and image") — the
                     // composer takes the clip itself now, see `beginRepost`.
                     let canPassOn = StoryShareRights.allows(s)
+                    // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.
+                    let canRepost = canPassOn && s.repostOf == nil
                     return StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,
@@ -1893,11 +1895,11 @@ struct StoryViewer: View {
                                 ? .plain()
                                 : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
-                                                                              showRepostButton: canPassOn),
+                                                                              showRepostButton: canRepost),
                                                emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
                                     : .plain(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
-                                                                            showRepostButton: canPassOn)),
+                                                                            showRepostButton: canRepost)),
                             mediaType: s.isVideo ? .video : .image
                         )
                     )
@@ -4710,7 +4712,7 @@ struct StoryViewer: View {
         // The story is found across every group the viewer was given, not only the one on screen:
         // the footer belongs to whichever page is up, and pages change under a swipe.
         guard let story = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
-              StoryShareRights.allows(story) else { return }
+              StoryShareRights.allows(story), story.repostOf == nil else { return }   // no repost of a repost
         // ⛔ A REPOST OF A REPOST CREDITS THE ORIGINAL (reference-app research, 2026-10-12: the
         // reference carries the first author forward). Crediting the story in hand named the person
         // who reposted it, not the person whose picture it is.
