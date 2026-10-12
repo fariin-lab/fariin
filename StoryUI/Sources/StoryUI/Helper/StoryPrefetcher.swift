@@ -126,8 +126,10 @@ public enum StoryPrefetcher {
                     // The clip's OWN prefix when the uploader recorded one, this file's default when
                     // it did not. Only read when range streaming is on — see `warmVideo`.
                     // Never below the default: stories posted before 2026-10-12 recorded 512KB.
+                    // The very next item is about to be watched: normal priority (see `warmPrefix`).
                     warmVideo(story.mediaURL, allowsCellular: true, window: true,
-                              prefixBytes: max(story.preloadPrefix, StoryVideoStream.defaultPrefix))
+                              prefixBytes: max(story.preloadPrefix, StoryVideoStream.defaultPrefix),
+                              urgent: offset == 0)
                 default:     warmImage(story.mediaURL, poster: false)
                 }
             }
@@ -265,7 +267,7 @@ public enum StoryPrefetcher {
     /// `allowsCellular`: only the viewer's own next-clip window sets this. `window`: whether this
     /// download belongs to that window, and may therefore be cancelled when the window moves past it.
     private static func warmVideo(_ urlString: String?, allowsCellular: Bool = false,
-                                  window: Bool = false, prefixBytes: Int64? = nil) {
+                                  window: Bool = false, prefixBytes: Int64? = nil, urgent: Bool = false) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard claim(urlString) else { return }
         // ⚠️ A PREFIX, NOT THE WHOLE CLIP — and this is the largest single saving available in the
@@ -280,6 +282,7 @@ public enum StoryPrefetcher {
                 url,
                 bytes: prefixBytes ?? StoryVideoStream.defaultPrefix,
                 allowsCellular: allowsCellular,
+                urgent: urgent,
                 onTask: { task in
                     lock.lock(); running[urlString] = (task, window); lock.unlock()
                 },

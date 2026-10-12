@@ -161,7 +161,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     /// FETCH ONLY THE FIRST `bytes` OF A CLIP, for the lookahead. Nothing plays from this directly;
     /// it fills the same partial file the reader serves from, so arriving at the story finds the
     /// opening already here and starts on it while the rest streams in behind.
-    static func warmPrefix(_ remote: URL, bytes: Int64, allowsCellular: Bool,
+    static func warmPrefix(_ remote: URL, bytes: Int64, allowsCellular: Bool, urgent: Bool = false,
                            onTask: ((URLSessionTask) -> Void)? = nil,
                            onFinish: (() -> Void)? = nil) {
         guard enabled, bytes > 0 else { onFinish?(); return }
@@ -175,7 +175,11 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         request.setValue("bytes=0-\(bytes - 1)", forHTTPHeaderField: "Range")
         request.allowsConstrainedNetworkAccess = false
         request.allowsExpensiveNetworkAccess = allowsCellular
-        request.networkServiceType = .background
+        // ⛔ NOT BACKGROUND FOR THE VERY NEXT ITEM (owner 2026-10-12: Next onto a video froze for
+        // seconds). This warm writes only when it completes, and a reader opened before then cannot
+        // see it and fetches the same opening again. At `.background` priority the next clip's warm
+        // was often still running at the tap; the one about to be watched goes at normal priority.
+        request.networkServiceType = urgent ? .default : .background
         let task = URLSession.shared.dataTask(with: request) { data, response, _ in
             defer { onFinish?() }
             guard let data, !data.isEmpty,

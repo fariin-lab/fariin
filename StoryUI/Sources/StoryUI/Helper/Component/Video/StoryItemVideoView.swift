@@ -112,6 +112,7 @@ final class StoryItemVideoView: UIView {
     private var statusObservation: NSKeyValueObservation?
     private var rateObservation: NSKeyValueObservation?
     private var bufferObservation: NSKeyValueObservation?
+    private var reasonObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     private var endToken: NSObjectProtocol?
 
@@ -228,6 +229,7 @@ final class StoryItemVideoView: UIView {
         statusObservation?.invalidate()
         rateObservation?.invalidate()
         bufferObservation?.invalidate()
+        reasonObservation?.invalidate()
         if let endToken { NotificationCenter.default.removeObserver(endToken) }
     }
 
@@ -465,6 +467,14 @@ final class StoryItemVideoView: UIView {
             else { DispatchQueue.main.async { self.noteTimeControl(s) } }
         }
 
+        // The waiting REASON changes without `timeControlStatus` changing (evaluating → minimize
+        // stalls), so it is watched on its own: see `startIfBuffered`.
+        reasonObservation = p.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] _, _ in
+            guard let self else { return }
+            if Thread.isMainThread { self.startIfBuffered() }
+            else { DispatchQueue.main.async { self.startIfBuffered() } }
+        }
+
         // Every new run of buffered bytes is a chance to start: see `startIfBuffered`.
         bufferObservation = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
             guard let self else { return }
@@ -508,6 +518,9 @@ final class StoryItemVideoView: UIView {
             // Objective-C exception in Swift is not catchable — it goes straight to abort(). That
             // was a shipped crash. `.readyToPlay` is the state the documentation requires.
             player?.preroll(atRate: 1) { _ in }
+            // Ready is a moment `startIfBuffered` must see: a warmed opening is handed over in one
+            // piece, usually BEFORE the item is ready, so the buffer KVO had already come and gone.
+            startIfBuffered()
         default:
             break
         }
@@ -540,10 +553,19 @@ final class StoryItemVideoView: UIView {
     /// prefix plus a live fetch that is seconds of frozen cover with the bytes already here. The
     /// waiting stays on (it still guards a clip with nothing buffered); this only overrides it once
     /// half a second, or the rest of the clip if shorter, is in hand.
+    ///
+    /// ⛔ AND IT MUST BE ASKED AT EVERY MOMENT THE ANSWER CAN CHANGE — owner 2026-10-12: image story,
+    /// Next, the video sat frozen for seconds although its opening was pre-downloaded (older than this
+    /// rule; the first version of it only narrowed the window). A warmed opening arrives in ONE
+    /// `respond`, which fires the buffer KVO while the item is not ready yet or while the player is
+    /// still `.evaluatingBufferingRate`; this returned, and nothing asked again — not `.readyToPlay`,
+    /// not the reason changing (unobserved, and `timeControlStatus` stays `waiting` through it) —
+    /// until more live bytes happened to land. Any waiting reason but "no item" counts now, and
+    /// ready, the reason and the buffer all ask.
     private func startIfBuffered() {
         guard mode == .play, window != nil, let p = player,
               p.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-              p.reasonForWaitingToPlay == .toMinimizeStalls,
+              p.reasonForWaitingToPlay != .noItemToPlay,
               let item = p.currentItem, item.status == .readyToPlay else { return }
         let now = item.currentTime().seconds
         guard now.isFinite else { return }
@@ -959,6 +981,7 @@ final class StoryItemVideoView: UIView {
         statusObservation?.invalidate(); statusObservation = nil
         rateObservation?.invalidate(); rateObservation = nil
         bufferObservation?.invalidate(); bufferObservation = nil
+        reasonObservation?.invalidate(); reasonObservation = nil
         if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
         // ⚠️ BOUND TO A DIFFERENT NAME, and the shorthand is why. `if let endToken { … }` shadows the
