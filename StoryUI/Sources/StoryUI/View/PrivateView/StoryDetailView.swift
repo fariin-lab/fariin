@@ -2665,16 +2665,12 @@ struct VisitLinkBubble: View {
         Button(action: onTap) {
             HStack(spacing: person == nil ? 6 : 10) {
                 if let person {
-                    AsyncImage(url: person.photoURL) { phase in
-                        if let img = phase.image { img.resizable().scaledToFill() }
-                        else {
-                            ZStack {
-                                Color.white.opacity(0.25)
-                                Text(String(person.name.prefix(1)).uppercased())
-                                    .font(.system(size: 15, weight: .semibold))
-                            }
-                        }
-                    }
+                    // ⛔ THE HEADER'S IMAGE VIEW, NOT `AsyncImage` — owner 2026-10-12, third report of
+                    // the letter "A". The header's credit line drew the SAME url with its real face
+                    // (his 8:58 screenshot) through `CacheAsyncImage`, which reads the app's image
+                    // cache; this bubble used SwiftUI's `AsyncImage`, which has no cache and fell back
+                    // to the letter. Re-feeding the url (775fae8a) could not help: the url was right.
+                    CacheAsyncImage(urlString: person.photoURL?.absoluteString, name: person.name, size: 34)
                     .frame(width: 34, height: 34)
                     .clipShape(Circle())
                     Text(person.name.isEmpty ? "Profile" : person.name)
