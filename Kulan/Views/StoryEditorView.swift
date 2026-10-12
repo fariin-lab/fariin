@@ -1675,6 +1675,16 @@ struct StoryEditorView: View {
                                                         avatar: repostAvatar)
                                   : nil)
                 .frame(width: card.width, height: card.height)
+                // ⛔ CARD ⇄ FULL SCREEN REBUILDS THE PICTURE VIEW (owner, 2026-10-12, third report:
+                // "tapping a photo repost card gives the haptic, but nothing changes"). The haptic
+                // is the last line of `toggleRepostShape`, so the toggle ran and swapped the item's
+                // picture; what never arrived on his phone was the swap itself, which travelled as
+                // an in-place `image` write through `updateUIView`. A new identity for each shape
+                // goes through `makeUIView` instead, which builds the image view WITH the picture.
+                // The zoom is reset by the toggle anyway, so a rebuilt view loses nothing; a video
+                // repost switches shape by zoom and never changes this id.
+                .id(repostFullScreen)
+                .transition(.identity)
 
             // The video repost's card frame is drawn INSIDE the zoomable view, above the clip, in
             // UIKit — see `ZoomableImageView.cardFrame`.

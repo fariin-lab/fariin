@@ -229,6 +229,7 @@ final class RepostCardFrameView: UIView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = .clear
+        isHidden = true   // nothing to draw until a spec arrives; `apply(nil)` on a fresh view is a no-op
         // The page-coloured surround with the clip cut out of it (even-odd), so its corners round.
         hole.fillRule = .evenOdd
         hole.fillColor = UIColor.black.cgColor
