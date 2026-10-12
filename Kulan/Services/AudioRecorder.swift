@@ -194,7 +194,7 @@ final class AudioRecorder {
             guard let self, granted else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 let session = AVAudioSession.sharedInstance()
-                try? session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
                 try? session.setActive(true)
                 Self.allowHapticsWhileRecording(session)
                 let url = FileManager.default.temporaryDirectory
@@ -219,7 +219,7 @@ final class AudioRecorder {
             // .playAndRecord (pre-warmed in prepare(), kept warm across records), skip it and record()
             // instantly. (First record right after playing a voice note still reconfigures.)
             if s.category != .playAndRecord {
-                try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
                 try? s.setActive(true)
             }
             // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a
@@ -244,7 +244,7 @@ final class AudioRecorder {
             guard let self, granted, self.wantsRecording else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 let session = AVAudioSession.sharedInstance()
-                try? session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
                 try? session.setActive(true)
                 Self.allowHapticsWhileRecording(session)
                 let url = FileManager.default.temporaryDirectory
@@ -443,7 +443,7 @@ final class AudioRecorder {
         if let r = recorder {
             let s = AVAudioSession.sharedInstance()
             if s.category != .playAndRecord {
-                try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
                 try? s.setActive(true)
             }
             // OUTSIDE the guard on purpose: the warm path skips the configuration above, and a

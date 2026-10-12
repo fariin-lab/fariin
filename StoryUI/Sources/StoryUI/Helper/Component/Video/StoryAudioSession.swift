@@ -23,18 +23,26 @@ public enum StoryAudioSession {
                                   mode: AVAudioSession.Mode,
                                   options: AVAudioSession.CategoryOptions)?
 
+    /// Set by the app: true while one of ITS calls is live. Only that owns the session against a
+    /// story; nil (no app answer) keeps the old rule.
+    public static var callIsLive: (() -> Bool)?
+
     /// Before a clip plays. Takes `.playback` once per viewer sitting.
     public static func claim() {
         let s = AVAudioSession.sharedInstance()
-        // ⛔ A CAMERA'S LEFTOVER IS NOT A CALL (owner 2026-10-12: video stories stopped playing after
-        // the story camera, photos did not). A capture session leaves `.playAndRecord` with mode
-        // `.videoRecording` behind; nothing that really owns the session (our calls, voice notes)
-        // runs in that mode, so it is taken over like any idle session. See the app's `CameraAudio`.
-        let cameraLeftover = s.category == .playAndRecord && s.mode == .videoRecording
-        guard s.category != .playAndRecord || cameraLeftover else { return }   // a call or a recording owns it
+        // ⛔ A LEFTOVER RECORDING SESSION IS NOT AN OWNER — owner 2026-10-12, twice: video stories
+        // stopped playing after the story camera, and "sometimes story audio comes out of the
+        // earpiece". `.playAndRecord` is left behind by the camera (`.videoRecording`), by the voice
+        // recorder that warms itself on every chat open and never hands back, and by our calls after
+        // they end. Standing aside for any of those played the clip in a recording session: the
+        // earpiece, or nothing at all while another app's call held the mic. Only a LIVE call of ours
+        // keeps the session now; everything else is taken over like an idle session.
+        let leftover = s.category == .playAndRecord && !(callIsLive?() ?? (s.mode != .videoRecording))
+        guard s.category != .playAndRecord || leftover else { return }   // a live call owns it
         if !claimed {
-            // Hand back the system default, not the leftover, when the viewer closes.
-            previous = cameraLeftover ? (.soloAmbient, .default, []) : (s.category, s.mode, s.categoryOptions)
+            // Hand back the system default, not the leftover, when the viewer closes: whatever left
+            // it (the voice recorder's warm path, a call) configures its own session when it next runs.
+            previous = leftover ? (.soloAmbient, .default, []) : (s.category, s.mode, s.categoryOptions)
             claimed = true
         }
         if s.category != .playback { try? s.setCategory(.playback) }

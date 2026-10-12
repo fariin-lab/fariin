@@ -38,6 +38,13 @@ struct KulanApp: App {
                 // main-actor isolated, which this is. Memory only and synchronous, which is what the
                 // hook asks for; a miss falls through to the old path unchanged.
                 .task {
+                    // ⛔ ONLY A LIVE CALL OF OURS KEEPS THE AUDIO FROM A STORY (owner 2026-10-12: story
+                    // sound from the earpiece). Any other `.playAndRecord` is a leftover the story
+                    // takes over for the loudspeaker. See `StoryAudioSession.claim`.
+                    StoryAudioSession.callIsLive = {
+                        let s = CallService.shared.state
+                        return (s != .idle && s != .ended) || GroupCallService.shared.isActive
+                    }
                     // 2026-10-10: a Stories-page card now holds only its small copy (`StoryImage
                     // .cardPixels`), so the open falls back to that as its first frame.
                     StoryPosterSource.provider = {
