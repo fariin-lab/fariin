@@ -567,6 +567,8 @@ struct RootView: View {
         // usually a handful of numbers — and it has to be running before Add Story can be pressed,
         // because that button asks it whether there is any allowance left before it opens anything.
         AppLimits.shared.start()
+        // The owner's feature switches (config/features). Saved for the NEXT launch; see RemoteFeatures.
+        RemoteFeatures.shared.start()
         // The story audiences, for the same reason: the share sheet opens on a tap and must already
         // know what to draw. It starts from its own disk mirror, so this listener is a correction
         // rather than a load — see StoryAudienceStore.

@@ -1073,6 +1073,14 @@ service cloud.firestore {
       allow write: if adminIsOwner();
     }
 
+    // FEATURE SWITCHES (2026-10-12). Read by every signed-in phone (RemoteFeatures.swift), written by
+    // NOBODY from a client: only the adminApi function changes it, which checks the owner, refuses ON
+    // for an unfinished feature, and records every flip in the audit log.
+    match /config/features {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // The admin team. You may read your OWN row, which is how the app knows whether to show the admin
     // screens at all; the owner may read the whole team.
     match /admins/{uid} {

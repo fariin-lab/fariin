@@ -10,10 +10,11 @@ import Foundation
 enum CallFeatures {
     /// Group calls: the call buttons on a group, its "Join call" bar, "Add people" in a call, and
     /// the full-screen invitation when someone adds me.
-    static let groupCalls = false
+    /// Unfinished: the admin panel can only switch it OFF (RemoteFeatures).
+    static var groupCalls: Bool { RemoteFeatures.offOnly("groupCalls", default: false) }
     /// Call links: the "Create a Call Link" row and saved links on the Calls tab, and opening a
-    /// link's pre-join screen from a chat, a web link or the list.
-    static let callLinks = false
+    /// link's pre-join screen from a chat, a web link or the list. Unfinished: OFF-only remotely.
+    static var callLinks: Bool { RemoteFeatures.offOnly("callLinks", default: false) }
 }
 
 /// App features that are built but hidden — owner, 2026-10-10: "completely disable and hide the
@@ -24,13 +25,14 @@ enum AppFeatures {
     /// Glow: the Glowing grid and "Glowing" search results on the Stories tab, the Glow button and
     /// "Glow Story" menu item on a profile, the Glowers · Glowing card on My Profile, the Glowers
     /// tab and glow rows on the Notifications page, and Glow in the feature tour.
-    static let glow = false
+    /// Finished: the admin panel may switch it on or off (RemoteFeatures, applies on next open).
+    static var glow: Bool { RemoteFeatures.value("glow", default: false) }
     /// Insights: the Insights card on My Profile, the only way into the Insights page.
-    static let insights = false
+    static var insights: Bool { RemoteFeatures.value("insights", default: false) }
     /// Stories tab layout (owner 2026-10-11): true = one person per row (`StoryListRow`), false =
     /// the original two-column card grid, kept whole.
-    static let storyList = true
+    static var storyList: Bool { RemoteFeatures.value("storyList", default: true) }
     /// The My Profile card under the header in Settings (owner 2026-10-11: hidden). The page it
     /// opens is kept; this is only its door in Settings.
-    static let myProfileCard = false
+    static var myProfileCard: Bool { RemoteFeatures.value("myProfileCard", default: false) }
 }

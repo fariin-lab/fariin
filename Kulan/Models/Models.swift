@@ -11,17 +11,19 @@ import UIKit   // the inline thumbnail is decoded here, next to the field that c
 // in the project but every user-reachable door (create, join link, filter tab,
 // contact-screen section, group header tap) is closed until this flips to true.
 enum Flags {
-    static let groupsEnabled = false
+    /// Unfinished: the admin panel can only switch it OFF (RemoteFeatures, next open).
+    static var groupsEnabled: Bool { RemoteFeatures.offOnly("groups", default: false) }
     /// Two-step verification's door in Settings. OFF (owner, 2026-09-25: "turn off 2FA as groups,
     /// we are not ready to finalize"). Only the door closes. An account that ALREADY turned it on
     /// still sees the row, so it can turn it off, and still gets the sign-in password prompt,
     /// because the database rules keep enforcing the claim for that account; hiding the prompt
     /// would lock it out of its own data.
-    static let twoStepEnabled = false
+    static var twoStepEnabled: Bool { RemoteFeatures.offOnly("twoStep", default: false) }
     /// Profile links (the capsules under the bio, and Edit Profile › Links). OFF (owner,
     /// 2026-09-27: "link feature hide, don't delete, hide by flag"). Only what people SEE goes:
     /// saved links stay on the profile and in `ProfileLinksView`, and come back when this flips.
-    static let profileLinksEnabled = false
+    /// Finished: on or off from the admin panel (RemoteFeatures, next open).
+    static var profileLinksEnabled: Bool { RemoteFeatures.value("profileLinks", default: false) }
     /// The Official Announcements admin screen in Settings. OFF (owner, 2026-09-25): the admin panel
     /// will live on a fariin.com subdomain instead of inside the app. Only the door closes; the
     /// channel everyone reads, the admin rules and the sending functions are untouched, so the web
