@@ -4101,7 +4101,11 @@ struct StoryEditorView: View {
         let zoomed = abs(photoZoom - 1) > 0.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
         // ⚠️ `stickers.isEmpty` BELONGS IN THIS TEST. The fast path posts the photo untouched, so
         // anything left off this line is a thing he placed and never sees again.
-        if drawing.bounds.isEmpty && overlays.isEmpty && stickers.isEmpty && !zoomed && imageFillsCanvas(size) {
+        // ⛔ NEVER FOR A PHOTO REPOST CARD (owner, 2026-10-12: "the blur shows in the editor, after
+        // posting it is gone", the card on white). Since 877 the card is drawn on a TRANSPARENT
+        // ground and the editor paints `repostCanvas` behind it; the card is 9:16, so it "fills" and
+        // this path posted it bare, ground and all missing. The composition below bakes the ground.
+        if !isRepostPhotoCard && drawing.bounds.isEmpty && overlays.isEmpty && stickers.isEmpty && !zoomed && imageFillsCanvas(size) {
             return StoryPhoto.encode(base)
         }
         // BAKED AT THE CARD'S OWN SIZE, which is the space the pen drew in and the text overlays are
