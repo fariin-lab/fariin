@@ -16,14 +16,29 @@ final class RepostEditorRenderTests: XCTestCase {
     private var window: UIWindow?
     private var log: [String] = []
 
+    private let started = Date()
+
     override func setUp() async throws {
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let t0 = started
+        StoryEditorView.renderProbe = { [weak self] s in
+            let line = String(format: "%.2fs ", Date().timeIntervalSince(t0)) + s
+            if Thread.isMainThread { MainActor.assumeIsolated { self?.appendProbe(line) } }
+        }
+    }
+
+    private var lastProbe = ""
+    private func appendProbe(_ line: String) {
+        // Only changes, so the log reads as a timeline rather than a wall of repeats.
+        let body = line.split(separator: " ", maxSplits: 1).last.map(String.init) ?? line
+        guard body != lastProbe else { return }
+        lastProbe = body
+        log.append("probe " + line)
     }
 
     override func tearDown() async throws {
-        let text = log.joined(separator: "\n")
-        try? text.write(to: outDir.appendingPathComponent("\(name.filter { $0.isLetter || $0.isNumber })-log.txt"),
-                        atomically: true, encoding: .utf8)
+        StoryEditorView.renderProbe = nil
+        flushLog()
         window?.isHidden = true
         window = nil
     }
@@ -40,7 +55,10 @@ final class RepostEditorRenderTests: XCTestCase {
                                      onPosted: {},
                                      sourceVideo: .init(url: clip))
         show(editor)
-        try await Task.sleep(for: .seconds(4))
+        try await Task.sleep(for: .seconds(0.6))
+        dumpFrames("video, 0.6s after open")
+        shoot("video-0.6s")
+        try await Task.sleep(for: .seconds(3.4))
         dumpFrames("video, 4s after open")
         shoot("video-open")
 
@@ -104,12 +122,12 @@ final class RepostEditorRenderTests: XCTestCase {
         let r = UIGraphicsImageRenderer(bounds: w.bounds)
         let img = r.image { _ in _ = w.drawHierarchy(in: w.bounds, afterScreenUpdates: true) }
         if let d = img.pngData() { try? d.write(to: outDir.appendingPathComponent("\(label)-hierarchy.png")) }
-        let screen = XCUIScreen.main.screenshot()
-        try? screen.pngRepresentation.write(to: outDir.appendingPathComponent("\(label)-screen.png"))
-        let a = XCTAttachment(screenshot: screen)
-        a.name = label
-        a.lifetime = .keepAlways
-        add(a)
+        flushLog()
+    }
+
+    private func flushLog() {
+        try? log.joined(separator: "\n").write(to: outDir.appendingPathComponent("\(name.filter { $0.isLetter || $0.isNumber })-log.txt"),
+                                               atomically: true, encoding: .utf8)
     }
 
     private func all(_ v: UIView) -> [UIView] { [v] + v.subviews.flatMap(all) }

@@ -702,6 +702,8 @@ struct StoryEditorView: View {
     /// A VIDEO repost is showing as the card: the clip at `RepostVideoCard.scale` with the rounded
     /// surround and the chip over it. Off = full screen. See `RepostVideoCard`.
     @State private var repostVideoCard = false
+    /// Test hook: told the editor's state each time the canvas is built. nil in the app.
+    nonisolated(unsafe) static var renderProbe: ((String) -> Void)? = nil
     /// `repostStartSecond` has been used (once per editor; a later player starts where it is told).
     @State private var repostStartApplied = false
     /// Any keyboard is on screen, and when one last went down: a canvas tap while typing (or the
@@ -1648,6 +1650,8 @@ struct StoryEditorView: View {
         // The pen's canvas for this pass — the card, enlarged when the photo is zoomed out so its
         // surround can still be drawn on. See `penCanvasSize`.
         let penCanvas = Self.penCanvasSize(card: card, zoom: photoZoom)
+        // Test hook only (KulanTests/RepostEditorRenderTests); nil in the app, so this does nothing there.
+        let _ = Self.renderProbe?("items=\(items.count) index=\(index) isVideo=\(currentIsVideo) repostVideo=\(isRepostVideo) card=\(repostVideoCard) full=\(repostFullScreen) player=\(previewPlayer != nil) playing=\(previewPlaying) zoom=\(photoZoom) edited=\(edited.size)")
         ZStack {
             Color.black
             // ⚠️ THE CANVAS THE POST WILL BAKE, not a blur of the photo. WYSIWYG is the whole
@@ -5238,6 +5242,7 @@ struct ZoomableImageView: UIViewRepresentable {
         // layer sitting over its picture, but the view stays so the constraints never rebuild.
         c.clipView?.isHidden = player == nil
         c.frameView?.apply(cardFrame)
+        StoryEditorView.renderProbe?("  update: cardFrame=\(cardFrame != nil) player=\(player != nil) image=\(image.size) scale=\(scale)")
         c.pinch?.isEnabled = interactive
         c.pan?.isEnabled = interactive
         if !c.active {   // adopt external scale/offset (e.g. a reset) only when not mid-gesture
