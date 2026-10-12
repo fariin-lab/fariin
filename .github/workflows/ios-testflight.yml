@@ -76,7 +76,8 @@ jobs:
           TF_CHANGELOG: |
             THIS BUILD: STORY VIDEO AND REPOST FIXES.
             Video stories start sooner: they play once half a second is loaded, and the opening of each person's first story is downloaded ahead (about 3.5 seconds, on Wi-Fi and now on mobile data for the first 10 people). A reposted video plays by itself again in the repost editor. Tapping a repost shows the original author's real photo in the bubble, not a letter.
-            PLEASE TEST: open video stories on Wi-Fi and on mobile data and check how fast they start; repost a video (it plays, name and face show); tap a posted repost and check the bubble photo.
+            Message requests: the name and blurred photo block under the chat header is gone, and with it the black band above the messages.
+            PLEASE TEST: open video stories on Wi-Fi and on mobile data and check how fast they start; repost a video (it plays, name and face show); tap a posted repost and check the bubble photo; open a message request from someone new.
 
             EARLIER: ONE MORE VERIFIED BADGE FIX.
             A badge given while a profile was loading could still disappear until the next refresh; it now stays.

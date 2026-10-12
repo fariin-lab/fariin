@@ -189,9 +189,6 @@ struct ThreadView: View {
         }?.id
     }
     @State private var showEncryptionInfo = false   // empty-chat notice → the safety-number screen
-    /// The requester's @username, fetched once for the message-request card. Empty until it lands,
-    /// and the line simply is not drawn until then rather than showing a placeholder.
-    @State private var requestHandle = ""
     @State private var showWallpaper = false      // "Change Wallpaper" from the profile menu opens the picker here
     // Hold-to-record voice gesture state (standard hold-to-record).
     @State private var recordLocked = false        // recording continues after finger lifts
@@ -3051,75 +3048,10 @@ struct ThreadView: View {
                     }
                 }
             }
-            // WHO IS ASKING, at the top, before you decide (owner 2026-08-04, with his reference).
-            //
-            // `safeAreaInset`, NOT an overlay, and the note twenty lines up on `topPinArea` is why:
-            // an overlay padded down by a reported nav-bar height "repeatedly came back wrong". It
-            // came back wrong here too — the owner photographed this card's 88pt avatar sitting on
-            // top of the header's own avatar and the name printed twice. An inset is measured by the
-            // system against the real bar, so it cannot land anywhere but under it.
-            //
-            // It also means the conversation is pushed down by the card rather than running beneath
-            // it, which is what the reference app gets for free by making its version a real row.
-            .safeAreaInset(edge: .top) {
-                if requestStance == .incoming { requestIntroCard }
-            }
-    }
-
-    /// The card above a stranger's first message: who they are, and that the conversation is private.
-    /// Their name and picture are the whole decision — you are about to let someone in or not, and
-    /// the old screen asked you to make that call from a name in the navigation bar.
-    private var requestIntroCard: some View {
-        Button {
-            inputFocused = false
-            showContactInfo = true
-        } label: {
-            VStack(spacing: 8) {
-                // A STRANGER'S PHOTO IS BLURRED UNTIL YOU LET THEM IN. The reference app does this
-                // (the reference implementation) and the reason is worth writing down:
-                // without it, anybody who can reach you can put a picture in front of you that you
-                // never asked to see, just by setting it as their profile photo. Tapping opens the
-                // profile, where it is shown properly, so nothing is hidden — it just is not pushed
-                // at you before you have agreed to the conversation.
-                AvatarView(name: title, photoUrl: photoUrl, size: 88)
-                    .blur(radius: 14)
-                    .clipShape(Circle())
-                    .overlay {
-                        Image(systemName: "eye.slash.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .shadow(radius: 3)
-                    }
-                HStack(spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 20, weight: .semibold))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                // WHO THEY ARE, not a reassurance. This said "This conversation is private", which
-                // tells you nothing about the person you are being asked to decide about. The reference app
-                // fills this line with identifying detail and mutual groups; groups are switched off
-                // here, so our equivalent is the username somebody would actually recognise.
-                if !requestHandle.isEmpty {
-                    Text("@\(requestHandle)")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            .padding(.horizontal, 24)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .task(id: cid) {
-            guard requestStance == .incoming, requestHandle.isEmpty else { return }
-            let other = conversation?.otherUid(me) ?? ""
-            if let p = await ProfileStore.shared.fetch(other) { requestHandle = p.handle }
-        }
+            // ⛔ NO "WHO IS ASKING" CARD UNDER THE HEADER — owner 2026-10-12: on a message request it
+            // drew the name and avatar a second time under the header (its avatar slid up beneath
+            // the bar) and its top inset left a black band over the conversation. Removed with its
+            // inset; the header already names the person and the bottom bar asks Accept / Delete.
     }
 
     // Per-row CONTENT signature (what a bubble actually renders): text, edited, send state, reactions,
