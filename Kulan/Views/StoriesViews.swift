@@ -6020,8 +6020,13 @@ enum AppWindowScheme {
     @MainActor static var colorScheme: ColorScheme { style == .dark ? .dark : .light }
     /// `systemBackground` resolved for that scheme: the sheet is inside a dark trait, so the
     /// dynamic colour on its own would answer black in light mode.
+    /// ⛔ ELEVATED, AS APPLE'S OWN SHEETS ARE (owner, 2026-10-12: "dark mode too black, use the Apple
+    /// sheet grey"). A sheet sits at the elevated interface level, where `systemBackground` is the
+    /// system's dark grey rather than pure black. Light mode is white at either level, so unchanged.
     @MainActor static var background: Color {
-        Color(uiColor: UIColor.systemBackground.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)))
+        let traits = UITraitCollection(traitsFrom: [UITraitCollection(userInterfaceStyle: style),
+                                                    UITraitCollection(userInterfaceLevel: .elevated)])
+        return Color(uiColor: UIColor.systemBackground.resolvedColor(with: traits))
     }
 }
 

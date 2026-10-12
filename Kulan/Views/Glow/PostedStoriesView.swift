@@ -346,7 +346,10 @@ struct PostedStoriesView: View {
                         .lineLimit(1)
                         .fixedSize()
                         .padding(.horizontal, 18)
-                        .padding(.vertical, 10)
+                        // ⛔ THE BIN'S HEIGHT (owner, 2026-10-12: "use the height the delete button
+                        // is using, don't touch width"). The bottom bar's glass button is 44pt tall;
+                        // 10pt of padding on a headline left the pill visibly shorter beside it.
+                        .frame(height: 44)
                         .liquidGlass(Capsule())
                     }
                     .sharedBackgroundVisibility(.hidden)
