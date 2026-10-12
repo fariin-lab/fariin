@@ -93,16 +93,33 @@ enum SearchFieldFill {
                 if let owned { apply(owned, to: f) }
             }
         }
+        // Editing begins and ends: the glass and the grey trade places (see `apply`).
+        field.addAction(UIAction { [weak field, weak owned] _ in
+            guard let field, let owned else { return }
+            apply(owned, to: field)
+        }, for: [.editingDidBegin, .editingDidEnd])
         objc_setAssociatedObject(field, &key, owned, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         apply(owned, to: field)
     }
 
     private static func apply(_ owned: Owned, to field: UISearchTextField) {
-        // The system's own background stays stood down, or its pop-time removal comes back.
-        if field.borderStyle != .none { field.borderStyle = .none }
+        // ⛔ WHILE SEARCHING, THE SYSTEM'S GLASS (owner, 2026-10-12, Stories, Calls and Chats: "when I
+        // tap search the liquid glass is missing, make it like the reference app"). The system
+        // background this stands down is, on iOS 26, the field's Liquid Glass. Our grey is only
+        // needed at REST, where the back swipe used to drop the system one; a field being typed in
+        // is never on a page being swiped away. So the system background comes back for the edit
+        // and our grey steps aside, and both go back the moment editing ends.
+        let searching = field.isEditing
+        if searching {
+            if field.borderStyle != .roundedRect { field.borderStyle = .roundedRect }
+        } else {
+            // The system's own background stays stood down at rest, or its pop-time removal comes back.
+            if field.borderStyle != .none { field.borderStyle = .none }
+        }
         if field.backgroundColor != nil { field.backgroundColor = nil }
         CATransaction.begin()
         CATransaction.setDisableActions(true)   // no implicit fade when the bar folds the field
+        owned.fill.isHidden = searching
         owned.fill.frame = field.layer.bounds
         owned.fill.cornerRadius = field.layer.bounds.height / 2
         owned.fill.backgroundColor = UIColor.tertiarySystemFill

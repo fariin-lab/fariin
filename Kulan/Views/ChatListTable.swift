@@ -1071,8 +1071,11 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         guard let item = searchHostItem(), let bar = item.searchController?.searchBar else { return }
         // The grey survives the back swipe — see `SearchFieldFill`. Once per field.
         SearchFieldFill.own(bar.searchTextField)
-        let shouldShow = item.searchController?.isActive ?? false
-        if bar.showsCancelButton != shouldShow { bar.setShowsCancelButton(shouldShow, animated: false) }
+        // Only the leftover is cleared. Showing the button is the search controller's own job
+        // (`automaticallyShowsCancelButton`), so it draws in the system's iOS 26 style; forcing it
+        // on here drew the classic one (owner, 2026-10-12: make search like the reference app).
+        let active = item.searchController?.isActive ?? false
+        if !active, bar.showsCancelButton { bar.setShowsCancelButton(false, animated: false) }
     }
 
     // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and
