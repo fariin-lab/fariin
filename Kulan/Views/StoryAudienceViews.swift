@@ -34,7 +34,9 @@ struct StoryContact: Identifiable, Equatable {
             // the conversation's flag had not caught up, and somebody who blocked ME was listed
             // every time. Either way the picker offered a person the post would then strip, which is
             // the owner's report: a blocked user must not be selectable at all.
-            .filter { !$0.isGroup && !$0.isBlockedByMe(me) && !$0.isBlockedByMe($0.otherUid(me)) }
+            // And not an unanswered message request: the same test `resolveAudience` makes (2026-10-12).
+            .filter { !$0.isGroup && !MessageRequests.isUnansweredRequest($0)
+                && !$0.isBlockedByMe(me) && !$0.isBlockedByMe($0.otherUid(me)) }
             .compactMap {
                 let u = $0.otherUid(me)
                 return u.isEmpty ? nil : StoryContact(id: u, name: $0.displayName(me), photo: $0.displayPhoto(me))
@@ -53,7 +55,7 @@ struct StoryContact: Identifiable, Equatable {
         guard !uid.isEmpty else { return false }
         let me = AuthService.shared.uid ?? ""
         return ConversationsRepository.shared.conversations.contains { c in
-            !c.isGroup && c.otherUid(me) == uid
+            !c.isGroup && !MessageRequests.isUnansweredRequest(c) && c.otherUid(me) == uid
                 && !c.isBlockedByMe(me) && !c.isBlockedByMe(uid)
         }
     }

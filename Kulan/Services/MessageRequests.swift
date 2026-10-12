@@ -214,6 +214,15 @@ enum MessageRequests {
         return !c.lastMessageCipher.isEmpty
     }
 
+    /// A request-era 1:1 nobody has accepted yet, in either direction. ⛔ STORIES SKIP THESE — owner
+    /// 2026-10-12: someone whose message request he had NOT accepted had their story in his row.
+    /// Every story audience was built from every 1:1 chat, so one unanswered message put each side
+    /// in the other's tray. Narrower than `isFriend` on purpose: a pre-request chat whose last
+    /// message is gone (a disappearing timer) is still a friend's chat and keeps its stories.
+    static func isUnansweredRequest(_ c: Conversation) -> Bool {
+        !c.isGroup && !c.startedBy.isEmpty && !c.accepted
+    }
+
     // THERE IS DELIBERATELY NO "may I open a chat with them" CHECK HERE.
     //
     // One was written and then deleted unused, which is the useful part to record. The thread should

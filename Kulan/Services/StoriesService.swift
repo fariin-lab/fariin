@@ -1182,6 +1182,8 @@ final class StoriesService {
                     // Never a demo chat (2026-09-24 audit): with "Demo chats" on, a post pinned
                     // "demo-hooyo" and the rest into the immutable `recipientUids`.
                     guard !c.isGroup, !DemoMode.isDemoConversation(c.id) else { return false }
+                    // Not an unanswered message request, in either direction (owner 2026-10-12).
+                    guard !MessageRequests.isUnansweredRequest(c) else { return false }
                     let them = c.otherUid(me)
                     return !c.isBlockedByMe(me) && !c.isBlockedByMe(them) && !them.isEmpty
                 }
@@ -3059,6 +3061,11 @@ final class StoriesRepository {
         // 2026-09-26 block rebuild: and everybody on my account list, chat or no chat.
         let blockedAuthors = Set(convs.filter { $0.isBlockedByMe(me) }.map { $0.otherUid(me) })
             .union(BlockList.snapshot.entries.keys)
+            // ⛔ AND ANYONE WHOSE CHAT WITH ME IS STILL AN UNANSWERED REQUEST (owner 2026-10-12). The
+            // poster now leaves them out (`resolveAudience`), but stories already posted, and posts
+            // from older builds, still name me in `recipientUids`. Someone with no chat at all is not
+            // touched here (a glow reaches people who never chatted).
+            .union(convs.filter { MessageRequests.isUnansweredRequest($0) }.map { $0.otherUid(me) })
 
         var myGroup: StoryGroup?
         var groups: [StoryGroup] = []
