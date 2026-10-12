@@ -74,9 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD (878): PHOTO REPOST TAP TO FULL SCREEN.
-            Tapping a photo repost card now rebuilds the picture when it switches between the card and the original full screen. In 877 the tap gave the haptic but the picture did not change.
-            PLEASE TEST: repost a photo, tap the card, tap again. Everything from 877 below is in this build too.
+            THIS BUILD: FOUR STORY FIXES ON TOP OF 877.
+            After an upload finishes, pulling your story down and letting go flies it back into your My Story card. In 877 the pull still aimed at the old Uploading card, so the story faded out instead.
+            The share sheet on a story is Apple's sheet grey in dark mode, not pure black. Light mode stays white.
+            Posted Stories: the "Selected" pill is the same height as the delete button.
+            The + in the story editor opens your last folder straight away, with no Recents showing first.
+            Tapping a photo repost card rebuilds the picture when it switches between the card and full screen (877 gave the haptic but the picture did not change).
+            PLEASE TEST: open your story while it uploads, wait for 0 Views, pull down and let go; Share on a story in dark mode; select stories in Posted Stories; pick from a folder, then tap +; repost a photo and tap the card.
 
             EARLIER (877): EIGHT STORY REPORTS.
             Video repost editor: the author's face and name and the rounded frame are drawn by UIKit now, and a clip whose picture froze while the sound played is woken up. Photo repost: the card no longer carries its own background, so pinching it smaller shows one gradient, not a second box, and zoom in and out work. The uploading card for a video repost wears the card shape and chip from the start. After the upload finishes, pulling the story down flies it back into My Story. Story to profile to the chat button opens a real chat. The story's share sheet is white in light mode and dark in dark mode. Posted Stories select bar: no Share button, the count is a pill, no blur. The + in the editor reopens the folder your last picture came from.
