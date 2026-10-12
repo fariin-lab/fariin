@@ -433,7 +433,12 @@ struct StoryEditorView: View {
     @State private var photoOffset: CGSize = .zero
     // Real device safe-area top from the window (the editor's GeometryReader under-reports it because the
     // status bar is hidden). Used to place the close button 12pt below the Dynamic Island / notch.
-    private var windowSafeTop: CGFloat {
+    // Read ONCE when the editor is made, never from `body`: reading the window's live inset during
+    // layout fed the editor's own layout back into itself (AttributeGraph cycle), and SwiftUI then
+    // stopped rebuilding the canvas, so the repost card frame, chip and card/full tap never showed.
+    // The simulator render test isolated it to this padding (run 38256875620, skip "pad").
+    @State private var windowSafeTop: CGFloat = StoryEditorView.readWindowSafeTop()
+    private static func readWindowSafeTop() -> CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }
             .first ?? 47
