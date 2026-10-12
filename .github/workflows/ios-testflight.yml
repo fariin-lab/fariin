@@ -74,7 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: FOUR STORY FIXES ON TOP OF 877.
+            THIS BUILD: SIX FIXES ON TOP OF 879.
+            Messaging someone from a story's profile creates the chat properly first: the first message sends, and the name shows instead of "User". An existing chat that says "User" gets the name when you open it from the profile.
+            Photo groups: the download button and the dot menu offer Save All and Save This.
+            A posted photo repost keeps its blurred background instead of white.
+            Call screen share: the full-screen button zooms the picture out of the card and back.
+            A loading story no longer shows a blurred band down the right side and along the bottom.
+            Search on Stories, Calls and Chats shows Apple's liquid glass while you type.
+            STILL OPEN: tapping a photo repost card to go full screen. Tell me if the phone buzzes when you tap it.
+            PLEASE TEST: message a stranger from a story's profile; save an album; repost a photo and post it; expand a shared screen in a call; open a story on a slow connection; tap search on each tab.
+
+            EARLIER (879): FOUR STORY FIXES ON TOP OF 877.
             After an upload finishes, pulling your story down and letting go flies it back into your My Story card. In 877 the pull still aimed at the old Uploading card, so the story faded out instead.
             The share sheet on a story is Apple's sheet grey in dark mode, not pure black. Light mode stays white.
             Posted Stories: the "Selected" pill is the same height as the delete button.
