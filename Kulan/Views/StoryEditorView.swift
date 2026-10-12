@@ -4166,7 +4166,7 @@ struct StoryEditorView: View {
         // ground and the editor paints `repostCanvas` behind it; the card is 9:16, so it "fills" and
         // this path posted it bare, ground and all missing. The composition below bakes the ground.
         if !isRepostPhotoCard && drawing.bounds.isEmpty && overlays.isEmpty && stickers.isEmpty && !zoomed && imageFillsCanvas(size) {
-            return StoryPhoto.encode(base)
+            return StoryPhoto.encode(base, quality: repostOf != nil ? 0.93 : StoryPhoto.quality)
         }
         // BAKED AT THE CARD'S OWN SIZE, which is the space the pen drew in and the text overlays are
         // positioned in, so what he framed is byte-for-byte what lands. On every full-size phone the
@@ -4284,7 +4284,8 @@ struct StoryEditorView: View {
         // Post was tapped, which is a stutter on the button and the dismiss. The render above has
         // to stay on main; the encode does not.
         if let img = r.uiImage {
-            return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(img) }.value
+            let q: CGFloat = repostOf != nil ? 0.93 : StoryPhoto.quality
+            return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(img, quality: q) }.value
         }
         // A card that could not be drawn falls back to a card drawn now by the plain renderer,
         // never to the bare original: that would post full screen still marked a card, with no
@@ -4292,7 +4293,8 @@ struct StoryEditorView: View {
         let fallback = repostCardBake
             ? RepostCard.render(base, name: repostOf?.authorName ?? "", avatar: repostAvatar)
             : base
-        return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(fallback) }.value
+        let fq: CGFloat = repostOf != nil ? 0.93 : StoryPhoto.quality
+        return await Task.detached(priority: .userInitiated) { StoryPhoto.encode(fallback, quality: fq) }.value
     }
 
     // `flattenBackdrop` lived here: the photo aspect-filled into an eighth-size canvas and darkened

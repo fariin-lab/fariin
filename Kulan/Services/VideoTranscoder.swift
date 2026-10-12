@@ -70,7 +70,8 @@ enum VideoTranscoder {
                         canvasAspect: CGFloat? = nil, contentScale: CGFloat = 1,
                         backdrop: UIImage? = nil, storyBackdrop: Bool = false,
                         brightness: Double = 0,
-                        holeCorner: CGFloat = 0) async -> Prepared? {
+                        holeCorner: CGFloat = 0,
+                        bytesPerSecond rate: Double? = nil) async -> Prepared? {
         // ⛔ BRIGHTNESS IS A PRE-PASS, AND IT HAS TO BE (owner, 2026-08-20 — the trim page's Adjust
         // tab). It cannot ride the composition the export already uses: `burnIn` composites with
         // LAYER INSTRUCTIONS and a Core Animation tool, which has nowhere to hang a Core Image
@@ -195,7 +196,9 @@ enum VideoTranscoder {
         // The ceiling is still absolute: Storage refuses anything over it, so the clamp is what keeps
         // a very long clip sendable at all. The 2 MB margin covers AVFoundation overshooting slightly
         // and the few bytes encryption adds.
-        let bytesPerSecond: Double = hd ? 500_000 : 250_000        // ≈ 4 Mbps / 2 Mbps, audio included
+        // `rate` overrides both caps for a caller that must not lose a generation of quality: a repost
+        // re-encodes media that was already compressed once (reference app: 3.7-5.8 Mbps for stories).
+        let bytesPerSecond: Double = rate ?? (hd ? 500_000 : 250_000)        // ≈ 4 Mbps / 2 Mbps, audio included
         let ceiling = Int64(Limits.videoMessageBytes - 2 * 1024 * 1024)
         let wanted = Int64(max(1, duration) * bytesPerSecond)
         session.fileLengthLimit = min(ceiling, wanted)
@@ -247,7 +250,7 @@ enum VideoTranscoder {
         // as it must, so a clip already under its target is untouched. Sits AFTER the timeRange
         // block because `duration` is only final once the slice and the cap have had their say.
         session.fileLengthLimit = min(session.fileLengthLimit,
-                                      max(Int64(duration * 400_000), 2 * 1024 * 1024))
+                                      max(Int64(duration * (rate ?? 400_000)), 2 * 1024 * 1024))
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
         // ⚠️ THE POSTER IS A FRAME OF THE FILE THAT WAS JUST WRITTEN, NOT OF THE SOURCE, whenever

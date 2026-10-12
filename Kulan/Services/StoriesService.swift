@@ -593,10 +593,12 @@ enum StoryPhoto {
     static let widthLadder: [CGFloat] = [1080, 900, 720, 540]
 
     /// The one encode. Returns the first rung that fits the budget, or the smallest if none do.
-    static func encode(_ image: UIImage) -> Data {
+    /// `q`: a repost card asks for more (0.93): its picture was already a JPEG once, and a second
+    /// pass at 0.85 is the visible loss he reported (2026-10-12). Same budget and ladder either way.
+    static func encode(_ image: UIImage, quality q: CGFloat = quality) -> Data {
         var last = Data()
         for w in widthLadder {
-            guard let d = fit(image, toWidth: w).jpegData(compressionQuality: quality) else { continue }
+            guard let d = fit(image, toWidth: w).jpegData(compressionQuality: q) else { continue }
             last = d
             if d.count <= budget { return d }
         }
@@ -1737,14 +1739,29 @@ final class StoriesService {
         // `storyBackdrop`: a square/landscape clip gets a gradient canvas BAKED into the
         // file, so the posted story looks like the editor everywhere. Costs those clips the fast
         // copy path (they re-encode); 9:16 clips are untouched. See `VideoTranscoder.prepare`.
-        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, range: range,
+        // ⛔ A REPOST KEEPS ITS QUALITY (owner, 2026-10-12: "reposted video and images lose quality";
+        // the reference app re-exports a modified repost at 720x1280 and 3.7-5.8 Mbps). A repost
+        // re-encodes a clip that was already compressed once, so it renders at full 1080x1920 and
+        // may use ~6 Mbps; ordinary stories keep their sizes. An unedited full-screen repost that
+        // already fits is still copied, not re-encoded (the passthrough path).
+        let repostQuality = repostOf != nil
+        // Bounded by the 25 MB story upload cap in storage.rules: ~6 Mbps, or whatever keeps the
+        // segment under ~23 MB, whichever is lower.
+        var repostRate: Double? = nil
+        if repostQuality {
+            let seconds: Double = if let range { range.duration.seconds }
+                else { ((try? await AVURLAsset(url: videoURL).load(.duration))?.seconds) ?? Double(Limits.storyVideoSeconds) }
+            repostRate = min(750_000, 23_000_000 / max(1, min(seconds, Double(Limits.storyVideoSeconds))))
+        }
+        guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, hd: repostQuality, range: range,
                                                            overlay: burn?.overlay, cropRect: burn?.cropRect,
                                                            canvasAspect: burn?.canvasAspect,
                                                            contentScale: burn?.contentScale ?? 1,
                                                            backdrop: burn?.backdrop,
                                                            storyBackdrop: true,
                                                            brightness: burn?.brightness ?? 0,
-                                                           holeCorner: burn?.holeCorner ?? 0) else {
+                                                           holeCorner: burn?.holeCorner ?? 0,
+                                                           bytesPerSecond: repostRate) else {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }
