@@ -370,6 +370,25 @@ struct StoryLibraryPicker: View {
     /// The removals waiting on that same notice, so taking something off and adding something else
     /// stays one move even when part of the batch would not open.
     @State private var resolvedRemoved: [String] = []
+    /// ⛔ THE + REOPENS THE FOLDER THE LAST PICK CAME FROM — owner, 2026-10-12: "I navigate to a
+    /// folder and pick an image; then the + next to the caption opens the library from the
+    /// beginning again. Make it reopen the same folder." Written at pick time (`pick`): the album
+    /// the picture was taken from, or nothing for a pick from the Photos tab. Read when the editors'
+    /// + opens this picker (`allowsMultiple`), once the albums have loaded. The create flow, where
+    /// the first tap raises the editor, is untouched.
+    @AppStorage("story.picker.lastAlbum") private var lastAlbumID = ""
+    @State private var reopenedAlbum = false
+
+    private func reopenLastAlbum() {
+        guard allowsMultiple, !reopenedAlbum, !lastAlbumID.isEmpty,
+              let album = (store.pinned + store.albums).first(where: { $0.id == lastAlbumID }) else { return }
+        reopenedAlbum = true
+        tab = 1
+        // Straight into the folder, not a push animation on a sheet that has just appeared.
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { openAlbum = album }
+    }
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -511,6 +530,9 @@ struct StoryLibraryPicker: View {
             // race it through PhotoKit for the tab nobody is looking at; `load()` chains it once the
             // grid has its list. See both.
             .task { store.load(); seedFromPost() }
+            // The albums arrive after the grid (`load` chains `loadAlbums`); the + lands in the last
+            // folder the moment they are here.
+            .onChange(of: store.pinned.count + store.albums.count) { _, _ in reopenLastAlbum() }
         }
         // ALWAYS DARK, like every story surface (owner's standing rule). On the picker itself so
         // every presentation — the camera's library button and both editors' + — is dark without
@@ -920,6 +942,8 @@ struct StoryLibraryPicker: View {
     /// the menu cannot drift from the grid: the five-item ceiling, the ten-minute video refusal and
     /// the multi-select tick all live here and are answered the same way whichever door was used.
     private func pick(_ asset: PHAsset) {
+        // Where this pick came from, for the next + to reopen — see `reopenLastAlbum`.
+        lastAlbumID = openAlbum?.id ?? ""
         // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
         // the sheet does not move until Add.
         if allowsMultiple { toggle(asset); return }
