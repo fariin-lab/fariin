@@ -113,6 +113,9 @@ final class StoryItemVideoView: UIView {
     private var rateObservation: NSKeyValueObservation?
     private var bufferObservation: NSKeyValueObservation?
     private var reasonObservation: NSKeyValueObservation?
+    /// `startIfBuffered` has called `playImmediately` for the current wait; cleared on `.playing` and
+    /// with the player. Without it the call re-entered itself (build 895 crash).
+    private var kickedThisWait = false
     private var timeObserver: Any?
     private var endToken: NSObjectProtocol?
 
@@ -469,10 +472,11 @@ final class StoryItemVideoView: UIView {
 
         // The waiting REASON changes without `timeControlStatus` changing (evaluating → minimize
         // stalls), so it is watched on its own: see `startIfBuffered`.
+        // ⚠️ ALWAYS A HOP, NEVER INLINE — build 895 crash (stack overflow, iOS 27): `playImmediately`
+        // changes this property SYNCHRONOUSLY, so an inline call re-entered `startIfBuffered`, which
+        // called `playImmediately` again, until the stack ran out. See also `kickedThisWait`.
         reasonObservation = p.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] _, _ in
-            guard let self else { return }
-            if Thread.isMainThread { self.startIfBuffered() }
-            else { DispatchQueue.main.async { self.startIfBuffered() } }
+            DispatchQueue.main.async { self?.startIfBuffered() }
         }
 
         // Every new run of buffered bytes is a chance to start: see `startIfBuffered`.
@@ -530,6 +534,7 @@ final class StoryItemVideoView: UIView {
         switch s {
         case .playing:
             didBeginPlayback = true
+            kickedThisWait = false   // a later stall may be kicked once again
             setBuffering(false)
         case .waitingToPlayAtSpecifiedRate:
             // ⚠️ INITIAL BUFFERING IS NOT A STALL. The reference app counts only
@@ -563,7 +568,7 @@ final class StoryItemVideoView: UIView {
     /// until more live bytes happened to land. Any waiting reason but "no item" counts now, and
     /// ready, the reason and the buffer all ask.
     private func startIfBuffered() {
-        guard mode == .play, window != nil, let p = player,
+        guard !kickedThisWait, mode == .play, window != nil, let p = player,
               p.timeControlStatus == .waitingToPlayAtSpecifiedRate,
               p.reasonForWaitingToPlay != .noItemToPlay,
               let item = p.currentItem, item.status == .readyToPlay else { return }
@@ -574,7 +579,11 @@ final class StoryItemVideoView: UIView {
             return (start <= now + 0.05 && end > now) ? max(best, end - now) : best
         }
         let rest = knownDuration > 0 ? knownDuration - now : .infinity
-        if ahead >= min(0.5, max(0.05, rest)) { p.playImmediately(atRate: 1) }
+        if ahead >= min(0.5, max(0.05, rest)) {
+            // ONCE per wait: set before the call, because the call itself fires the observers.
+            kickedThisWait = true
+            p.playImmediately(atRate: 1)
+        }
     }
 
     private func setBuffering(_ on: Bool) {
@@ -982,6 +991,7 @@ final class StoryItemVideoView: UIView {
         rateObservation?.invalidate(); rateObservation = nil
         bufferObservation?.invalidate(); bufferObservation = nil
         reasonObservation?.invalidate(); reasonObservation = nil
+        kickedThisWait = false
         if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
         // ⚠️ BOUND TO A DIFFERENT NAME, and the shorthand is why. `if let endToken { … }` shadows the
