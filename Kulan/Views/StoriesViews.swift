@@ -2446,12 +2446,7 @@ struct StoryViewer: View {
         // into the item's tap area when the pages are fed, and the pages are only re-fed on an ID
         // change above. A profile landing a moment after the viewer opened changed `models` and
         // reached nobody. Re-feed the buckets that carry a repost when one lands.
-        .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in
-            for m in models where m.stories.contains(where: { $0.taps.contains { $0.person != nil } }) {
-                NotificationCenter.default.post(name: .storyItemsReconciled,
-                                                object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
-            }
-        }
+        .onChange(of: RepostAuthorPhotos.shared.urls) { _, _ in refeedRepostBuckets() }
         // ⚠️ THE STORY UNDERNEATH MOVES THE INSTANT THE ROW DOES, AND BOTH HALVES OF WHY THAT WAS
         // EVER A PROBLEM ARE NOW GONE.
         //
@@ -4847,6 +4842,16 @@ struct StoryViewer: View {
                                     repostStartSecond: startSecond),
                     onDismissed: { repostUp = false })
             }
+        }
+    }
+
+    /// Out of `body` on purpose: inline, the loop put the body past the type checker's time limit.
+    private func refeedRepostBuckets() {
+        for m in models {
+            let hasPerson = m.stories.contains { s in s.taps.contains { t in t.person != nil } }
+            guard hasPerson else { continue }
+            NotificationCenter.default.post(name: .storyItemsReconciled,
+                                            object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
         }
     }
 
