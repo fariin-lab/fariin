@@ -79,11 +79,13 @@ struct UserView: View {
         .foregroundColor(.white.opacity(0.85))
         .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
         if let tap = audience.tapNotification {
-            line
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    NotificationCenter.default.post(name: .init(tap), object: audience.tapObject)
-                }
+            // A button now, for the reference app's press (see `StoryPressStyle`); same action.
+            Button {
+                NotificationCenter.default.post(name: .init(tap), object: audience.tapObject)
+            } label: {
+                line.contentShape(Rectangle())
+            }
+            .buttonStyle(StoryPressStyle())
         } else {
             line
         }
@@ -175,7 +177,9 @@ struct UserView: View {
         // avatar-to-name gap on the very next line, and he asked for this one gap only — moving the
         // constant would have pulled the name in against the picture as a side effect.
         HStack(spacing: 10) {
-            // Tappable header block (avatar 38pt + name 14pt + timestamp 12pt) → profile.
+            // Tappable header block (avatar 38pt + name 14pt + timestamp 12pt) → profile. A button
+            // with the reference app's press (`StoryPressStyle`); the repost line inside is its own.
+            Button { onProfile?() } label: {
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
                 VStack(alignment: .leading, spacing: 2) {
@@ -223,7 +227,8 @@ struct UserView: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture { onProfile?() }
+            }
+            .buttonStyle(StoryPressStyle())
 
             Spacer()
 
