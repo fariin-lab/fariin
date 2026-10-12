@@ -76,7 +76,8 @@ jobs:
           TF_CHANGELOG: |
             THIS BUILD: VIDEO STORIES START WITHOUT THE SMALL WAIT.
             A video story whose opening is already downloaded now starts as soon as its first frames are ready, instead of pausing a moment first.
-            PLEASE TEST: someone's stories with a photo then videos; tap Next quickly.
+            The repost bubble (tap the middle of a repost) shows the person's real photo, not a letter.
+            PLEASE TEST: someone's stories with a photo then videos; tap Next quickly; tap the middle of a repost.
 
             EARLIER: CRASH FIX.
             Build 895 could crash while watching video stories. Fixed; videos still start at once.
