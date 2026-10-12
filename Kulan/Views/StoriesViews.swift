@@ -1677,7 +1677,12 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
-            || repostUp || shareURL != nil
+            || repostUp || repostLoading || shareURL != nil
+        // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
+        // keeps playing, I can hear it"). The story was held only once the composer was up, but the
+        // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
+        // seconds nothing paused it. Held from the tap now; the success path flips loading off and
+        // `repostUp` on in one update, so the hold never lapses in between.
     }
 
     init(group: StoryGroup, startStoryId: String? = nil, ownSwipeDismiss: Bool = false,
