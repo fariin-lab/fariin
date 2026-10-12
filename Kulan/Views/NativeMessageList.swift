@@ -1014,6 +1014,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.alpha = 0   // invisible until the first render is final â€” never shows a mid-measure frame
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
+        // ⛔ NO SYSTEM SCROLL-TO-TOP — owner 2026-10-12, with a recording: a tap on the empty strip
+        // between the header and the pinned bar (or the top of the messages) flew the chat to its
+        // very first message. That is UIKit's scroll-to-top, which this list never switched off and
+        // which the bar sends to its content scroll view. The reference app turns it off on its
+        // list (`scrollsToTop = false`) and its header swallows that strip; a tap there does nothing.
+        collectionView.scrollsToTop = false
         // `.always`: UIKit folds the safe area in on the correct sides now that nothing is mirrored.
         // The nav bar lands in adjustedContentInset.top and the home indicator in .bottom. NOT the
         // keyboard: the SwiftUI side ignores the keyboard region for this list (see `nativeList` in
