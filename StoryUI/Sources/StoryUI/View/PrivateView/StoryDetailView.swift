@@ -2678,6 +2678,12 @@ struct VisitLinkBubble: View {
             .padding(.leading, person == nil ? 18 : 10)
             .padding(.trailing, 18)
             .frame(height: Self.rowH)
+            // The tail lives OUTSIDE the row, so the shape is drawn into a taller box and the label
+            // keeps the whole 50pt to itself. ⛔ THE PADDING COMES BEFORE THE BACKGROUND (owner,
+            // 2026-10-12: "the avatar and name are not centred, they touch the bottom"). After it,
+            // the shape got only the 50pt row and drew its body 9pt shorter than the row the face
+            // and name are centred in, so they sat low against the body's edge.
+            .padding(tailDown ? .bottom : .top, Self.tailH)
             .background(
                 BubbleShape(tailDown: tailDown, radius: Self.radius,
                             tailW: Self.tailW, tailH: Self.tailH)
@@ -2685,9 +2691,6 @@ struct VisitLinkBubble: View {
                     .environment(\.colorScheme, .dark)
                     .shadow(color: .black.opacity(0.2), radius: 10, y: 5)
             )
-            // The tail lives OUTSIDE the row, so the shape is drawn into a taller box and the label
-            // keeps the whole 50pt to itself.
-            .padding(tailDown ? .bottom : .top, Self.tailH)
         }
         .buttonStyle(.plain)
     }

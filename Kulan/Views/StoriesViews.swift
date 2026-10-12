@@ -4814,9 +4814,15 @@ struct StoryViewer: View {
     /// The picture for a uid this viewer may not have a group for: the groups on screen first, then
     /// everything the repository can see. Nil when nobody knows, which draws the letter circle.
     private func authorPhoto(_ uid: String) -> String? {
-        if let g = groups.first(where: { $0.authorUid == uid }) { return g.photoUrl }
+        if let g = groups.first(where: { $0.authorUid == uid }), let p = g.photoUrl, !p.isEmpty { return p }
         let repo = StoriesRepository.shared
-        return (repo.others + [repo.mine].compactMap { $0 }).first(where: { $0.authorUid == uid })?.photoUrl
+        if let p = (repo.others + [repo.mine].compactMap { $0 }).first(where: { $0.authorUid == uid })?.photoUrl,
+           !p.isEmpty { return p }
+        // ⛔ AND THEN THEIR PROFILE (owner, 2026-10-12: the repost bubble showed the letter "A", not
+        // the author's picture). The original author of a repost usually has no story live in this
+        // viewer or the row, so both lookups above came back empty. The profile is fetched once and
+        // the bubble redraws when it lands.
+        return RepostAuthorPhotos.shared.url(uid)
     }
 
     /// ⛔ THE CREDIT LINE OPENS THE ORIGINAL STORY — 2026-09-24. `storyId` is the REPOST whose line
@@ -6005,6 +6011,32 @@ struct StoryImagePayload: Identifiable {
 }
 
 /// A story's link on its way to the system share sheet.
+/// Profile pictures of repost authors who have no story in view, fetched once per person. Observed,
+/// so the repost bubble that drew the letter circle redraws with the face when it arrives.
+@Observable final class RepostAuthorPhotos: @unchecked Sendable {
+    static let shared = RepostAuthorPhotos()
+    /// Written on the main actor only (see `url`).
+    private(set) var urls: [String: String] = [:]
+    @ObservationIgnored private var asked: Set<String> = []
+    @ObservationIgnored private let lock = NSLock()
+
+    func url(_ uid: String) -> String? {
+        if let u = urls[uid] { return u }
+        guard !uid.isEmpty else { return nil }
+        let first: Bool = lock.withLock { asked.insert(uid).inserted }
+        guard first else { return nil }
+        Task { @MainActor in
+            if let p = await ProfileStore.shared.fetch(uid), let photo = p.photoUrl, !photo.isEmpty {
+                self.urls[uid] = photo
+            } else {
+                // A failed fetch may be asked again on the next look.
+                _ = self.lock.withLock { self.asked.remove(uid) }
+            }
+        }
+        return nil
+    }
+}
+
 struct StoryLinkPayload: Identifiable {
     let id = UUID()
     let url: URL
