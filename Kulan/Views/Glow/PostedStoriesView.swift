@@ -276,6 +276,12 @@ struct PostedStoriesView: View {
             .navigationBarTitleDisplayMode(.inline)
             // A pushed page is not a tab — see the note in `GlowNotificationsView`.
             .toolbar(.hidden, for: .tabBar)
+            // ⛔ NO BLUR UNDER THE SELECT BAR (owner, 2026-10-12, his screenshot with the band over
+            // the My Chats row circled: "remove the blur"). The bar's own ground and the soft edge
+            // the grid blurs into under it both go; the count pill and the bin sit straight on the
+            // page.
+            .toolbarBackground(.hidden, for: .bottomBar)
+            .scrollEdgeEffectStyle(.hidden, for: .bottom)
             .toolbar {
                 // ⛔ THE FILTER IS THE TITLE — his reference: "Posted stories ⌄", a menu hanging off
                 // the heading rather than an icon in the corner. That is better than my first pass
@@ -318,20 +324,18 @@ struct PostedStoriesView: View {
                 // His order is unchanged — Share, the count, Delete — and `Spacer()` between items
                 // is how a toolbar group is told to push them apart.
                 if isMe, editing {
+                    // ⛔ NO SHARE BUTTON (owner, 2026-10-12: "remove Share button completely"). A
+                    // blank item of the bin's width keeps the count in the middle of the screen.
                     ToolbarItem(placement: .bottomBar) {
-                        Button { shareSelected() } label: {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                        .disabled(selected.isEmpty || deleting)
+                        Color.clear.frame(width: 44, height: 44)
                     }
+                    .sharedBackgroundVisibility(.hidden)
                     ToolbarSpacer(.flexible, placement: .bottomBar)
-                    // ⛔ PLAIN TEXT, NOT A BUTTON (owner, 2026-10-11: "the selected count looks too
-                    // small, use Apple's size"). In one group with the two buttons, iOS 26 drew the
-                    // label in a round glass button of its own and squeezed it to "Se-lec…". Photos'
-                    // select bar is the model: the count as plain 17pt semibold text with no
-                    // background, at its full width, between the two round buttons.
-                    // The widest label still reserves the room (see the note it replaces), so the
-                    // buttons do not move as the count changes.
+                    // ⛔ THE COUNT AS A BUTTON-SHAPED PILL (owner, 2026-10-12: "selected count make
+                    // button"), on its OWN glass rather than the toolbar's: in one group with the
+                    // bin, iOS 26 squeezed the label to "Se-lec…" (his 2026-10-11 report). Its own
+                    // capsule at a fixed size cannot be squeezed, and the widest label still reserves
+                    // the room so the bin does not move as the count changes.
                     ToolbarItem(placement: .bottomBar) {
                         ZStack {
                             Text("Select Stories").hidden()
@@ -341,6 +345,9 @@ struct PostedStoriesView: View {
                         .font(.headline)
                         .lineLimit(1)
                         .fixedSize()
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .liquidGlass(Capsule())
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarSpacer(.flexible, placement: .bottomBar)
