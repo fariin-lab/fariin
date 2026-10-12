@@ -379,6 +379,15 @@ struct NoticeRow: Equatable {
     var tapTargetId: String?           // a pin notice jumps to the pinned message
     var onWallpaper: Bool
     var wallpaperBlur: WallpaperBlurState?
+    /// Answer buttons drawn under the notice, left to right (owner, 2026-10-12: a Restricted chat
+    /// request arrives with Reject and Accept). Empty on every other notice.
+    var actions: [NoticeAction] = []
+}
+
+/// One button under a notice. `id` is what the tap reports back to the thread.
+struct NoticeAction: Equatable {
+    var id: String
+    var title: String
 }
 
 /// A call-history row: disc, status, detail, and the bubble that hugs them.

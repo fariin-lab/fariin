@@ -168,6 +168,26 @@ struct ThreadView: View {
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
     @State private var showMyProfile = false     // my own username tapped in a message → my profile
     @State private var showRestrictAnswer = false   // their request to turn Restricted chat off
+    /// The two confirmations behind the request's Accept and Reject buttons (owner, 2026-10-12: the
+    /// reference app asks before either answer is sent).
+    @State private var confirmRestrictAccept = false
+    @State private var confirmRestrictReject = false
+
+    /// THE RESTRICTED CHAT REQUEST I CAN ANSWER NOW, by its notice's message id, or nil.
+    ///
+    /// Open (`pendingRestrictRequestBy`, which lapses after a day), asked by THEM, of ME (my switch
+    /// is the one on). The notice does not carry the request's id, so it is matched the way the
+    /// writes are ordered: the chat field first, the notice a moment later. So it is the newest
+    /// request notice from the asker that is not older than the request (5s for clock skew). Older
+    /// notices in the history are plain lines; the asker's own copy never has buttons.
+    private var liveRestrictRequestId: String? {
+        guard !isGroup, let c = conversation, let by = c.pendingRestrictRequestBy,
+              by != me, c.restrictedByMe(me) else { return nil }
+        let floor = c.restrictRequestAt?.addingTimeInterval(-5)
+        return repo.items.last { m in
+            m.isRestrictRequest && m.authorId == by && (floor.map { m.createdAt >= $0 } ?? true)
+        }?.id
+    }
     @State private var showEncryptionInfo = false   // empty-chat notice → the safety-number screen
     /// The requester's @username, fetched once for the message-request card. Empty until it lands,
     /// and the line simply is not drawn until then rather than showing a placeholder.
@@ -1251,6 +1271,22 @@ struct ThreadView: View {
             Button("Turn Off") { Task { await ChatService.answerUnrestrict(cid, accept: true) } }
             Button("Keep On") { Task { await ChatService.answerUnrestrict(cid, accept: false) } }
             Button("Cancel", role: .cancel) {}
+        }
+        // The request card's answers, each confirmed first (owner, 2026-10-12, his wording for
+        // Accept: "Enable Sharing / Are you sure you want to enable sharing? Cancel / Enable").
+        .alert("Enable Sharing", isPresented: $confirmRestrictAccept) {
+            Button("Cancel", role: .cancel) {}
+            Button("Enable") { Task { await ChatService.answerUnrestrict(cid, accept: true) } }
+                .keyboardShortcut(.defaultAction)
+        } message: {
+            Text("Are you sure you want to enable sharing? This turns off Restricted Chat.")
+        }
+        .alert("Keep Restricted Chat", isPresented: $confirmRestrictReject) {
+            Button("Cancel", role: .cancel) {}
+            Button("Keep On") { Task { await ChatService.answerUnrestrict(cid, accept: false) } }
+                .keyboardShortcut(.defaultAction)
+        } message: {
+            Text("Are you sure you want to keep Restricted Chat on?")
         }
         // My own username or profile card tapped in a message (see `openProfileHandle`).
         .navigationDestination(isPresented: $showMyProfile) {
@@ -3148,7 +3184,9 @@ struct ThreadView: View {
         let nameTok = isGroup ? "\(conversation?.names.hashValue ?? 0)" : "-"
         // owner audit 2026-10-06 chat #45: grouping and date facts from the one-pass cache.
         let geo = rowGeometry
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)"   // 2026-09-24 feature-audit: edit clock
+        // The open Restricted chat request grows Reject / Accept buttons, a HEIGHT change on one row.
+        let liveRequest = liveRestrictRequestId
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(deliveredCutoff)|\(dayTick)|\(nameTok)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(editPendingIds.hashValue)|\(liveRequest ?? "-")"   // 2026-09-24 feature-audit: edit clock
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -3227,7 +3265,7 @@ struct ThreadView: View {
                 // recompute at all; this token is what makes the right row differ.)
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(delivered)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(editPendingIds.contains(m.id))|\(m.expiresAt?.timeIntervalSince1970 ?? 0)|\(nameTok)|\(m.isRestrictRequest && m.id == liveRequest)"   // 2026-09-24 feature-audit; expiresAt 2026-09-28 (the timer ring appeared only on rows a reaction happened to redraw)
             }
             sigCache.key = key
             sigCache.base = out
@@ -3341,6 +3379,8 @@ struct ThreadView: View {
             // owner audit 2026-10-06 chat #73: the day ("Today" becomes "Yesterday" at midnight, time
             // zone, 12/24-hour) and the group's sender names are read while building a row as well.
             "\(dayTick)", "\(conversation?.names.hashValue ?? 0)",
+            // The Restricted chat request I can answer: its notice carries Reject / Accept.
+            liveRestrictRequestId ?? "-",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
 
@@ -3371,7 +3411,8 @@ struct ThreadView: View {
                 !storiesRepo.didLoad || storiesRepo.hasLive(storyId: storyId, author: author)
             },
             editPendingIds: editPendingIds,   // 2026-09-24 feature-audit
-            timer: timerSeconds > 0 ? (timerSince, timerSeconds) : nil)
+            timer: timerSeconds > 0 ? (timerSince, timerSeconds) : nil,
+            liveRestrictRequestId: liveRestrictRequestId)
 
         var out: [String: MessageRowModel] = [:]
         // owner audit 2026-10-06 chat #45: one pass for grouping and dates, shared with the signatures.
@@ -3978,6 +4019,17 @@ struct ThreadView: View {
                     || (m.callOutcome == "ongoing" && age < 4 * 3600)
                 guard !live else { return }
                 pendingCallBack = m.callVideo ? .video : .voice
+            },
+            onTapNoticeAction: { _, action in
+                pendingKeyboardDismiss = false
+                // Asked again at the tap: the request may have been answered or lapsed since the
+                // row was drawn.
+                guard liveRestrictRequestId != nil else {
+                    showJumpToast("This request is no longer open")
+                    return
+                }
+                if action == MessageRowModelBuilder.restrictAccept { confirmRestrictAccept = true }
+                if action == MessageRowModelBuilder.restrictReject { confirmRestrictReject = true }
             },
             onTapPinNotice: { id in
                 pendingKeyboardDismiss = false

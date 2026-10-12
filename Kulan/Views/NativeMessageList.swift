@@ -93,6 +93,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
+    /// A button under a notice: (message id, action id). See `NoticeRow.actions`.
+    var onTapNoticeAction: (String, String) -> Void = { _, _ in }
     var onTapPinNotice: (String) -> Void = { _ in }
     var uikitMenu: (String) -> UIMenu? = { _ in nil }        // long-press menu for UIKit-routed rows
     var onUikitDoubleTap: (String) -> Void = { _ in }        // double-tap quick reaction (heart)
@@ -291,6 +293,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapSender = onTapSender
         vc.onTapCallRow = onTapCallRow
         vc.onTapPinNotice = onTapPinNotice
+        vc.onTapNoticeAction = onTapNoticeAction
         vc.customMenuActions = customMenuActions
         vc.customReactConfig = customReactConfig
         vc.onCustomReact = onCustomReact
@@ -783,6 +786,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
     var onTapPinNotice: (String) -> Void = { _ in }
+    var onTapNoticeAction: (String, String) -> Void = { _, _ in }
     // CUSTOM LONG-PRESS MENU (experiment — CMContextMenu.swift). Fed from SwiftUI like every callback.
     var customMenuActions: (String) -> [CMAction] = { _ in [] }
     var customReactConfig: (String) -> (emojis: [String], selected: String?)? = { _ in nil }
@@ -803,6 +807,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var bubbleTapStamp: UITapGestureRecognizer!
     /// When a call card last opened the lobby (`rowCellDidTapCallJoin`'s debounce).
     private var lastCallJoinAt: CFTimeInterval = 0
+    private var lastNoticeActionAt: CFTimeInterval = 0
 
     @objc private func stampBubbleTap(_ g: UITapGestureRecognizer) {
         guard g.state == .ended else { return }
@@ -6395,6 +6400,14 @@ extension MessageListController: MessageRowCellDelegate {
 
     func rowCellDidTapPinNotice(_ cell: MessageRowCell, jumpTo id: String) {
         onTapPinNotice(id)
+    }
+
+    func rowCell(_ cell: MessageRowCell, didTapNoticeAction id: String) {
+        // One answer per second, as Join: a double tap must not answer twice.
+        let now = CACurrentMediaTime()
+        guard let row = cell.rowId, now - lastNoticeActionAt > 1.0 else { return }
+        lastNoticeActionAt = now
+        onTapNoticeAction(row, id)
     }
 }
 

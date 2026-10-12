@@ -46,6 +46,8 @@ struct MessageRowContext {
     /// The disappearing timer in force now, and since when (the notice that set it, or nil when that
     /// notice is outside the loaded window). See `provisionalExpiry`.
     var timer: (since: Date?, seconds: Int)? = nil
+    /// The Restricted chat request notice I can answer right now, or nil. See `ThreadView`.
+    var liveRestrictRequestId: String? = nil
 }
 
 /// ⚠️ `@MainActor` because it genuinely is main-actor work, not to silence a warning: it reads
@@ -700,6 +702,9 @@ enum MessageRowModelBuilder {
 
     /// The notice tap target that means "the Restricted chat request", not a message to jump to.
     static let restrictRequestTarget = "restrict-request"
+    /// The two answers under an open Restricted chat request (`NoticeRow.actions` ids).
+    static let restrictReject = "restrict-reject"
+    static let restrictAccept = "restrict-accept"
 
     /// The four sentences `ChatService` writes about Restricted chat, minus the writer's name:
     /// "turned on Restricted chat." etc. Nil for any other notice.
@@ -728,9 +733,16 @@ enum MessageRowModelBuilder {
                 let who = m.authorId == ctx.me ? "You" : ctx.nameFor(m.authorId)
                 // His wording: "Restricted Chat", as the profile row names it.
                 let words = action.replacingOccurrences(of: "Restricted chat", with: "Restricted Chat")
+                // ⛔ THE OPEN REQUEST CARRIES ITS ANSWER (owner, 2026-10-12): Reject and Accept under
+                // the request, for the person it was asked of, while it is open. Only the one notice
+                // ThreadView names live gets them; older requests and the asker's own copy are a
+                // plain line, and the buttons go the moment the request is answered or lapses.
+                let live = m.isRestrictRequest && m.id == ctx.liveRestrictRequestId
                 return NoticeRow(text: " \(who) \(words)", symbol: "ic_restricted_chat", style: .pill,
                                  tapTargetId: m.isRestrictRequest ? Self.restrictRequestTarget : nil,
-                                 onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
+                                 onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur,
+                                 actions: live ? [NoticeAction(id: Self.restrictReject, title: "Reject"),
+                                                  NoticeAction(id: Self.restrictAccept, title: "Accept")] : [])
             }
             // A request to turn Restricted chat off answers from its own notice, as in the
             // reference app (`ThreadView` reads this target and offers Turn Off / Keep On).

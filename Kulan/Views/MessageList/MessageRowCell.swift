@@ -36,6 +36,8 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCell(_ cell: MessageRowCell, didTapSender uid: String)
     func rowCellDidTapCallRow(_ cell: MessageRowCell)
     func rowCellDidTapPinNotice(_ cell: MessageRowCell, jumpTo id: String)
+    /// A button under a notice (`NoticeRow.actions`), by its action id.
+    func rowCell(_ cell: MessageRowCell, didTapNoticeAction id: String)
 }
 
 final class MessageRowCell: UICollectionViewCell {
@@ -388,6 +390,11 @@ final class MessageRowCell: UICollectionViewCell {
             if rowView.hitsCallBubble(p) { delegate?.rowCellDidTapCallRow(self) }
             return
         case .notice(let n):
+            // The buttons first: they are the answer, the pill above them is only the question.
+            if !n.actions.isEmpty, let action = rowView.noticeAction(at: p) {
+                delegate?.rowCell(self, didTapNoticeAction: action)
+                return
+            }
             if let target = n.tapTargetId, n.style == .pill {
                 delegate?.rowCellDidTapPinNotice(self, jumpTo: target)
             }

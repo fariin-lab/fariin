@@ -254,6 +254,15 @@ struct NoticePlan {
     var style: NoticeRow.Style
     var onWallpaper: Bool
     var wallpaperBlur: WallpaperBlurState?
+    /// The answer buttons under the notice, in ROW coordinates like `capsule`. See `NoticeRow.actions`.
+    var buttons: [NoticeButtonPlan] = []
+}
+
+struct NoticeButtonPlan {
+    var id: String
+    var rect: CGRect                    // row coordinates
+    var text: CGRect                    // button coordinates
+    var attr: NSAttributedString
 }
 
 struct DividerPlan {
@@ -364,7 +373,10 @@ enum MessageRowLayout {
         case .notice(let n):
             var p = notice(n, width: width)
             p.capsule.origin.y += y + 6
-            contentHeight = p.capsule.height + 12             // .padding(.vertical, 6)
+            for i in p.buttons.indices { p.buttons[i].rect.origin.y += y + 6 }
+            // The buttons hang under the pill, so the row is as tall as the lowest of them.
+            let bottom = p.buttons.map(\.rect.maxY).max() ?? p.capsule.maxY
+            contentHeight = bottom - p.capsule.minY + 12      // .padding(.vertical, 6)
             body = .notice(p)
         case .call(let c):
             var p = call(c, originX: contentX, availableWidth: contentW, rowWidth: width)
@@ -2388,10 +2400,12 @@ enum MessageRowLayout {
             let capsuleW = size.width + hPad * 2
             let capsuleH = size.height + vPad * 2
             let rect = CGRect(x: (width - capsuleW) / 2, y: 0, width: capsuleW, height: capsuleH)
-            return NoticePlan(capsule: rect,
-                              text: CGRect(x: hPad, y: vPad, width: size.width, height: size.height),
-                              attr: attr, style: .pill,
-                              onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
+            var plan = NoticePlan(capsule: rect,
+                                  text: CGRect(x: hPad, y: vPad, width: size.width, height: size.height),
+                                  attr: attr, style: .pill,
+                                  onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
+            plan.buttons = noticeButtons(n.actions, under: rect, rowWidth: width)
+            return plan
         case .unsupported:
             let hPad: CGFloat = 14, vPad: CGFloat = 10
             let boxMax: CGFloat = 300
@@ -2404,6 +2418,31 @@ enum MessageRowLayout {
                               text: CGRect(x: hPad + 23, y: vPad, width: size.width, height: size.height),
                               attr: attr, style: .unsupported,
                               onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
+        }
+    }
+
+    /// A row of equal pill buttons centred under a notice: at least as wide as the notice, never
+    /// narrower than 240 for two of them, 8pt apart, in the notice's own font and pill shape.
+    private static func noticeButtons(_ actions: [NoticeAction], under pill: CGRect,
+                                      rowWidth: CGFloat) -> [NoticeButtonPlan] {
+        guard !actions.isEmpty else { return [] }
+        let gap: CGFloat = 8, height: CGFloat = 34
+        let font = UIFont.systemFont(ofSize: 15, weight: .semibold)
+        let maxW = rowWidth - BubbleMetrics.rowMargin * 2
+        let total = min(maxW, max(pill.width, 120 * CGFloat(actions.count) + gap * CGFloat(actions.count - 1)))
+        let each = (total - gap * CGFloat(actions.count - 1)) / CGFloat(actions.count)
+        var x = (rowWidth - total) / 2
+        let y = pill.maxY + 6
+        return actions.map { a in
+            let attr = NSAttributedString(string: a.title, attributes: [
+                .font: font, .foregroundColor: UIColor.label])
+            let s = BubbleText.size(attr, width: each - 16)
+            let plan = NoticeButtonPlan(id: a.id, rect: CGRect(x: x, y: y, width: each, height: height),
+                                        text: CGRect(x: (each - s.width) / 2, y: (height - s.height) / 2,
+                                                     width: s.width, height: s.height),
+                                        attr: attr)
+            x += each + gap
+            return plan
         }
     }
 

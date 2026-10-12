@@ -544,6 +544,7 @@ final class MessageRowView: UIView {
     private var dividerRight: UIView?
     private var dividerLabel: UILabel?
     private var noticeView: RowNoticePillView?
+    private var noticeButtonViews: [RowNoticePillView] = []
     private var callView: CallBubbleView?
     private var checkbox: SelectionCheckboxView?
     /// The disappearing-message icon, drawn over the footer. See `setExpiryTimer`.
@@ -632,6 +633,7 @@ final class MessageRowView: UIView {
             bubbleBox.isHidden = false
             noticeView?.isHidden = true
             callView?.isHidden = true
+            applyNoticeButtons(nil, dark: dark)
             applyBubble(b, model: m, dark: dark, cid: cid)
         case .notice(let n):
             bubbleBox.isHidden = true
@@ -643,9 +645,11 @@ final class MessageRowView: UIView {
             v.isHidden = false
             v.configure(n, dark: dark)
             v.frame = n.capsule
+            applyNoticeButtons(n, dark: dark)
         case .call(let c):
             bubbleBox.isHidden = true
             noticeView?.isHidden = true
+            applyNoticeButtons(nil, dark: dark)
             hideBubbleChrome()
             let v = callView ?? {
                 let v = CallBubbleView(); addSubview(v); callView = v; return v
@@ -1583,6 +1587,33 @@ final class MessageRowView: UIView {
     func hitsLocation(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, b.locationPlan != nil else { return false }
         return b.bubble.contains(point)
+    }
+
+    /// The answer buttons under a notice (Reject / Accept on a Restricted chat request). Each is
+    /// drawn by the same pill view as the notice itself, so it wears the notice's surface on every
+    /// wallpaper. Recycled cells hide the ones they no longer need.
+    private func applyNoticeButtons(_ n: NoticePlan?, dark: Bool) {
+        let buttons = n?.buttons ?? []
+        while noticeButtonViews.count < buttons.count {
+            let v = RowNoticePillView(); addSubview(v); noticeButtonViews.append(v)
+        }
+        for (i, v) in noticeButtonViews.enumerated() {
+            guard i < buttons.count, let n else { v.isHidden = true; continue }
+            let b = buttons[i]
+            v.isHidden = false
+            v.configure(NoticePlan(capsule: CGRect(origin: .zero, size: b.rect.size), text: b.text,
+                                   attr: b.attr, style: .pill,
+                                   onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur),
+                        dark: dark)
+            v.frame = b.rect
+        }
+    }
+
+    /// Which notice button a point is on, by its action id, or nil.
+    func noticeAction(at point: CGPoint) -> String? {
+        guard let p = plan, case .notice(let n) = p.body else { return nil }
+        // A little slop around each pill: they are short targets.
+        return n.buttons.first { $0.rect.insetBy(dx: -2, dy: -6).contains(point) }?.id
     }
 
     /// The contact card's "message" button, specifically. Tapping the card ELSEWHERE opens the
