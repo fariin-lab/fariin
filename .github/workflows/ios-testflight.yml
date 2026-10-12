@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CRASH FIX.
+            THIS BUILD: VIDEO STORIES START WITHOUT THE SMALL WAIT.
+            A video story whose opening is already downloaded now starts as soon as its first frames are ready, instead of pausing a moment first.
+            PLEASE TEST: someone's stories with a photo then videos; tap Next quickly.
+
+            EARLIER: CRASH FIX.
             Build 895 could crash while watching video stories. Fixed; videos still start at once.
             PLEASE TEST: watch video stories and tap Next quickly through them.
 
