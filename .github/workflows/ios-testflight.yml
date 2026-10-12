@@ -74,10 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: TWO STORY CHANGES.
+            THIS BUILD: REPOST EDITOR FIXES.
+            The repost editor no longer freezes after it opens: the name and face on a video repost card show straight away, and tapping a photo or video repost switches card / full screen on screen. A reposted video no longer plays by itself in the editor (that was the sound you heard, not the original story); the tap only switches card / full screen.
+            PLEASE TEST: repost a video story (no sound, name and face visible, tap card/full, post); repost a photo story (tap card/full, post); open and close the editor a few times; cancel; post on slow internet.
+
+            EARLIER: TWO STORY CHANGES.
             A repost cannot be reposted again; the original author's own stories still can be. Story videos are encoded once at the clip's own frame rate (720p HEVC, steady bitrate, normal colour).
-            STILL OPEN: the repost editor canvas not updating (card frame, name and face, the card/full tap). Narrowed to the editor's top buttons; the fix comes in the next build.
-            PLEASE TEST: try to repost a repost; post a video story and check it looks right.
 
             EARLIER: STORY AND REPOST AUDIT.
             Repost editor video reads a fresh frame every refresh (the "sound but frozen picture" fix). Stories give the sound back when closed so your music resumes. A share sheet, the repost editor or an upload holds the story so nothing else restarts it. Flicking a story back up no longer dips first; open/close animations keep time when the phone is busy.
