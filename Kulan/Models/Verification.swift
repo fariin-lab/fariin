@@ -101,6 +101,10 @@ struct Verification: Equatable, Hashable {
         case creator
 
         var id: String { rawValue }
+        /// ⛔ GOLD FOR COMPANIES — owner 2026-10-13 ("only companies like Facebook, Meta, Hormuud"):
+        /// a Business or Organization verification draws the gold seal; every other kind, our own
+        /// channel included, stays blue. Same seal, same size; only the colour says "company".
+        var isGold: Bool { self == .business || self == .organization }
 
         var label: String {
             switch self {
@@ -138,10 +142,6 @@ struct Verification: Equatable, Hashable {
         case revoked
 
         var id: String { rawValue }
-        /// ⛔ GOLD FOR COMPANIES — owner 2026-10-13 ("only companies like Facebook, Meta, Hormuud"):
-        /// a Business or Organization verification draws the gold seal; every other kind, our own
-        /// channel included, stays blue. Same seal, same size; only the colour says "company".
-        var isGold: Bool { self == .business || self == .organization }
         var label: String {
             switch self {
             case .active:    return "Verified"
