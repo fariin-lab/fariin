@@ -2920,7 +2920,7 @@ struct ThreadView: View {
                     inputFocused = true
                 },
                 onReactMore: { morePickerTarget = $0 },
-                onConfirmLink: { tappedLink = $0 },
+                onConfirmLink: { WebLink.open($0) },   // owner 2026-10-13: no "Open link?", straight in
                 onUserNotFound: { tappedUserNotFound = true },
                 isGroup: isGroup,
                 onTapReactions: { reactorsTarget = msg },
@@ -3698,7 +3698,9 @@ struct ThreadView: View {
         }
         if openStoryLink(url) { return }
         guard url.scheme == "kulan", url.host == "u" else {
-            tappedLink = url
+            // ⛔ STRAIGHT INTO THE BROWSER, NO "Open link?" — owner 2026-10-13: "when I click every
+            // link don't show the open menu, open the link directly using my browser".
+            WebLink.open(url)
             return
         }
         openProfileHandle(url.lastPathComponent)
@@ -5516,6 +5518,18 @@ struct ThreadView: View {
         // card (its image under a local draft key), and the sealed copy travels with the message.
         // 2026-09-24 feature-audit: not on a send the rules would refuse for it (see `linkCardAllowed`).
         let draft = linkCardAllowed ? linkDraft : nil
+        // ⛔ SEND BEFORE THE CARD HAS LOADED STILL GETS THE CARD — owner 2026-10-13: a YouTube link
+        // pasted and sent straight away went out as a bare link, because only a card already on
+        // screen rode the send. Same conditions as the composer's fetch (cards allowed here, previews
+        // on, the reader did not close this card); `deliver` then waits a few seconds for it. The
+        // bubble appears at once either way; only the server write waits.
+        let lateCardURL: URL? = {
+            guard draft == nil, linkCardAllowed,
+                  UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true,
+                  let u = LinkPreviewService.firstURL(in: text),
+                  u.absoluteString != suppressedLinkUrl else { return nil }
+            return u
+        }()
         linkDetectTask?.cancel()
         linkDraft = nil
         linkLoadingUrl = nil
@@ -5539,6 +5553,8 @@ struct ThreadView: View {
         // "typing…" every 10s forever and the other side never saw it stop (my own regression).
         typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
         Task {
+            var draft = draft
+            if let lateCardURL { draft = await LinkPreviewService.draft(for: lateCardURL, within: 3) }
             await deliver(text: text, reply: reply, clientId: clientId, mentions: mentions, draft: draft,
                           tapTs: tapTs, turn: turn)
         }

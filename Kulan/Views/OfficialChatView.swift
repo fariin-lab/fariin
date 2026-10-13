@@ -535,7 +535,8 @@ struct OfficialChatView: View {
         case .link:
             // Same confirm a link inside a normal message gets. An official chat is exactly where
             // somebody stops reading addresses, so it does not get to skip the step.
-            if let url = URL(string: button.value) { pendingLink = url }
+            // Owner 2026-10-13: links open directly, no "Open this link?" step.
+            if let url = URL(string: button.value) { WebLink.open(url) }
         case .appStore:
             if let url = URL(string: OfficialConfig.shared.appStoreUrl) { openURL(url) }
         case .screen:

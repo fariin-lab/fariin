@@ -109,6 +109,22 @@ actor LinkPreviewService {
         return result
     }
 
+    /// `draft(for:)`, but given up on after `seconds`. For Send tapped while the card was still
+    /// loading (owner 2026-10-13: a YouTube link pasted and sent at once went out bare). The fetch is
+    /// shared with the composer's (same in-flight task), so this waits on it rather than starting over.
+    static func draft(for url: URL, within seconds: Double) async -> LinkDraft? {
+        await withTaskGroup(of: LinkDraft?.self) { group in
+            group.addTask { await shared.draft(for: url) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// One of OUR call links, either spelling: anything on call.fariin.com, or /call, /voice,
     /// /video on the main host. A host-and-path test only: the real router (`KulanApp.route`) is
     /// main-actor and this is not, and a false positive here costs a preview for an address nobody
