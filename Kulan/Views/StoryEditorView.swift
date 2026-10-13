@@ -4116,7 +4116,12 @@ struct StoryEditorView: View {
         // path carries a note about.
         let card = repostVideoCard && isRepostVideo
         let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty || card
-        guard hasArt || cropRect != nil || reframed || shrunk else { return nil }
+        // ⛔ BRIGHTNESS ALONE IS AN EDIT — owner 2026-10-13: "before upload Brightness is working,
+        // after upload finished it is not appearing". With nothing else changed this returned nil,
+        // and the dial (carried at the bottom of this function) never reached the export.
+        let brightness = items.indices.contains(index) ? items[index].brightness : 0
+        guard hasArt || cropRect != nil || reframed || shrunk
+              || !StoryVideoBrightness.isNeutral(brightness) else { return nil }
 
         var art: UIImage?
         if hasArt {
@@ -4206,7 +4211,7 @@ struct StoryEditorView: View {
                            backdrop: shrunk ? canvasBackdrop(size: size) : nil,
                            holeCorner: card && shrunk ? RepostVideoCard.corner : 0,
                            // The Adjust tab's dial, carried with everything else the editor did.
-                           brightness: items.indices.contains(index) ? items[index].brightness : 0)
+                           brightness: brightness)
     }
 
     /// The story's own canvas as a picture, for the export to put behind a clip that has been pinched

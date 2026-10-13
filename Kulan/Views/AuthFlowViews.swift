@@ -339,6 +339,8 @@ struct AuthMethodView: View {
 
     @Environment(\.colorScheme) private var scheme
     @State private var busy = false
+    /// The saved account being signed back into: its own row shows the spinner (see `savedAccountRow`).
+    @State private var resumingUid: String?
     @State private var error: String?
     /// The accounts this phone has used (see `LastAccount`), Log In only, newest first.
     @State private var saved: [LastAccount.Info] = LastAccount.all()
@@ -437,7 +439,9 @@ struct AuthMethodView: View {
                 .buttonStyle(.plain)
                 .padding(.top, 24)
                 .overlay(alignment: .top) {
-                    ProgressView().controlSize(.small).opacity(busy ? 1 : 0).allowsHitTesting(false)
+                    // Not for a saved-account tap: that one spins in its own row (owner 2026-10-13,
+                    // "loading appearing wrong position").
+                    ProgressView().controlSize(.small).opacity(busy && resumingUid == nil ? 1 : 0).allowsHitTesting(false)
                 }
 
                 Spacer()
@@ -521,7 +525,13 @@ struct AuthMethodView: View {
                     Text("@\(info.handle)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                // ⛔ THE SPINNER WHERE THE TAP WAS — owner 2026-10-13: it sat squeezed between "Add
+                // another account" and "Sign up". The row you tapped turns its chevron into it.
+                if resumingUid == info.uid {
+                    ProgressView().tint(.secondary)
+                } else {
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                }
             }
             .padding(.horizontal, 16).frame(height: 72)
             .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -597,14 +607,14 @@ struct AuthMethodView: View {
             error = "No internet connection. Check your connection and try again."
             return
         }
-        busy = true; error = nil
+        busy = true; error = nil; resumingUid = info.uid
         Task {
             let resumed = await DeviceSessionKeys.resume(uid: info.uid)
             if resumed {
                 await AuthService.shared.bootstrap()
-                await MainActor.run { busy = false; onAuthed() }
+                await MainActor.run { busy = false; resumingUid = nil; onAuthed() }
             } else {
-                await MainActor.run { busy = false; continueWithDoor(info) }
+                await MainActor.run { busy = false; resumingUid = nil; continueWithDoor(info) }
             }
         }
     }
@@ -612,6 +622,7 @@ struct AuthMethodView: View {
     private func continueWithDoor(_ info: LastAccount.Info) {
         switch AuthService.SignInMethod(rawValue: info.method) {
         case .apple:
+            resumingUid = info.uid
             run {
                 let request = ASAuthorizationAppleIDProvider().createRequest()
                 AuthService.shared.prepareAppleRequest(request)
@@ -621,6 +632,7 @@ struct AuthMethodView: View {
                                                            requireExistingAccount: true, requireNewAccount: false)
             }
         case .google:
+            resumingUid = info.uid
             run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: true, requireNewAccount: false) }
         case .email:
             emailPrefill = info.email ?? ""
@@ -682,7 +694,7 @@ struct AuthMethodView: View {
                     }
                 }
             }
-            await MainActor.run { busy = false }
+            await MainActor.run { busy = false; resumingUid = nil }
         }
     }
 }
