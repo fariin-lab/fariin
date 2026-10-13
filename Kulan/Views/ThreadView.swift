@@ -4093,7 +4093,10 @@ struct ThreadView: View {
                 else { ChatScrollStore.shared.clear(cid) }
             },
             canSwipeReply: { id in
-                repo.indexById[id].map { repo.items[$0].sendState == nil } ?? false
+                // ⛔ NOT ON A STORY REACTION (owner 2026-10-13: "swipe reply still works"). The row
+                // model's `canSwipeToReply` said no, but the swipe pan asks THIS closure and never read
+                // the model, so the earlier fix had nothing listening to it.
+                repo.indexById[id].map { repo.items[$0].sendState == nil && !repo.items[$0].isStoryReaction } ?? false
             },
             onSwipeReply: { id in
                 if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
@@ -9541,7 +9544,8 @@ struct MessageBubble: View, Equatable {
                 // No reply-swipe on a tombstone: there is nothing to quote, and the composer would
                 // open a reply box pointing at "You deleted this message" (owner report). Gated here
                 // at the movement source — dragX never moves, so onEnded can never fire a reply.
-                guard message.sendState == nil, !message.deleted, !VoiceScrubState.active else { return }
+                guard message.sendState == nil, !message.deleted, !message.isStoryReaction,
+                      !VoiceScrubState.active else { return }   // no reply-swipe on a story reaction either
                 // THE WAVEFORM IS A NO-REPLY ZONE (user's "red area"). Refused for the whole touch,
                 // whichever way it goes, because the flag is raised on the waveform's first movement -
                 // earlier than this gesture's own 18pt threshold. Ownership, not arbitration: the two
