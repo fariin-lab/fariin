@@ -52,4 +52,17 @@ final class StoryReplyLayoutTests: XCTestCase {
             XCTAssertLessThan(plain.gap, 20, "card-to-bubble gap is large even with nothing above (isMe=\(isMe))")
         }
     }
+
+    /// Owner 2026-10-13: on his own replies the grey line sat far from the picture. The space between
+    /// the bar and the card must be the same small gap on both sides, whatever the caption's width.
+    func testGreyBarSitsBesideThePicture() throws {
+        for isMe in [false, true] {
+            let p = MessageRowLayout.plan(row(isMe: isMe, dateHeader: false, unread: false), width: 393)
+            guard case .bubble(let b) = p.body else { throw XCTSkip("not a bubble plan") }
+            let sr = try XCTUnwrap(b.storyReplyPlan)
+            let bar = try XCTUnwrap(sr.bar), thumb = try XCTUnwrap(sr.thumb)
+            let between = isMe ? bar.minX - thumb.maxX : thumb.minX - bar.maxX
+            XCTAssertEqual(between, 9, accuracy: 0.5, "bar-to-picture gap, isMe=\(isMe)")
+        }
+    }
 }

@@ -1646,7 +1646,11 @@ enum MessageRowLayout {
         let cardTop = caption.maxY + 5
         // The accent bar sits on the OUTSIDE of the card — the side the bubble is on.
         let barX = isMe ? (originX + size.width - bar) : originX
-        let thumbX = isMe ? originX : (originX + bar + gap)
+        // ⛔ MEASURED FROM THE BAR, BOTH SIDES — owner 2026-10-13 (second report): on my own replies
+        // the grey line and the picture had a wide empty gap. `size.width` is the CAPTION's width
+        // whenever "You replied to their story" is wider than bar + gap + card, and the picture was
+        // pinned to the far (left) edge of that box while the bar sat on the right one.
+        let thumbX = isMe ? (barX - gap - storyCardWidth) : (originX + bar + gap)
         return StoryReplyPlan(
             caption: caption, captionAttr: captionAttr,
             bar: CGRect(x: barX, y: cardTop, width: bar, height: storyCardHeight),
