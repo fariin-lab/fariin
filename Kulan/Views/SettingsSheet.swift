@@ -39,7 +39,7 @@ struct SettingsSheet: View {
             .listSectionSpacing(20)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
             .overlay {
-                if searching, SettingsIndex.matching(query, onSignOut: onSignOut).isEmpty {
+                if searching, searchResults.isEmpty {
                     NoSearchResults(query: query.trimmingCharacters(in: .whitespaces))
                 }
             }
@@ -60,8 +60,13 @@ struct SettingsSheet: View {
         .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme ?? nil)
     }
 
+    /// Devices is not part of Settings (it is on the tab's own card), so the search here skips it.
+    private var searchResults: [SettingsIndex.Entry] {
+        SettingsIndex.matching(query, onSignOut: onSignOut).filter { $0.title != "Devices" }
+    }
+
     @ViewBuilder private var results: some View {
-        ForEach(SettingsIndex.matching(query, onSignOut: onSignOut)) { e in
+        ForEach(searchResults) { e in
             NavigationLink { e.dest } label: {
                 e.system ? SettingsRowLabel(e.title, system: e.icon) : SettingsRowLabel(e.title, e.icon)
             }
@@ -85,18 +90,14 @@ struct SettingsSheet: View {
             }
         } }   // hidden 2026-10-11 — see `AppFeatures.myProfileCard`
 
+        // ⛔ TWO CARDS — owner 2026-10-13: main settings here, Invite + Help in the second. Devices is
+        // NOT in Settings; it lives on the tab's own five-row card.
         Section {
             // Account is data + session actions only — no profile fields here, they all
             // live above now (see AccountSettingsView's own note, user direction 2026-07-22).
             NavigationLink { AccountSettingsView(onSignOut: onSignOut).toolbar(.hidden, for: .tabBar) } label: {
                 SettingsRowLabel("Account", "ic_account")
             }
-            NavigationLink { DevicesView().toolbar(.hidden, for: .tabBar) } label: {
-                SettingsRowLabel("Devices", "ic_linked_devices")
-            }
-        }
-
-        Section {
             NavigationLink { NotificationsSettingsView().toolbar(.hidden, for: .tabBar) } label: {
                 SettingsRowLabel("Notifications", "ic_notifications")
             }
