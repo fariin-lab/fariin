@@ -1630,8 +1630,9 @@ enum MessageRowLayout {
     // ── The story-reply card ──
 
     private static let storyCardHeight: CGFloat = 140
-    /// The react-bar emoji on the card's corner: about two fifths of the card's width.
-    private static let storyReactionGlyph: CGFloat = 34
+    /// The react-bar emoji on the card's corner: about half the card's width (owner 2026-10-13:
+    /// 34 "looks small"; his drawing measures ~42pt wide, which a 46pt glyph draws).
+    private static let storyReactionGlyph: CGFloat = 46
     private static let storyCardWidth: CGFloat = 80
 
     private static func storyReplyCaption(_ sr: StoryReplyChrome) -> NSAttributedString {

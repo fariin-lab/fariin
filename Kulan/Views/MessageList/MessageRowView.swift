@@ -1084,7 +1084,10 @@ final class MessageRowView: UIView {
             return
         }
         let v = storyReplyView ?? {
-            let v = StoryReplyCardView(); addSubview(v); storyReplyView = v; return v
+            // UNDER the bubble, not over it (owner 2026-10-13: the react-bar emoji went under the
+            // story picture). The card and the bubble only overlap for a story reaction, whose
+            // emoji sits on the card's corner and has to be drawn on top of it.
+            let v = StoryReplyCardView(); insertSubview(v, belowSubview: bubbleBox); storyReplyView = v; return v
         }()
         v.isHidden = false
         v.frame = bounds
