@@ -59,6 +59,15 @@ final class StoryVideoPreviewView: MTKView {
     /// ask for a frame and be given nothing.
     private var lastBuffer: CVPixelBuffer?
     private var isPlaying = false
+    /// ⛔ THE CLIP'S OWN ROTATION, nil until read. Owner 2026-10-13, a long-standing report: a tall
+    /// video in the editor showed as three bands, a sideways copy of the clip in the middle with the
+    /// upright poster above and below it. A phone camera stores its frames sideways and says "turn
+    /// me 90°" in the track's `preferredTransform`; `AVPlayerLayer` obeyed that, and
+    /// `AVPlayerItemVideoOutput` hands over the raw sideways buffer. This renderer aspect-fitted the
+    /// sideways frame into the card and the clear letterbox let the poster show through. The export
+    /// rotates (`StoryVideoEncoder`), so only the preview was wrong. Nothing is drawn until it is
+    /// known, so a frame never shows sideways for a moment.
+    private var orientation: CGImagePropertyOrientation?
     /// Screen refreshes in a row that found no new frame while the clip was meant to be moving.
     /// See `currentBuffer`.
 
@@ -177,6 +186,14 @@ final class StoryVideoPreviewView: MTKView {
         item.add(out)
         output = out
         observedItem = item
+        orientation = nil
+        let asset = item.asset
+        Task { @MainActor [weak self, weak item] in
+            let t = (try? await asset.loadTracks(withMediaType: .video).first?.load(.preferredTransform)) ?? nil
+            guard let self, let item, self.observedItem === item else { return }
+            self.orientation = Self.orientation(of: t ?? .identity)
+            self.requestRedraw()
+        }
         // An output added to an item that is ALREADY playing (the repost starts its clip the same
         // turn the player is made; this view only hears about it on the next update) may never get
         // a first frame. An exact seek to where it is makes the item deliver one to the new output.
@@ -259,14 +276,15 @@ extension StoryVideoPreviewView: MTKViewDelegate {
         // presented drawable on the layer, and after a clip change that drawable belongs to the clip
         // you just left — this is the other half of the flash `attachOutput` describes, and the one
         // that catches the case where the wipe there could not get a drawable.
-        guard let pixels = currentBuffer() else {
+        guard let pixels = currentBuffer(), let orientation else {
             clear(drawable, with: buffer)
             buffer.present(drawable)
             buffer.commit()
             return
         }
 
-        var image = CIImage(cvPixelBuffer: pixels)
+        // Upright first, so the fit below measures the clip as it is meant to be seen.
+        var image = CIImage(cvPixelBuffer: pixels).oriented(orientation)
 
         // ⛔ THE FILTER RUNS WHATEVER THE VALUE IS, AND THAT IS DELIBERATE. The reference has the
         // neutral early-out COMMENTED OUT in its own source, so the per-frame cost is constant. A
@@ -300,6 +318,25 @@ extension StoryVideoPreviewView: MTKViewDelegate {
                          bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
         buffer.present(drawable)
         buffer.commit()
+    }
+
+    /// A track's `preferredTransform` as the orientation that turns its raw frames upright. The
+    /// rotation is read off the matrix; a mirrored track (front camera) carries the flip in the sign
+    /// of the determinant.
+    static func orientation(of t: CGAffineTransform) -> CGImagePropertyOrientation {
+        let angle = atan2(t.b, t.a)
+        let mirrored = t.a * t.d - t.b * t.c < 0
+        let quarter = Int((angle / (.pi / 2)).rounded()) & 3   // 0, 90, 180, 270 degrees
+        switch (quarter, mirrored) {
+        case (1, false): return .right
+        case (2, false): return .down
+        case (3, false): return .left
+        case (0, true):  return .upMirrored
+        case (1, true):  return .rightMirrored
+        case (2, true):  return .downMirrored
+        case (3, true):  return .leftMirrored
+        default:         return .up
+        }
     }
 
     /// Transparent, edge to edge. Used for the letterbox bands under a frame, and on its own when
