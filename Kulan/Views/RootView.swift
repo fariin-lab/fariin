@@ -32,6 +32,9 @@ struct RootView: View {
     // Someone signed this phone out from Settings › Devices on another phone.
     @ObservedObject private var devices = DeviceRegistry.shared
     @State private var showRevokedNotice = false
+    // The session ended because the account was disabled (a suspension from the admin panel), not
+    // because another device signed this one out. 2026-10-13.
+    @State private var endedBySuspension = false
     @State private var userLinkAlert: String?   // 2026-09-24 fix-all #167
     /// audit M-098, 2026-10-07: true while the lock or the switcher blank is drawn in its own window
     /// above the call screens (see `PrivacyShield`); the in-tree copies below are then skipped.
@@ -273,6 +276,7 @@ struct RootView: View {
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
+                endedBySuspension = false
                 showRevokedNotice = true
             }
         }
@@ -296,17 +300,21 @@ struct RootView: View {
         // …and when there is no session left at all (Firebase signs out by itself when it was
         // revoked or the account disabled): the teardown of a sign-out from another device, then
         // the front door, instead of a signed-in-looking app that can do nothing.
-        .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.sessionEnded)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: SessionRecovery.sessionEnded)) { note in
+            let suspended = SessionRecovery.endedBySuspension(note)
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
+                endedBySuspension = suspended
                 showRevokedNotice = true
             }
         }
-        .alert("Signed out", isPresented: $showRevokedNotice) {
+        .alert(endedBySuspension ? "Account suspended" : "Signed out", isPresented: $showRevokedNotice) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("This device was signed out from another device.")
+            Text(endedBySuspension
+                 ? "This account can't be used right now. If you think this is a mistake, contact us at fariin.com/help."
+                 : "This device was signed out from another device.")
         }
         // 2026-09-24 fix-all #167: see `openPendingUserLink`.
         .alert(userLinkAlert ?? "", isPresented: Binding(get: { userLinkAlert != nil },

@@ -971,6 +971,9 @@ final class AuthService: NSObject {
         // password can be right because the account no longer has one. Google- or Apple-only
         // accounts never had one either. So point at Log In, which is also where the code door is.
         case 17007: return "This email already has an account. Go back and choose Log In, then use the way you signed up or log in with a code."
+        // User disabled: a suspension from the admin panel turns sign-in off (2026-10-13). Firebase's
+        // own text names an "administrator", which reads like a bug in the app.
+        case 17005: return "This account is suspended and can't sign in right now. If you think this is a mistake, contact us at fariin.com/help."
         case 17020: return "No internet connection. Try again."
         case 17010: return "Too many attempts. Wait a moment and try again."
         case 17014: return "Please sign in again before doing this."

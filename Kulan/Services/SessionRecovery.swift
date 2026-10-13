@@ -334,6 +334,11 @@ enum SessionRecovery {
     /// "no user". A Sign Out tapped while this refresh was in flight also leaves no user, and that
     /// sign-out has already run its own teardown, keeping the media it chose to keep; a second,
     /// keep-nothing wipe on top would delete it.
+    /// Was this `sessionEnded` a disabled account (a suspension), rather than a sign-out elsewhere?
+    static func endedBySuspension(_ note: Notification) -> Bool {
+        (note.userInfo?["code"] as? Int) == AuthErrorCode.userDisabled.rawValue
+    }
+
     @MainActor private static func endSessionIfOver(_ error: Error) -> Bool {
         let code = (error as NSError).code
         let over = [AuthErrorCode.userTokenExpired, .userDisabled, .userNotFound, .invalidUserToken]
@@ -342,7 +347,9 @@ enum SessionRecovery {
         print("[Recovery] session is over:", error)
         unrecovered = false
         attempt = 0
-        NotificationCenter.default.post(name: sessionEnded, object: nil)
+        // The code rides along so the notice can tell a suspension (account disabled from the admin
+        // panel) apart from a sign-out on another device.
+        NotificationCenter.default.post(name: sessionEnded, object: nil, userInfo: ["code": code])
         return true
     }
 
