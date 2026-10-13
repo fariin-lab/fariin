@@ -98,8 +98,19 @@ final class StoryPlaybackStartTests: XCTestCase {
 
     /// One landing. Returns seconds from `play` to the first moving frame, or nil on a 15s timeout.
     @MainActor
-    private func land(source: Source, prepared: Bool, lead: Double) async throws -> Double? {
+    private func land(source: Source, prepared: Bool, lead: Double, trace: Bool = false) async throws -> Double? {
         let data = try await clip()
+        // The timeline: every step of the start, in ms from the mount; PLAY marks the landing.
+        let lock = NSLock()
+        var lines: [String] = []
+        let mount = CACurrentMediaTime()
+        if trace {
+            StoryVideoTrace.sink = { msg in
+                let t = String(format: "%6.0f", (CACurrentMediaTime() - mount) * 1000)
+                lock.lock(); lines.append("  \(t)ms  \(msg)"); lock.unlock()
+            }
+        }
+        defer { StoryVideoTrace.sink = nil }
         let id = UUID().uuidString
         var server: LoopbackVideoServer?
         let url: URL
@@ -134,11 +145,20 @@ final class StoryPlaybackStartTests: XCTestCase {
         if lead > 0 { try await Task.sleep(for: .milliseconds(Int(lead * 1000))) }
 
         let t0 = CACurrentMediaTime()
+        StoryVideoTrace.note("PLAY (the story lands)")
         session.setMode(.play)
         var result: Double?
         while CACurrentMediaTime() - t0 < 15 {
-            if session.isPlaying, session.timestamp > 0.001 { result = CACurrentMediaTime() - t0; break }
+            if session.isPlaying, session.timestamp > 0.001 {
+                result = CACurrentMediaTime() - t0
+                StoryVideoTrace.note("MOVING (clock \(String(format: "%.2f", session.timestamp))s)")
+                break
+            }
             try await Task.sleep(for: .milliseconds(5))
+        }
+        if trace {
+            lock.lock(); let copy = lines; lock.unlock()
+            note("TIMELINE \(prepared ? "PREPARED" : "COLD"):\n" + copy.joined(separator: "\n"))
         }
         v.teardown()
         server?.stop()
@@ -155,9 +175,10 @@ final class StoryPlaybackStartTests: XCTestCase {
             let s = xs.map { $0 ?? 15 }.sorted(); return s[s.count / 2]
         }
         var cold: [Double?] = [], prep: [Double?] = []
-        for _ in 0..<3 {
-            cold.append(try await land(source: source, prepared: false, lead: lead))
-            prep.append(try await land(source: source, prepared: true, lead: lead))
+        note("--- \(label)")
+        for run in 0..<3 {
+            cold.append(try await land(source: source, prepared: false, lead: lead, trace: run == 1))
+            prep.append(try await land(source: source, prepared: true, lead: lead, trace: run == 1))
         }
         let c = median(cold), p = median(prep)
         note("\(label): COLD median \(ms(c)) [\(cold.map(ms).joined(separator: ", "))]"
@@ -269,6 +290,7 @@ final class LoopbackVideoServer {
             c.send(content: Data(h.utf8), isComplete: true, completion: .contentProcessed { _ in c.cancel() })
             return
         }
+        StoryVideoTrace.note("server: GET bytes \(lo)-\(hi)")
         let head = "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\n"
             + "Content-Range: bytes \(lo)-\(hi)/\(total)\r\nContent-Length: \(hi - lo + 1)\r\nConnection: close\r\n\r\n"
         queue.asyncAfter(deadline: .now() + latency) { [weak self] in

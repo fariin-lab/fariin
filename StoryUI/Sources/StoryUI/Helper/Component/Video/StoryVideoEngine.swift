@@ -31,6 +31,15 @@
 import UIKit
 import AVFoundation
 
+// MARK: - Timeline (tests only)
+
+/// A step-by-step timeline of one story video's start, for `StoryPlaybackStartTests`. Nil in the
+/// app, so each call is one nil check and nothing is ever shown or stored.
+enum StoryVideoTrace {
+    static var sink: ((String) -> Void)?
+    static func note(_ s: @autoclosure () -> String) { sink?(s()) }
+}
+
 // MARK: - The mode an item is in
 
 /// WHAT A STORY ITEM IS DOING, decided by the one thing that knows — the viewer — and handed DOWN.

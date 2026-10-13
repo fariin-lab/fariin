@@ -402,6 +402,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     // MARK: - Serving
 
     private func serve(_ request: AVAssetResourceLoadingRequest) {
+        StoryVideoTrace.note("reader asked: info=\(request.contentInformationRequest != nil) offset=\(request.dataRequest?.requestedOffset ?? -1) length=\(request.dataRequest?.requestedLength ?? -1) toEnd=\(request.dataRequest?.requestsAllDataToEndOfResource ?? false) held=\(partial.contiguousLength(from: request.dataRequest?.requestedOffset ?? 0, limit: 64 << 20))")
         // ⚠️ THE CONTENT INFORMATION COMES FIRST AND THE PLAYER WILL NOT MOVE WITHOUT IT. It needs a
         // length, a UTI and an explicit promise that ranges are supported; answer any of the three
         // wrongly and AVFoundation gives up without a word.
@@ -437,6 +438,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func fill(_ info: AVAssetResourceLoadingContentInformationRequest, total: Int64) {
+        StoryVideoTrace.note("reader: length answered \(total)")
         info.contentLength = total
         info.isByteRangeAccessSupported = true
         // ⚠️ A UTI, NOT THE MIME TYPE. AVFoundation matches this against uniform type identifiers,
@@ -478,6 +480,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         let held = partial.contiguousLength(from: start, limit: wanted)
         if held > 0, let bytes = partial.read(offset: start, length: held) {
             data.respond(with: bytes)
+            StoryVideoTrace.note("reader: handed \(held) bytes at \(start)")
             if held >= wanted {
                 request.finishLoading()
                 live.removeAll { $0 === request }
@@ -507,6 +510,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     private func lean(on w: (task: URLSessionTask, urgent: Bool)) {
+        StoryVideoTrace.note("reader: waiting on the prefetch (urgent=\(w.urgent))")
         if !w.urgent {
             w.task.cancel()
         } else if !warmDeadlineSet {
@@ -549,6 +553,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     /// Open-ended rather than range-sized on purpose: a player asks in small windows and re-asks
     /// constantly, and a request per window is a connection setup per few kilobytes.
     private func fetch(from offset: Int64) {
+        StoryVideoTrace.note("reader: network fetch from \(offset)")
         if pending.values.contains(where: { $0.offset <= offset }) { return }
         // ⚠️ REFUSING AT THE CEILING USED TO MEAN WAITING FOR EVER, WHICH IS THE SAME HANG THIS
         // METHOD'S NOTE IS ABOUT, ARRIVING BY A DIFFERENT DOOR.

@@ -439,6 +439,7 @@ final class StoryItemVideoView: UIView {
             p.automaticallyWaitsToMinimizeStalling = false
         }
         player = p
+        StoryVideoTrace.note("player built: streamed=\(streamed != nil) waits=\(p.automaticallyWaitsToMinimizeStalling) mode=\(mode)")
 
         let pl = AVPlayerLayer(player: p)
         // CLEAR, not black: the canvas lives behind this layer and a black fill would cover it.
@@ -519,12 +520,14 @@ final class StoryItemVideoView: UIView {
         // ⚠️ ALWAYS A HOP, NEVER INLINE — build 895 crash (stack overflow, iOS 27): `playImmediately`
         // changes this property SYNCHRONOUSLY, so an inline call re-entered `startIfBuffered`, which
         // called `playImmediately` again, until the stack ran out. See also `kickedThisWait`.
-        reasonObservation = p.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] _, _ in
+        reasonObservation = p.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] pl, _ in
+            StoryVideoTrace.note("reason \(pl.reasonForWaitingToPlay?.rawValue ?? "nil")")
             DispatchQueue.main.async { self?.startIfBuffered() }
         }
 
         // Every new run of buffered bytes is a chance to start: see `startIfBuffered`.
-        bufferObservation = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
+        bufferObservation = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] i, _ in
+            StoryVideoTrace.note("buffered to \(String(format: "%.2f", i.loadedTimeRanges.map { ($0.timeRangeValue.start + $0.timeRangeValue.duration).seconds }.max() ?? 0))s")
             guard let self else { return }
             if Thread.isMainThread { self.startIfBuffered() }
             else { DispatchQueue.main.async { self.startIfBuffered() } }
@@ -553,6 +556,7 @@ final class StoryItemVideoView: UIView {
 
     private func noteItemStatus(_ item: AVPlayerItem) {
         guard item === player?.currentItem else { return }
+        StoryVideoTrace.note("item status \(item.status == .readyToPlay ? "readyToPlay" : String(item.status.rawValue))")
         switch item.status {
         case .failed:
             // ⚠️ HOPPED OUT OF THE OBSERVER'S OWN CALLBACK. The recovery below tears the player down,
@@ -578,6 +582,7 @@ final class StoryItemVideoView: UIView {
     }
 
     private func noteTimeControl(_ s: AVPlayer.TimeControlStatus) {
+        StoryVideoTrace.note("timeControl \(s == .playing ? "playing" : s == .paused ? "paused" : "waiting(\(player?.reasonForWaitingToPlay?.rawValue ?? "-"))")")
         switch s {
         case .playing:
             didBeginPlayback = true
@@ -634,6 +639,7 @@ final class StoryItemVideoView: UIView {
         if ahead >= min(0.5, max(0.05, rest)) {
             // ONCE per wait: set before the call, because the call itself fires the observers.
             kickedThisWait = true
+            StoryVideoTrace.note("kick playImmediately, ahead \(String(format: "%.2f", ahead))s")
             p.playImmediately(atRate: 1)
         }
     }
@@ -699,6 +705,7 @@ final class StoryItemVideoView: UIView {
         applyGravity()
         refreshBackdrop()
         didShowFirstFrame = true
+        StoryVideoTrace.note("first frame shown")
         CATransaction.begin()
         CATransaction.setDisableActions(true)   // an appearance must not fade in
         pl.isHidden = false
