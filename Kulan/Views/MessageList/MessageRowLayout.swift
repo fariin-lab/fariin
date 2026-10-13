@@ -2530,5 +2530,14 @@ extension BubblePlan {
         forwardedIcon?.origin.y += dy
         failBadge?.origin.y += dy
         for i in reactions.indices { reactions[i].origin.y += dy }
+        // ⛔ THE STORY CARD IS IN ROW COORDINATES TOO, and it was missing here — owner 2026-10-13,
+        // "a big gap between the reply and its story preview, sometimes". A story reply that was the
+        // first message of a day (or under the unread line) had its bubble moved down by the date
+        // pill while the card stayed at the top of the row, drawn over the pill: the pill sat beside
+        // the caption and the bubble sat a pill-height below the card.
+        storyReplyPlan?.caption.origin.y += dy
+        storyReplyPlan?.bar?.origin.y += dy
+        storyReplyPlan?.thumb?.origin.y += dy
+        storyReplyPlan?.unavailable?.origin.y += dy
     }
 }
