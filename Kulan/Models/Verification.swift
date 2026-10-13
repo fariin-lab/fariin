@@ -138,6 +138,10 @@ struct Verification: Equatable, Hashable {
         case revoked
 
         var id: String { rawValue }
+        /// ⛔ GOLD FOR COMPANIES — owner 2026-10-13 ("only companies like Facebook, Meta, Hormuud"):
+        /// a Business or Organization verification draws the gold seal; every other kind, our own
+        /// channel included, stays blue. Same seal, same size; only the colour says "company".
+        var isGold: Bool { self == .business || self == .organization }
         var label: String {
             switch self {
             case .active:    return "Verified"
@@ -362,9 +366,17 @@ struct VerifiedMark: View {
     /// chat header hit this on 09-27, `ChatHeaderView.verifiedMark`). Drawn once into a picture,
     /// there is no symbol left to recolour, so it stays a white tick on blue everywhere.
     private var mark: some View {
-        Image(uiImage: Self.badge(size: size * Self.scale, blue: Self.blue, weight: Self.weight))
+        let record = VerificationIndex.of(peer)
+        return Image(uiImage: Self.badge(size: size * Self.scale, blue: Self.color(for: record), weight: Self.weight))
             .frame(width: size, height: size)
     }
+
+    /// Gold for a company's verification, blue for everyone else (see `Verification.Kind.isGold`).
+    static let gold = UIColor(Color(hex: 0xE8B21E))
+    static func color(for record: Verification?) -> UIColor {
+        record?.kind?.isGold == true ? gold : blue
+    }
+    static func color(for uid: String) -> UIColor { color(for: VerificationIndex.of(uid)) }
 
     /// ⛔ ONE BADGE FOR EVERYBODY, THE OFFICIAL CHANNEL INCLUDED — owner 2026-10-13: the Fariin tick
     /// and a person's tick sat side by side in the chat list at two sizes and two blues (official
@@ -403,7 +415,7 @@ struct VerificationInfoSheet: View {
             VStack(spacing: 18) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 56))
-                    .foregroundStyle(.white, Color(uiColor: VerifiedMark.blue))
+                    .foregroundStyle(.white, Color(uiColor: VerifiedMark.color(for: record)))
                     .symbolRenderingMode(.palette)
                     .padding(.top, 28)
 

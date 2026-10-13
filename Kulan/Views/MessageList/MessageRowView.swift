@@ -1194,13 +1194,17 @@ final class MessageRowView: UIView {
                 // PALETTE, not a tint: the mark is a WHITE check on a blue seal. A monochrome
                 // `checkmark.seal.fill` in the same blue is a different glyph — the check goes
                 // blue-on-blue and disappears.
-                // The shared blue and weight (`VerifiedMark`, owner 2026-10-13); 11pt beside a name.
-                let cfg = UIImage.SymbolConfiguration(pointSize: 11, weight: VerifiedMark.weight)
-                    .applying(UIImage.SymbolConfiguration(paletteColors: [.white, VerifiedMark.blue]))
-                let v = UIImageView(image: UIImage(systemName: "checkmark.seal.fill", withConfiguration: cfg))
+                let v = UIImageView()
                 v.contentMode = .scaleAspectFit
                 addSubview(v); verifiedView = v; return v
             }()
+            // The shared weight (`VerifiedMark`, owner 2026-10-13), 11pt beside a name, and the
+            // sender's own colour: gold for a company's verification, blue for everyone else.
+            var uid = ""
+            if case .bubble(let row) = m.content, let s = row.sender { uid = s.uid }
+            let cfg = UIImage.SymbolConfiguration(pointSize: 11, weight: VerifiedMark.weight)
+                .applying(UIImage.SymbolConfiguration(paletteColors: [.white, VerifiedMark.color(for: uid)]))
+            v.image = UIImage(systemName: "checkmark.seal.fill", withConfiguration: cfg)
             v.isHidden = false
             v.frame = rect
         } else {

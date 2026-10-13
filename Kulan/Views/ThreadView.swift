@@ -5365,7 +5365,7 @@ struct ThreadView: View {
         // was built before the other profile loaded and never showed the mark it should have).
         let _ = VerificationSignal.shared.tick
         if !isGroup, VerificationIndex.of(otherUid)?.showsBadge == true {
-            m.titleIcon = ChatHeaderModel.verifiedMark()
+            m.titleIcon = ChatHeaderModel.verifiedMark(color: VerifiedMark.color(for: otherUid))
         }
         // Constant reminder that messages self-delete here — this timer being invisible is how a
         // whole chat history vanished unnoticed.
