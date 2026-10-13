@@ -65,6 +65,7 @@ struct SettingsView: View {
     @State private var showScreenShareDemo = false
     @State private var showEdit = false
     @State private var showQR = false
+    @State private var showSearch = false
     @State private var showPhoto = false          // tap the avatar → full-screen photo morph
     /// Whether a REAL photograph is on the avatar, as reported by the avatar itself rather than
     /// inferred from the url. See the `onPhotoResolved` note on `profileHeader`.
@@ -293,12 +294,16 @@ struct SettingsView: View {
                             Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                         }
                         .tint(.primary)
-                    } else {
-                        Button { showQR = true } label: { Image(systemName: "qrcode") }.tint(.primary)
                     }
                 }
+                // ⛔ SEARCH, WHERE QR AND EDIT WERE — owner 2026-10-13: both are on the page now (Share
+                // profile, Edit profile), so the bar keeps one button, and it opens Settings search.
                 ToolbarItem(placement: .topBarTrailing) {
-                    if !showPhoto { Button("Edit") { showEdit = true }.tint(.primary) }
+                    if !showPhoto {
+                        Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
+                            .tint(.primary)
+                            .accessibilityLabel("Search settings")
+                    }
                 }
                 if !asTab {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -325,6 +330,7 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showEdit) { EditProfileView() }
             .sheet(isPresented: $showQR) { MyQRView() }
+            .fullScreenCover(isPresented: $showSearch) { SettingsSearchPage(onSignOut: onSignOut) }
             // ⚠️ THE HONEST HALF OF AN OPTIMISTIC PHOTO, and it belongs on THIS screen rather than in
             // the sheet: the sheet has already closed by the time an upload can fail. The old picture
             // is back before this appears, which is why it says what happened rather than asking for

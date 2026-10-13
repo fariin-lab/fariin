@@ -633,6 +633,9 @@ enum SettingsIndex {
         var system = false
         let keywords: String
         let dest: AnyView
+        /// The page this one lives inside, shown under the title (the reference's "Password /
+        /// Account"). Nil for a top-level settings page.
+        var parent: String? = nil
     }
 
     static func entries(onSignOut: @escaping () -> Void) -> [Entry] {
@@ -666,10 +669,27 @@ enum SettingsIndex {
                   dest: AnyView(StorageDataView())),
             Entry(title: "Chat Key", icon: "ic_chat_key",
                   keywords: "chat key pin number code private",
-                  dest: AnyView(ChatPinPage())),
+                  dest: AnyView(ChatPinPage()), parent: "Chats"),
+            // Pages INSIDE pages, so a search reaches them directly (owner 2026-10-13, with the
+            // reference's settings search).
+            Entry(title: "Email address", icon: "envelope", system: true,
+                  keywords: "email address change mail",
+                  dest: AnyView(ChangeEmailView()), parent: "Account"),
+            Entry(title: "Passkeys", icon: "person.badge.key", system: true,
+                  keywords: "passkeys passkey face id sign in key",
+                  dest: AnyView(PasskeysView()), parent: "Account"),
+            Entry(title: "Two-step verification", icon: "lock.shield", system: true,
+                  keywords: "two step verification 2fa password code security",
+                  dest: AnyView(TwoStepVerificationView()), parent: "Account"),
+            Entry(title: "Security notifications", icon: "bell.badge", system: true,
+                  keywords: "security notifications alerts new login",
+                  dest: AnyView(SecurityNotificationsView()), parent: "Account"),
+            Entry(title: "App Lock", icon: "lock", system: true,
+                  keywords: "app lock face id passcode",
+                  dest: AnyView(AppLockPage()), parent: "Privacy & Security"),
             Entry(title: "Blocked Users", icon: "hand.raised", system: true,
                   keywords: "blocked block users",
-                  dest: AnyView(BlockedUsersView())),
+                  dest: AnyView(BlockedUsersView()), parent: "Privacy & Security"),
             Entry(title: "Help & About", icon: "questionmark.circle", system: true,
                   keywords: "help about version",
                   dest: AnyView(AboutView())),
