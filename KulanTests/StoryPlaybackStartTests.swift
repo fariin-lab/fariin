@@ -213,6 +213,19 @@ final class StoryPlaybackStartTests: XCTestCase {
                           source: .stream(bytesPerSecond: 190_000, latency: 0.2, warm: true))
     }
 
+    /// EXPERIMENT: the same two streamed cases with AVFoundation's start wait off for streamed clips.
+    @MainActor
+    func testExperimentNoWaitOnStream() async throws {
+        StoryItemVideoView.experimentNoWaitOnStream = true
+        defer { StoryItemVideoView.experimentNoWaitOnStream = false }
+        try await compare("EXPERIMENT no-wait: uncached, opening pre-downloaded, 8 Mbps / 50ms",
+                          source: .stream(bytesPerSecond: 1_000_000, latency: 0.05, warm: true))
+        try await compare("EXPERIMENT no-wait: uncached, nothing pre-downloaded, 8 Mbps / 50ms",
+                          source: .stream(bytesPerSecond: 1_000_000, latency: 0.05, warm: false))
+        try await compare("EXPERIMENT no-wait: uncached, opening pre-downloaded, 1.5 Mbps / 200ms",
+                          source: .stream(bytesPerSecond: 190_000, latency: 0.2, warm: true))
+    }
+
     /// A fast swipe: the neighbour had almost no time before it landed.
     @MainActor
     func testRapidSwipe() async throws {

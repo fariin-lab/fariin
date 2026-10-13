@@ -97,6 +97,10 @@ final class StoryItemVideoView: UIView {
     /// see `StoryVideoStream.release`. Nil on the ordinary local-file path.
     private var streamedAsset: AVURLAsset?
 
+    /// TEST-ONLY experiment switch (`StoryPlaybackStartTests`): a streamed clip starts without
+    /// AVFoundation's wait and asks for a 1s forward buffer. Always false in the app.
+    static var experimentNoWaitOnStream = false
+
     private var mode: StoryProgressMode = .pause
     /// The next or previous PERSON's item, sitting on the cube's side face: build the player now,
     /// paused, so it is ready the moment the turn lands. See `setPrepared`.
@@ -435,9 +439,10 @@ final class StoryItemVideoView: UIView {
         // start evaluating a network it cannot see through our reader, with the opening already on
         // disk. So a warmed clip starts without that wait; `noteTimeControl(.playing)` turns the
         // waiting back on, so a stall LATER in the clip is still held the safe way.
-        if streamed != nil, StoryVideoStream.holdsOpening(file) {
+        if streamed != nil, StoryVideoStream.holdsOpening(file) || Self.experimentNoWaitOnStream {
             p.automaticallyWaitsToMinimizeStalling = false
         }
+        if streamed != nil, Self.experimentNoWaitOnStream { p.currentItem?.preferredForwardBufferDuration = 1 }
         player = p
         StoryVideoTrace.note("player built: streamed=\(streamed != nil) waits=\(p.automaticallyWaitsToMinimizeStalling) mode=\(mode)")
 
