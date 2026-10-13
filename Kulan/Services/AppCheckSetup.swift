@@ -2,6 +2,7 @@ import Foundation
 import DeviceCheck
 import FirebaseCore
 import FirebaseAppCheck
+import os
 
 // 2026-09-24 fix-all #161: App Check on the client. Every Firebase call (Firestore, Storage,
 // Functions) now carries an App Check token proving the request came from this app on a real
@@ -33,7 +34,83 @@ final class KulanAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
         // age-range keys). Once the capability is on: add the key with "production" to
         // Kulan.entitlements and return `AppAttestProvider(app:)` when
         // `DCAppAttestService.shared.isSupported`, keeping DeviceCheck as the fallback.
-        return DeviceCheckProvider(app: app)
+        guard let deviceCheck = DeviceCheckProvider(app: app) else { return nil }
+        return DeadlineAppCheckProvider(wrapping: deviceCheck)
         #endif
+    }
+}
+
+// 2026-10-13, the "one phone goes dead until relaunch" bug (6th report): App Check keeps ONE
+// shared token fetch for the whole app and clears it only when the provider answers. Firestore,
+// Storage, Functions and Auth all wait on that fetch before sending, with no time limit, so a
+// DeviceCheck call that never answers leaves every send, listener, upload, lookup and call ring
+// waiting until the app is killed. Disabling/enabling the network re-joins the same stuck fetch,
+// which is why recovery never healed it and only a relaunch did.
+//
+// The fix is a deadline: if the provider has not answered in `deadline` seconds, answer with an
+// error. App Check then clears its shared fetch (the next call starts a fresh one) and hands the
+// SDKs a placeholder token, which the server accepts while enforcement is off.
+final class DeadlineAppCheckProvider: NSObject, AppCheckProvider {
+    private let inner: AppCheckProvider
+    private let deadline: TimeInterval
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Kulan", category: "AppCheck")
+
+    init(wrapping inner: AppCheckProvider, deadline: TimeInterval = 6) {
+        self.inner = inner
+        self.deadline = deadline
+    }
+
+    func getToken(completion handler: @escaping (AppCheckToken?, Error?) -> Void) {
+        race(handler) { inner.getToken(completion: $0) }
+    }
+
+    func getLimitedUseToken(completion handler: @escaping (AppCheckToken?, Error?) -> Void) {
+        race(handler) { done in
+            if inner.getLimitedUseToken?(completion: done) == nil {
+                inner.getToken(completion: done)
+            }
+        }
+    }
+
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        /// True for the first caller only.
+        func claim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if done { return false }
+            done = true
+            return true
+        }
+        var isDone: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return done
+        }
+    }
+
+    // Whichever comes first, the provider's answer or the deadline, is delivered; the other is dropped.
+    private func race(_ handler: @escaping (AppCheckToken?, Error?) -> Void,
+                      start: (@escaping (AppCheckToken?, Error?) -> Void) -> Void) {
+        let once = Once()
+        let began = Date()
+        let finish: (AppCheckToken?, Error?) -> Void = { token, error in
+            guard once.claim() else { return }
+            handler(token, error)
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + deadline) { [deadline] in
+            guard !once.isDone else { return }
+            Self.log.error("App Check token: no answer in \(deadline, privacy: .public)s, going on without it")
+            finish(nil, NSError(domain: "Kulan.AppCheckDeadline", code: 1,
+                                userInfo: [NSLocalizedDescriptionKey: "App Check provider did not answer in time"]))
+        }
+        start { token, error in
+            let ms = Int(Date().timeIntervalSince(began) * 1000)
+            if let error {
+                Self.log.error("App Check token failed after \(ms, privacy: .public)ms: \(error.localizedDescription, privacy: .public)")
+            } else {
+                Self.log.info("App Check token in \(ms, privacy: .public)ms")
+            }
+            finish(token, error)
+        }
     }
 }
