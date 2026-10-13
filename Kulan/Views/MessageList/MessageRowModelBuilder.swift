@@ -591,7 +591,9 @@ enum MessageRowModelBuilder {
             shape = .article
         }
         return BubbleBody.LinkPreview(
-            shape: shape, url: p.url, title: p.title, desc: p.desc, host: p.host,
+            // A YouTube card says "YouTube", as the reference's does, whatever spelling the link used.
+            shape: shape, url: p.url, title: p.title, desc: p.desc,
+            host: URL(string: p.url).flatMap { LinkPreviewService.youtubeID(in: $0) } != nil ? "YouTube" : p.host,
             imageUrl: p.imageUrl, imageEnc: p.imageEnc)
     }
 

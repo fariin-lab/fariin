@@ -94,6 +94,9 @@ actor LinkPreviewService {
             if let link = Self.storyLink(in: url) {
                 return await Self.storyDraft(url: url, id: link.id, handle: link.handle)
             }
+            if let vid = Self.youtubeID(in: url), let yt = await Self.youtubeDraft(url: url, id: vid) {
+                return yt
+            }
             return await Self.fetch(url)
         }
         inFlight[key] = task
@@ -242,6 +245,81 @@ actor LinkPreviewService {
     // Fetch the first ~300 KB of the page and scrape og:title / og:description / og:image
     // (twitter:* and <title> as fallbacks). Bounded: https only, 8s timeout, image capped at 3 MB and
     // downscaled to ≤800px before it ever touches a message.
+    // MARK: - YouTube
+
+    /// ⛔ A YOUTUBE LINK GETS THE VIDEO'S OWN CARD — owner 2026-10-13, with the reference app's card: the
+    /// video's real cover with a play button, "YouTube", and the video's title. The page scrape below
+    /// often gets YouTube's generic consent or app page instead of the video's tags, so the title and
+    /// channel come from YouTube's public oEmbed endpoint and the cover straight from its thumbnail
+    /// host (the HD cover when the video has one, else the standard one). Nil hands over to the
+    /// ordinary scrape, so a failure here never leaves a link without whatever card it had before.
+    static func youtubeID(in url: URL) -> String? {
+        guard let host = url.host?.lowercased() else { return nil }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        var id: String?
+        if host == "youtu.be" {
+            id = parts.first
+        } else if host == "youtube.com" || host.hasSuffix(".youtube.com") {
+            if parts.first == "watch" {
+                id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "v" })?.value
+            } else if parts.count >= 2, ["shorts", "embed", "live", "v"].contains(parts[0]) {
+                id = parts[1]
+            }
+        }
+        guard let id, id.count == 11,
+              id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
+              id.unicodeScalars.allSatisfy(\.isASCII) else { return nil }
+        return id
+    }
+
+    private static func youtubeDraft(url: URL, id: String) async -> LinkDraft? {
+        let watch = "https://www.youtube.com/watch?v=\(id)"
+        var title = "", channel = ""
+        if var c = URLComponents(string: "https://www.youtube.com/oembed") {
+            c.queryItems = [URLQueryItem(name: "url", value: watch), URLQueryItem(name: "format", value: "json")]
+            if let u = c.url, let (data, resp) = try? await URLSession.shared.data(for: URLRequest(url: u, timeoutInterval: 8)),
+               (resp as? HTTPURLResponse)?.statusCode == 200,
+               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                title = j["title"] as? String ?? ""
+                channel = j["author_name"] as? String ?? ""
+            }
+        }
+        guard !title.isEmpty else { return nil }   // private, removed or unreachable: the scrape decides
+        var cover: UIImage?
+        for name in ["maxresdefault", "hqdefault"] {
+            if let u = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg"),
+               let img = await fetchImage(u, pageURL: url),
+               img.size.width > 200 {   // the "no HD cover" answer is a tiny grey placeholder
+                cover = img
+                break
+            }
+        }
+        return LinkDraft(url: url, title: title, desc: channel, image: cover.map(withPlayButton))
+    }
+
+    /// The play button the reference card draws on a video's cover: a dark translucent disc with a white
+    /// triangle, centred. Baked into the picture that travels, as the story card bakes its own marks.
+    private static func withPlayButton(_ img: UIImage) -> UIImage {
+        let size = img.size
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = img.scale; fmt.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            img.draw(in: CGRect(origin: .zero, size: size))
+            let d = min(size.width, size.height) * 0.22
+            let disc = CGRect(x: (size.width - d) / 2, y: (size.height - d) / 2, width: d, height: d)
+            UIColor.black.withAlphaComponent(0.45).setFill()
+            ctx.cgContext.fillEllipse(in: disc)
+            let t = d * 0.36
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: disc.midX - t * 0.38, y: disc.midY - t / 2))
+            path.addLine(to: CGPoint(x: disc.midX - t * 0.38, y: disc.midY + t / 2))
+            path.addLine(to: CGPoint(x: disc.midX + t * 0.55, y: disc.midY))
+            path.close()
+            UIColor.white.setFill()
+            path.fill()
+        }
+    }
+
     private static func fetch(_ url: URL) async -> LinkDraft? {
         guard url.scheme == "https", !isPrivateHost(url) else { return nil }
         var req = URLRequest(url: url, timeoutInterval: 8)
