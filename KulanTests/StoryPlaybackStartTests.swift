@@ -98,7 +98,8 @@ final class StoryPlaybackStartTests: XCTestCase {
 
     /// One landing. Returns seconds from `play` to the first moving frame, or nil on a 15s timeout.
     @MainActor
-    private func land(source: Source, prepared: Bool, lead: Double, trace: Bool = false) async throws -> Double? {
+    private func land(source: Source, prepared: Bool, lead: Double, trace: Bool = false,
+                      wholeArrivesBeforeLanding: Bool = false) async throws -> Double? {
         let data = try await clip()
         // The timeline: every step of the start, in ms from the mount; PLAY marks the landing.
         let lock = NSLock()
@@ -143,6 +144,13 @@ final class StoryPlaybackStartTests: XCTestCase {
 
         // The time the neighbour has before the turn lands (a swipe plus the 0.4s settle).
         if lead > 0 { try await Task.sleep(for: .milliseconds(Int(lead * 1000))) }
+        // The whole-file preload (`StoryPrefetcher.warmWhole`) finishing while the page sat beside
+        // the one on screen, after its player was already built on the stream.
+        if wholeArrivesBeforeLanding {
+            let dest = StoryPartialFile.completedURL(for: url)
+            try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: dest)
+        }
 
         let t0 = CACurrentMediaTime()
         StoryVideoTrace.note("PLAY (the story lands)")
@@ -224,6 +232,21 @@ final class StoryPlaybackStartTests: XCTestCase {
                           source: .stream(bytesPerSecond: 1_000_000, latency: 0.05, warm: false))
         try await compare("EXPERIMENT no-wait: uncached, opening pre-downloaded, 1.5 Mbps / 200ms",
                           source: .stream(bytesPerSecond: 190_000, latency: 0.2, warm: true))
+    }
+
+    /// The 2026-10-13 fix: the next person's clip is downloaded WHOLE ahead; a page whose player was
+    /// already built on the stream switches to the file on landing. Same slow network as above.
+    @MainActor
+    func testWholeFileArrivesBeforeLanding() async throws {
+        func ms(_ v: Double?) -> String { v.map { String(format: "%.0fms", $0 * 1000) } ?? "TIMEOUT" }
+        var runs: [Double?] = []
+        for i in 0..<3 {
+            runs.append(try await land(source: .stream(bytesPerSecond: 190_000, latency: 0.2, warm: true),
+                                       prepared: true, lead: 0.6, trace: i == 1, wholeArrivesBeforeLanding: true))
+        }
+        let sorted = runs.map { $0 ?? 15 }.sorted()
+        note("whole file arrived before landing (1.5 Mbps stream underneath): PREPARED median \(ms(sorted[1])) [\(runs.map(ms).joined(separator: ", "))]")
+        XCTAssertLessThan(sorted[1], 1.0)
     }
 
     /// A fast swipe: the neighbour had almost no time before it landed.

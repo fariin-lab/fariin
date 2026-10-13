@@ -307,6 +307,16 @@ final class StoryItemVideoView: UIView {
     /// nothing else would ever come along to build one for it.
     func apply(mode newMode: StoryProgressMode) {
         mode = newMode
+        // ⛔ A WHOLE FILE THAT ARRIVED AFTER THIS PLAYER WAS BUILT WINS (owner 2026-10-13). A prepared
+        // neighbour may have built on the stream while `StoryPrefetcher.warmWhole` was still fetching;
+        // landing on it then would still pay the stream's start. Measured: local file 8-300ms, stream
+        // 1.5s+. So on the way to playing, a never-started streamed player is swapped for the file.
+        if newMode == .play, !didBeginPlayback, streamedAsset != nil, let storyURL,
+           let file = CacheManager.cachedFileIfUsable(for: storyURL) {
+            StoryVideoTrace.note("landing: whole file arrived, player rebuilt on it")
+            teardownPlayer()
+            localFile = file
+        }
         if let player {
             // Playing needs more than permission: the bytes have to be here and the view has to be
             // in the hierarchy. The reference app gates on exactly these two

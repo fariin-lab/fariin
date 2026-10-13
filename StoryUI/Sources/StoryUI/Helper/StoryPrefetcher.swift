@@ -107,7 +107,12 @@ public enum StoryPrefetcher {
             // away and leave the player to fetch the same clip again from zero — the exact wait
             // this whole feature exists to remove.
             let wanted = Set([stories[index].mediaURL] + upcoming.prefix(videoDepth).map(\.mediaURL))
-            cancelStaleWindow(keeping: wanted)
+            cancelStaleWindow(keeping: wanted.union(wanted.map { wholeKey($0) }))
+            // ⛔ THE VERY NEXT CLIP, WHOLE — see `warmWhole`. The prefix warm below still runs for it,
+            // so a tap that beats the whole download still finds its opening.
+            if let next = upcoming.first, next.config.mediaType == .video, videoDepth > 0 {
+                startWhole(next.mediaURL, window: true)
+            }
             for (offset, story) in upcoming.enumerated() {
                 // The poster first and always. It is a few KB, it is what the blurred loading state
                 // draws, and having it means the story can never open on nothing.
@@ -151,6 +156,40 @@ public enum StoryPrefetcher {
     }
 
     /// Cancel the window's running video downloads that are no longer in it.
+    /// ⛔ WHOLE CLIPS, ON THE PHONE BEFORE THEY ARE REACHED — owner 2026-10-13: "swipe from Abdi's
+    /// story to Ali's, Ali's video stays paused for seconds after the turn".
+    ///
+    /// MEASURED (KulanTests/StoryPlaybackStartTests, CI simulator, a full-bitrate 3MB clip): a clip
+    /// that is a whole local file starts 8-300ms after landing; the same clip read through
+    /// `StoryVideoStream` from a 1.5MB prefix takes ~1.5s on a good connection and ~10s on a slow
+    /// one, because AVPlayer fed through a resource loader holds playback far longer than the bytes
+    /// need. The reference apps do not stream into AVPlayer either: one downloads the next three
+    /// stories in full and plays local files, another fetches each media item as one encrypted blob
+    /// and then opens it, and the one that streams prefixes runs its own player, not AVPlayer. So the clips a turn can land on are fetched WHOLE into `VideoCache`, where
+    /// `StoryItemVideoView.ensureContent` finds them and plays the file: the next item, and the item
+    /// each neighbouring person would open on. Low Data Mode still gets nothing (`Net.isConstrained`).
+    public static func warmWhole(_ stories: [Story]) {
+        queue.async {
+            guard !Net.isConstrained else { return }
+            for s in stories where s.config.mediaType == .video { startWhole(s.mediaURL, window: false) }
+        }
+    }
+
+    private static func wholeKey(_ url: String) -> String { "whole|" + url }
+
+    private static func startWhole(_ urlString: String, window: Bool) {
+        guard !urlString.isEmpty, let url = URL(string: urlString),
+              CacheManager.cachedFileIfUsable(for: url) == nil else { return }
+        let key = wholeKey(urlString)
+        guard claim(key) else { return }
+        CacheManager().loadVideo(from: url, speculative: true, allowsCellular: true,
+                                 onTask: { task in lock.lock(); running[key] = (task, window); lock.unlock() },
+                                 completion: { _ in
+                                     lock.lock(); running.removeValue(forKey: key); lock.unlock()
+                                     release(key)
+                                 })
+    }
+
     private static func cancelStaleWindow(keeping wanted: Set<String>) {
         lock.lock()
         let doomed = running.filter { $0.value.lookahead && !wanted.contains($0.key) }

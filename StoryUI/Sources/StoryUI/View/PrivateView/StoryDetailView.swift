@@ -2129,6 +2129,19 @@ private extension StoryDetailView {
                 if let i = all.firstIndex(where: { $0.id == cur.id }) {
                     StoryPrefetcher.prefetch(from: i, in: all)
                 }
+                // ⛔ THE STORY A TURN LANDS ON, EITHER WAY, WHOLE (owner 2026-10-13, see
+                // `StoryPrefetcher.warmWhole`): the item the next and the previous person open on —
+                // where they were left this session, else their first unseen — fully on the phone,
+                // so the cube lands on a local file instead of a stream.
+                if let bi = viewModel.stories.firstIndex(where: { $0.id == model.id }) {
+                    var landing: [Story] = []
+                    for j in [bi + 1, bi - 1] where viewModel.stories.indices.contains(j) {
+                        let b = viewModel.stories[j]
+                        let k = viewModel.lastIndex[b.id] ?? (b.stories.firstIndex(where: { !$0.isSeen }) ?? 0)
+                        if b.stories.indices.contains(k) { landing.append(b.stories[k]) }
+                    }
+                    StoryPrefetcher.warmWhole(landing)
+                }
             }
         }
         // Report the ACTUAL current item as seen (per-item, not the whole bucket) — drives accurate
