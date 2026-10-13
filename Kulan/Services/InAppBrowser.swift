@@ -21,8 +21,8 @@ import SafariServices
 /// ⛔ THE LOOK IS iOS 26 LIQUID GLASS WITH NO BARS AND NO LINES — owner 2026-10-13 (build 908, with
 /// the reference's screen beside ours: "top header and bottom are using borders, make it exactly
 /// like image 2"). The page fills the whole sheet. Floating over it: a glass circle (close), a glass
-/// capsule with the address and the loading fill, a glass circle (menu); at the bottom one floating
-/// glass capsule with back, forward, share, bookmark and open-in-Safari. The page is inset so its
+/// capsule with the address and the loading fill, a glass circle (menu); at the bottom two floating
+/// glass capsules, back/forward and share/reading list/open in Safari (his second picture, same day). The page is inset so its
 /// top starts below the controls; scrolled, it runs under the glass.
 ///
 /// ⚠️ PRIVACY. WebKit runs the page in its own process, so the page cannot read Kulan's memory. What
@@ -45,7 +45,10 @@ final class InAppBrowserViewController: UIViewController {
     private let progressFill = UIView()
 
     // Bottom: one floating capsule.
-    private let bottomGlass = InAppBrowserViewController.glass()
+    // ⛔ TWO CAPSULES — owner 2026-10-13, with a picture: back/forward on the left, share /
+    // reading list / Safari on the right, each its own floating glass.
+    private let navGlass = InAppBrowserViewController.glass()
+    private let actionGlass = InAppBrowserViewController.glass()
     private let backButton = UIButton(type: .system)
     private let forwardButton = UIButton(type: .system)
     private let shareButton = UIButton(type: .system)
@@ -185,22 +188,24 @@ final class InAppBrowserViewController: UIViewController {
 
     private func buildBottom() {
         func setUp(_ b: UIButton, _ name: String, _ label: String, _ action: @escaping () -> Void) {
-            b.setImage(symbol(name, 19, .regular), for: .normal)
+            b.setImage(symbol(name, 21, .regular), for: .normal)
             b.tintColor = .label
             b.accessibilityLabel = label
             b.addAction(UIAction { _ in action() }, for: .touchUpInside)
-            bottomGlass.contentView.addSubview(b)
+            let onLeft = b === backButton || b === forwardButton
+            (onLeft ? navGlass : actionGlass).contentView.addSubview(b)
         }
         setUp(backButton, "chevron.backward", "Back") { [weak self] in self?.webView.goBack() }
         setUp(forwardButton, "chevron.forward", "Forward") { [weak self] in self?.webView.goForward() }
         setUp(shareButton, "square.and.arrow.up", "Share") { [weak self] in self?.share() }
-        setUp(bookmarkButton, "bookmark", "Add to Reading List") { [weak self] in self?.addToReadingList() }
-        setUp(safariButton, "safari", "Open in Safari") { [weak self] in
+        setUp(bookmarkButton, "book", "Add to Reading List") { [weak self] in self?.addToReadingList() }
+        setUp(safariButton, "square.on.square", "Open in Safari") { [weak self] in
             guard let self else { return }
             // Leaving is allowed, but only when asked for by name.
             UIApplication.shared.open(self.webView.url ?? self.initialURL)
         }
-        view.addSubview(bottomGlass)
+        view.addSubview(navGlass)
+        view.addSubview(actionGlass)
 
         // Holding Back or Forward lists the pages in that direction, as the reference does.
         backButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
@@ -299,16 +304,24 @@ final class InAppBrowserViewController: UIViewController {
         hostLabel.frame = CGRect(x: rowX + lockW + gap, y: 0, width: textW, height: control)
         progressFill.frame = CGRect(x: 0, y: 0, width: addressW * CGFloat(webView.estimatedProgress), height: control)
 
-        // BOTTOM. One capsule, slid off the bottom edge as the fraction grows.
-        let bottomW = min(w - 96, 360)
+        // BOTTOM. Two capsules side by side, proportioned from his picture (left 37% of the row,
+        // an 11pt gap, 28pt margins), slid off the bottom edge together as the fraction grows.
         let travel = toolbarHeight + bottomPad + 20
-        bottomGlass.frame = CGRect(x: (w - bottomW) / 2, y: h - bottomPad - toolbarHeight + travel * f,
-                                   width: bottomW, height: toolbarHeight)
-        let buttons = [backButton, forwardButton, shareButton, bookmarkButton, safariButton]
-        let slot = (bottomW - 16) / CGFloat(buttons.count)
-        for (i, b) in buttons.enumerated() {
-            b.frame = CGRect(x: 8 + slot * CGFloat(i), y: 0, width: slot, height: toolbarHeight)
+        let margin: CGFloat = 28, gapB: CGFloat = 11
+        let rowW = min(w - 2 * margin, 420)
+        let leftW = ((rowW - gapB) * 0.375).rounded()
+        let barX = (w - rowW) / 2
+        let rowY = h - bottomPad - toolbarHeight + travel * f
+        navGlass.frame = CGRect(x: barX, y: rowY, width: leftW, height: toolbarHeight)
+        actionGlass.frame = CGRect(x: barX + leftW + gapB, y: rowY, width: rowW - leftW - gapB, height: toolbarHeight)
+        func lay(_ bs: [UIButton], in width: CGFloat, inset: CGFloat) {
+            let slot = (width - 2 * inset) / CGFloat(bs.count)
+            for (i, b) in bs.enumerated() {
+                b.frame = CGRect(x: inset + slot * CGFloat(i), y: 0, width: slot, height: toolbarHeight)
+            }
         }
+        lay([backButton, forwardButton], in: navGlass.bounds.width, inset: 10)
+        lay([shareButton, bookmarkButton, safariButton], in: actionGlass.bounds.width, inset: 14)
 
         // Past the middle the glass itself dematerialises (iOS 26 animates an effect change), so a
         // collapsed top is the address alone over the page.
@@ -474,10 +487,10 @@ final class InAppBrowserViewController: UIViewController {
         do {
             try SSReadingList.default()?.addItem(with: url, title: webView.title, previewText: nil)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            bookmarkButton.setImage(symbol("bookmark.fill", 19, .regular), for: .normal)
+            bookmarkButton.setImage(symbol("book.fill", 21, .regular), for: .normal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self else { return }
-                self.bookmarkButton.setImage(self.symbol("bookmark", 19, .regular), for: .normal)
+                self.bookmarkButton.setImage(self.symbol("book", 21, .regular), for: .normal)
             }
         } catch {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
