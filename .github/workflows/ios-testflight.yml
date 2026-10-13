@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: YOUTUBE CARDS, UNPIN, STORY REACTIONS, REPOST, SETTINGS.
+            THIS BUILD: KULAN'S OWN IN-APP BROWSER.
+            Every web link now opens in Kulan's own browser sheet, not Safari: chat links, link cards, profile links, Settings help/privacy/terms, sign-up terms.
+            Title and address at the top with the menu and close; back, forward, reload and share at the bottom. Scroll down and the bars get out of the way; scroll up or tap the slim top bar to bring them back.
+            Swipe from the left/right edge for back/forward; hold Back or Forward to see history. Menu: reload, copy link, share, find on page, text size, open in Safari.
+            Phone numbers and email links still go to the phone/mail app. Swipe down to close.
+            PLEASE TEST: tap links in a chat, a profile and Settings; scroll a long page up and down; go back and forward; close and reopen.
+
+            ALSO IN THIS BUILD: YOUTUBE CARDS, UNPIN, STORY REACTIONS, REPOST, SETTINGS.
             YouTube links: the video's real cover with a play button, the title and channel; tapping opens the YouTube app, or the browser if it is not installed.
             Unpin: the pin button only opens its menu now; if an unpin fails, a message says why.
             Story reactions: no swipe to reply and no long press.
