@@ -213,7 +213,6 @@ struct ThreadView: View {
     @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
     @State private var voiceOnceDismiss: DispatchWorkItem?   // cancels a superseded toast's own timer (audit)
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
-    @State private var unpinError: String?             // a refused unpin, said out loud (see `unpin`)
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
@@ -2526,7 +2525,9 @@ struct ThreadView: View {
         repo.unpinLocally(id)
         Task {
             do { try await ChatService.unpin(cid, id) }
-            catch { await MainActor.run { unpinError = error.localizedDescription } }
+            // A toast, not an alert inside the bar: the bar has already gone (unpinLocally), and an
+            // alert hung on it went with it, so a refusal was never seen.
+            catch { await MainActor.run { showJumpToast("Couldn't unpin: \(error.localizedDescription)") } }
         }
     }
 
@@ -2615,6 +2616,51 @@ struct ThreadView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .clipped()
+                // ⛔ THE JUMP TAP IS ON THE TEXT, NOT THE WHOLE BAR — owner 2026-10-13: Unpin from the pin
+                // button's menu did nothing (See All's worked). The tap that jumps to the pin (paging older
+                // history, or opening See All when it cannot be reached) covered the pin button too, so
+                // opening the menu could also start a jump and move the bar under it.
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Three outcomes, and only one of them used to exist.
+                    //
+                    // `ensureLoaded` pages older history looking for the message and gives up after 12
+                    // pages, about 480 messages. Everything past that was reported as "Pinned message was
+                    // deleted", which is not true and was never likely to be: delete-for-everyone already
+                    // drops the pin (ChatService.removePinnedMessage), so a pin that still exists is
+                    // almost never a deleted message. It is simply too old to reach by paging.
+                    //
+                    // So: jump to it when we can reach it. Say deleted only when the repository has PROVEN
+                    // it is gone. Otherwise the message is real and out of reach, and the pinned list can
+                    // show it to him — which is the one thing that beats a sentence explaining why not.
+                    // owner audit 2026-10-06 chat #10: a newer jump or the down arrow supersedes this one.
+                    jumpSeq += 1
+                    let seq = jumpSeq
+                    Task {
+                        await repo.ensureLoaded(pid)
+                        await MainActor.run {
+                            guard seq == jumpSeq else { return }
+                            if repo.items.contains(where: { $0.id == pid }) {
+                                flashAndScroll(pid)
+                                // owner audit 2026-10-06 chat #75: advance only once the jump really
+                                // landed. Moving on after a failed jump (toast or the pinned sheet) left
+                                // the bar naming a pin the reader never reached. The index test skips the
+                                // advance if the pin list changed (and reset the index) while this paged.
+                                if ids.count > 1, min(pinIndex, ids.count - 1) == idx {
+                                    // The reference banner's spring: 0.3 s, damping 1 (no bounce).
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 1)) {
+                                        pinIndex = (idx + 1) % ids.count   // next tap shows the next pin
+                                    }
+                                }
+                            }
+                            else if repo.pinnedGone.contains(pid) { showJumpToast("Pinned message was deleted") }
+                            else { showPinnedSheet = true }
+                        }
+                    }
+                }
+                // 20pt = the nav bar's own button inset on iOS 26 (the glass back-button circle's leading
+                // edge). scenePadding resolved to 16pt here, leaving the bar poking 4pt past the back button;
+                // this lines the bar's edges up exactly under the back button and the call/video pill.
                 // Pin icon → menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
                 // ⛔ A UIKIT MENU, NOT SwiftUI's `Menu` — owner 2026-10-13: "Unpin from this menu does
                 // not work well; See All works". The sheet's Unpin and this one call the same `unpin`,
@@ -2640,55 +2686,11 @@ struct ThreadView: View {
                             },
                             onSeeAll: { showPinnedSheet = true })
                     }
-                .alert("Couldn't unpin", isPresented: Binding(get: { unpinError != nil },
-                                                             set: { if !$0 { unpinError = nil } })) {
-                    Button("OK", role: .cancel) {}
-                } message: { Text(unpinError ?? "") }
             }
             .padding(.leading, 14).padding(.trailing, 8)
             .frame(height: 48)
             .liquidGlass(RoundedRectangle(cornerRadius: 24, style: .continuous), interactive: true)
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .onTapGesture {
-                // Three outcomes, and only one of them used to exist.
-                //
-                // `ensureLoaded` pages older history looking for the message and gives up after 12
-                // pages, about 480 messages. Everything past that was reported as "Pinned message was
-                // deleted", which is not true and was never likely to be: delete-for-everyone already
-                // drops the pin (ChatService.removePinnedMessage), so a pin that still exists is
-                // almost never a deleted message. It is simply too old to reach by paging.
-                //
-                // So: jump to it when we can reach it. Say deleted only when the repository has PROVEN
-                // it is gone. Otherwise the message is real and out of reach, and the pinned list can
-                // show it to him — which is the one thing that beats a sentence explaining why not.
-                // owner audit 2026-10-06 chat #10: a newer jump or the down arrow supersedes this one.
-                jumpSeq += 1
-                let seq = jumpSeq
-                Task {
-                    await repo.ensureLoaded(pid)
-                    await MainActor.run {
-                        guard seq == jumpSeq else { return }
-                        if repo.items.contains(where: { $0.id == pid }) {
-                            flashAndScroll(pid)
-                            // owner audit 2026-10-06 chat #75: advance only once the jump really
-                            // landed. Moving on after a failed jump (toast or the pinned sheet) left
-                            // the bar naming a pin the reader never reached. The index test skips the
-                            // advance if the pin list changed (and reset the index) while this paged.
-                            if ids.count > 1, min(pinIndex, ids.count - 1) == idx {
-                                // The reference banner's spring: 0.3 s, damping 1 (no bounce).
-                                withAnimation(.spring(response: 0.3, dampingFraction: 1)) {
-                                    pinIndex = (idx + 1) % ids.count   // next tap shows the next pin
-                                }
-                            }
-                        }
-                        else if repo.pinnedGone.contains(pid) { showJumpToast("Pinned message was deleted") }
-                        else { showPinnedSheet = true }
-                    }
-                }
-            }
-            // 20pt = the nav bar's own button inset on iOS 26 (the glass back-button circle's leading
-            // edge). scenePadding resolved to 16pt here, leaving the bar poking 4pt past the back button;
-            // this lines the bar's edges up exactly under the back button and the call/video pill.
             .padding(.horizontal, 20)
             .padding(.top, 6).padding(.bottom, 2)
             .transition(.move(edge: .top).combined(with: .opacity))
