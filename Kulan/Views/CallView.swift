@@ -2087,8 +2087,10 @@ struct FloatingCallWindow: View {
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
         }
-        .clipShape(shape)
+        // Size BEFORE the clip: the blurred photo is tabH wide, so clipping first cut the shape at
+        // 120pt and the 32pt frame after it clipped nothing (owner 2026-10-13: "cut that area").
         .frame(width: tabW, height: tabH)
+        .clipShape(shape)
         // Audit M-053, 2026-10-07: the PiP source view lived only on the video CARD, so a video call
         // parked as this tab had none, and leaving the app then had no window to detach into: the
         // capture was interrupted and the other side dropped to the avatar. The tab carries one too
