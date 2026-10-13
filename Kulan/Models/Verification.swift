@@ -362,8 +362,17 @@ struct VerifiedMark: View {
     /// chat header hit this on 09-27, `ChatHeaderView.verifiedMark`). Drawn once into a picture,
     /// there is no symbol left to recolour, so it stays a white tick on blue everywhere.
     private var mark: some View {
-        Image(uiImage: Self.badge(size: size, blue: UIColor(Color(hex: 0x3DA1FD)), weight: .regular))
+        Image(uiImage: Self.badge(size: size * Self.scale, blue: Self.blue, weight: Self.weight))
+            .frame(width: size, height: size)
     }
+
+    /// ⛔ ONE BADGE FOR EVERYBODY, THE OFFICIAL CHANNEL INCLUDED — owner 2026-10-13: the Fariin tick
+    /// and a person's tick sat side by side in the chat list at two sizes and two blues (official
+    /// 82% of its box, #0A84FF, semibold; a person 100%, #3DA1FD, regular). He asked for the middle
+    /// of both. `VerifiedTick` and the info sheet read these three, so they cannot drift again.
+    static let blue = UIColor(Color(hex: 0x2392FE))
+    static let scale: CGFloat = 0.91
+    static let weight: UIImage.SymbolWeight = .medium
 
     /// The seal as a flat picture at `size` points.
     static func badge(size: CGFloat, blue: UIColor, weight: UIImage.SymbolWeight) -> UIImage {
@@ -394,7 +403,7 @@ struct VerificationInfoSheet: View {
             VStack(spacing: 18) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 56))
-                    .foregroundStyle(.white, Color(hex: 0x3DA1FD))
+                    .foregroundStyle(.white, Color(uiColor: VerifiedMark.blue))
                     .symbolRenderingMode(.palette)
                     .padding(.top, 28)
 

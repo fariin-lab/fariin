@@ -37,8 +37,9 @@ struct UserView: View {
     @ViewBuilder private var verifiedTick: some View {
         if isVerified {
             Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white, Color(red: 0.0, green: 0.48, blue: 1.0))
+                // The app's one badge blue and weight (`VerifiedMark` in the app, owner 2026-10-13).
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white, Color(red: 0x23 / 255.0, green: 0x92 / 255.0, blue: 0xFE / 255.0))
                 .symbolRenderingMode(.palette)
                 .accessibilityLabel("Verified")
         }

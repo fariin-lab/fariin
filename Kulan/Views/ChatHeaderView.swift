@@ -313,9 +313,8 @@ struct ChatHeaderModel: Equatable {
     /// The verified mark drawn the way `VerifiedMark` draws it in SwiftUI — a palette seal, white
     /// tick on the brand blue — so the UIKit header and every SwiftUI badge in the app agree.
     static func verifiedMark() -> UIImage? {
-        let config = UIImage.SymbolConfiguration(paletteColors: [.white, UIColor(Color(hex: 0x3DA1FD))])
-            .applying(UIImage.SymbolConfiguration(pointSize: 14, weight: .regular))
-        return flat(UIImage(systemName: "checkmark.seal.fill", withConfiguration: config))
+        // One badge for everybody (`VerifiedMark.blue/scale/weight`, owner 2026-10-13).
+        VerifiedMark.badge(size: 15 * VerifiedMark.scale, blue: VerifiedMark.blue, weight: VerifiedMark.weight)
     }
 
     /// ⛔ A PLAIN BITMAP, NOT A SYMBOL — owner, 2026-09-27: "the verify badge in the chat header
@@ -331,12 +330,9 @@ struct ChatHeaderModel: Equatable {
             .withRenderingMode(.alwaysOriginal)
     }
 
-    /// The official channel's tick, as `VerifiedTick` draws it (system blue, semibold).
-    static func officialTick() -> UIImage? {
-        let config = UIImage.SymbolConfiguration(paletteColors: [.white, UIColor(Color(hex: 0x0A84FF))])
-            .applying(UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        return flat(UIImage(systemName: "checkmark.seal.fill", withConfiguration: config))
-    }
+    /// The official channel's tick: the SAME badge as everybody's since 2026-10-13 (owner: two sizes
+    /// and two blues side by side). Kept as its own name so the call sites read as they did.
+    static func officialTick() -> UIImage? { verifiedMark() }
 
     /// The timer, as the old SwiftUI header drew it: 13pt semibold. A TEMPLATE, tinted by the image
     /// view, so it follows the header's light/dark decision instead of freezing one appearance in.
