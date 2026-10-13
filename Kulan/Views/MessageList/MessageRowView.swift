@@ -919,8 +919,12 @@ final class MessageRowView: UIView {
         }
         if let sr = row.storyReply, sr.opens,
            let plan = b.storyReplyPlan, let thumb = plan.thumb {
+            // In the scope `StoryDoor` reads — see `StoryReplyCardView.flightKey`. The card also
+            // registers its live view; this keeps the rectangle current on a tap after a scroll.
             let rect = convert(thumb, to: nil)
-            if rect.width > 1 { MediaOpenRects.capture(sr.anchorKey, rect, cornerRadius: 14) }
+            if rect.width > 1 {
+                MediaOpenRects.capture(MediaOpenRects.key(.storyRow, sr.anchorKey), rect, cornerRadius: 14)
+            }
         }
     }
 

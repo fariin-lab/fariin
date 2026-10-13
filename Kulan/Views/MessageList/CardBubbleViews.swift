@@ -334,6 +334,15 @@ final class PillBubbleView: UIView {
 /// had to be told twice before it did.
 final class StoryReplyCardView: UIView {
     private let caption = UILabel()
+    /// ⛔ THE STORY LINK CARD'S REGISTRATION, EXACTLY — owner 2026-10-13: "the reply preview's open
+    /// and close animation must be the Story Link -> View Story one". Both open through
+    /// `StoryDoor.open`, which looks the source up in the `.storyRow` scope. This card used to write
+    /// its rectangle under the BARE key from `MessageRowView`, so the door found nothing: no cover
+    /// lifted off the card, no landing back on it, and the card was never hidden while the story
+    /// was out. Now it registers the way `LinkPreviewBubbleView` does: scoped key, the live view, its
+    /// own 14pt corner, released on reuse, hidden while it is the flight's source.
+    private(set) var flightKey = ""
+    private var visibilityToken: AnyCancellable?
     private let bar = UIView()
     private let thumb = RowImageView(frame: .zero)
     private let unavailable = UILabel()
@@ -352,10 +361,17 @@ final class StoryReplyCardView: UIView {
         addSubview(thumb)
         unavailable.lineBreakMode = .byTruncatingTail
         addSubview(unavailable)
+        visibilityToken = MediaSourceVisibility.shared.hiddenIdPublisher
+            .removeDuplicates()
+            .sink { [weak self] id in self?.applyVisibility(hiddenId: id) }
     }
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ sr: StoryReplyChrome, plan: StoryReplyPlan, cid: String) {
+        defer {
+            setFlightKey(sr.opens && plan.thumb != nil ? MediaOpenRects.key(.storyRow, sr.anchorKey) : "")
+            applyVisibility(hiddenId: MediaSourceVisibility.shared.hiddenId)
+        }
         caption.frame = plan.caption
         caption.attributedText = plan.captionAttr
 
@@ -379,7 +395,35 @@ final class StoryReplyCardView: UIView {
         }
     }
 
-    func prepareForReuse() { thumb.reset() }
+    func prepareForReuse() {
+        thumb.reset()
+        setFlightKey("")
+        thumb.alpha = 1
+    }
+
+    private func setFlightKey(_ key: String) {
+        if key != flightKey {
+            if !flightKey.isEmpty { MediaOpenRects.releaseView(flightKey, ifItIs: thumb) }
+            flightKey = key
+        }
+        // Re-registered on every configure too: the row may have moved under the same key.
+        if !key.isEmpty { register() }
+    }
+
+    private func register() {
+        guard window != nil, !thumb.isHidden else { return }
+        MediaOpenRects.captureView(flightKey, thumb)
+        MediaOpenRects.capture(flightKey, thumb.convert(thumb.bounds, to: nil), cornerRadius: 14)
+    }
+
+    private func applyVisibility(hiddenId: String?) {
+        thumb.alpha = (!flightKey.isEmpty && hiddenId == flightKey) ? 0 : 1
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil, !flightKey.isEmpty { register() }
+    }
 }
 
 // ── A poll ──
