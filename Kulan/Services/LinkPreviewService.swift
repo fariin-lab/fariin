@@ -342,10 +342,29 @@ actor LinkPreviewService {
         req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
         req.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
         req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        // ⛔ ONLY AS FAR AS </head> — owner 2026-10-13: "loading the preview takes too long". The
+        // whole page used to download before a tag was read: yahoo.com is 672KB and its og tags end
+        // at byte 10,262 (github 573KB / 32KB, bbc 390KB / 85KB, measured that day). The body is
+        // streamed and the read stops at the end of <head>, where every tag used here lives, or at
+        // the old 300KB cap.
+        guard let (bytes, resp) = try? await URLSession.shared.bytes(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               (http.mimeType ?? "").contains("html") else { return nil }
-        let html = String(decoding: data.prefix(300_000), as: UTF8.self)
+        var data = Data()
+        data.reserveCapacity(64_000)
+        let headEnd = Array("</head>".utf8)
+        do {
+            for try await byte in bytes {
+                data.append(byte)
+                if data.count >= 300_000 { break }
+                // Checked only when a '>' lands, so the search runs once per tag, not per byte.
+                if byte == UInt8(ascii: ">"), data.count >= headEnd.count,
+                   data.suffix(headEnd.count).map({ $0 | 0x20 }) == headEnd.map({ $0 | 0x20 }) { break }
+            }
+        } catch {
+            if data.isEmpty { return nil }   // what arrived before a dropped connection is still read
+        }
+        let html = String(decoding: data, as: UTF8.self)
 
         let title = metaContent(html, property: "og:title")
             ?? metaContent(html, property: "twitter:title")

@@ -33,6 +33,15 @@ final class ComposerBannerView: UIView {
                                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 20)),
                                    size: CGSize(width: 24, height: 24))
     private let divider = UIView()
+    /// Title / description / host placeholders while a link's page loads (owner 2026-10-13: a
+    /// skeleton, not the spinner and the bare host). Made on first use.
+    private lazy var skeletonBars: [ShimmerView] = (0..<3).map { _ in
+        let v = ShimmerView()
+        v.layer.cornerRadius = 4
+        addSubview(v)
+        return v
+    }
+    private var isLoadingLink: Bool { banner?.thumb == .loading }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -137,8 +146,13 @@ final class ComposerBannerView: UIView {
         }
         foot.text = b.footnote
         foot.isHidden = b.footnote == nil
+        let loading = b.thumb == .loading
+        title.alpha = loading ? 0 : 1
+        if loading || skeletonsMade { skeletonBars.forEach { $0.isHidden = !loading } }
+        if loading { skeletonsMade = true }
         setNeedsLayout()
     }
+    private var skeletonsMade = false
 
     // MARK: - Layout
 
@@ -194,6 +208,18 @@ final class ComposerBannerView: UIView {
             y += 2
             foot.frame = CGRect(x: x, y: y, width: colW, height: footH)
         }
+        if isLoadingLink {
+            // Three bars where the title, description and host will be, centred on the thumb.
+            let widths: [CGFloat] = [0.62, 0.9, 0.38]
+            let heights: [CGFloat] = [10, 8, 7]
+            let gap: CGFloat = 6
+            let total = heights.reduce(0, +) + gap * 2
+            var by = mid - total / 2
+            for (i, v) in skeletonBars.enumerated() {
+                v.frame = CGRect(x: x, y: by, width: colW * widths[i], height: heights[i])
+                by += heights[i] + gap
+            }
+        }
         divider.frame = CGRect(x: M.dividerInset, y: bounds.height - Theme.hairline,
                                width: max(0, W - 2 * M.dividerInset), height: Theme.hairline)
     }
@@ -215,29 +241,29 @@ final class ThumbImageView: UIImageView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// 2026-09-24 feature-audit: made on first use, only the link card's loading state needs it.
-    private var spinner: UIActivityIndicatorView?
+    /// The link card's loading state: a skeleton block, not a spinner (owner 2026-10-13). Made on
+    /// first use, only that state needs it.
+    private var shimmer: ShimmerView?
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        spinner?.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        shimmer?.frame = bounds
     }
 
     func load(_ t: ChatComposerBanner.Thumb?) {
         if case .loading? = t {
             key = "loading"
             image = nil
-            if spinner == nil {
-                let s = UIActivityIndicatorView(style: .medium)
-                s.hidesWhenStopped = true
-                addSubview(s)
-                spinner = s
+            if shimmer == nil {
+                let v = ShimmerView()
+                addSubview(v)
+                shimmer = v
             }
-            spinner?.startAnimating()
+            shimmer?.isHidden = false
             setNeedsLayout()
             return
         }
-        spinner?.stopAnimating()
+        shimmer?.isHidden = true
         guard let t else { key = ""; image = nil; return }
         switch t {
         case .loading:
@@ -300,5 +326,62 @@ final class MiniBarsView: UIView {
             UIBezierPath(roundedRect: CGRect(x: x, y: (size.height - h) / 2, width: barW, height: h),
                          cornerRadius: barW / 2).fill()
         }
+    }
+}
+
+
+/// A skeleton placeholder: a soft grey block with a lighter band sweeping across it, the loading
+/// look of large apps' link cards. Animates only while it is in a window and visible.
+final class ShimmerView: UIView {
+    private let band = CAGradientLayer()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .tertiarySystemFill
+        clipsToBounds = true
+        isUserInteractionEnabled = false
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+        layer.addSublayer(band)
+        updateColors()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func updateColors() {
+        let shine = UIColor.label.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.10 : 0.07)
+        band.colors = [UIColor.clear.cgColor, shine.cgColor, UIColor.clear.cgColor]
+        band.locations = [0, 0.5, 1]
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        updateColors()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // The band is as wide as the view and travels from fully left of it to fully right.
+        band.frame = CGRect(x: -bounds.width, y: 0, width: bounds.width, height: bounds.height)
+        restart()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        restart()
+    }
+
+    override var isHidden: Bool { didSet { restart() } }
+
+    private func restart() {
+        band.removeAnimation(forKey: "sweep")
+        guard window != nil, !isHidden, bounds.width > 0 else { return }
+        let a = CABasicAnimation(keyPath: "transform.translation.x")
+        a.fromValue = 0
+        a.toValue = bounds.width * 2
+        a.duration = 1.2
+        a.repeatCount = .infinity
+        a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        band.add(a, forKey: "sweep")
     }
 }
