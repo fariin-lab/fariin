@@ -4896,15 +4896,7 @@ struct StoryViewer: View {
         // the exact one he reposted". Everybody else's bubble still opens their profile (his
         // 2026-10-11 ruling). Gone (deleted or expired) says so in words instead.
         if uid == me, let r = currentStory?.repostOf, r.authorUid == me {
-            // ⛔ SWAPPED IN PLACE — owner 2026-10-13, twice. The first fix closed this viewer and opened
-            // mine in the same moment (an overlapping pop, and a list with nothing to return to); the
-            // second stacked mine over this one, which he rejected: the friend's story must be gone,
-            // mine must open normally, and closing mine must leave the Stories list exactly where it
-            // was. `StoryDoor.swapToOwnStory` replaces the viewer's content on the SAME screen (the
-            // delete re-feed's way): nothing is dismissed or presented, the list underneath is never
-            // touched, and the close is the ordinary one. Not one of our door's viewers: the old path.
-            if StoryDoor.swapToOwnStory(r.storyId) { return }
-            if !StoryDoor.reopen(onStory: r.storyId, by: me) { ownRepostGone = true }
+            openMyRepostedOriginal(r.storyId)
             return
         }
         let r = groups.flatMap(\.stories).compactMap(\.repostOf).first { $0.authorUid == uid }
@@ -4912,6 +4904,20 @@ struct StoryViewer: View {
             ?? StoryGroup(authorUid: uid, name: r?.authorName ?? "",
                           photoUrl: authorPhoto(uid), stories: [],
                           lastViewedAt: nil, isMine: uid == me)
+    }
+
+    /// A repost of MY story: my original opens. One door for both repost looks (owner 2026-10-13:
+    /// the card's bubble did this, the full-screen repost's header credit opened my profile).
+    ///
+    /// ⛔ SWAPPED IN PLACE — owner 2026-10-13, twice. The first fix closed this viewer and opened
+    /// mine in the same moment (an overlapping pop, and a list with nothing to return to); the
+    /// second stacked mine over this one, which he rejected: the friend's story must be gone and
+    /// mine must open normally. `StoryDoor.swapToOwnStory` replaces the viewer's content on the
+    /// SAME screen (the delete re-feed's way): nothing is dismissed or presented. Not one of our
+    /// door's viewers: the old path. Gone (deleted or expired) says so in words instead.
+    private func openMyRepostedOriginal(_ storyId: String) {
+        if StoryDoor.swapToOwnStory(storyId) { return }
+        if !StoryDoor.reopen(onStory: storyId, by: me) { ownRepostGone = true }
     }
 
     /// ⛔ THE AUTHOR'S FACE, ACTUALLY LOADED, BEFORE A REPOST'S CARD OR CHIP IS MADE (owner, 2026-10-12:
@@ -4954,6 +4960,12 @@ struct StoryViewer: View {
     private func openRepostOriginal(of storyId: String) {
         guard let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
               let r = s.repostOf else { return }
+        // ⛔ EXCEPT MY OWN STORY (owner 2026-10-13, full-screen repost): the header credit must do
+        // what the card's bubble does, open my story, not my profile.
+        if r.authorUid == me {
+            openMyRepostedOriginal(r.storyId)
+            return
+        }
         // ⛔ THE CREDIT OPENS THE AUTHOR'S PROFILE, NOT THEIR STORY (owner, 2026-10-11: "when I tap
         // the repost's name or face, open the profile; now it opens the other story"). The same
         // profile sheet the header's own tap uses, so the story underneath is held while it is up.
