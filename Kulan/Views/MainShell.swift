@@ -640,6 +640,15 @@ struct CallsView: View {
         return false
     }
 
+    /// This run holds the 1:1 call that is up right now: its live row is `call_<callId>` (written at
+    /// the ring, flipped to ongoing on connect; `ChatService.recordCallRinging`).
+    private func isLiveCall(_ run: CallRun) -> Bool {
+        let svc = CallService.shared
+        let s = svc.state
+        guard s == .outgoing || s == .active || s == .reconnecting, let id = svc.callId else { return false }
+        return run.ids.contains("call_\(id)")
+    }
+
     private func deleteSelectedCalls() {
         // A run's id is its NEWEST entry's id, and runs are regrouped live — a call ending mid-
         // selection (recordCall force-reloads the repo), or a change of filter/search, gives that
@@ -698,6 +707,7 @@ struct CallsView: View {
             CallHistoryRow(
                 call: call,
                 count: run.entries.count,
+                live: isLiveCall(run),
                 onProfile: { profileTarget = call },
                 onCall: {   // the ROW: call back the same way (video stays video), no confirm
                     if bringLiveCallForward() { return }   // 2026-09-24 decision D26
@@ -1199,6 +1209,8 @@ private struct GroupCallHistoryRow: View {
 struct CallHistoryRow: View {
     let call: CallEntry
     var count: Int = 1        // consecutive same-kind calls collapsed into this row → "name (3)"
+    /// The call on this row is up right now: Return instead of the time and the (i).
+    var live: Bool = false
     var onProfile: () -> Void
     var onCall: () -> Void
 
@@ -1264,27 +1276,47 @@ struct CallHistoryRow: View {
                         .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    Text(timeLabel(call.date)).font(.system(size: 14)).foregroundStyle(.secondary)
+                    if !live {
+                        Text(timeLabel(call.date)).font(.system(size: 14)).foregroundStyle(.secondary)
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
+            // ⛔ RETURN — owner 2026-10-13, with the reference app's row. While this call is up its row
+            // shows no time and one green pill: prominent glass tinted green, the filled phone (or
+            // camera) glyph 4pt from a bold subheadline "Return". The row's tap already brings the
+            // call forward (`bringLiveCallForward`), so the pill runs the same action.
+            if live {
+                Button(action: onCall) {
+                    HStack(spacing: 4) {
+                        Image(systemName: call.video ? "video.fill" : "phone.fill")
+                        Text("Return")
+                    }
+                    .font(.subheadline.bold())
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.green)
+            }
+
             // The (i) → the contact profile. Plain glyph, no disc behind it: the reference's is an
             // outline on the page's own background, and the disc we used to draw was there to make a
             // call button look like an action. This is not the action any more.
-            Button(action: onProfile) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 21))
-                    // ⛔ THE APP'S OWN INK, NOT THE TINT — owner, 2026-09-02: "the blue icon, make
-                    // it our colour". `.tint` here resolved to the system blue rather than the
-                    // app's `.primary`, so this was the one blue mark on a black-and-white page —
-                    // the same rule he set for Glow: the app is black and white.
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)        // 44pt hit target (HIG min) without enlarging the visual
-                    .contentShape(Rectangle())
+            if !live {
+                Button(action: onProfile) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 21))
+                        // ⛔ THE APP'S OWN INK, NOT THE TINT — owner, 2026-09-02: "the blue icon, make
+                        // it our colour". `.tint` here resolved to the system blue rather than the
+                        // app's `.primary`, so this was the one blue mark on a black-and-white page —
+                        // the same rule he set for Glow: the app is black and white.
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 44, height: 44)        // 44pt hit target (HIG min) without enlarging the visual
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.vertical, 2)
     }
