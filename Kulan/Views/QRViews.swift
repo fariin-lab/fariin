@@ -20,13 +20,42 @@ private func fariinLink(_ handle: String) -> String { KulanApp.userLink(handle: 
 /// are testing it. H tolerates 30%, which is the room the mark actually takes.
 /// 2026-09-24 fix-all #126: internal (was private) so the group invite sheet draws its link with
 /// this same generator rather than a second one.
-func qrImage(from string: String) -> UIImage? {
+func qrImage(from string: String, clearCentre: CGFloat = 0) -> UIImage? {
     let filter = CIFilter.qrCodeGenerator()
     filter.message = Data(string.utf8)
     filter.correctionLevel = "H"
-    guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
+    guard clearCentre > 0 else {
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
+              let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+    // ⛔ THE MIDDLE IS LEFT OUT WHOLE MODULES AT A TIME — owner 2026-10-13: "my logo is overlapping
+    // the QR code, remove my logo's background". A white plate laid over the finished code cut
+    // modules in half along its edges, which read as a ragged hole. Here the code is drawn module by
+    // module and a square of whole modules in the centre is skipped, so the hole has clean edges and
+    // the mark sits in it with no plate. Odd-sized so it stays centred on the middle module.
+    guard let output = filter.outputImage,
           let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
-    return UIImage(cgImage: cg)
+    let n = cg.width
+    guard n > 0, cg.height == n else { return nil }
+    var px = [UInt8](repeating: 255, count: n * n)
+    guard let ctx = CGContext(data: &px, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n,
+                              space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+    else { return nil }
+    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: n, height: n))
+    var hole = Int((CGFloat(n) * clearCentre).rounded())
+    if hole % 2 != n % 2 { hole += 1 }
+    let lo = (n - hole) / 2, hi = lo + hole
+    let scale: CGFloat = 10
+    let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
+    return UIGraphicsImageRenderer(size: CGSize(width: CGFloat(n) * scale, height: CGFloat(n) * scale), format: fmt).image { r in
+        UIColor.white.setFill(); r.fill(CGRect(x: 0, y: 0, width: CGFloat(n) * scale, height: CGFloat(n) * scale))
+        UIColor.black.setFill()
+        for y in 0..<n { for x in 0..<n where px[y * n + x] < 128 {
+            if (lo..<hi).contains(x) && (lo..<hi).contains(y) { continue }
+            r.fill(CGRect(x: CGFloat(x) * scale, y: CGFloat(y) * scale, width: scale, height: scale))
+        } }
+    }
 }
 
 /// Read a QR code out of a still image, for the "scan a picture" path.
@@ -231,7 +260,7 @@ struct MyQRView: View {
     /// off-screen at 3x so it is sharp enough to print or scan from another screen. The photo is
     /// fetched first because an off-screen render cannot wait for a network image.
     private func saveCodeCard() {
-        guard !handle.isEmpty, let code = qrImage(from: fariinLink(handle)) else { return }
+        guard !handle.isEmpty, let code = qrImage(from: fariinLink(handle), clearCentre: 0.26) else { return }
         savingCard = true
         Task { @MainActor in
             var photo: UIImage?
@@ -268,17 +297,14 @@ struct MyQRView: View {
     /// ALWAYS ON WHITE, in both themes. A QR code is read as dark-on-light and inverting it for dark
     /// mode is the classic way to make one that half the scanners in the world refuse.
     @ViewBuilder private var qrBlock: some View {
-        if let img = qrImage(from: fariinLink(handle)) {
+        if let img = qrImage(from: fariinLink(handle), clearCentre: 0.26) {
             Image(uiImage: img)
                 .interpolation(.none).resizable().scaledToFit()
                 .frame(width: 220, height: 220)
                 .overlay {
-                    // The mark, in the middle, in a cleared white BLOCK (owner 2026-09-25: the
-                    // modules crowded the old disc). 64pt of 220 is under 9% of the code, well
-                    // inside the 30% the H correction level buys us.
+                    // The mark, in the middle, in the hole the code was drawn with (whole modules
+                    // left out, `qrImage(clearCentre:)`): no white plate (owner 2026-10-13).
                     QRCentreMark(size: 44)
-                        .frame(width: 64, height: 64)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .padding(18)
                 .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -895,10 +921,8 @@ private struct SavedCodeCard: View {
                             .interpolation(.none)
                             .resizable()
                             .frame(width: 230, height: 230)
-                        // The same cleared block as the on-screen code, scaled to 230.
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .fill(.white).frame(width: 67, height: 67)
-                        QRCentreMark(size: 44)
+                        // The same module-cut hole as the on-screen code; no plate.
+                        QRCentreMark(size: 46)
                     }
                     .padding(.top, 18).padding(.bottom, 30)
                 }
