@@ -213,6 +213,7 @@ struct ThreadView: View {
     @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
     @State private var voiceOnceDismiss: DispatchWorkItem?   // cancels a superseded toast's own timer (audit)
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
+    @State private var unpinError: String?             // a refused unpin, said out loud (see `unpin`)
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
@@ -1748,7 +1749,7 @@ struct ThreadView: View {
                 me: me, cid: cid, title: title,
                 nameFor: { personName($0) },
                 canUnpin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
-                onUnpin: { id in Task { await ChatService.removePinnedMessage(cid, id) } },
+                onUnpin: { id in unpin(id) },
                 onTap: { id in
                     showPinnedSheet = false
                     // owner audit 2026-10-06 chat #10 / #75: superseded by a newer jump or the down
@@ -2520,6 +2521,15 @@ struct ThreadView: View {
         }
     }
 
+    /// Unpin: gone from the bar at once, the shared write behind it, and a refusal said out loud.
+    private func unpin(_ id: String) {
+        repo.unpinLocally(id)
+        Task {
+            do { try await ChatService.unpin(cid, id) }
+            catch { await MainActor.run { unpinError = error.localizedDescription } }
+        }
+    }
+
     // Liquid-Glass pinned-message bar below the nav (tap to scroll to it; pin.slash to unpin).
     @ViewBuilder private var pinnedBar: some View {
         if !visiblePinIds.isEmpty {
@@ -2609,7 +2619,7 @@ struct ThreadView: View {
                 Menu {
                     if !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false) {
                         Button {
-                            Task { await ChatService.removePinnedMessage(cid, pid) }
+                            unpin(pid)
                             if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
                         } label: { Label("Unpin", systemImage: "pin.slash") }
                     }
@@ -2639,6 +2649,10 @@ struct ThreadView: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .alert("Couldn't unpin", isPresented: Binding(get: { unpinError != nil },
+                                                             set: { if !$0 { unpinError = nil } })) {
+                    Button("OK", role: .cancel) {}
+                } message: { Text(unpinError ?? "") }
             }
             .padding(.leading, 14).padding(.trailing, 8)
             .frame(height: 48)

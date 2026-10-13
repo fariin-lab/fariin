@@ -3448,7 +3448,12 @@ enum ChatService {
             .setData(["pinnedMessageIds": FieldValue.arrayUnion([messageId])], merge: true)
     }
     static func removePinnedMessage(_ cid: String, _ messageId: String) async {
-        try? await db.collection("conversations").document(cid)
+        try? await unpin(cid, messageId)
+    }
+    /// The same write, with its error: the pinned bar's Unpin says why a refused unpin came back
+    /// (owner 2026-10-13: "unpin is not working", and the `try?` above had been throwing the reason away).
+    static func unpin(_ cid: String, _ messageId: String) async throws {
+        try await db.collection("conversations").document(cid)
             .setData(["pinnedMessageIds": FieldValue.arrayRemove([messageId])], merge: true)
     }
 

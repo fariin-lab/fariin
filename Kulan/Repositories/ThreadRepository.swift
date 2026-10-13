@@ -243,6 +243,7 @@ final class ThreadRepository {
         let ids = Set(pinnedMessageIds)
         pinnedPreviews = pinnedPreviews.filter { ids.contains($0.key) }
         pinnedGone = pinnedGone.filter { ids.contains($0) }
+        defer { persistPins() }
         for id in ids where pinnedPreviews[id] == nil && !pinnedFetching.contains(id) {
             if let inWindow = byId[id] { keepPinned(inWindow); continue }
             pinnedFetching.insert(id)
@@ -265,6 +266,34 @@ final class ThreadRepository {
     /// the one place in the app still showing something you deleted.
     private func keepPinned(_ m: Message) {
         if m.deleted { pinnedGone.insert(m.id) } else { pinnedPreviews[m.id] = m }
+        persistPins()
+    }
+
+    // ⛔ THE PINS ARE KEPT ON THE PHONE BETWEEN VISITS — owner 2026-10-13: "every time I open the chat
+    // the bar says Pinned Message / Tap to view, and the real pin comes seconds later". `pinnedPreviews`
+    // lived only as long as this repository, so every open started empty and fetched each pin again
+    // over the network before the bar had anything to draw. The reference apps read the pinned
+    // message out of their own local database, so their bar is drawn on the first frame. Ours now
+    // keeps the pinned messages (decrypted, like the rest of the chat's cached window) beside that
+    // window in `ThreadMessageCache`, in pin order, and seeds both the list and the previews from it
+    // at init. The conversation listener still decides: its first snapshot replaces the seeded list.
+    private var pinCacheKey: String { "pins-" + cid }
+    private func persistPins() {
+        let ordered = pinnedMessageIds.compactMap { pinnedPreviews[$0] }
+        ThreadMessageCache.shared.store(pinCacheKey, ordered)
+    }
+    private func seedPinsFromCache() {
+        guard let cached = ThreadMessageCache.shared.messages(for: pinCacheKey), !cached.isEmpty else { return }
+        pinnedMessageIds = cached.map(\.id)
+        for m in cached where !m.deleted { pinnedPreviews[m.id] = m }
+    }
+
+    /// Unpin on screen NOW (owner 2026-10-13: "unpin is not working"). The shared write follows;
+    /// if the server refuses it, the next snapshot puts the pin back and the caller says why.
+    func unpinLocally(_ id: String) {
+        guard pinnedMessageIds.contains(id) else { return }
+        pinnedMessageIds.removeAll { $0 == id }
+        syncPinnedPreviews()
     }
 
     init(cid: String) {
@@ -282,6 +311,8 @@ final class ThreadRepository {
         // seeded, so a pending message is on screen from the very first frame with its sending/failed
         // state intact and its retry affordance available.
         pending = ThreadMessageCache.shared.pending(for: cid)
+        // The pinned bar's content from the last visit, so the bar is drawn on the first frame.
+        seedPinsFromCache()
         // Seed the last-decrypted messages SYNCHRONOUSLY so the conversation is fully rendered and
         // frozen on the first frame — before the push transition — as standard messengers do, instead of
         // fading in a beat late while the E2EE decrypt runs off the main thread. The live listener
