@@ -457,10 +457,8 @@ enum StoryDoor {
     /// viewer of ours is open, and the caller closes instead.
     /// ⛔ A REPOST OF MY OWN STORY, OPENED FROM INSIDE A VIEWER: my story takes this screen's place
     /// (owner 2026-10-13). Same in-place swap as `dropStory` (`replaceContent`, no dismiss, no
-    /// present), so the friend's story is simply gone, nothing overlaps, and the Stories list under
-    /// the screen is never touched. The close is the ordinary one with no card to fly to (a drift),
-    /// and the row afterwards settles on the person it was opened from, as any close does
-    /// (`activeAuthorUid` is left as it was), which is the position he left it at. False when no
+    /// present), so the friend's story is simply gone and nothing overlaps. Closing it lands on MY
+    /// card in the Stories list (owner, 2026-10-13 evening; see the note in the body). False when no
     /// viewer of ours is up or the story is gone; the caller then takes the old path.
     static func swapToOwnStory(_ storyId: String) -> Bool {
         guard var next = request, let mine = StoriesRepository.shared.mine,
@@ -470,12 +468,27 @@ enum StoryDoor {
         next.startStoryId = storyId
         next.deliveredToMe = false
         next.pinned = true
-        // No card to land on: the friend's card is not mine, and flying my story into it would be a
-        // lie. Empty is the documented "no flight" key (`closeWithDrift`).
-        next.sourceKey = ""
+        // ⛔ THE CLOSE LANDS ON MY OWN CARD — owner 2026-10-13 (third report, build 908): swiping my
+        // story down went back to the friend's place in the list; "return to the Stories list and
+        // show my own story card, since the story open is my own". This reverses this morning's
+        // "leave the list where it was" (the empty key + untouched active person). My card is
+        // keyed by my group id in both the row and the list (`openStoryFromRow` opens `from: g.id`).
+        next.sourceKey = mine.id
         request = next
-        StoryDoorState.shared.openGroup = mine
+        let door = StoryDoorState.shared
+        door.openGroup = mine
+        // My card carries no screen prefix (the friends page's `friendspage-` would name a card that
+        // is not there), so the namespace is reset to the bare id before the person moves to me.
+        door.setKeyNamespace(openedWith: mine.id, groupId: mine.id)
+        // The person on screen is me now: the list scrolls my card into view (`activeSourceKey`
+        // observer in StoriesTabView, the row's `scrollToActiveIfNeeded`), and the close leaves the
+        // row on me (`restoreRowToUid`).
+        door.setActive(sourceKey: mine.id, authorUid: mine.authorUid)
         StoryZoomPresenter.replaceContent(viewer(next, refeed: true))
+        // The hole and the cover move to my card once the list has scrolled it in (a lazy list has
+        // no view for it before). If the photograph still fails, `retarget` moves nothing and the
+        // close fades instead of flying the friend's picture into my card.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { retarget(to: mine.id) }
         return true
     }
 
