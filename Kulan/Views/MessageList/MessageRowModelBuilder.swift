@@ -297,7 +297,8 @@ enum MessageRowModelBuilder {
                 thumbUrl: reply.storyThumbUrl,
                 anchorKey: "storyreply-\(msg.id)",
                 unavailable: !live,
-                opens: live)
+                opens: live,
+                isReaction: reply.isReaction == true)
         }
 
         var quote: QuoteChrome?

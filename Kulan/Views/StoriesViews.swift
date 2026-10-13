@@ -5056,7 +5056,9 @@ struct StoryViewer: View {
         guard !text.isEmpty else { return }
         let cid = [me, s.authorUid].sorted().joined(separator: "_")
         // Attach the status reference so the reply shows as a "Status" quote (thumbnail) in chat.
-        let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.previewUrl)
+        // `isReaction`: the react bar (an emoji and no typed text) — drawn on the card's corner.
+        let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.previewUrl,
+                           isReaction: typed == nil && emoji != nil ? true : nil)
         // Audit 2026-09-24: this was `try?`, so a reply that failed (no keys reachable offline, a
         // rule refusal) vanished while the toast below still said "Sent". The optimistic toast stays
         // (a write queued offline never returns, so waiting for it would show nothing), but a thrown

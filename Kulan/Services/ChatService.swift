@@ -881,6 +881,7 @@ enum ChatService {
             let rc = try await Crypto.shared.encryptForConversation(cid, r.text)
             var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": rc]
             if r.isStatus { e["isStatus"] = true }
+            if r.isReaction == true { e["isReaction"] = true }   // the story react bar (see ReplyRef)
             if let thumb = r.storyThumbUrl, !thumb.isEmpty { e["storyThumb"] = thumb }   // plaintext story URL (not E2EE)
             replyEnc = e
         }
@@ -1015,6 +1016,7 @@ enum ChatService {
             let rc = try await Crypto.shared.encryptForGroup(r.text, members: members)
             var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": rc]
             if r.isStatus { e["isStatus"] = true }
+            if r.isReaction == true { e["isReaction"] = true }   // the story react bar (see ReplyRef)
             if let thumb = r.storyThumbUrl, !thumb.isEmpty { e["storyThumb"] = thumb }
             replyEnc = e
         }
@@ -2336,6 +2338,7 @@ enum ChatService {
             else { rc = try await Crypto.shared.encryptForConversation(cid, r.text) }
             var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": rc]
             if r.isStatus { e["isStatus"] = true }
+            if r.isReaction == true { e["isReaction"] = true }   // the story react bar (see ReplyRef)
             if let thumb = r.storyThumbUrl, !thumb.isEmpty { e["storyThumb"] = thumb }   // plaintext story URL (not E2EE)
             replyEnc = e
         }

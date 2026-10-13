@@ -8,11 +8,11 @@ import UIKit
 @MainActor
 final class StoryReplyLayoutTests: XCTestCase {
 
-    private func row(isMe: Bool, dateHeader: Bool, unread: Bool) -> MessageRowModel {
+    private func row(isMe: Bool, dateHeader: Bool, unread: Bool, reaction: Bool = false) -> MessageRowModel {
         let reply = StoryReplyChrome(storyId: "s1", authorId: isMe ? "them" : "me",
                                      caption: isMe ? "You replied to their story" : "Abdi replied to your story",
                                      thumbUrl: "https://example.invalid/t.jpg", anchorKey: "storyreply-m1",
-                                     unavailable: false, opens: true)
+                                     unavailable: false, opens: true, isReaction: reaction)
         let bubble = BubbleRow(isMe: isMe, body: .jumbomoji("🔥"), fill: isMe ? .solid(0x007AFF) : .received,
                                radii: .cluster(isMe: isMe, first: true, last: true),
                                meta: MetaChrome(timeText: "9:01 AM", edited: false, tick: .read,
@@ -63,6 +63,22 @@ final class StoryReplyLayoutTests: XCTestCase {
             let bar = try XCTUnwrap(sr.bar), thumb = try XCTUnwrap(sr.thumb)
             let between = isMe ? bar.minX - thumb.maxX : thumb.minX - bar.maxX
             XCTAssertEqual(between, 9, accuracy: 0.5, "bar-to-picture gap, isMe=\(isMe)")
+        }
+    }
+
+    /// Owner 2026-10-13: a react-bar emoji sits ON the card's bottom corner (the side away from the
+    /// grey bar), the time just under the card.
+    func testReactBarEmojiSitsOnTheCardCorner() throws {
+        for isMe in [false, true] {
+            let p = MessageRowLayout.plan(row(isMe: isMe, dateHeader: true, unread: false, reaction: true), width: 393)
+            guard case .bubble(let b) = p.body else { throw XCTSkip("not a bubble plan") }
+            let card = try XCTUnwrap(b.storyReplyPlan?.thumb)
+            let glyph = b.text.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY)
+            let meta = b.meta.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY)
+            let corner = CGPoint(x: isMe ? card.minX : card.maxX, y: card.maxY)
+            XCTAssertTrue(glyph.insetBy(dx: -2, dy: -2).contains(corner), "emoji covers the card corner, isMe=\(isMe)")
+            XCTAssertGreaterThanOrEqual(meta.minY, card.maxY, "time under the card, isMe=\(isMe)")
+            XCTAssertLessThan(meta.minY - card.maxY, 12, "time close under the card, isMe=\(isMe)")
         }
     }
 }

@@ -761,7 +761,37 @@ enum MessageRowLayout {
         let bubbleW = contentW + hPad * 2
         let bubbleH = innerY + vPad
         let bubbleX = b.isMe ? (columnX + columnW - bubbleW) : columnX
-        let bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
+        var bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
+        var textRectOut = textRect, metaRectOut = metaRect, bodyAttrOut = bodyAttr
+
+        // ⛔ A STORY REACTION SITS ON THE CARD'S CORNER — owner 2026-10-13, with a drawing: an emoji
+        // sent from the story's react bar is not a message under the card but a mark on it. The
+        // emoji overlaps the card's bottom corner on the side away from the grey bar, and the time
+        // sits just under the card. ONLY for the react bar (`StoryReplyChrome.isReaction`); a typed
+        // reply, even one emoji, keeps the ordinary layout. The card is placed exactly as before
+        // (`storyReplyPlan` measures from this bubble's outer edge, which does not move).
+        if isJumbo, let sr = b.storyReply, sr.isReaction, !sr.unavailable, sr.thumbUrl?.isEmpty == false,
+           senderNameAttr == nil, !b.forwarded {
+            bodyAttrOut = NSAttributedString(string: bodyAttr.string, attributes: [
+                .font: UIFont.systemFont(ofSize: Self.storyReactionGlyph), .foregroundColor: textColor])
+            let glyph = lineSizeOf(bodyAttrOut)
+            let cardBottom = y - BubbleMetrics.senderNameGap
+            let right = columnX + columnW, left = columnX
+            let bar: CGFloat = 5, gap: CGFloat = 9
+            let cardMinX = b.isMe ? right - bar - gap - storyCardWidth : left + bar + gap
+            let cardMaxX = cardMinX + storyCardWidth
+            let centerX = b.isMe ? cardMinX + 6 : cardMaxX - 6
+            let g = CGRect(x: centerX - glyph.width / 2, y: cardBottom - glyph.height * 0.62,
+                           width: glyph.width, height: glyph.height)
+            let m = CGRect(x: b.isMe ? cardMaxX - metaSize.width : cardMinX, y: cardBottom + 4,
+                           width: metaSize.width, height: metaSize.height)
+            let u = g.union(m)
+            let box = b.isMe ? CGRect(x: u.minX, y: u.minY, width: right - u.minX, height: u.height)
+                             : CGRect(x: left, y: u.minY, width: u.maxX - left, height: u.height)
+            bubbleRect = box
+            textRectOut = g.offsetBy(dx: -box.minX, dy: -box.minY)
+            metaRectOut = m.offsetBy(dx: -box.minX, dy: -box.minY)
+        }
         y = bubbleRect.maxY
 
         var plan = BubblePlan(
@@ -770,7 +800,7 @@ enum MessageRowLayout {
             isCapsule: false,
             fill: isJumbo ? .clear : b.fill,                  // a jumbomoji bubble keeps its box and drops its fill
             rim: isJumbo ? false : b.rim,
-            text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
+            text: textRectOut, meta: metaRectOut, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             // ⛔ A BORDERLESS BUBBLE'S FOOTER CANNOT USE THE OUTGOING COLOUR. `myMeta` is white at
             // 70% and exists for the blue fill; the jumbomoji branch above clears that fill and drops
@@ -781,7 +811,7 @@ enum MessageRowLayout {
             // Incoming was fine by accident: `receivedMeta` is a system secondary label, which is
             // already surface-relative. This gives the outgoing side the same property when there is
             // no bubble under it. Theirs does the same thing for the same reason.
-            bodyAttr: bodyAttr, links: links, textColor: textColor,
+            bodyAttr: bodyAttrOut, links: links, textColor: textColor,
             metaColor: isJumbo ? BubblePalette.receivedMeta : metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
@@ -1599,6 +1629,8 @@ enum MessageRowLayout {
     // ── The story-reply card ──
 
     private static let storyCardHeight: CGFloat = 140
+    /// The react-bar emoji on the card's corner: about two fifths of the card's width.
+    private static let storyReactionGlyph: CGFloat = 34
     private static let storyCardWidth: CGFloat = 80
 
     private static func storyReplyCaption(_ sr: StoryReplyChrome) -> NSAttributedString {

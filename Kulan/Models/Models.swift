@@ -206,6 +206,9 @@ struct ReplyRef: Equatable, Codable {
     var text: String          // decrypted snippet
     var isStatus: Bool = false       // true = this quote points at a story/status, not a chat message
     var storyThumbUrl: String? = nil // plain (non-E2EE) story image URL, baked so it shows in-window
+    /// Sent from the story's REACT BAR (owner 2026-10-13): drawn on the card's corner, not as a
+    /// message under it. Optional so cached messages from older builds still decode.
+    var isReaction: Bool? = nil
 }
 
 // Local delivery state for a message I'm sending. nil = a confirmed server message
@@ -784,7 +787,8 @@ struct Message: Identifiable, Equatable, Codable {
                 // with that author (group). 1:1 ignores authorId (symmetric cid-pair key).
                 text: crypto.decrypt(r["text"] as? String ?? "", cid: cid, authorId: data["authorId"] as? String ?? ""),
                 isStatus: r["isStatus"] as? Bool ?? false,
-                storyThumbUrl: r["storyThumb"] as? String   // plaintext story URL, no decrypt
+                storyThumbUrl: r["storyThumb"] as? String,   // plaintext story URL, no decrypt
+                isReaction: r["isReaction"] as? Bool
             )
         }
         if let ts = data["createdAt"] as? Timestamp {

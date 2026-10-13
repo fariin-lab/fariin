@@ -344,6 +344,8 @@ struct StoryReplyChrome: Equatable {
     /// This card is a DOOR — tapping it flies the story open — so it registers a flight rect.
     /// False for the bubbles that draw a quote but never open one.
     var opens: Bool
+    /// Sent from the story's react bar: the emoji is drawn on the card's corner (MessageRowLayout).
+    var isReaction: Bool = false
 }
 
 /// A message bubble, fully resolved.
