@@ -91,6 +91,15 @@ final class StoryVideoSession {
         view?.apply(mode: newMode)
     }
 
+    /// This page is the person beside the one on screen: its item builds its player paused. Stored
+    /// like the mode, so a view that binds later is told too. See `StoryItemVideoView.setPrepared`.
+    private(set) var prepared = false
+
+    func setPrepared(_ on: Bool) {
+        prepared = on
+        view?.setPrepared(on)
+    }
+
     /// Restart what is playing, in place. One caller: tapping back past the first story.
     func restart() { view?.restart() }
 
@@ -100,6 +109,7 @@ final class StoryVideoSession {
     func bind(_ v: StoryItemVideoView) {
         view = v
         takeClaim(v.storyKey)
+        v.setPrepared(prepared)
         v.apply(mode: mode)
     }
 

@@ -98,6 +98,9 @@ final class StoryItemVideoView: UIView {
     private var streamedAsset: AVURLAsset?
 
     private var mode: StoryProgressMode = .pause
+    /// The next or previous PERSON's item, sitting on the cube's side face: build the player now,
+    /// paused, so it is ready the moment the turn lands. See `setPrepared`.
+    private var prepared = false
     private weak var session: StoryVideoSession?
 
     /// The bytes are on disk. The reference app keys its loading shimmer on this and never on player
@@ -321,11 +324,41 @@ final class StoryItemVideoView: UIView {
                 // Pausing IS the moment the sheet comes up over a story, so the frame is in hand
                 // before the first swipe can ask for it. Idempotent and cheap: a second call for the
                 // same second finds it cached and starts nothing.
-                if let storyURL { StoryVideoFrames.warm(storyURL, at: currentSecond) }
+                // Not for a prepared player that has never played: it is on second zero, which is
+                // the poster the card already has, and a still taken through the reader would
+                // spend a neighbour's bandwidth on nothing.
+                if let storyURL, didBeginPlayback { StoryVideoFrames.warm(storyURL, at: currentSecond) }
             }
         }
         initializeVideoIfReady()
         publishStatus()
+    }
+
+    /// ⛔ THE NEIGHBOUR'S PLAYER IS BUILT BEFORE THE TURN, NOT AFTER IT — owner 2026-10-13: "Ali's
+    /// video, swipe to Abdi, Abdi's video sits frozen for seconds, every time, watched or not".
+    ///
+    /// The four earlier fixes (895..fc614189) all made the BYTES arrive sooner. The bytes were never
+    /// the whole wait: no player existed for the next person until the cube had landed, because
+    /// `initializeVideoIfReady` refused to build one while paused. So every person switch paid,
+    /// AFTER the turn, for a new AVPlayer, the reader's content-information round trip, the asset's
+    /// track load, `.readyToPlay`, a decoder spin-up and a first frame, each step a KVO hop on the
+    /// main thread, cached clip or not.
+    ///
+    /// That refusal is the reference app's rule, ported literally, and it holds THERE because its
+    /// player is its own: it decodes straight from bytes already in its media store, so building on
+    /// the tap costs it almost nothing. AVFoundation has no such shortcut. So the item on the side
+    /// face (only the person either side of the one on screen, never a carousel card, never two
+    /// away) builds its player paused, prerolls, and shows its real first frame; landing is just
+    /// `play()`. Three players at most: the one on screen and one each side, the decoder cap.
+    func setPrepared(_ on: Bool) {
+        guard on != prepared else { return }
+        prepared = on
+        if on {
+            initializeVideoIfReady()
+        } else if mode == .pause, !didBeginPlayback, player != nil {
+            // No longer next to the person on screen, and never watched: give the decoder back.
+            teardownPlayer()
+        }
     }
 
     /// ⚠️ THE OTHER SEEK, AND THE ONLY ONE THAT IS NOT ON A FRESH PLAYER. It is an explicit thing the
@@ -363,7 +396,8 @@ final class StoryItemVideoView: UIView {
     /// back until the window is real.
     private func initializeVideoIfReady() {
         guard player == nil else { return }
-        guard mode == .play else { return }
+        // ...or the person beside the one on screen, built paused — see `setPrepared`.
+        guard mode == .play || prepared else { return }
         guard contentLoaded, let file = localFile else { return }
 
         // Stories are sound-on media: `.playback` plays through the ringer switch. The default

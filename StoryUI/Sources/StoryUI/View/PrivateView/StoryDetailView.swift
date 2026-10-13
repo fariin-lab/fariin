@@ -2584,7 +2584,27 @@ private extension StoryDetailView {
     /// Re-take the decision and hand it to the item. Cheap and safe to call from anywhere, and every
     /// former `playVideo()` / `pauseVideo()` call site now calls this instead.
     func syncVideoMode() {
+        // Mode FIRST: a page landing must already be `.play` when it is re-asked about preparing.
         video.setMode(videoMode)
+        video.setPrepared(videoPrepared)
+    }
+
+    /// The person on screen, or right before or right after it, showing a video: its player is
+    /// built now, even paused, so the turn onto it lands on a clip that is ready to play. See
+    /// `StoryItemVideoView.setPrepared` for why a paused player is built at all.
+    ///
+    /// ⚠️ THE PAGE ON SCREEN COUNTS TOO. Otherwise landing flips it from prepared to not, and a
+    /// landing held paused (a finger already down) would give back the player it was built for.
+    var videoPrepared: Bool {
+        // Not while the viewers sheet keeps paused items alive: those already sit at the decoder cap.
+        guard !StoryItemViewStore.retainDismounted else { return false }
+        if viewModel.currentStoryUser != model.id {
+            guard let me = viewModel.stories.firstIndex(where: { $0.id == model.id }),
+                  let cur = viewModel.stories.firstIndex(where: { $0.id == viewModel.currentStoryUser }),
+                  abs(me - cur) == 1 else { return false }
+        }
+        let i = getCurrentIndex()
+        return model.stories.indices.contains(i) && model.stories[i].config.mediaType == .video
     }
 
     /// Leaving the app and coming back, from whichever of the two sources reports it first.
