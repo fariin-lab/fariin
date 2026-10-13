@@ -321,6 +321,7 @@ struct StoryDetailView: View {
     static let legacyPauseReason = "legacy"
     @State private var hostPause = HostPauseBox()  // @State keeps the SAME box across re-renders
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
+    @State private var announcedStart = false   // `.storyLandingStarted` sent for this landing
     @State private var isFolding: Bool = false   // true while this page is mid-cube-fold (pause timer)
     /// The video is waiting on bytes MID-CLIP, so the progress bar holds. Mirrored from the session
     /// on the tick — see `startProgress`. It is a mirror rather than the truth because the bar's
@@ -871,6 +872,7 @@ struct StoryDetailView: View {
         // `startProgress`, where a missed edge is impossible and the numbers cannot belong to
         // anybody else.
         .onChange(of: viewModel.currentStoryUser) { newValue in
+            announcedStart = false   // a new landing (or leaving) announces again
             // ⚠️ THE `.stopVideo` BROADCAST THAT USED TO OPEN THIS IS GONE, AND NOTHING REPLACES IT.
             // It was posted with `object: nil`, so it reached every mounted page's player and each
             // one had to work out whether it was the one being left. `videoMode`'s first line
@@ -2021,6 +2023,14 @@ private extension StoryDetailView {
         // they will be watched, across people, so the last item of one warms the first of the next.
         if viewModel.currentStoryUser == model.id {
             let cur = getStory(with: getCurrentIndex())
+            // ⛔ TELL THE PAGER THIS STORY HAS STARTED, once per landing: a photo at once, a video
+            // when its clock moves. The pager builds the next neighbours only then, so their pages
+            // and prepared players never compete with this clip's start (see
+            // `StoryPager.Coordinator.prewarmWhenStarted`).
+            if !announcedStart, cur.config.mediaType != .video || (video.isPlaying && video.timestamp > 0) {
+                announcedStart = true
+                NotificationCenter.default.post(name: .storyLandingStarted, object: model.id)
+            }
             // ⚠️ THE MODE IS RE-ASSERTED HERE, AND THAT CLOSES A WHOLE CLASS OF DEAD STORY.
             //
             // `mode` has exactly one writer — `session.setMode` — and for the FIRST video item on a

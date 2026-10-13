@@ -246,4 +246,8 @@ public struct StoryTapPerson: Hashable {
 public extension Notification.Name {
     /// A person bubble was tapped. object = `StoryTapPerson.id`.
     static let storyTapPersonOpen = Notification.Name("storyTapPersonOpen")
+    /// The page now on screen has STARTED: its photo is up, or its video is moving. Object: its
+    /// bucket id. The pager builds the next neighbours on this, not on the landing (see
+    /// `StoryPager.Coordinator.prewarmWhenStarted`).
+    static let storyLandingStarted = Notification.Name("storyLandingStarted")
 }

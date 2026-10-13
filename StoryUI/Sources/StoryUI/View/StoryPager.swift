@@ -351,6 +351,32 @@ struct StoryPager: UIViewControllerRepresentable {
         // blur system; what pulls away now is the card, over the live chat list, as below.
         private var didInstallPan = false
 
+        /// ⛔ THE NEXT NEIGHBOURS ARE BUILT ONCE THE LANDED STORY HAS STARTED, NOT AT THE LANDING —
+        /// owner 2026-10-13: "Ali's video, swipe to Casho: the turn has finished but Casho's video
+        /// sits for about a second, as if it were still turning; opening a story from the chat list
+        /// does not do this". The difference between the two paths: the open warms the neighbours at
+        /// its START, under the open flight, so they are done before the video needs the main
+        /// thread; a swipe warmed them AT the landing — two full story pages laid out on the main
+        /// thread, each preparing its own video player (`StoryItemVideoView.setPrepared`), in the very
+        /// moment the landed clip's player needed the main thread for its ready/play/first-frame hops.
+        /// The landed page now says when it has started (`.storyLandingStarted`), and only then does
+        /// the next pair get built. No timer: the signal is the story actually showing.
+        private var prewarmWaitingFor: String?
+        private var landingObserver: NSObjectProtocol?
+
+        private func prewarmWhenStarted(_ id: String) {
+            prewarmWaitingFor = id
+            if landingObserver == nil {
+                landingObserver = NotificationCenter.default.addObserver(
+                    forName: .storyLandingStarted, object: nil, queue: .main) { [weak self] note in
+                    guard let self, let started = note.object as? String,
+                          started == self.prewarmWaitingFor else { return }
+                    self.prewarmWaitingFor = nil
+                    self.prewarmNeighbours(of: started)
+                }
+            }
+        }
+
         /// ⚠️ A PROGRAMMATIC PAGE TURN IS IN FLIGHT. Without this the app CRASHES — his
         /// `Kulan-2026-08-10-114950.ips`, build 520, `SIGABRT` from a UIKit assertion:
         /// `-[UIPageViewController _flushViewController:animated:]` ← `_UIQueuingScrollView
@@ -550,7 +576,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 StoryPager.personTurnActive = false
                 guard let self else { return }
                 self.isTurning = false
-                self.prewarmNeighbours(of: next)
+                self.prewarmWhenStarted(next)
                 self.replayPendingSync()
             }
             pendingLanding = land
@@ -656,7 +682,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 // ⚠️ `isTurning` COMES DOWN HERE AND NOWHERE EARLIER. It is tied to the real end of
                 // the turn, never to a duration we guessed.
                 self.isTurning = false
-                self.prewarmNeighbours(of: next)
+                self.prewarmWhenStarted(next)
                 self.replayPendingSync()
             }
             pendingLanding = land
@@ -794,7 +820,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 return
             }
             parent.viewModel.currentStoryUser = cur   // StoryView's onChange fires onUserChanged
-            prewarmNeighbours(of: cur)
+            prewarmWhenStarted(cur)
         }
 
         /// The finger asked for the person after the last one. A tap on that story already closes
