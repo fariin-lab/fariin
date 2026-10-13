@@ -621,17 +621,10 @@ struct ContactsSearchView: View {
 
 // MARK: - Settings search
 
-struct SettingsSearchView: View {
-    var onSignOut: () -> Void
-    var onCancel: () -> Void
-    init(onSignOut: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}) {
-        self.onSignOut = onSignOut; self.onCancel = onCancel
-    }
-    @State private var query = ""
-    @FocusState private var searchFocused: Bool
-    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
-
-    private struct Entry: Identifiable {
+/// Every settings page, searchable by its title and a few words people type for it. Used by the
+/// settings search page and by the Settings sheet's own search bar, so the two never disagree.
+enum SettingsIndex {
+    struct Entry: Identifiable {
         var id: String { title }   // stable identity (was UUID() -> new id each render = List flicker)
         let title: String
         let icon: String
@@ -642,7 +635,7 @@ struct SettingsSearchView: View {
         let dest: AnyView
     }
 
-    private var entries: [Entry] {
+    static func entries(onSignOut: @escaping () -> Void) -> [Entry] {
         [
             Entry(title: "Account", icon: "ic_account",
                   keywords: "account name username id sign out delete",
@@ -668,6 +661,12 @@ struct SettingsSearchView: View {
             Entry(title: "Privacy & Security", icon: "ic_privacy",
                   keywords: "privacy security read receipts typing last seen app lock screen",
                   dest: AnyView(PrivacySettingsView())),
+            Entry(title: "Storage and Data", icon: "externaldrive", system: true,
+                  keywords: "storage data cache download network usage",
+                  dest: AnyView(StorageDataView())),
+            Entry(title: "Chat Key", icon: "ic_chat_key",
+                  keywords: "chat key pin number code private",
+                  dest: AnyView(ChatPinPage())),
             Entry(title: "Blocked Users", icon: "hand.raised", system: true,
                   keywords: "blocked block users",
                   dest: AnyView(BlockedUsersView())),
@@ -676,6 +675,29 @@ struct SettingsSearchView: View {
                   dest: AnyView(AboutView())),
         ]
     }
+
+
+    static func matching(_ query: String, onSignOut: @escaping () -> Void) -> [Entry] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let all = entries(onSignOut: onSignOut)
+        guard !q.isEmpty else { return all }
+        return all.filter { $0.title.lowercased().contains(q) || $0.keywords.contains(q) }
+    }
+}
+
+
+struct SettingsSearchView: View {
+    var onSignOut: () -> Void
+    var onCancel: () -> Void
+    init(onSignOut: @escaping () -> Void = {}, onCancel: @escaping () -> Void = {}) {
+        self.onSignOut = onSignOut; self.onCancel = onCancel
+    }
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+
+    private typealias Entry = SettingsIndex.Entry
+    private var entries: [Entry] { SettingsIndex.entries(onSignOut: onSignOut) }
 
     private var results: [Entry] {
         let q = trimmed.lowercased()
