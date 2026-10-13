@@ -1,25 +1,29 @@
 import UIKit
 import WebKit
+import SafariServices
 
 /// KULAN'S OWN BROWSER — owner, 2026-10-13: "whenever a user taps any link … open it inside Kulan's
-/// own browser sheet", with the reference app's browsing behaviour and a simpler look of our own.
+/// own browser sheet", with the reference app's browsing behaviour.
 ///
 /// What is the reference app's, verified in its source (BrowserUI, read 2026-10-13), not guessed:
 /// - the page stays invisible until loading passes 10%, then fades in, so a sheet never opens onto
 ///   a white flash of half-drawn layout;
 /// - edge swipes go back and forward through the page history;
-/// - the bars FOLLOW THE FINGER: every point scrolled moves a 0-1 collapse fraction by that many
-///   points over the top bar's height; near either end of the page the fraction is capped so the bars
-///   come back before you reach it; when the finger lets go they snap to whichever side is nearer
-///   the middle (0.25s ease), and a tap on the collapsed bar opens them again (0.4s spring);
+/// - the controls FOLLOW THE FINGER: every point scrolled moves a 0-1 collapse fraction by that many
+///   points over the top bar's height; near either end of the page the fraction is capped so the
+///   controls come back before you reach it; when the finger lets go they snap to whichever side is
+///   nearer the middle (0.25s ease), and a tap on the collapsed top opens them again (0.4s spring);
 /// - only web addresses load in place; tel:, mailto:, maps and the like go to the system, FaceTime
 ///   is ignored outright (a page must not be able to start a call), and a page that asks for a new
 ///   window gets it in this one;
 /// - alerts and confirms a page raises are shown natively, titled with the site.
 ///
-/// What is ours: the layout. Title and address sit left-aligned in a plain bar with the two
-/// controls at the right, and back / forward / reload / share live in a full-width bottom bar, not
-/// a floating pill.
+/// ⛔ THE LOOK IS iOS 26 LIQUID GLASS WITH NO BARS AND NO LINES — owner 2026-10-13 (build 908, with
+/// the reference's screen beside ours: "top header and bottom are using borders, make it exactly
+/// like image 2"). The page fills the whole sheet. Floating over it: a glass circle (close), a glass
+/// capsule with the address and the loading fill, a glass circle (menu); at the bottom one floating
+/// glass capsule with back, forward, share, bookmark and open-in-Safari. The page is inset so its
+/// top starts below the controls; scrolled, it runs under the glass.
 ///
 /// ⚠️ PRIVACY. WebKit runs the page in its own process, so the page cannot read Kulan's memory. What
 /// would open a door is a script bridge (`WKScriptMessageHandler`) or an injected user script: this
@@ -29,38 +33,53 @@ final class InAppBrowserViewController: UIViewController {
     private let initialURL: URL
     private let webView: WKWebView
 
-    private let topBar = UIView()
-    private let topSeparator = UIView()
-    private let titleLabel = UILabel()
-    private let hostLabel = UILabel()
-    private let lockView = UIImageView()
+    // Top: close circle, address capsule, menu circle.
+    private let closeGlass = InAppBrowserViewController.glass()
+    private let addressGlass = InAppBrowserViewController.glass()
+    private let menuGlass = InAppBrowserViewController.glass()
     private let closeButton = UIButton(type: .system)
     private let menuButton = UIButton(type: .system)
-    private let progressView = UIView()
+    private let addressButton = UIButton(type: .system)
+    private let hostLabel = UILabel()
+    private let lockView = UIImageView()
+    private let progressFill = UIView()
 
-    private let bottomBar = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
-    private let bottomSeparator = UIView()
+    // Bottom: one floating capsule.
+    private let bottomGlass = InAppBrowserViewController.glass()
     private let backButton = UIButton(type: .system)
     private let forwardButton = UIButton(type: .system)
-    private let reloadButton = UIButton(type: .system)
     private let shareButton = UIButton(type: .system)
+    private let bookmarkButton = UIButton(type: .system)
+    private let safariButton = UIButton(type: .system)
 
     private let errorView = UIStackView()
     private let errorMessage = UILabel()
 
     private var observations: [NSKeyValueObservation] = []
 
-    // Bar sizes. The reference collapses its top bar to a slim strip and slides the toolbar away.
+    // Sizes. `expandedTop` is the distance that collapses the controls fully (the reference's top
+    // bar height); `toolbarHeight` is the bottom capsule's.
     private let expandedTop: CGFloat = 58
-    private let collapsedTop: CGFloat = 26
-    private let toolbarHeight: CGFloat = 49
+    private let toolbarHeight: CGFloat = 50
+    private let control: CGFloat = 44
 
-    /// 0 = bars fully out, 1 = top bar slim and toolbar gone.
+    /// 0 = controls fully out, 1 = top shrunk to the address alone and the bottom capsule gone.
     private var collapse: CGFloat = 0
     private var lastOffsetToTop: CGFloat?
     private var ignoreScrollUntilStopped = false
+    /// Whether the glass is currently drawn; it dematerialises past the middle of a collapse.
+    private var glassShown = true
 
     private static let zoomSteps: [CGFloat] = [0.5, 0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0]
+
+    /// The app's interactive glass, as the composer's pill and lock use it.
+    private static func glass() -> UIVisualEffectView {
+        let g = UIGlassEffect(style: .regular)
+        g.isInteractive = true
+        let v = UIVisualEffectView(effect: g)
+        v.cornerConfiguration = .capsule()
+        return v
+    }
 
     init(url: URL) {
         initialURL = url
@@ -95,8 +114,8 @@ final class InAppBrowserViewController: UIViewController {
         webView.uiDelegate = self
         view.addSubview(webView)
 
-        buildTopBar()
-        buildBottomBar()
+        buildTop()
+        buildBottom()
         buildErrorView()
 
         // WebKit posts these on the main thread; `assumeIsolated` says so to the compiler.
@@ -107,7 +126,7 @@ final class InAppBrowserViewController: UIViewController {
             webView.observe(\.hasOnlySecureContent) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshTitle() } },
             webView.observe(\.canGoBack) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshButtons() } },
             webView.observe(\.canGoForward) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshButtons() } },
-            // Stop mid-load leaves `estimatedProgress` where it was; this is what clears the line then.
+            // Stop mid-load leaves `estimatedProgress` where it was; this is what clears the fill then.
             webView.observe(\.isLoading) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshButtons(); self?.progressChanged() } },
         ]
 
@@ -116,75 +135,72 @@ final class InAppBrowserViewController: UIViewController {
         webView.load(URLRequest(url: initialURL))
     }
 
-    private func buildTopBar() {
-        topBar.backgroundColor = .systemBackground
-        view.addSubview(topBar)
+    private func symbol(_ name: String, _ size: CGFloat, _ weight: UIImage.SymbolWeight = .semibold) -> UIImage? {
+        UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight))
+    }
 
-        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        titleLabel.textColor = .label
-        titleLabel.lineBreakMode = .byTruncatingTail
-        topBar.addSubview(titleLabel)
+    private func fill(_ glass: UIVisualEffectView, with button: UIButton) {
+        button.frame = glass.contentView.bounds
+        button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        glass.contentView.addSubview(button)
+    }
 
-        hostLabel.font = .systemFont(ofSize: 13)
-        hostLabel.textColor = .secondaryLabel
-        hostLabel.lineBreakMode = .byTruncatingMiddle
-        topBar.addSubview(hostLabel)
-
-        lockView.contentMode = .scaleAspectFit
-        lockView.tintColor = .secondaryLabel
-        topBar.addSubview(lockView)
-
-        var close = UIButton.Configuration.glass()
-        close.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
-        close.baseForegroundColor = .label
-        closeButton.configuration = close
+    private func buildTop() {
+        closeButton.setImage(symbol("xmark", 17), for: .normal)
+        closeButton.tintColor = .label
         closeButton.accessibilityLabel = "Close"
         closeButton.addAction(UIAction { [weak self] _ in self?.dismiss(animated: true) }, for: .touchUpInside)
-        topBar.addSubview(closeButton)
+        fill(closeGlass, with: closeButton)
+        view.addSubview(closeGlass)
 
-        var more = UIButton.Configuration.glass()
-        more.image = UIImage(systemName: "ellipsis", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
-        more.baseForegroundColor = .label
-        menuButton.configuration = more
+        menuButton.setImage(symbol("ellipsis", 17), for: .normal)
+        menuButton.tintColor = .label
         menuButton.accessibilityLabel = "More"
         menuButton.showsMenuAsPrimaryAction = true
         menuButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
             done(self?.menuItems() ?? [])
         }])
-        topBar.addSubview(menuButton)
+        fill(menuGlass, with: menuButton)
+        view.addSubview(menuGlass)
 
-        progressView.backgroundColor = view.tintColor
-        progressView.alpha = 0
-        topBar.addSubview(progressView)
-
-        topSeparator.backgroundColor = .separator
-        topBar.addSubview(topSeparator)
-
-        // The collapsed bar is the way back to the full one.
-        topBar.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(topBarTapped)))
+        // The loading fill sweeps across the capsule behind the address, as the reference shows it.
+        progressFill.backgroundColor = UIColor.label.withAlphaComponent(0.10)
+        progressFill.alpha = 0
+        addressGlass.contentView.addSubview(progressFill)
+        hostLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        hostLabel.textColor = .label
+        hostLabel.textAlignment = .center
+        hostLabel.lineBreakMode = .byTruncatingMiddle
+        lockView.contentMode = .scaleAspectFit
+        lockView.tintColor = .secondaryLabel
+        lockView.image = symbol("lock.fill", 11)
+        // The capsule is a button so a tap on it always brings the controls back.
+        addressButton.addAction(UIAction { [weak self] _ in self?.expandBars() }, for: .touchUpInside)
+        addressButton.accessibilityLabel = "Address"
+        fill(addressGlass, with: addressButton)
+        addressGlass.contentView.addSubview(lockView)
+        addressGlass.contentView.addSubview(hostLabel)
+        view.addSubview(addressGlass)
     }
 
-    private func buildBottomBar() {
-        view.addSubview(bottomBar)
-        bottomSeparator.backgroundColor = .separator
-        bottomBar.contentView.addSubview(bottomSeparator)
-
-        func setUp(_ b: UIButton, _ symbol: String, _ label: String, _ action: @escaping () -> Void) {
-            var c = UIButton.Configuration.plain()
-            c.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular))
-            c.baseForegroundColor = .label
-            b.configuration = c
+    private func buildBottom() {
+        func setUp(_ b: UIButton, _ name: String, _ label: String, _ action: @escaping () -> Void) {
+            b.setImage(symbol(name, 19, .regular), for: .normal)
+            b.tintColor = .label
             b.accessibilityLabel = label
             b.addAction(UIAction { _ in action() }, for: .touchUpInside)
-            bottomBar.contentView.addSubview(b)
+            bottomGlass.contentView.addSubview(b)
         }
         setUp(backButton, "chevron.backward", "Back") { [weak self] in self?.webView.goBack() }
         setUp(forwardButton, "chevron.forward", "Forward") { [weak self] in self?.webView.goForward() }
-        setUp(reloadButton, "arrow.clockwise", "Reload") { [weak self] in
-            guard let self else { return }
-            if self.webView.isLoading { self.webView.stopLoading() } else { self.reload() }
-        }
         setUp(shareButton, "square.and.arrow.up", "Share") { [weak self] in self?.share() }
+        setUp(bookmarkButton, "bookmark", "Add to Reading List") { [weak self] in self?.addToReadingList() }
+        setUp(safariButton, "safari", "Open in Safari") { [weak self] in
+            guard let self else { return }
+            // Leaving is allowed, but only when asked for by name.
+            UIApplication.shared.open(self.webView.url ?? self.initialURL)
+        }
+        view.addSubview(bottomGlass)
 
         // Holding Back or Forward lists the pages in that direction, as the reference does.
         backButton.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
@@ -201,7 +217,7 @@ final class InAppBrowserViewController: UIViewController {
         errorView.spacing = 10
         errorView.isHidden = true
 
-        let icon = UIImageView(image: UIImage(systemName: "wifi.exclamationmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 38, weight: .regular)))
+        let icon = UIImageView(image: symbol("wifi.exclamationmark", 38, .regular))
         icon.tintColor = .tertiaryLabel
         let title = UILabel()
         title.text = "Can't open this page"
@@ -210,15 +226,14 @@ final class InAppBrowserViewController: UIViewController {
         errorMessage.textColor = .secondaryLabel
         errorMessage.numberOfLines = 0
         errorMessage.textAlignment = .center
-        var retry = UIButton.Configuration.filled()
+        var retry = UIButton.Configuration.glass()
         retry.title = "Try Again"
-        retry.cornerStyle = .capsule
         let retryButton = UIButton(configuration: retry)
         retryButton.addAction(UIAction { [weak self] _ in self?.reload() }, for: .touchUpInside)
 
         [icon, title, errorMessage, retryButton].forEach(errorView.addArrangedSubview)
         errorView.setCustomSpacing(18, after: errorMessage)
-        view.addSubview(errorView)
+        view.insertSubview(errorView, aboveSubview: webView)
     }
 
     // MARK: - Layout
@@ -233,78 +248,91 @@ final class InAppBrowserViewController: UIViewController {
         view.setNeedsLayout()
     }
 
+    private var topPad: CGFloat { view.safeAreaInsets.top + 10 }
+    private var bottomPad: CGFloat { max(view.safeAreaInsets.bottom, 12) + 4 }
+
     /// Every frame here is a straight blend of the expanded and collapsed layouts by `collapse`, so
-    /// the bars track the finger point for point and any animation of `collapse` animates them all.
+    /// the controls track the finger point for point and any animation of `collapse` animates them all.
     private func layoutBars() {
         let w = view.bounds.width, h = view.bounds.height
         let safe = view.safeAreaInsets
         let f = collapse
-        let side: CGFloat = 16 + safe.left
 
-        let barHeight = expandedTop * (1 - f) + collapsedTop * f
-        topBar.frame = CGRect(x: 0, y: 0, width: w, height: safe.top + barHeight)
-        topSeparator.frame = CGRect(x: 0, y: topBar.bounds.height - 1 / traitCollection.displayScale, width: w, height: 1 / traitCollection.displayScale)
-        topSeparator.alpha = 1 - f
+        // The page fills the sheet and is inset so its top and bottom clear the floating glass.
+        webView.frame = view.bounds
+        let inset = UIEdgeInsets(top: topPad + control + 8, left: 0, bottom: bottomPad + toolbarHeight + 8, right: 0)
+        let sv = webView.scrollView
+        if sv.contentInset != inset {
+            let atTop = sv.contentOffset.y <= -sv.contentInset.top + 1
+            sv.contentInset = inset
+            sv.verticalScrollIndicatorInsets = inset
+            if atTop { sv.contentOffset.y = -inset.top }
+        }
 
-        // The two controls shrink and fade as the bar slims; they are gone at 1.
-        let button: CGFloat = 38
-        let midY = safe.top + barHeight / 2
-        closeButton.bounds = CGRect(x: 0, y: 0, width: button, height: button)
-        closeButton.center = CGPoint(x: w - 16 - safe.right - button / 2, y: midY)
-        menuButton.bounds = closeButton.bounds
-        menuButton.center = CGPoint(x: closeButton.center.x - button - 8, y: midY)
-        for b in [closeButton, menuButton] {
-            let s = 1 - 0.35 * f
-            b.transform = CGAffineTransform(scaleX: s, y: s)
+        // TOP. Collapsing lifts the row a little; the two circles shrink and fade, the capsule
+        // shrinks less and keeps its address, which is all a collapsed top shows.
+        let side: CGFloat = 16
+        let centerY = topPad + control / 2 - 10 * f
+        let circleScale = 1 - 0.35 * f
+        closeGlass.bounds = CGRect(x: 0, y: 0, width: control, height: control)
+        closeGlass.center = CGPoint(x: side + safe.left + control / 2, y: centerY)
+        menuGlass.bounds = closeGlass.bounds
+        menuGlass.center = CGPoint(x: w - side - safe.right - control / 2, y: centerY)
+        for (g, b) in [(closeGlass, closeButton), (menuGlass, menuButton)] {
+            g.transform = CGAffineTransform(scaleX: circleScale, y: circleScale)
             b.alpha = 1 - f
-            b.isUserInteractionEnabled = f < 0.5
+            g.isUserInteractionEnabled = f < 0.5
         }
 
-        // Expanded: title over a lock + address line, left-aligned. Collapsed: the address alone,
-        // small and centred, which is all a slim bar has room for.
-        let textRight = menuButton.center.x - button / 2 - 12
-        let textWidth = max(0, textRight - side)
-        let titleH = titleLabel.font.lineHeight
-        titleLabel.frame = CGRect(x: side, y: safe.top + expandedTop / 2 - titleH - 1 - f * expandedTop / 2, width: textWidth, height: titleH)
-        titleLabel.alpha = max(0, 1 - f * 2)
+        let addressX = closeGlass.center.x + control / 2 + 14
+        let addressW = max(0, menuGlass.center.x - control / 2 - 14 - addressX)
+        addressGlass.bounds = CGRect(x: 0, y: 0, width: addressW, height: control)
+        addressGlass.center = CGPoint(x: addressX + addressW / 2, y: centerY)
+        let pillScale = 1 - 0.25 * f
+        addressGlass.transform = CGAffineTransform(scaleX: pillScale, y: pillScale)
 
-        let lockSize: CGFloat = lockView.isHidden ? 0 : 11
-        let lockGap: CGFloat = lockView.isHidden ? 0 : 4
-        let hostFit = hostLabel.sizeThatFits(CGSize(width: textWidth, height: 20))
-        let hostW = max(0, min(hostFit.width, textWidth - lockSize - lockGap))
-        let hostH = hostLabel.font.lineHeight
-        let expandedRow = CGRect(x: side, y: safe.top + expandedTop / 2 + 2, width: lockSize + lockGap + hostW, height: hostH)
-        let collapsedRow = CGRect(x: (w - (lockSize + lockGap + hostW)) / 2, y: safe.top + (collapsedTop - hostH) / 2, width: expandedRow.width, height: hostH)
-        let row = CGRect(x: expandedRow.minX + (collapsedRow.minX - expandedRow.minX) * f,
-                         y: expandedRow.minY + (collapsedRow.minY - expandedRow.minY) * f,
-                         width: expandedRow.width, height: hostH)
-        lockView.frame = CGRect(x: row.minX, y: row.midY - lockSize / 2, width: lockSize, height: lockSize)
-        hostLabel.frame = CGRect(x: row.minX + lockSize + lockGap, y: row.minY, width: hostW, height: hostH)
+        let lockW: CGFloat = lockView.isHidden ? 0 : 11, gap: CGFloat = lockView.isHidden ? 0 : 5
+        let textMax = max(0, addressW - 32 - lockW - gap)
+        let textW = min(hostLabel.sizeThatFits(CGSize(width: textMax, height: control)).width, textMax)
+        let rowX = (addressW - (lockW + gap + textW)) / 2
+        lockView.frame = CGRect(x: rowX, y: (control - lockW) / 2, width: lockW, height: lockW)
+        hostLabel.frame = CGRect(x: rowX + lockW + gap, y: 0, width: textW, height: control)
+        progressFill.frame = CGRect(x: 0, y: 0, width: addressW * CGFloat(webView.estimatedProgress), height: control)
 
-        // Loading line along the bottom edge of the top bar.
-        let progress = CGFloat(webView.estimatedProgress)
-        progressView.frame = CGRect(x: 0, y: topBar.bounds.height - 2.5, width: w * progress, height: 2.5)
-
-        // The toolbar slides down by its own height times the fraction.
-        let bottomFull = toolbarHeight + safe.bottom
-        bottomBar.frame = CGRect(x: 0, y: h - bottomFull + bottomFull * f, width: w, height: bottomFull)
-        bottomSeparator.frame = CGRect(x: 0, y: 0, width: w, height: 1 / traitCollection.displayScale)
-        let buttons = [backButton, forwardButton, reloadButton, shareButton]
-        let slot = (w - safe.left - safe.right - 24) / CGFloat(buttons.count)
+        // BOTTOM. One capsule, slid off the bottom edge as the fraction grows.
+        let bottomW = min(w - 96, 360)
+        let travel = toolbarHeight + bottomPad + 20
+        bottomGlass.frame = CGRect(x: (w - bottomW) / 2, y: h - bottomPad - toolbarHeight + travel * f,
+                                   width: bottomW, height: toolbarHeight)
+        let buttons = [backButton, forwardButton, shareButton, bookmarkButton, safariButton]
+        let slot = (bottomW - 16) / CGFloat(buttons.count)
         for (i, b) in buttons.enumerated() {
-            b.frame = CGRect(x: safe.left + 12 + slot * CGFloat(i), y: 0, width: slot, height: toolbarHeight)
+            b.frame = CGRect(x: 8 + slot * CGFloat(i), y: 0, width: slot, height: toolbarHeight)
         }
 
-        // The page fills what the bars leave.
-        let webTop = topBar.frame.maxY
-        let webBottom = h - bottomFull * (1 - f)
-        webView.frame = CGRect(x: 0, y: webTop, width: w, height: max(0, webBottom - webTop))
+        // Past the middle the glass itself dematerialises (iOS 26 animates an effect change), so a
+        // collapsed top is the address alone over the page.
+        let wantGlass = f < 0.5
+        if wantGlass != glassShown {
+            glassShown = wantGlass
+            UIView.animate(withDuration: 0.25) {
+                for g in [self.closeGlass, self.menuGlass, self.addressGlass] {
+                    g.effect = wantGlass ? Self.glassEffect() : nil
+                }
+            }
+        }
 
         let errorWidth = min(w - 64, 340)
         errorMessage.preferredMaxLayoutWidth = errorWidth   // or a long message stays one clipped line
         let errorSize = errorView.systemLayoutSizeFitting(CGSize(width: errorWidth, height: .greatestFiniteMagnitude),
                                                           withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
-        errorView.frame = CGRect(x: (w - errorWidth) / 2, y: webView.frame.midY - errorSize.height / 2 - 20, width: errorWidth, height: errorSize.height)
+        errorView.frame = CGRect(x: (w - errorWidth) / 2, y: h / 2 - errorSize.height / 2 - 20, width: errorWidth, height: errorSize.height)
+    }
+
+    private static func glassEffect() -> UIGlassEffect {
+        let g = UIGlassEffect(style: .regular)
+        g.isInteractive = true
+        return g
     }
 
     private func setCollapse(_ value: CGFloat, animation: BarAnimation) {
@@ -322,12 +350,8 @@ final class InAppBrowserViewController: UIViewController {
 
     private enum BarAnimation { case none, snap, spring }
 
-    @objc private func topBarTapped() {
-        guard collapse > 0 else { return }
-        expandBars()
-    }
-
     private func expandBars() {
+        guard collapse > 0 else { return }
         if webView.scrollView.isDecelerating { ignoreScrollUntilStopped = true }
         lastOffsetToTop = nil
         setCollapse(0, animation: .spring)
@@ -338,42 +362,33 @@ final class InAppBrowserViewController: UIViewController {
     private func progressChanged() {
         let p = webView.estimatedProgress
         // Hidden until the page has something to show, then faded in.
-        if p >= 0.1, webView.alpha == 0 {
+        if p >= 0.1, webView.alpha == 0, errorView.isHidden {
             UIView.animate(withDuration: 0.2) { self.webView.alpha = 1 }
         }
         if webView.isLoading && p < 1 {
-            progressView.alpha = 1
+            progressFill.alpha = 1
             UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) { self.layoutBars() }
         } else {
             UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState]) { self.layoutBars() }
-            UIView.animate(withDuration: 0.25, delay: 0.2, options: [.beginFromCurrentState]) { self.progressView.alpha = 0 }
+            UIView.animate(withDuration: 0.25, delay: 0.2, options: [.beginFromCurrentState]) { self.progressFill.alpha = 0 }
         }
     }
 
     private func refreshTitle() {
         let url = webView.url ?? initialURL
         let host = Self.displayHost(url)
-        let title = webView.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        titleLabel.text = title.isEmpty ? host : title
         let secure = url.scheme?.lowercased() == "https" && webView.hasOnlySecureContent
-        if url.scheme?.lowercased() == "http" {
-            hostLabel.text = "Not Secure · " + host
-            lockView.isHidden = true
-        } else {
-            hostLabel.text = host
-            lockView.isHidden = !secure
-            lockView.image = UIImage(systemName: "lock.fill")
-        }
+        hostLabel.text = url.scheme?.lowercased() == "http" ? "Not Secure · " + host : host
+        lockView.isHidden = !secure
+        addressButton.accessibilityValue = webView.title
         view.setNeedsLayout()
     }
 
     private func refreshButtons() {
         backButton.isEnabled = webView.canGoBack
         forwardButton.isEnabled = webView.canGoForward
-        reloadButton.configuration?.image = UIImage(systemName: webView.isLoading ? "xmark" : "arrow.clockwise",
-                                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular))
-        reloadButton.accessibilityLabel = webView.isLoading ? "Stop" : "Reload"
         shareButton.isEnabled = webView.url != nil
+        bookmarkButton.isEnabled = webView.url != nil
     }
 
     private static func displayHost(_ url: URL) -> String {
@@ -410,7 +425,6 @@ final class InAppBrowserViewController: UIViewController {
         let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
             UIPasteboard.general.url = url
         }
-        let share = UIAction(title: "Share", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in self?.share() }
         let find = UIAction(title: "Find on Page", image: UIImage(systemName: "doc.text.magnifyingglass")) { [weak self] _ in
             self?.webView.findInteraction?.presentFindNavigator(showingReplace: false)
         }
@@ -425,14 +439,9 @@ final class InAppBrowserViewController: UIViewController {
                              attributes: zoom == 1 ? .disabled : []) { [weak self] _ in self?.webView.pageZoom = 1 }
         let textSize = UIMenu(title: "Text Size", image: UIImage(systemName: "textformat.size"), children: [smaller, larger, reset])
 
-        // Leaving is allowed, but only when asked for by name.
-        let safari = UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { _ in
-            UIApplication.shared.open(url)
-        }
         return [
-            UIMenu(options: .displayInline, children: [reload, copy, share]),
+            UIMenu(options: .displayInline, children: [reload, copy]),
             UIMenu(options: .displayInline, children: [find, textSize]),
-            UIMenu(options: .displayInline, children: [safari]),
         ]
     }
 
@@ -456,6 +465,23 @@ final class InAppBrowserViewController: UIViewController {
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         sheet.popoverPresentationController?.sourceView = shareButton
         present(sheet, animated: true)
+    }
+
+    /// The bookmark button: the page goes into the system Reading List (Safari's), which needs no
+    /// list of our own. The icon fills to say it worked.
+    private func addToReadingList() {
+        guard let url = webView.url, SSReadingList.supportsURL(url) else { return }
+        do {
+            try SSReadingList.default()?.addItem(with: url, title: webView.title, previewText: nil)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            bookmarkButton.setImage(symbol("bookmark.fill", 19, .regular), for: .normal)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self else { return }
+                self.bookmarkButton.setImage(self.symbol("bookmark", 19, .regular), for: .normal)
+            }
+        } catch {
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
     }
 
     // MARK: - Leaving the browser for another app
