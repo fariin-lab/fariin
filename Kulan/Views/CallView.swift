@@ -1812,8 +1812,8 @@ struct FloatingCallWindow: View {
     // Hiding it to the side.
     private let overshoot: CGFloat = 70   // how far past the edge a drag is allowed to pull it
     private let stashAt: CGFloat = 42     // let go beyond this and it parks as a tab
-    private let tabW: CGFloat = 68        // no part of it is buried, so it needs no extra width
-    private let tabH: CGFloat = 46        // the wedge loses height at its point, so it starts taller
+    private let tabW: CGFloat = 32        // owner 2026-10-13: a slim edge tab, not the wedge
+    private let tabH: CGFloat = 120
     private let pullMax: CGFloat = 34     // how far the tab rubber-bands inward before letting go
     private let pullBack: CGFloat = 22    // pulled at least this far → the card comes back
 
@@ -2064,26 +2064,30 @@ struct FloatingCallWindow: View {
     /// left of it, so the drag has already recorded this and there is no second flag to keep in step.
     private var stashedLeft: Bool { base.width < 0 }
 
-    /// THE TAB. Everything the card was saying is gone except the one thing worth a glance from the
-    /// corner of your eye: how long you have been on. Green because that is what a live call is
-    /// everywhere else in here — the row in the chat list, the talking bubble.
-    ///
-    /// ⛔ NOT A ROUNDED RECTANGLE WITH A CORNER POKING OUT. That is the reference app's drawing, and
-    /// the first build of this was a straight copy of it — the owner asked, fairly, whether it just
-    /// looked like theirs (2026-08-23). It is a WEDGE now, his own pick: see `WedgeTab`.
+    /// THE TAB. ⛔ OWNER 2026-10-13, with a picture: a slim rounded tab flush with the edge, the call
+    /// blurred behind it and a white chevron pointing back in — not the green wedge with the clock
+    /// (his 2026-08-23 pick, reversed by him). The blur is the other person's photo, so it reads as
+    /// the card tucked away rather than a button.
     ///
     /// Tap brings the card back and does nothing else — never the full call screen, which is one more
     /// tap on the card itself. Dragging it is handled where the geometry is, at the call site.
     private var stashTab: some View {
-        TimelineView(.periodic(from: Date(), by: 1)) { context in
-            ZStack {
-                tabShape.fill(Color.green)
-                tabLabel(context.date)
-                    // The clock lives in the ROUND end, the half still facing the screen. Centred in
-                    // the frame it would sit halfway down the taper and lose a digit off the point.
-                    .padding(stashedLeft ? .leading : .trailing, tabW * 0.26)
-            }
+        let inner: CGFloat = 14
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: stashedLeft ? 0 : inner, bottomLeadingRadius: stashedLeft ? 0 : inner,
+            bottomTrailingRadius: stashedLeft ? inner : 0, topTrailingRadius: stashedLeft ? inner : 0,
+            style: .continuous)
+        return ZStack {
+            Color(white: 0.35)
+            AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: tabH)
+                .scaleEffect(1.6)
+                .blur(radius: 14)
+            Color.black.opacity(0.18)
+            Image(systemName: stashedLeft ? "chevron.compact.right" : "chevron.compact.left")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
         }
+        .clipShape(shape)
         .frame(width: tabW, height: tabH)
         // Audit M-053, 2026-10-07: the PiP source view lived only on the video CARD, so a video call
         // parked as this tab had none, and leaving the app then had no window to detach into: the
@@ -2100,28 +2104,6 @@ struct FloatingCallWindow: View {
         }
         .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
         .accessibilityLabel("Back to the call")
-    }
-
-    /// Parked on the right → the point aims right, out through that edge. Mirrored on the left.
-    private var tabShape: WedgeTab { WedgeTab(pointsRight: !stashedLeft) }
-
-    @ViewBuilder private func tabLabel(_ now: Date) -> some View {
-        // Audit M-055, 2026-10-07: a clock only while the call screen would show one. `connectedDate`
-        // stays set through "Reconnecting…" and the end label, so the tab kept counting on a call
-        // that was frozen or already over.
-        if call.state == .active, CallStageWords.progress(call) == nil, let start = call.connectedDate {
-            Text(CallDuration.clock(max(0, Int(now.timeIntervalSince(start)))))
-                .font(.system(size: 14, weight: .bold))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .lineLimit(1).minimumScaleFactor(0.7)
-        } else {
-            // Not connected yet, so there is no duration to report and a zeroed clock would be a
-            // lie. The glyph says "a call is going on here" and nothing more.
-            Image(systemName: "phone.fill")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.white)
-        }
     }
 
     /// ⛔ ALWAYS ATTACHED. IT IS NOT WHAT SHOOK THE CARD, AND SWITCHING IT OFF MID-DRAG IS WHAT
