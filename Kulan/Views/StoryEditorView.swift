@@ -2494,7 +2494,7 @@ struct StoryEditorView: View {
                 // Aa and the pen stay for both, because they already work on a video — they
                 // travel to the export and are composited into the frames there (see
                 // `videoBurnIn`). Removing them would take away something that works.
-                HStack(spacing: 22) {
+                HStack(spacing: barToolSpacing) {
                     capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on either
                     if currentIsVideo {
                         // (Sound is NOT here any more — it is beside the ✕ at the top, on his
@@ -2530,11 +2530,11 @@ struct StoryEditorView: View {
                     // bottom Upload Story button because it is a duplicate. Keep the one in the
                     // caption bar exactly as it is."
                 }
-                .padding(.horizontal, 20).frame(height: 46)   // user spec: 46px
+                .padding(.horizontal, barToolPadding).frame(height: 46)   // user spec: 46px
                 .liquidGlass(Capsule())   // real Apple Liquid Glass capsule (not a flat dark fill)
 
-                Spacer()
-                sendButton
+                Spacer(minLength: 8)
+                sendButton.layoutPriority(1)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
@@ -3478,18 +3478,29 @@ struct StoryEditorView: View {
         .buttonStyle(StoryPressStyle()).disabled(posting)
     }
 
+    /// Every phone narrower than the Pro Max (440pt). At the full spacing the tools and NEXT need
+    /// about 400pt; at the compact one about 340, which fits the 375pt phones too.
+    private var compactBottomBar: Bool { UIScreen.main.bounds.width < 420 }
+    private var barToolSpacing: CGFloat { compactBottomBar ? 14 : 22 }
+    private var barToolPadding: CGFloat { compactBottomBar ? 16 : 20 }
+    private var nextPadding: CGFloat { compactBottomBar ? 16 : 22 }
+
     private var sendButton: some View {
         Button { Task { await send() } } label: {
             HStack(spacing: 4) {
                 if posting {
                     ProgressView().tint(.white)
                 } else {
+                    // ⛔ ONE LINE, ALWAYS — owner 2026-10-13: "NE / XT" on every phone but the Pro
+                    // Max. The tool capsule's icons have fixed frames, so when the row ran short the
+                    // only thing SwiftUI could squeeze was this text, and it wrapped it.
                     Text("NEXT").font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1).fixedSize()
                     Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold))
                 }
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 22).frame(height: 46)   // user spec: 46px
+            .padding(.horizontal, nextPadding).frame(height: 46)   // user spec: 46px
             // Blue-tinted real Liquid Glass (prominent action), not a flat blue fill.
             .liquidGlass(Capsule(), interactive: true, tint: Color(.systemBlue))
             // WHOLE PILL tappable (user: only the "NEXT" text responded). Without an explicit
