@@ -112,18 +112,18 @@ struct SettingsView: View {
                     profileHeader
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                }
-
-                // ⛔ EDIT PROFILE / SHARE PROFILE under the name — owner 2026-10-13, with a picture of the
-                // two grey Liquid Glass capsules. ONLY these were added: the page is otherwise exactly
-                // the design it had before the same day's redesign, which he asked to have back.
-                Section {
+                    // ⛔ EDIT PROFILE / SHARE PROFILE under the name — owner 2026-10-13, with a picture of
+                    // the two grey Liquid Glass capsules. ONLY these were added: the page is otherwise the
+                    // design it had before the same day's redesign, which he asked to have back.
+                    // In the HEADER'S section, not a section of their own (owner, same day: "the space
+                    // between the username and the buttons is too big" — a section of their own added a
+                    // full section gap above them).
                     HStack(spacing: 12) {
                         profileButton("Edit profile") { showEdit = true }
                         profileButton("Share profile") { showQR = true }
                     }
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
                     .listRowSeparator(.hidden)
                 }
 
