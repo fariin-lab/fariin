@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SETTINGS PROFILE BUTTONS.
+            THIS BUILD: FIX FOR "THE APP GOES DEAD UNTIL I REFRESH".
+            Messages not sending, username empty, calls not ringing, Devices stuck loading, story upload and archive doing nothing: one stuck security check was blocking all of them. It now gives up after 6 seconds and the app carries on.
+            Also: minimized voice call is a black card with their face big; slim tab on the call card edge; green Return pill on the live call in Calls; voice calls no longer start on loudspeaker; QR code logo in a clean hole; browser bottom bar as two glass capsules; link preview skeleton; story link text opens the story like its card.
+            PLEASE TEST: use the app normally for a few days without refreshing. If messages stop sending again, tell me straight away.
+
+            EARLIER (910): SETTINGS PROFILE BUTTONS.
             Edit profile and Share profile no longer show a cut edge when you press them.
             PLEASE TEST: press and hold each button in Settings.
 
