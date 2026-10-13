@@ -92,6 +92,9 @@ struct UserProfile: Identifiable, Equatable {
     /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
     /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
     var deletionScheduledFor: Date?
+    /// Banned from the admin panel. Server-only field; the rules refuse a banned account's stories,
+    /// and the app reads it only to say so before the picker opens (2026-10-13).
+    var banned: Bool = false
 
     /// True while this account is inside its deletion grace period: hidden from search, contacts and
     /// stories, but not yet destroyed.
@@ -122,6 +125,7 @@ struct UserProfile: Identifiable, Equatable {
         // anything recorded it — see `joinedAt`.
         self.joinedAt = (data["createdAt"] as? Timestamp)?.dateValue()
         self.links = ProfileLink.list(from: data["links"])
+        self.banned = data["banned"] as? Bool ?? false
     }
 }
 

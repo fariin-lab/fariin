@@ -149,6 +149,10 @@ final class AppLimits {
     /// ⚠️ AND IT IS THE SAME `!= 0` THE RULE USES, deliberately, not `== 1`. A 3 that means nothing
     /// has to read as ON in both halves or they disagree about who is locked out.
     var storiesEnabled: Bool {
+        // A banned account is refused by the rules (`isBanned()` on stories); say it before the
+        // picker rather than after the whole story has been made. Fails open like the rest: no
+        // profile yet reads as not banned.
+        if ProfileStore.shared.me?.banned == true { return false }
         let key = amVerified ? "stories_enabled_verified" : "stories_enabled_default"
         return flag(key, 1) != 0
     }
