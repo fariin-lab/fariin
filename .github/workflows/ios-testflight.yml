@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: FIX FOR "THE APP GOES DEAD UNTIL I REFRESH".
+            THIS BUILD: "APP GOES DEAD UNTIL I REFRESH", PART 2.
+            The app now notices a stuck connection within about 20 seconds and reconnects by itself, retrying every minute at most. Before, your own unsent message fooled it into thinking all was fine, and a leftover call state could block the reconnect for hours.
+            A hidden log on the phone records what got stuck. Nothing on screen.
+            Also: the call card's edge tab is really slim now; browser bottom icons are the normal iPhone size.
+            PLEASE TEST: use it normally. If it goes dead again, wait 1 minute before refreshing, then tell me the time.
+
+            EARLIER (911): FIX FOR "THE APP GOES DEAD UNTIL I REFRESH".
             Messages not sending, username empty, calls not ringing, Devices stuck loading, story upload and archive doing nothing: one stuck security check was blocking all of them. It now gives up after 6 seconds and the app carries on.
             Also: minimized voice call is a black card with their face big; slim tab on the call card edge; green Return pill on the live call in Calls; voice calls no longer start on loudspeaker; QR code logo in a clean hole; browser bottom bar as two glass capsules; link preview skeleton; story link text opens the story like its card.
             PLEASE TEST: use the app normally for a few days without refreshing. If messages stop sending again, tell me straight away.
