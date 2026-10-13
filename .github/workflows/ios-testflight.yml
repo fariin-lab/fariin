@@ -74,12 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY VIDEOS START LIKE THE REFERENCE APP, PLUS 3 FIXES.
+            THIS BUILD: NEXT PERSON'S VIDEO READY BEFORE YOU SWIPE, PLUS 3 STORY FIXES.
+            The person before and after the one you watch get their video player ready in advance, so swiping to them should start the video at once.
+            Brightness: the uploading card and the first second of the posted story now show your edited brightness, not the original.
+            Story editor: a tall phone-camera video shows as one upright picture, not split into sideways pieces.
+            Story editor: NEXT stays on one line on smaller iPhones.
+            PLEASE TEST: one person's video then swipe to the next person's video, back and forward, watched and new, also on mobile data; post a video with brightness raised; pick a tall camera video; NEXT on a small iPhone.
+
+            EARLIER: STORY VIDEOS START LIKE THE REFERENCE APP, PLUS 3 FIXES.
             The next video's opening is saved as it downloads and the player uses it at once, no second download. All story downloads share one connection, the story you watch goes first.
             After sending a reaction, the video plays again as soon as the keyboard closes.
             Brightness on a story video is kept after upload.
             Saved accounts: the loading spinner shows in the account row you tapped.
-            PLEASE TEST: photo then videos, tap Next and swipe fast, also on mobile data; send a reaction on a video; post a video with only brightness changed; tap a saved account.
 
             EARLIER: VIDEO STORIES START WITHOUT THE SMALL WAIT.
             A video story whose opening is already downloaded now starts as soon as its first frames are ready, instead of pausing a moment first.
