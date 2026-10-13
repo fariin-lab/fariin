@@ -2615,40 +2615,31 @@ struct ThreadView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .clipped()
-                // Pin icon → context menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
-                Menu {
-                    if !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false) {
-                        Button {
-                            unpin(pid)
-                            if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
-                        } label: { Label("Unpin", systemImage: "pin.slash") }
+                // Pin icon → menu: Unpin (admin/1:1 only) + See All (full pinned-messages sheet).
+                // ⛔ A UIKIT MENU, NOT SwiftUI's `Menu` — owner 2026-10-13: "Unpin from this menu does
+                // not work well; See All works". The sheet's Unpin and this one call the same `unpin`,
+                // so the write was never the difference: the SwiftUI menu, inside a bar that carries its
+                // own tap gesture and interactive glass, dropped its item's action. A `UIButton` with a
+                // `UIMenu` runs its actions itself (the chat's long-press menus are UIKit for the same
+                // reason). Drawn exactly as before; the UIKit button is a clear layer over the circle.
+                Image("ic_pin_bar").renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: MenuIcon.standard, height: MenuIcon.standard)
+                    .foregroundStyle(.primary)
+                    .frame(width: 36, height: 36)
+                    // ⛔ LIQUID GLASS, NOT A DRAWN RING — owner, 2026-10-03, the button ringed:
+                    // "make it liquid glass like the reference app". 22 in 36 is the reference app's
+                    // own proportion for this button.
+                    .liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+                    .overlay {
+                        PinBarMenuButton(
+                            canUnpin: !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false),
+                            onUnpin: {
+                                unpin(pid)
+                                if pinIndex > 0 { pinIndex -= 1 }   // keep index valid after removal
+                            },
+                            onSeeAll: { showPinnedSheet = true })
                     }
-                    Button {
-                        // Opens straight away now. This used to page older history for EVERY pin
-                        // before the sheet could build — up to 12 pages each, five times over, with
-                        // the menu just sitting there — because the list could only resolve pins that
-                        // were in the window. `pinnedPreviews` already holds them, so there is
-                        // nothing to wait for and nothing to load into memory.
-                        showPinnedSheet = true
-                    } label: { Label("See All", systemImage: "list.bullet") }
-                } label: {
-                    // Upright pin in a bordered circle (reference: image-2 style).
-                    // 22 in 36 is the reference app's own proportion for this button: their banner pin is a
-                    // 24pt glyph with `contentInsets .init(margin: 6)`, so the glyph owns two thirds
-                    // of the button. 17 in 34 was half of it, which is the "too small" he reported —
-                    // the same wrong number, from the same wrong reasoning, as the menu icons.
-                    Image("ic_pin_bar").renderingMode(.template).resizable().scaledToFit()
-                        .frame(width: MenuIcon.standard, height: MenuIcon.standard)
-                        .foregroundStyle(.primary)
-                        .frame(width: 36, height: 36)
-                        // ⛔ LIQUID GLASS, NOT A DRAWN RING — owner, 2026-10-03, the button ringed:
-                        // "make it liquid glass like the reference app". The system's interactive
-                        // glass circle (`liquidGlass` is `glassEffect` on iOS 26), so it presses and
-                        // shimmers like every other glass button; the hand-drawn 1.5pt stroke is gone.
-                        .liquidGlass(Circle(), interactive: true)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
                 .alert("Couldn't unpin", isPresented: Binding(get: { unpinError != nil },
                                                              set: { if !$0 { unpinError = nil } })) {
                     Button("OK", role: .cancel) {}
@@ -11091,5 +11082,40 @@ private struct DayTickWatcher: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
                 DispatchQueue.main.async { tick &+= 1 }
             }
+    }
+}
+
+/// The pinned bar's pin button menu, in UIKit (see the note at its call site in `pinnedBar`). A clear
+/// button laid over the drawn glass circle; the menu opens on a tap, as the SwiftUI one did.
+private struct PinBarMenuButton: UIViewRepresentable {
+    var canUnpin: Bool
+    var onUnpin: () -> Void
+    var onSeeAll: () -> Void
+
+    final class Coordinator {
+        var onUnpin: () -> Void = {}
+        var onSeeAll: () -> Void = {}
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIButton {
+        let b = UIButton(type: .custom)
+        b.backgroundColor = .clear
+        b.showsMenuAsPrimaryAction = true
+        b.accessibilityLabel = "Pinned message options"
+        return b
+    }
+
+    func updateUIView(_ b: UIButton, context: Context) {
+        // The coordinator holds the latest closures, so the menu always acts on the pin on screen now.
+        context.coordinator.onUnpin = onUnpin
+        context.coordinator.onSeeAll = onSeeAll
+        let c = context.coordinator
+        var items: [UIMenuElement] = []
+        if canUnpin {
+            items.append(UIAction(title: "Unpin", image: UIImage(systemName: "pin.slash")) { _ in c.onUnpin() })
+        }
+        items.append(UIAction(title: "See All", image: UIImage(systemName: "list.bullet")) { _ in c.onSeeAll() })
+        b.menu = UIMenu(children: items)
     }
 }
