@@ -3680,6 +3680,8 @@ enum ChatService {
             // rule because Firestore rules are not filters - a data-dependent read rule would make
             // this whole read fail instead of skipping the row.
             if u.isAwaitingDeletion { return nil }
+            // Banned from the admin panel: not findable by strangers (the server's search agrees).
+            if u.banned, u.id != uid { return nil }
             if !allowSelf { guard u.id != uid else { return nil } }   // never "find" yourself
             return ProfileStore.indexed(u, fresh: !d.metadata.isFromCache)   // warms photo / call-privacy / verification
         } catch {
@@ -3726,7 +3728,7 @@ enum ChatService {
                     guard let d = try? await db.collection("users").document(owner).getDocument(),
                           let data = d.data() else { return (i, nil, false) }
                     let u = UserProfile(id: d.documentID, data: data)
-                    return (i, u.isAwaitingDeletion ? nil : u, !d.metadata.isFromCache)
+                    return (i, u.isAwaitingDeletion || u.banned ? nil : u, !d.metadata.isFromCache)
                 }
             }
             var out = [(Int, UserProfile, Bool)]()
