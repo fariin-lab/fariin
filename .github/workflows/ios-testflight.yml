@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: VIDEO STORIES START WITHOUT THE SMALL WAIT.
+            THIS BUILD: STORY VIDEOS START LIKE THE REFERENCE APP, PLUS 3 FIXES.
+            The next video's opening is saved as it downloads and the player uses it at once, no second download. All story downloads share one connection, the story you watch goes first.
+            After sending a reaction, the video plays again as soon as the keyboard closes.
+            Brightness on a story video is kept after upload.
+            Saved accounts: the loading spinner shows in the account row you tapped.
+            PLEASE TEST: photo then videos, tap Next and swipe fast, also on mobile data; send a reaction on a video; post a video with only brightness changed; tap a saved account.
+
+            EARLIER: VIDEO STORIES START WITHOUT THE SMALL WAIT.
             A video story whose opening is already downloaded now starts as soon as its first frames are ready, instead of pausing a moment first.
             The repost bubble (tap the middle of a repost) shows the person's real photo, not a letter.
             PLEASE TEST: someone's stories with a photo then videos; tap Next quickly; tap the middle of a repost.
