@@ -402,8 +402,13 @@ service cloud.firestore {
       // mistake that left the ban flag writable by the banned account, so the field is in
       // serverOnlyUserFields() above as well — the owner's own update rule refuses it there, and this
       // is the only path that allows it.
-      allow update: if adminCan('verify')
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['verification']);
+      // ⛔ 2026-10-13 AUDIT: NO CLIENT WRITES THE BADGE ANY MORE, ADMIN OR NOT. This used to let an
+      // admin holding `verify` write `verification` straight from the app: any shape, their OWN badge,
+      // and with no audit entry required, skipping everything the server path enforces (fresh sign-in,
+      // Access, the hash-chained adminAudit, no self-badge, the reason list, the state machine). Badges
+      // are granted, changed and removed only by adminApi `verifyApply` (admin.fariin.com), which writes
+      // with the Admin SDK and is not subject to these rules. `verification` stays in
+      // serverOnlyUserFields(), so nothing on this document can write it.
       // NO delete. (A copy of the message-request decline rule was pasted here by mistake; it read
       // conversation fields off a user document, so it could only ever error, and the real one lives
       // on /conversations/{cid} where it belongs. Removed 2026-08-04, no behaviour change.)
@@ -1052,7 +1057,12 @@ service cloud.firestore {
     // button that opens nothing is a fake feature. Owner sets it once; everybody reads it.
     match /config/official {
       allow read: if signedIn();
-      allow write: if adminIsOwner();
+      // 2026-10-13 audit: the Fariin badge (`badge`) is one of three values and says who set it
+      // (`badgeBy`), which the adminOfficialBadgeAudit trigger copies into the hash-chained adminAudit.
+      allow write: if adminIsOwner()
+        && (!request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasAny(['badge'])
+            || (request.resource.data.badge in ['blue', 'gold', 'none']
+                && request.resource.data.get('badgeBy', '') == request.auth.uid));
     }
 
     // ⛔ EVERY CEILING THE APP ENFORCES, IN ONE DOCUMENT THE OWNER CAN EDIT WITHOUT A RELEASE.
@@ -1108,8 +1118,9 @@ service cloud.firestore {
     // somebody, and are for the people making the next judgement.
     match /verifications/{peerKey} {
       allow read: if adminCan('verify');
-      allow create, update: if adminCan('verify')
-        && request.resource.data.get('updatedBy', '') == request.auth.uid;
+      // Server only since 2026-10-13 (see the users rule above): the case file is written by
+      // adminApi in the same transaction as the badge.
+      allow create, update: if false;
       // NO delete. Withdrawing a verification is a status change, never an erasure — a peer that was
       // verified and no longer is has a history, and that history is the useful part.
       allow delete: if false;
@@ -1128,9 +1139,9 @@ service cloud.firestore {
       allow read: if adminCan('verify');
       // Pinned to the caller: an admin cannot write an entry attributed to somebody else, so the
       // trail cannot be used to blame a colleague for your own decision.
-      allow create: if adminCan('verify')
-        && request.resource.data.get('adminUid', '') == request.auth.uid;
-      allow update, delete: if false;
+      // Server only since 2026-10-13: a client could write an entry with a made-up reason, or a badge
+      // with no entry at all. Entries now come only from adminApi, beside its hash-chained adminAudit.
+      allow create, update, delete: if false;
     }
 
     // A send to CHOSEN PEOPLE never touches /announcements. The words would be readable by anybody

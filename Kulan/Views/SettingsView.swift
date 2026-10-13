@@ -3,6 +3,7 @@ import PhotosUI
 import UIKit
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 import AuthenticationServices   // Sign in with Apple button (connect Apple in Account settings)
 
 // Custom-SVG row label (template asset tinted like an SF Symbol, sized to a list row).
@@ -1969,6 +1970,20 @@ struct EditProfileView: View {
             error = "No internet connection. Check your connection and try again."; return
         }
         saving = true; error = nil
+        // ⛔ A NAME THAT POSES AS A COMPANY OR A VERIFIED PERSON IS REFUSED HERE, IN WORDS — 2026-10-13
+        // audit ("Fariin", "Hormuud", "Meta Support" and their lookalikes, as usernames already are).
+        // The server's displayNameGuard would put the old name back anyway; asking first is what turns
+        // that into a sentence instead of a name that silently reverts. A failed CHECK (offline, old
+        // server) does not block the save: the guard is still there behind it.
+        if hasUnsavedText, n != (profile.me?.name ?? "") {
+            if let r = try? await Functions.functions(region: "me-central1")
+                .httpsCallable("checkDisplayName").call(["name": n]),
+               let d = r.data as? [String: Any], (d["ok"] as? Bool) == false {
+                error = (d["message"] as? String) ?? "That name can\u{2019}t be used."
+                saving = false
+                return
+            }
+        }
         do {
             // NO PRE-CHECK. `updateProfile` claims the name in one server transaction when it has
             // changed, which is the only test that can actually settle who gets it — a query here

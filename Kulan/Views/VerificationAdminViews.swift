@@ -202,65 +202,18 @@ struct VerificationDetailView: View {
                 }
             }
 
+            // ⛔ VIEW ONLY IN THE APP — 2026-10-13 audit. Granting, changing, suspending, removing and
+            // noting all wrote straight to the database from here, which skipped every protection the
+            // server path has (fresh sign-in, Access, the hash-chained log, no badge for yourself, the
+            // reason list). The rules now refuse those writes, and every decision is made on the admin
+            // website, through adminApi `verifyApply`. This screen still shows the badge, the notes and
+            // the full history.
             Section {
-                Picker("Type", selection: $kind) {
-                    ForEach(Verification.Kind.allCases) { k in
-                        Text(k.label).tag(k)
-                    }
+                Link(destination: URL(string: "https://admin.fariin.com")!) {
+                    Label("Change this badge on admin.fariin.com", systemImage: "arrow.up.right.square")
                 }
-                TextField("Why (internal, never shown to them)", text: $reason, axis: .vertical)
-                    .lineLimit(2...5)
-            } header: {
-                Text(isVerified ? "Change" : "Verify")
             } footer: {
-                Text("The reason is stored with the decision and is the answer to \u{201C}why does this account have a badge\u{201D} for whoever asks next. It is never shown to the verified person.")
-            }
-
-            Section {
-                if !isVerified {
-                    Button {
-                        act(hasRecord ? .restored : .granted, status: .active)
-                    } label: {
-                        Label(hasRecord ? "Restore verification" : "Verify this account",
-                              systemImage: "checkmark.seal.fill")
-                    }
-                    .disabled(!canSubmit)
-                } else {
-                    Button {
-                        act(.typeChanged, status: .active)
-                    } label: {
-                        Label("Update type", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(!canSubmit || current?.kind == kind)
-
-                    // 2026-09-24 decision D-verify-suspend: confirmed like Remove. It hides a live
-                    // badge just as Remove does, and used to fire on one tap.
-                    Button {
-                        confirmingSuspend = true
-                    } label: {
-                        Label("Suspend while reviewing", systemImage: "pause.circle")
-                    }
-                    .disabled(!canSubmit)
-
-                    Button(role: .destructive) {
-                        confirmingWithdraw = true
-                    } label: {
-                        Label("Remove verification", systemImage: "xmark.seal")
-                    }
-                    .disabled(!canSubmit)
-                }
-                // 2026-09-24 decision D-verify-note: "looked, did nothing" gets written down too. The
-                // service had `addNote` and nothing called it. Uses the same reason field.
-                Button {
-                    addNote()
-                } label: {
-                    Label("Save as a note", systemImage: "note.text")
-                }
-                .disabled(!canSubmit)
-            } footer: {
-                if isVerified {
-                    Text("Suspending hides the badge and keeps the record and its history. Removing does the same and marks it withdrawn — neither ever deletes anything.")
-                }
+                Text("Badges are granted, changed and removed only on the admin website, where every decision is checked and recorded.")
             }
 
             if let failure {

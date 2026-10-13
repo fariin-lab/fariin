@@ -74,7 +74,8 @@ final class OfficialConfig {
     /// Owner only (rules: `config/official` is `adminIsOwner()`).
     func setBadge(_ b: OfficialBadge) async throws {
         try await Firestore.firestore().collection("config").document("official")
-            .setData(["badge": b.rawValue], merge: true)
+            // `badgeBy` is required by the rules and copied into the admin log (adminOfficialBadgeAudit).
+            .setData(["badge": b.rawValue, "badgeBy": Auth.auth().currentUser?.uid ?? ""], merge: true)
         badge = b
     }
 
