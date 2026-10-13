@@ -41,7 +41,8 @@ final class StoryPlaybackStartTests: XCTestCase {
         if let d = Self.clipData { return d }
         let src = try await StoryVideoEncoderTests.makeClip(size: CGSize(width: 1080, height: 1920), fps: 30,
                                                             seconds: 6, colour: .systemTeal, audio: true)
-        let p = try XCTUnwrap(await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true))
+        let prepared = await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true)
+        let p = try XCTUnwrap(prepared)
         Self.clipData = p.data
         note("clip: \(p.data.count) bytes, \(String(format: "%.1f", p.duration))s")
         return p.data
