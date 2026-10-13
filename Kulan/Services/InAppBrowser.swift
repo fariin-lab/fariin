@@ -99,14 +99,16 @@ final class InAppBrowserViewController: UIViewController {
         buildBottomBar()
         buildErrorView()
 
+        // WebKit posts these on the main thread; `assumeIsolated` says so to the compiler.
         observations = [
-            webView.observe(\.estimatedProgress) { [weak self] _, _ in self?.progressChanged() },
-            webView.observe(\.title) { [weak self] _, _ in self?.refreshTitle() },
-            webView.observe(\.url) { [weak self] _, _ in self?.refreshTitle() },
-            webView.observe(\.hasOnlySecureContent) { [weak self] _, _ in self?.refreshTitle() },
-            webView.observe(\.canGoBack) { [weak self] _, _ in self?.refreshButtons() },
-            webView.observe(\.canGoForward) { [weak self] _, _ in self?.refreshButtons() },
-            webView.observe(\.isLoading) { [weak self] _, _ in self?.refreshButtons() },
+            webView.observe(\.estimatedProgress) { [weak self] _, _ in MainActor.assumeIsolated { self?.progressChanged() } },
+            webView.observe(\.title) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshTitle() } },
+            webView.observe(\.url) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshTitle() } },
+            webView.observe(\.hasOnlySecureContent) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshTitle() } },
+            webView.observe(\.canGoBack) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshButtons() } },
+            webView.observe(\.canGoForward) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshButtons() } },
+            // Stop mid-load leaves `estimatedProgress` where it was; this is what clears the line then.
+            webView.observe(\.isLoading) { [weak self] _, _ in MainActor.assumeIsolated { self?.refreshButtons(); self?.progressChanged() } },
         ]
 
         refreshTitle()
@@ -269,7 +271,7 @@ final class InAppBrowserViewController: UIViewController {
         let lockSize: CGFloat = lockView.isHidden ? 0 : 11
         let lockGap: CGFloat = lockView.isHidden ? 0 : 4
         let hostFit = hostLabel.sizeThatFits(CGSize(width: textWidth, height: 20))
-        let hostW = min(hostFit.width, textWidth - lockSize - lockGap)
+        let hostW = max(0, min(hostFit.width, textWidth - lockSize - lockGap))
         let hostH = hostLabel.font.lineHeight
         let expandedRow = CGRect(x: side, y: safe.top + expandedTop / 2 + 2, width: lockSize + lockGap + hostW, height: hostH)
         let collapsedRow = CGRect(x: (w - (lockSize + lockGap + hostW)) / 2, y: safe.top + (collapsedTop - hostH) / 2, width: expandedRow.width, height: hostH)
@@ -299,6 +301,7 @@ final class InAppBrowserViewController: UIViewController {
         webView.frame = CGRect(x: 0, y: webTop, width: w, height: max(0, webBottom - webTop))
 
         let errorWidth = min(w - 64, 340)
+        errorMessage.preferredMaxLayoutWidth = errorWidth   // or a long message stays one clipped line
         let errorSize = errorView.systemLayoutSizeFitting(CGSize(width: errorWidth, height: .greatestFiniteMagnitude),
                                                           withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
         errorView.frame = CGRect(x: (w - errorWidth) / 2, y: webView.frame.midY - errorSize.height / 2 - 20, width: errorWidth, height: errorSize.height)
@@ -480,19 +483,19 @@ final class InAppBrowserViewController: UIViewController {
 extension InAppBrowserViewController: UIScrollViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        updateCollapse(scrollView, animated: false)
+        updateCollapse(scrollView, settling: false)
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
             ignoreScrollUntilStopped = false
-            updateCollapse(scrollView, animated: true)
+            updateCollapse(scrollView, settling: true)
         }
     }
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         ignoreScrollUntilStopped = false
-        updateCollapse(scrollView, animated: true)
+        updateCollapse(scrollView, settling: true)
     }
 
     func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
@@ -503,12 +506,16 @@ extension InAppBrowserViewController: UIScrollViewDelegate {
     /// The reference app's rule, in our terms: the fraction moves by the scrolled distance over the
     /// top bar's height; within one bar-height of either end of the page it is capped so the bars
     /// are back by the time you arrive; off the finger it settles at 0 or 1.
-    private func updateCollapse(_ scrollView: UIScrollView, animated: Bool) {
+    /// `settling` comes from the end-of-drag callbacks, where the scroll view may still report itself
+    /// dragging or decelerating; the snap must happen there regardless.
+    private func updateCollapse(_ scrollView: UIScrollView, settling: Bool) {
         guard !ignoreScrollUntilStopped else { return }
         let toTop = max(0, scrollView.contentOffset.y + scrollView.adjustedContentInset.top)
         let toBottom = max(0, scrollView.contentSize.height + scrollView.adjustedContentInset.bottom - scrollView.bounds.maxY)
-        defer { lastOffsetToTop = toTop }
-        guard let last = lastOffsetToTop else { return }
+        // Recorded BEFORE the bars move: resizing the page can scroll it again from inside
+        // `setCollapse`, and that nested call must not count this same distance a second time.
+        guard let last = lastOffsetToTop else { lastOffsetToTop = toTop; return }
+        lastOffsetToTop = toTop
 
         var f = max(0, min(1, collapse + (toTop - last) / expandedTop))
         if toBottom < toolbarHeight {
@@ -516,9 +523,9 @@ extension InAppBrowserViewController: UIScrollViewDelegate {
         } else if toTop < expandedTop {
             f = min(f, toTop / expandedTop)
         }
-        let interacting = scrollView.isDragging || scrollView.isDecelerating
+        let interacting = !settling && (scrollView.isDragging || scrollView.isDecelerating)
         if !interacting { f = f < 0.5 ? 0 : 1 }
-        setCollapse(f, animation: interacting ? .none : (animated ? .snap : .none))
+        setCollapse(f, animation: interacting ? .none : .snap)
     }
 }
 
