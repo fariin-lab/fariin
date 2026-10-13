@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY REACTIONS ON THE CARD.
+            THIS BUILD: A REPOST OF YOUR OWN STORY OPENS YOUR STORY.
+            In a friend's repost of your story, tapping your name in the middle opens your original story (the exact one they reposted), not your profile. If you deleted it or it expired, a message says so.
+            PLEASE TEST: have a friend repost your story; open their story, tap the middle, tap your name. Then delete your original and try again.
+
+            EARLIER: STORY REACTIONS ON THE CARD.
             A reaction sent with a story's react bar now sits on the corner of the story card in the chat, with the time under the card (incoming: right corner; outgoing: left corner). Typed replies and older reactions look as before.
             PLEASE TEST: react to someone's story with the react bar, then look at it in the chat on both phones.
 
