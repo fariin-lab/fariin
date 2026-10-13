@@ -324,6 +324,10 @@ final class StoryItemVideoView: UIView {
             // that keeps decoding is a story you can hear but not see.
             let canPlay = newMode == .play && contentLoaded && window != nil
             if canPlay {
+                // Re-taken on every resume, not only when the player is built: a viewer closed OVER
+                // this one (a story opened on top of a story) hands the session back on its way out,
+                // and this clip would otherwise come back silent on a muted phone. Idempotent.
+                StoryAudioSession.claim()
                 player.play()
             } else {
                 player.pause()

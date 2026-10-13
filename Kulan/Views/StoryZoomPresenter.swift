@@ -440,6 +440,12 @@ enum StoryComposerPresenter {
         while let presented = top?.presentedViewController { top = presented }
         return top
     }
+
+    /// Close the topmost thing this presenter put up — a story opened over a story closes itself here.
+    static func dismissTop() {
+        guard let vc = topController() as? StoryComposerHostVC else { return }
+        vc.dismiss(animated: true)
+    }
 }
 
 final class StoryComposerHostVC: UIHostingController<AnyView> {

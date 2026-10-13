@@ -186,6 +186,9 @@ struct StoryPager: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ host: StoryPagerHostVC, context: Context) {
+        // The live coordinator comes back to this pager when a viewer closed OVER it (a story opened
+        // on top of a story) cleared it on its way out (see `liveCoordinator` and `dismantle`).
+        if StoryPager.liveCoordinator == nil { StoryPager.liveCoordinator = context.coordinator }
         context.coordinator.syncIfNeeded()
     }
 
