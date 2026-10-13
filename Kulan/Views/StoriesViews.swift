@@ -2750,6 +2750,12 @@ struct StoryViewer: View {
             // sheet follows the finger 1:1 (native feel) and snaps on release — WITHOUT an app gesture
             // that would fight the library's down dismiss pan. Swipe-DOWN dismiss is the library pan too.
             onSwipeUpChanged: { up in
+                // ⛔ NOT UNDER A SHEET — owner 2026-10-13: open a reposter's profile from the bubble in
+                // the middle of a repost, scroll or close it, and the story came back with no name or
+                // badge and its video paused. A swipe made on the profile reached this pan through the
+                // sheet: on my own story that is the viewers pull, which hides the header and pauses,
+                // with nothing to undo it once the sheet had taken the touch. A covered story ignores it.
+                guard !sheetUp else { return }
                 // ⚠️ `showingMine`, and this is the guard its first-frame fallback exists for.
                 // `currentIsMine` depends on `currentBucketUid`, which is only set AFTER the library's
                 // `onUserChanged` fires — so on a fresh open it can still be empty and would silently
@@ -2778,6 +2784,8 @@ struct StoryViewer: View {
                 viewersProgress = max(0, min(1, up / sheetH))
             },
             onSwipeUpEnded: { translation, velocity in
+                // The other half of the guard above: a pull that never engaged has nothing to settle.
+                if sheetUp && !showViewers { openDragging = false; return }
                 guard showingMine else {
                     // Friend's story: a swipe UP opens the reply keyboard (like tapping the reply
                     // pill). StoryUI's MessageView focuses its TextField on this notification.

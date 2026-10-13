@@ -1552,7 +1552,16 @@ private extension StoryDetailView {
     /// it does when a link leaves for the browser; the sheet's own close resumes it.
     private func openPerson(_ p: StoryTapPerson) {
         armedTapID = nil
+        // ⛔ THE BUBBLE'S PAUSE IS HANDED TO THE SHEET'S — owner 2026-10-13: back from the profile, the
+        // video stayed paused. Arming the bubble paused the story under the untagged reason and the
+        // profile sheet pauses under "sheet"; clearing the bubble here never lifted the first one, so
+        // when the sheet's close lifted its own, the bubble's was still holding the story. The sheet's
+        // reason goes in first (the host posts the same one when the sheet appears, so nothing changes
+        // twice), then the bubble's comes out: no frame plays in between, and the profile closing is
+        // the only thing left to resume it.
+        NotificationCenter.default.post(name: .pauseStory, object: "sheet")
         NotificationCenter.default.post(name: .storyTapPersonOpen, object: p.id)
+        NotificationCenter.default.post(name: .resumeStory, object: nil)
     }
 
     /// The bubble's own height, which the placement above needs before the thing has been laid out —
