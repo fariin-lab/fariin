@@ -29,7 +29,7 @@ enum WebLink {
         // one did; only when none did does it open here in the in-app browser, as every other page does.
         if isYouTube(url) {
             UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { opened in
-                if !opened { presentSheet(url) }
+                if !opened { Task { @MainActor in presentSheet(url) } }
             }
             return
         }
@@ -41,6 +41,7 @@ enum WebLink {
         return h == "youtu.be" || h == "youtube.com" || h.hasSuffix(".youtube.com")
     }
 
+    @MainActor
     private static func presentSheet(_ url: URL) {
         guard useSheet(for: url) else {
             UIApplication.shared.open(url)   // let iOS route it to whichever app owns this
