@@ -531,7 +531,10 @@ final class StoryItemVideoView: UIView {
             // `preroll(atRate:)` raises an Objective-C exception if the item is not ready, and an
             // Objective-C exception in Swift is not catchable — it goes straight to abort(). That
             // was a shipped crash. `.readyToPlay` is the state the documentation requires.
-            player?.preroll(atRate: 1) { _ in }
+            // Only for a PAUSED player (a preloaded item). One already asked to play is starting
+            // anyway, and a preroll on it is a second start request the player has to settle
+            // first — the reference app never prerolls a story at all.
+            if player?.rate == 0 { player?.preroll(atRate: 1) { _ in } }
             // Ready is a moment `startIfBuffered` must see: a warmed opening is handed over in one
             // piece, usually BEFORE the item is ready, so the buffer KVO had already come and gone.
             startIfBuffered()

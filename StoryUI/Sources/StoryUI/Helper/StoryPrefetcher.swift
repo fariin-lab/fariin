@@ -269,7 +269,12 @@ public enum StoryPrefetcher {
     private static func warmVideo(_ urlString: String?, allowsCellular: Bool = false,
                                   window: Bool = false, prefixBytes: Int64? = nil, urgent: Bool = false) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
-        guard claim(urlString) else { return }
+        guard claim(urlString) else {
+            // Already being fetched — usually by the chat list's arrival download, at background
+            // priority behind everybody else's. The very next story's gets moved to the front.
+            if urgent { StoryVideoStream.expedite(url) }
+            return
+        }
         // ⚠️ A PREFIX, NOT THE WHOLE CLIP — and this is the largest single saving available in the
         // app. A story video is capped at 23MB and this warms up to three of them ahead, for stories
         // nobody has asked to watch; the reference app fetches a few hundred KB per neighbour and

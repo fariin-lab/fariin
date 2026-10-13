@@ -96,6 +96,18 @@ final class StoryPartialFile {
         }
     }
 
+    /// Take in what ANOTHER instance for this clip has recorded since this one loaded its map — a
+    /// prefix warm still running when the reader opened. Without this the reader went on believing
+    /// it held nothing and fetched the same opening again from byte zero.
+    func absorbDisk() {
+        guard let data = try? Data(contentsOf: metaURL),
+              let m = try? JSONDecoder().decode(Meta.self, from: data),
+              FileManager.default.fileExists(atPath: dataURL.path) else { return }
+        for r in m.ranges where r.count == 2 && r[0] < r[1] { merge(r[0] ..< r[1]) }
+        if total == nil { total = m.total }
+        if contentType == nil { contentType = m.contentType }
+    }
+
     // MARK: - Writing
 
     func note(total: Int64, contentType: String?) {

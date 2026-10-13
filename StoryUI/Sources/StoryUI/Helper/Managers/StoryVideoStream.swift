@@ -87,10 +87,22 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         URLSession(configuration: .default, delegate: self, delegateQueue: nil)
     }()
 
+    /// Content-information requests held for a warm that has not learnt the clip's length yet.
+    private var awaitingInfo: [AVAssetResourceLoadingRequest] = []
+    private var warmToken: NSObjectProtocol?
+    /// Set once this reader has started relying on somebody else's warm — see `fetchOrAwait`.
+    private var warmDeadlineSet = false
+
     private init(remote: URL) {
         self.remote = remote
         self.partial = StoryPartialFile(remote: remote)
         super.init()
+        let key = remote.absoluteString
+        warmToken = NotificationCenter.default.addObserver(
+            forName: Self.warmMovedNote, object: nil, queue: nil) { [weak self] note in
+            guard let self, note.userInfo?["url"] as? String == key else { return }
+            self.queue.async { self.warmMoved() }
+        }
     }
 
     // MARK: - Building an asset
@@ -138,6 +150,9 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
 
     private func teardown() {
         queue.async { [self] in
+            if let warmToken { NotificationCenter.default.removeObserver(warmToken) }
+            warmToken = nil
+            awaitingInfo.removeAll()
             pending.values.forEach { $0.task.cancel() }
             pending.removeAll()
             let stranded = live
@@ -180,29 +195,33 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         // that skipped it would leave that entry behind for the life of the process.
         if partial.holds(0 ..< bytes) { onFinish?(); return }
         if CacheManager.cachedFileIfUsable(for: remote) != nil { onFinish?(); return }
+        // From the end of what is already here: a warm cancelled part way keeps what it got.
+        let from = partial.contiguousLength(from: 0, limit: bytes)
         var request = URLRequest(url: remote)
-        request.setValue("bytes=0-\(bytes - 1)", forHTTPHeaderField: "Range")
+        request.setValue("bytes=\(from)-\(bytes - 1)", forHTTPHeaderField: "Range")
         request.allowsConstrainedNetworkAccess = false
         request.allowsExpensiveNetworkAccess = allowsCellular
         // ⛔ NOT BACKGROUND FOR THE VERY NEXT ITEM (owner 2026-10-12: Next onto a video froze for
-        // seconds). This warm writes only when it completes, and a reader opened before then cannot
-        // see it and fetches the same opening again. At `.background` priority the next clip's warm
-        // was often still running at the tap; the one about to be watched goes at normal priority.
+        // seconds). The one about to be watched goes at normal priority, and first in line.
         request.networkServiceType = urgent ? .default : .background
-        let task = URLSession.shared.dataTask(with: request) { data, response, _ in
-            defer { onFinish?() }
-            guard let data, !data.isEmpty,
-                  let http = response as? HTTPURLResponse,
-                  http.statusCode == 200 || http.statusCode == 206 else { return }
-            if let total = Self.totalLength(from: http) {
-                partial.note(total: total, contentType: http.mimeType)
-            }
-            partial.write(offset: 0, data: data)
-            // This instance dies with this closure, so the map goes down now or not at all — and a
-            // prefix nobody recorded is a prefix that gets fetched again on arrival, which is the
-            // whole saving.
-            partial.flush()
-            // ⚠️ STILL NO PROMOTION FROM HERE, EVEN THOUGH IT IS NOW SAFE FROM THE READER.
+        // ⛔ WRITTEN AS IT ARRIVES, NOT WHEN IT ENDS — owner 2026-10-13, "still a small late". This
+        // warm used to hold every byte in memory until the last one, so a Next tapped while it was
+        // still running (the usual case from a photo story: a few seconds is not enough on a phone
+        // connection) found NOTHING on disk. The reader then fetched the same opening again from
+        // byte zero, on a cold connection, competing with this one, and AVFoundation waited on it.
+        // The reference app's preload goes into the same store its player reads from, as it
+        // arrives, and its player reads whatever is there and waits for the rest. Now so does ours:
+        // chunks land in the partial file and the map goes down every `warmAnnounceEvery`, and a
+        // reader for this clip is told each time (see `warmMoved`).
+        let task = warmSession.dataTask(with: request)
+        task.priority = urgent ? URLSessionTask.highPriority : URLSessionTask.lowPriority
+        let warm = Warm(key: remote.absoluteString, partial: partial, cursor: from, end: bytes,
+                        urgent: urgent, task: task, onFinish: onFinish)
+        warmLock.lock()
+        warmsByTask[task.taskIdentifier] = warm
+        warmsByURL[warm.key] = warm
+        warmLock.unlock()
+        // ⚠️ STILL NO PROMOTION FROM A WARM, EVEN THOUGH IT IS NOW SAFE FROM THE READER.
             //
             // `promoteIfComplete` is safe for the instance that OWNS the file: its own descriptor
             // survives the rename. It is not safe across instances, and this is the one place where
@@ -212,9 +231,124 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             // `openHandle` creates an EMPTY `.part`, the map says bytes are held, and the reader
             // answers the player with zeros. A truncated response is worse than a lost promotion,
             // which costs one more pass through the reader on the next open and nothing else.
-        }
         onTask?(task)
         task.resume()
+    }
+
+    /// The very next story's opening is ALREADY being fetched by an earlier, background warm (the
+    /// chat list's arrival download): move it to the front rather than start a second one.
+    static func expedite(_ remote: URL) {
+        warmLock.lock(); defer { warmLock.unlock() }
+        guard let w = warmsByURL[remote.absoluteString] else { return }
+        w.urgent = true
+        w.task.priority = URLSessionTask.highPriority
+    }
+
+    // MARK: - Warms a reader can see
+
+    /// One prefix warm in flight. `cursor`, `unannounced` and `partial` are touched only on the
+    /// warm session's serial delegate queue; `urgent` only under `warmLock`.
+    fileprivate final class Warm {
+        let key: String
+        let partial: StoryPartialFile
+        var cursor: Int64
+        let end: Int64
+        var urgent: Bool
+        let task: URLSessionDataTask
+        let onFinish: (() -> Void)?
+        var unannounced: Int64 = 0
+        init(key: String, partial: StoryPartialFile, cursor: Int64, end: Int64, urgent: Bool,
+             task: URLSessionDataTask, onFinish: (() -> Void)?) {
+            self.key = key; self.partial = partial; self.cursor = cursor; self.end = end
+            self.urgent = urgent; self.task = task; self.onFinish = onFinish
+        }
+    }
+
+    fileprivate static let warmLock = NSLock()
+    fileprivate static var warmsByTask: [Int: Warm] = [:]
+    fileprivate static var warmsByURL: [String: Warm] = [:]
+    /// Posted with the clip's url string whenever a warm has put more of it on disk, learnt its
+    /// length, or ended. A reader for that clip takes it in (see `warmMoved`).
+    fileprivate static let warmMovedNote = Notification.Name("StoryVideoStream.warmMoved")
+    /// 128KB: the first frames of a 720p clip, so a reader waiting on the opening is fed within a
+    /// chunk or two of it arriving — and the map is written ~12 times per prefix, not per packet.
+    fileprivate static let warmAnnounceEvery: Int64 = 128 * 1024
+
+    /// ONE session for every warm, so the warms share their connections instead of each paying for
+    /// a handshake. Serial delegate queue: a warm's state is only touched there.
+    fileprivate static let warmSession: URLSession = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 1
+        return URLSession(configuration: .default, delegate: WarmRouter(), delegateQueue: q)
+    }()
+
+    fileprivate static func announce(_ key: String) {
+        NotificationCenter.default.post(name: warmMovedNote, object: nil, userInfo: ["url": key])
+    }
+
+    /// The warm still fetching bytes at or after `offset` for this clip, if any.
+    fileprivate static func warmAhead(of remote: URL, at offset: Int64) -> (task: URLSessionTask, urgent: Bool)? {
+        warmLock.lock(); defer { warmLock.unlock() }
+        guard let w = warmsByURL[remote.absoluteString], offset < w.end else { return nil }
+        return (w.task, w.urgent)
+    }
+
+    fileprivate final class WarmRouter: NSObject, URLSessionDataDelegate {
+        private func warm(for task: URLSessionTask) -> Warm? {
+            StoryVideoStream.warmLock.lock(); defer { StoryVideoStream.warmLock.unlock() }
+            return StoryVideoStream.warmsByTask[task.taskIdentifier]
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                        didReceive response: URLResponse,
+                        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+            guard let w = warm(for: dataTask), let http = response as? HTTPURLResponse else {
+                completionHandler(.cancel); return
+            }
+            switch http.statusCode {
+            case 206: break
+            case 200: w.cursor = 0   // the server ignored the range: this is the file from byte 0
+            default:
+                // An error body is not video (see the streaming session's same rule).
+                completionHandler(.cancel); return
+            }
+            if let total = StoryVideoStream.totalLength(from: http) {
+                w.partial.note(total: total, contentType: http.mimeType)
+                // The length is what a reader's content-information request is waiting on.
+                StoryVideoStream.announce(w.key)
+            }
+            completionHandler(.allow)
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            guard let w = warm(for: dataTask), w.cursor < w.end else { dataTask.cancel(); return }
+            // A whole-file answer is trimmed to the prefix; a ranged one already is.
+            let keep = data.prefix(Int(min(Int64(data.count), w.end - w.cursor)))
+            w.partial.write(offset: w.cursor, data: Data(keep))
+            w.cursor += Int64(keep.count)
+            w.unannounced += Int64(keep.count)
+            if w.unannounced >= StoryVideoStream.warmAnnounceEvery {
+                w.unannounced = 0
+                w.partial.flush()
+                StoryVideoStream.announce(w.key)
+            }
+            if w.cursor >= w.end { dataTask.cancel() }
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            StoryVideoStream.warmLock.lock()
+            let w = StoryVideoStream.warmsByTask.removeValue(forKey: task.taskIdentifier)
+            if let w, StoryVideoStream.warmsByURL[w.key] === w {
+                StoryVideoStream.warmsByURL.removeValue(forKey: w.key)
+            }
+            StoryVideoStream.warmLock.unlock()
+            guard let w else { return }
+            // Ended, finished or cancelled alike: everything that arrived is on disk, so the map
+            // goes down and the reader is told, and whatever is missing it now fetches itself.
+            w.partial.flush()
+            StoryVideoStream.announce(w.key)
+            w.onFinish?()
+        }
     }
 
     // MARK: - AVAssetResourceLoaderDelegate
@@ -251,6 +385,13 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
                 finishIfPossible(request)
                 return
             }
+            // A warm for this clip is already on the wire and will learn the length from its first
+            // response; a probe would be a second round trip racing it. `warmMoved` answers this.
+            if let w = Self.warmAhead(of: remote, at: 0) {
+                awaitingInfo.append(request)
+                lean(on: w)
+                return
+            }
             probe { [weak self] total, type in
                 // Back on the one queue: `probe` answers on URLSession's, and everything below
                 // touches state this class serialises.
@@ -282,6 +423,9 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
 
     /// Hand over whatever of this request we hold, and go and get the rest.
     private func finishIfPossible(_ request: AVAssetResourceLoadingRequest) {
+        // A request whose length is still being learnt is not answerable yet; finishing it now
+        // would tell the player the clip has no length.
+        if let info = request.contentInformationRequest, info.contentLength == 0 { return }
         guard let data = request.dataRequest else {
             request.finishLoading()
             live.removeAll { $0 === request }
@@ -294,7 +438,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             // shape read `(partial.total ?? start) - start`, which is zero when the length is not
             // known yet — and zero fell through to `finishLoading()`, telling the player the request
             // was satisfied when nothing had been handed over. Go and get the length instead.
-            guard let total = partial.total else { fetch(from: start); return }
+            guard let total = partial.total else { fetchOrAwait(from: start); return }
             wanted = total - start
         } else {
             // `currentOffset` advances as we respond, so this is what is LEFT of the request.
@@ -314,7 +458,52 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
                 return
             }
         }
-        fetch(from: start + held)
+        fetchOrAwait(from: start + held)
+    }
+
+    /// ⛔ ONE DOWNLOAD PER BYTE, NOT TWO — owner 2026-10-13. When the lookahead is still fetching
+    /// this clip's opening, those bytes are already on the wire to the same file: starting a second
+    /// transfer for them meant a cold connection racing a warm one for the same bandwidth, and the
+    /// player waiting on the slower. So:
+    /// - an URGENT warm (the very next story's, already first in line) is waited on; `warmMoved`
+    ///   hands its bytes over as they land;
+    /// - a BACKGROUND one (the chat list's arrival download, queued behind dozens) is stopped. What
+    ///   it got is on disk, and its end is announced, after which this fetches the rest itself.
+    /// Waiting is capped: if the warm is still running after `warmPatience`, it is stopped the same
+    /// way, so a stuck connection cannot hold a story longer than a fresh one would.
+    private func fetchOrAwait(from offset: Int64) {
+        if pending.values.contains(where: { $0.offset <= offset }) { return }
+        if let w = Self.warmAhead(of: remote, at: offset) {
+            lean(on: w)
+            return
+        }
+        fetch(from: offset)
+    }
+
+    private func lean(on w: (task: URLSessionTask, urgent: Bool)) {
+        if !w.urgent {
+            w.task.cancel()
+        } else if !warmDeadlineSet {
+            warmDeadlineSet = true
+            let task = w.task
+            queue.asyncAfter(deadline: .now() + Self.warmPatience) { task.cancel() }
+        }
+    }
+
+    /// How long a reader leans on somebody else's warm before taking over. Long enough for a
+    /// 1.5MB opening on an ordinary phone connection; a warm that has not finished by then is on a
+    /// connection a fresh one is unlikely to beat by much, and nothing it got is lost.
+    private static let warmPatience: TimeInterval = 2.5
+
+    /// A warm for this clip moved on: more bytes, its length, or its end. Take in its map and give
+    /// every waiting request another go.
+    private func warmMoved() {
+        guard warmToken != nil else { return }   // torn down
+        partial.absorbDisk()
+        let waiting = awaitingInfo
+        awaitingInfo.removeAll()
+        for r in waiting where live.contains(where: { $0 === r }) { serve(r) }
+        for r in live where !waiting.contains(where: { $0 === r }) { finishIfPossible(r) }
     }
 
     /// ⚠️ NOT "ONE FETCH AT A TIME", AND THE DIFFERENCE IS A HANG.
