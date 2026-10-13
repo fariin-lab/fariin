@@ -2,6 +2,7 @@ import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseFunctions
+import CallKit
 
 /// ⛔ THE SERVER REFUSED THIS PHONE, SO GET BACK IN AND RECONNECT — owner, 2026-09-27 and 09-28:
 /// "every account looks deleted, I can't send, can't archive, can't react". Fine with the internet
@@ -37,7 +38,8 @@ import FirebaseFunctions
 /// in through `noteStall`. What a mature messenger does when its socket goes quiet is drop it and
 /// dial again, so this does the same: a fresh token (10s at most), then Firestore's network switched
 /// off and on, which drops the stuck stream and reconnects. Pending writes are kept and sent again.
-/// Stall recoveries are spaced 20s, 60s, 120s, then every 300s while the stall lasts.
+/// Stall recoveries are spaced 15s, 30s, then every 60s while the stall lasts (2026-10-13: the old
+/// 300s cap left a stuck phone dead for five minutes between tries).
 ///
 /// ⛔ A REAL OUTAGE MUST NOT TURN INTO A STORM — owner, 2026-10-08, round 2. With no route there is
 /// nothing to reset, so a stall is ignored until the path is back. With a route that answers nothing
@@ -68,7 +70,7 @@ enum SessionRecovery {
     /// Refusals that came back after a fresh token, in a row, before `persistentRefusal` is posted.
     private static let persistentAfter = 5
     /// Stall recoveries: the gap before the 2nd, the 3rd, the 4th, and every later one in the episode.
-    private static let stallGaps: [Double] = [20, 60, 120, 300]
+    private static let stallGaps: [Double] = [15, 30, 60, 60]
     private static let tokenTimeout: Double = 10
     /// The most a stall recovery waits for each half of Firestore's network switch.
     private static let switchTimeout: Double = 15
@@ -92,6 +94,21 @@ enum SessionRecovery {
         UIApplication.shared.applicationState == .active
     }
 
+    private static let callObserver = CXCallObserver()
+
+    /// ⛔ IN A CALL MEANS iOS HAS ONE TOO — owner, 2026-10-13, 7th "dead until relaunch" report. Every
+    /// 1:1 call, both directions, is a CallKit call, so a non-idle `CallService.state` with no live
+    /// call on the phone is a leftover (the 10-11 screenshots had a green call pill for hours with no
+    /// call). That leftover used to skip every network reset for up to 4 hours, which left a stuck
+    /// connection stuck until the app was killed.
+    @MainActor private static var inLiveCall: Bool {
+        let s = CallService.shared.state
+        guard s != .idle && s != .ended else { return false }
+        // DiagLog.snapshot records both sides (callState / systemCalls), so no log line here: this is
+        // asked on every watchdog tick.
+        return callObserver.calls.contains(where: { !$0.hasEnded })
+    }
+
     /// Every back-off wait times a random 0.8 to 1.25.
     private static func jittered(_ delay: Double) -> Double {
         delay * Double.random(in: 0.8...1.25)
@@ -110,6 +127,7 @@ enum SessionRecovery {
         guard let since = answeringSince else { answeringSince = now; return }
         guard now.timeIntervalSince(since) >= 60 else { return }
         print("[Recovery] server kept answering for 60s, stall episode over")
+        DiagLog.add("server kept answering 60s, episode over")
         stallDuringCall = false   // 1:1 audit #10: no reset owed after the call
         stallStep = 0
         nextStallAt = .distantPast
@@ -186,9 +204,9 @@ enum SessionRecovery {
         // and every call error walked the step up further. Now: one token refresh per call (as
         // before, the connection is left alone), no step used, and the reset runs once the call ends
         // if the server has not been answering since.
-        let callState = CallService.shared.state
-        if callState != .idle && callState != .ended {
+        if inLiveCall {
             guard !stallDuringCall else { return }
+            DiagLog.snapshot(from)
             stallDuringCall = true
             stallRunning = true
             print("[Recovery] stall (\(from)) in a call, token only, reset after the call")
@@ -197,8 +215,7 @@ enum SessionRecovery {
                 stallRunning = false
                 let until = Date().addingTimeInterval(4 * 3600)
                 while Date() < until {
-                    let s = CallService.shared.state
-                    if s == .idle || s == .ended { break }
+                    if !inLiveCall { break }
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
                 guard stallDuringCall else { return }   // the server kept answering meanwhile
@@ -212,12 +229,14 @@ enum SessionRecovery {
         }
         let now = Date()
         guard now >= nextStallAt else { return }
+        DiagLog.snapshot(from)
         stallStep += 1
         let gap = stallGaps[min(stallStep - 1, stallGaps.count - 1)]
         nextStallAt = now.addingTimeInterval(jittered(gap))
         stallRunning = true
         let announce = !stallEpisodeRecovered
         print("[Recovery] stall (\(from)), recovery \(stallStep)")
+        DiagLog.add("  recovery \(stallStep) starts")
         Task { @MainActor in
             await recoverStall(announce: announce)
             stallRunning = false
@@ -288,9 +307,9 @@ enum SessionRecovery {
         guard isActive, Auth.auth().currentUser?.uid == uid else { return }
         // ⛔ NEVER DURING A LIVE CALL — owner, 2026-10-08: switching Firestore's network off drops the
         // call's signalling listeners mid-call. The fresh token above is all a call gets.
-        let callState = CallService.shared.state
-        if callState != .idle && callState != .ended {
+        if inLiveCall {
             print("[Recovery] stall: in a call, token refreshed, connection left alone")
+            DiagLog.add("  in a call: token only")
             return
         }
         // ⚠️ BOTH CALLS, ALWAYS: a network left switched off would be far worse than the stall.
@@ -312,6 +331,7 @@ enum SessionRecovery {
         }
         guard offAnswered, onAnswered else {
             print("[Recovery] stall: the network switch did not answer in \(Int(switchTimeout))s, trying again later")
+            DiagLog.add("  network switch DID NOT ANSWER (off \(offAnswered), on \(onAnswered))")
             return
         }
         guard Auth.auth().currentUser?.uid == uid else { return }
@@ -323,10 +343,12 @@ enum SessionRecovery {
         // anything to re-attach; posting on every reset of a long outage would re-attach for nothing.
         guard announce else {
             print("[Recovery] stall: connection reset again, same episode")
+            DiagLog.add("  connection reset again")
             return
         }
         stallEpisodeRecovered = true
         print("[Recovery] stall: connection reset, posting recovered")
+        DiagLog.add("  connection reset, recovered posted")
         NotificationCenter.default.post(name: recovered, object: nil)
     }
 

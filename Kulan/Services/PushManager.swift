@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
 
         // 2026-09-24 fix-all #161: App Check provider, installed before configure (see AppCheckSetup).
         AppCheckSetup.install()
+        DiagLog.launched()
         FirebaseApp.configure()
 
         // ⚠️ A DEAD UPLOAD MUST FAIL, NOT HANG. Firebase Storage's default `maxUploadRetryTime` is

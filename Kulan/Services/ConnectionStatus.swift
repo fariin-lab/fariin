@@ -263,6 +263,7 @@ final class ConnectionStatus {
             // 2026-10-08: this reset the network every ~45s on a slow but working connection).
             guard Date().timeIntervalSince(self.lastServerAnswer) >= Self.stallAfter else { return }
             print("[Recovery] heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
+            DiagLog.add("heartbeat: no server answer in \(Int(Self.heartbeatTimeout))s")
             SessionRecovery.noteStall("heartbeat")
         }
     }
@@ -300,11 +301,15 @@ final class ConnectionStatus {
         probeUid = uid
         probeGen += 1
         guard let uid else { return }
+        DiagLog.uploadIfPending(uid: uid)
         let gen = probeGen
         probe = Firestore.firestore().collection("users").document(uid)
             .addSnapshotListener(includeMetadataChanges: true) { [weak self] snap, error in
                 if let snap {
-                    Task { @MainActor in self?.noteSnapshot(fromCache: snap.metadata.isFromCache) }
+                    let meta = snap.metadata
+                    Task { @MainActor in
+                        self?.noteSnapshot(fromCache: meta.isFromCache, pendingWrites: meta.hasPendingWrites)
+                    }
                     return
                 }
                 Task { @MainActor in self?.probeDied(error, gen: gen) }
@@ -325,8 +330,15 @@ final class ConnectionStatus {
     /// ⚠️ A SERVER ANSWER IS PROOF AND A CACHED ONE IS NOT. Firestore serves cache for reasons that
     /// have nothing to do with the network (a query it can answer locally, a pending write), so a
     /// cached snapshot only ever starts the clock; it never itself declares us disconnected.
-    func noteSnapshot(fromCache: Bool) {
+    ///
+    /// ⛔ AND A SNAPSHOT CARRYING MY OWN UNCONFIRMED WRITE IS NOT ONE EITHER — owner, 2026-10-13, 7th
+    /// "dead until relaunch" report. Firestore shows a local write at once, and on a query it still
+    /// believes is current that snapshot says `isFromCache == false`. So every message sent into a dead
+    /// connection reset the silence clock, and the watchdog, the heartbeat and the stall episode all
+    /// stood down while nothing was reaching the server.
+    func noteSnapshot(fromCache: Bool, pendingWrites: Bool = false) {
         guard !fromCache else { armSettle(); return }
+        guard !pendingWrites else { return }
         pending?.cancel(); pending = nil
         serverAnswered()
     }

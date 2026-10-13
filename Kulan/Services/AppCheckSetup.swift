@@ -100,6 +100,7 @@ final class DeadlineAppCheckProvider: NSObject, AppCheckProvider {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + deadline) { [deadline] in
             guard !once.isDone else { return }
             Self.log.error("App Check token: no answer in \(deadline, privacy: .public)s, going on without it")
+            DiagLog.add("App Check: no answer in \(Int(deadline))s, going on without it")
             finish(nil, NSError(domain: "Kulan.AppCheckDeadline", code: 1,
                                 userInfo: [NSLocalizedDescriptionKey: "App Check provider did not answer in time"]))
         }
@@ -107,8 +108,10 @@ final class DeadlineAppCheckProvider: NSObject, AppCheckProvider {
             let ms = Int(Date().timeIntervalSince(began) * 1000)
             if let error {
                 Self.log.error("App Check token failed after \(ms, privacy: .public)ms: \(error.localizedDescription, privacy: .public)")
+                DiagLog.add("App Check failed after \(ms)ms: \(error.localizedDescription)")
             } else {
                 Self.log.info("App Check token in \(ms, privacy: .public)ms")
+                if ms > 2000 { DiagLog.add("App Check slow: \(ms)ms") }
             }
             finish(token, error)
         }

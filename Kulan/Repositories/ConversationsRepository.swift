@@ -271,7 +271,7 @@ final class ConversationsRepository {
                 // the offline cold start, and it is the one the header most needs to hear about —
                 // returning first would make this listener silent precisely when it has the most to
                 // say. One line, no extra read; see `ConnectionStatus`.
-                Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache) }
+                Task { @MainActor in ConnectionStatus.shared.noteSnapshot(fromCache: snap.metadata.isFromCache, pendingWrites: snap.metadata.hasPendingWrites) }
                 // Offline cold-start: ignore an empty cached snapshot so the
                 // last-known chats stay visible (parity with the RN fromCache guard).
                 if snap.metadata.isFromCache && snap.documents.isEmpty { return }
