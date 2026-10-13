@@ -1268,8 +1268,7 @@ struct StoryViewer: View {
     /// rather than a flag because the sheet edits THAT story: same id, same posting time, same
     /// media. See `ShareStorySheet.editing`.
     @State private var editViewers: Story?
-    @State private var ownRepostGone = false
-    @State private var ownOriginalOpen = false          // my original story is open ON TOP of this one            // the repost's original was mine and is gone
+    @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
@@ -1699,7 +1698,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
-            || repostUp || repostLoading || shareURL != nil || ownRepostGone || ownOriginalOpen
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -4897,26 +4896,15 @@ struct StoryViewer: View {
         // the exact one he reposted". Everybody else's bubble still opens their profile (his
         // 2026-10-11 ruling). Gone (deleted or expired) says so in words instead.
         if uid == me, let r = currentStory?.repostOf, r.authorUid == me {
-            // ⛔ OPENED ON TOP, NOT INSTEAD — owner 2026-10-13 (second report): closing the friend's
-            // viewer and opening mine in the same moment overlapped the two with a pop, and swiping
-            // mine down returned to a list with nothing left to return to. The reference app opens
-            // the original over the story being watched and leaves that one paused underneath, so
-            // closing the original lands back on the same story at the same point. Mine is presented
-            // over this stage (`StoryComposerPresenter`, the composer's own way over the story: the
-            // stage stays in the window), with its own swipe-down close; this viewer is held under
-            // the "sheet" reason while it is up (`ownOriginalOpen` is in `sheetUp`).
-            guard let mine = StoriesRepository.shared.mine,
-                  mine.stories.contains(where: { $0.id == r.storyId }) else { ownRepostGone = true; return }
-            ownOriginalOpen = true
-            StoryComposerPresenter.present(
-                StoryViewer(group: mine, startStoryId: r.storyId, ownSwipeDismiss: true,
-                            onClose: { StoryComposerPresenter.dismissTop() }),
-                onDismissed: {
-                    // The top viewer's own teardown posts an untagged pause on its way out, and that
-                    // reaches this viewer's pages too: lift it, then the "sheet" hold comes down.
-                    NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
-                    ownOriginalOpen = false
-                })
+            // ⛔ SWAPPED IN PLACE — owner 2026-10-13, twice. The first fix closed this viewer and opened
+            // mine in the same moment (an overlapping pop, and a list with nothing to return to); the
+            // second stacked mine over this one, which he rejected: the friend's story must be gone,
+            // mine must open normally, and closing mine must leave the Stories list exactly where it
+            // was. `StoryDoor.swapToOwnStory` replaces the viewer's content on the SAME screen (the
+            // delete re-feed's way): nothing is dismissed or presented, the list underneath is never
+            // touched, and the close is the ordinary one. Not one of our door's viewers: the old path.
+            if StoryDoor.swapToOwnStory(r.storyId) { return }
+            if !StoryDoor.reopen(onStory: r.storyId, by: me) { ownRepostGone = true }
             return
         }
         let r = groups.flatMap(\.stories).compactMap(\.repostOf).first { $0.authorUid == uid }
