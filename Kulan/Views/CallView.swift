@@ -1786,6 +1786,15 @@ enum CallZoomSource {
 
 // The minimized VIDEO call: a small draggable window carrying the whole call layout — the big feed
 // plus the corner tile, following the same big/small choice as the call screen. Tap it to go back.
+/// A view whose parent can never make it re-run: `==` is always true, so SwiftUI skips its body on
+/// a parent update and runs it only when something its OWN body read (an @Observable property)
+/// changes. For content that must stay still while its container moves under a finger.
+private struct FrozenCardContent<Content: View>: View, Equatable {
+    let content: () -> Content
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
+    var body: some View { content() }
+}
+
 struct FloatingCallWindow: View {
     private var call: CallService { CallService.shared }
     // NOT @State. See CallService.cardOffset: this view dies on every restore, and @State handed the
@@ -1915,7 +1924,14 @@ struct FloatingCallWindow: View {
                 // ⛔ THE TRANSFORM SITS ON `window`, INSIDE THE GESTURE, which is where the smooth
                 // build had it. Hung on the outside it moves the very view the drag is measured on,
                 // so the finger's own reference frame travels with the card.
-                morphAnchored(zoomAnchored(window
+                // ⛔ THE CARD'S INSIDES ARE NOT REBUILT BY THE DRAG — owner 2026-10-13: "the window
+                // follows my finger but feels laggy". `dragLive` is this view's @State, so every touch
+                // re-ran this whole body, and `window` with it: the video renderers, the avatars, the
+                // palette lookup and `pipFeeds`, 60-120 times a second, to move a transform. The card
+                // is wrapped so a parent update never re-runs it (`FrozenCardContent`, always equal);
+                // it still redraws on its own when what it reads from `call` changes, because the
+                // Observation tracking belongs to the wrapper's own body.
+                morphAnchored(zoomAnchored(FrozenCardContent { window }.equatable()
                     // Where the minimize/restore flight lands and starts (`CallPipMorph`). At rest
                     // `dragLive` is zero, which is the only time a flight reads it.
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { call.cardFrame = $0 }
