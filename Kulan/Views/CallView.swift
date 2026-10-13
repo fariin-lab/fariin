@@ -2201,7 +2201,7 @@ struct FloatingCallWindow: View {
     @ViewBuilder private var voiceWindow: some View {
         if let stage = stageLabel {
             VStack(spacing: 10) {
-                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 54, level: 0)
+                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 54)
                 Text(stage)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
@@ -2216,15 +2216,14 @@ struct FloatingCallWindow: View {
             // ⛔ CONNECTED = THE VIDEO CARD'S SHAPE WITH BOTH CAMERAS OFF — owner 2026-10-13, with the
             // two pictures: not two stacked halves on their colour, but black, their face big in the
             // middle and mine in the same bottom-right tile the video card uses (size, corner, hairline
-            // and inset copied from `videoWindow`). The talking wave stays on both faces.
-            let tw = w * 0.34
+            // and inset copied from `videoWindow`).             let tw = w * 0.34
             ZStack(alignment: .bottomTrailing) {
                 Color.black
-                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56, level: call.remoteLevel)
+                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 ZStack {
                     Color.black
-                    voiceFace(name: call.myName, photoUrl: call.myPhotoUrl, size: 22, level: call.localLevel)
+                    voiceFace(name: call.myName, photoUrl: call.myPhotoUrl, size: 22)
                 }
                 .frame(width: tw, height: tw * 16 / 9)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -2248,23 +2247,10 @@ struct FloatingCallWindow: View {
         return .black
     }
 
-    /// A face on the card, wearing the wave.
-    ///
-    /// ⛔ THE WAVE IS ON THE FACE, NOT BESIDE IT, and it is driven by HOW LOUD rather than by
-    /// whether (owner, 2026-08-23: "what if we make around avatar wave that take talk", and then
-    /// "can that wave be free from a copied look?").
-    ///
-    /// It replaces a white speech bubble with green bars, which was a straight lift of the reference
-    /// app's mark and looked it. This one cannot be copied without first doing the work underneath:
-    /// everyone else's talking indicator is a BOOLEAN, so their ring switches on and sits there. We
-    /// already read the real audio level to decide whether somebody is speaking at all, so the ring
-    /// breathes with the voice instead of blinking with a flag.
-    ///
-    /// Nothing at all is drawn at level 0 — silence carries no mark, and a call that has not been
-    /// answered passes 0 explicitly, because a live ring on a phone nobody picked up would be a lie.
-    private func voiceFace(name: String, photoUrl: String?, size: CGFloat, level: Double) -> some View {
+    /// A face on the card. ⛔ NO TALKING RING — owner 2026-10-13: "remove the green speaking animation
+    /// from the floating voice-call window". The level-driven wave (`TalkingWave`) is no longer drawn.
+    private func voiceFace(name: String, photoUrl: String?, size: CGFloat) -> some View {
         AvatarView(name: name, photoUrl: photoUrl, size: size)
-            .background { TalkingWave(level: level, avatar: size) }
     }
 
     private var videoWindow: some View {
