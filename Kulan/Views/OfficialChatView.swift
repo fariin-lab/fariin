@@ -857,10 +857,13 @@ struct VerifiedTick: View {
 
     var body: some View {
         // A flat picture, not a symbol: iOS 26 can recolour a symbol white (see `VerifiedMark.badge`).
-        // The same badge as everybody's (`VerifiedMark.blue/scale/weight`), owner 2026-10-13.
-        Image(uiImage: VerifiedMark.badge(size: size * VerifiedMark.scale, blue: VerifiedMark.blue, weight: VerifiedMark.weight))
-            .frame(width: size, height: size)
-            .accessibilityLabel("Verified official account")
+        // The same badge as everybody's (`VerifiedMark.blue/scale/weight`), owner 2026-10-13, in the
+        // colour the owner set for the channel, or nothing (`OfficialConfig.badge`).
+        if let color = OfficialConfig.shared.badge.color {
+            Image(uiImage: VerifiedMark.badge(size: size * VerifiedMark.scale, blue: color, weight: VerifiedMark.weight))
+                .frame(width: size, height: size)
+                .accessibilityLabel("Verified official account")
+        }
     }
 }
 

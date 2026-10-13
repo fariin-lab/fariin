@@ -53,6 +53,14 @@ struct AnnouncementAdminView: View {
                     NavigationLink { AdminTeamView() } label: {
                         Label("Admins", systemImage: "person.2")
                     }
+                    // The Fariin channel's verified badge: blue, gold or none (owner 2026-10-13).
+                    Picker(selection: Binding(
+                        get: { config.badge },
+                        set: { b in Task { try? await OfficialConfig.shared.setBadge(b) } })) {
+                        ForEach(OfficialBadge.allCases) { b in Text(b.label).tag(b) }
+                    } label: {
+                        Label("Fariin Badge", systemImage: "checkmark.seal")
+                    }
                     NavigationLink { AppStoreLinkView() } label: {
                         HStack {
                             Label("Update Link", systemImage: "arrow.down.app")

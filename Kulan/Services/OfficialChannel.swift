@@ -53,6 +53,10 @@ final class OfficialConfig {
 
     private var listener: ListenerRegistration?
     private(set) var appStoreUrl: String = ""
+    /// ⛔ THE FARIIN CHANNEL'S BADGE, THE OWNER'S TO SET — owner 2026-10-13: "I need to control the
+    /// Fariin official chat verify". `blue` (the default, and what an old document without the field
+    /// means), `gold`, or `none`. Read by `VerifiedTick` and the official chat header.
+    private(set) var badge: OfficialBadge = .blue
 
     var hasAppStoreUrl: Bool { URL(string: appStoreUrl)?.scheme?.hasPrefix("http") == true }
 
@@ -61,10 +65,18 @@ final class OfficialConfig {
         listener = Firestore.firestore().collection("config").document("official")
             .addSnapshotListener { [weak self] snap, _ in
                 self?.appStoreUrl = snap?.data()?["appStoreUrl"] as? String ?? ""
+                self?.badge = OfficialBadge(rawValue: snap?.data()?["badge"] as? String ?? "") ?? .blue
             }
     }
 
     func stop() { listener?.remove(); listener = nil }
+
+    /// Owner only (rules: `config/official` is `adminIsOwner()`).
+    func setBadge(_ b: OfficialBadge) async throws {
+        try await Firestore.firestore().collection("config").document("official")
+            .setData(["badge": b.rawValue], merge: true)
+        badge = b
+    }
 
     /// Owner only; the rules enforce that, not this.
     func setAppStoreUrl(_ url: String) async throws {
@@ -80,6 +92,26 @@ final class OfficialConfig {
 /// The kind of announcement. Drives the small coloured label above the title, nothing else — the
 /// bubble itself is identical, because a maintenance notice that looks like a different app is
 /// exactly the confusion this chat exists to prevent.
+enum OfficialBadge: String, CaseIterable, Identifiable {
+    case blue, gold, none
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .blue: return "Blue"
+        case .gold: return "Gold"
+        case .none: return "No badge"
+        }
+    }
+    /// Nil = draw nothing.
+    var color: UIColor? {
+        switch self {
+        case .blue: return VerifiedMark.blue
+        case .gold: return VerifiedMark.gold
+        case .none: return nil
+        }
+    }
+}
+
 enum AnnouncementKind: String, CaseIterable, Identifiable {
     case feature, release, maintenance, security, news
 
