@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: NEXT PERSON'S VIDEO READY BEFORE YOU SWIPE, PLUS 3 STORY FIXES.
+            THIS BUILD: CLEARER MESSAGES FOR SUSPENDED AND BANNED ACCOUNTS.
+            A suspended account now sees "Account suspended" instead of "signed out from another device", and a clear message when it tries to sign in.
+            A banned account is told "Can't upload story right now" before the story picker opens, not after the upload fails.
+            PLEASE TEST: suspend a test account from the admin panel and open the app on it; ban a test account and tap add story.
+
+            EARLIER: NEXT PERSON'S VIDEO READY BEFORE YOU SWIPE, PLUS 3 STORY FIXES.
             The person before and after the one you watch get their video player ready in advance, so swiping to them should start the video at once.
             Brightness: the uploading card and the first second of the posted story now show your edited brightness, not the original.
             Story editor: a tall phone-camera video shows as one upright picture, not split into sideways pieces.
