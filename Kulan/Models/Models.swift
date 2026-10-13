@@ -211,6 +211,14 @@ struct ReplyRef: Equatable, Codable {
     var isReaction: Bool? = nil
 }
 
+extension Message {
+    /// ⛔ A STORY REACTION (an emoji sent from a story's react bar) is a mark on the story, not a
+    /// message to answer: owner 2026-10-13, "when somebody reacts to my story I can reply to it or
+    /// react to that emoji; stop that — only for the react bar, not for typed replies". Nobody can
+    /// reply to it or react to it, by swipe, double tap or menu, and reactions already on one are hidden.
+    var isStoryReaction: Bool { replyTo?.isStatus == true && replyTo?.isReaction == true }
+}
+
 // Local delivery state for a message I'm sending. nil = a confirmed server message
 // (its receipt is derived from the other person's lastRead instead).
 enum MessageSendState: Equatable { case sending, failed }

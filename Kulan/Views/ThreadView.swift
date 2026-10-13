@@ -3377,9 +3377,11 @@ struct ThreadView: View {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
         var items: [UIMenuElement] = []
-        items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
-            beginReply(to: m)
-        })
+        if !m.isStoryReaction {   // a story react-bar emoji takes no reply (see Message.isStoryReaction)
+            items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
+                beginReply(to: m)
+            })
+        }
         // 2026-09-24 feature-audit: offered only where the quick bar is (`canReact`); it had no guard,
         // so a call/system/pin/tombstone row took a reaction nobody could see.
         if canReact(m) {
@@ -3517,7 +3519,7 @@ struct ThreadView: View {
         // resolves, and Reply sealed a quote pointing at an id the other device has never seen.
         // Edit and Info already had this guard; Reply, Forward and Pin now share it.
         let delivered = m.sendState == nil
-        if delivered {
+        if delivered, !m.isStoryReaction {   // a story react-bar emoji takes no reply
             out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
         }
         // Both forward paths now ask `canForward` and nothing else — see the note on it. This one
@@ -3650,6 +3652,7 @@ struct ThreadView: View {
     private func canReact(_ m: Message) -> Bool {
         m.sendState == nil && !iAmMuted && !m.isCall && !m.isSystem
             && !m.deleted && m.pinNotice == nil && !m.isUnsupportedFeature
+            && !m.isStoryReaction   // a story react-bar emoji takes no reaction (see Message.isStoryReaction)
     }
 
     // Double-tap quick heart on a UIKit-routed row — mirrors the SwiftUI bubble's double-tap gesture.
@@ -4334,6 +4337,8 @@ struct ThreadView: View {
     // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit — they
     // can't both be active, or send would commit the edit and silently drop the reply.
     private func beginReply(to m: Message) {
+        // The backstop for every door (swipe, menu, SwiftUI bubble): a story react-bar emoji takes no reply.
+        guard !m.isStoryReaction else { return }
         if editingMessage != nil { editingMessage = nil; setInputSilently(Drafts.shared.text(cid)) }
         withAnimation(.easeInOut(duration: 0.22)) { replyingTo = m }
         inputFocused = true   // replying = you're about to type → open the keyboard

@@ -316,7 +316,7 @@ enum MessageRowModelBuilder {
         // A tombstone is a placeholder, never a reactable message. Empty here is STRUCTURAL: every
         // badge, overhang and tap surface derives from this one value, so a deleted row cannot
         // render or respond to reactions no matter what the data still says.
-        let reactions: [ReactionChip] = msg.deleted ? [] : reactionChips(msg, ctx: ctx)
+        let reactions: [ReactionChip] = (msg.deleted || msg.isStoryReaction) ? [] : reactionChips(msg, ctx: ctx)
 
         return BubbleRow(
             isMe: isMe,
@@ -350,12 +350,12 @@ enum MessageRowModelBuilder {
             // Theirs only, and only on a wallpaper — the reference guards it `hasWallpaper,
             // isIncoming`, and an outgoing bubble never wears one.
             rim: !isMe && ctx.onWallpaper,
-            canSwipeToReply: msg.sendState == nil && !msg.deleted,
+            canSwipeToReply: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction,
             // Media whose single tap opens something. Deliberately NOT gifs: a gif plays where it
             // sits and opens nothing, so there is no tap for the recogniser to hold up — which is
             // why it keeps the double-tap shortcut and the others give it away.
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
-            canDoubleTapReact: msg.sendState == nil && !msg.deleted)
+            canDoubleTapReact: msg.sendState == nil && !msg.deleted && !msg.isStoryReaction)
     }
 
     /// ⛔ THE TIMER ICON FROM THE FIRST FRAME — owner, 2026-09-29: messages sent right after the
