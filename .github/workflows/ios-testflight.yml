@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: KULAN'S OWN IN-APP BROWSER.
+            THIS BUILD: GLASS BROWSER, LINKS OPEN DIRECTLY, YOUTUBE CARD ON QUICK SEND, REPOSTS OF MY STORY.
+            Browser: no bars and no lines. Liquid glass close, address and menu float at the top; one glass capsule at the bottom with back, forward, share, bookmark (Reading List) and open in Safari. Reload is in the menu.
+            Tapping a link opens the browser straight away, no "Open link?" question.
+            A link sent before its preview finished loading still gets the card (waits up to 3 seconds). Older messages stay as they were.
+            Repost of my story: tapping my name or face at the top of a full-screen repost opens my story (not my profile); swiping my story down lands on my own card in the Stories list.
+            PLEASE TEST: paste a YouTube link and send at once; tap links; scroll a page; open my story from a friend's repost (card and full-screen) and swipe down.
+
+            EARLIER (908): KULAN'S OWN IN-APP BROWSER.
             Every web link now opens in Kulan's own browser sheet, not Safari: chat links, link cards, profile links, Settings help/privacy/terms, sign-up terms.
             Title and address at the top with the menu and close; back, forward, reload and share at the bottom. Scroll down and the bars get out of the way; scroll up or tap the slim top bar to bring them back.
             Swipe from the left/right edge for back/forward; hold Back or Forward to see history. Menu: reload, copy link, share, find on page, text size, open in Safari.
