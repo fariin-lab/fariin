@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SWIPE TO THE NEXT PERSON'S VIDEO, UNPIN, STORY REACTIONS.
+            THIS BUILD: YOUTUBE CARDS, UNPIN, STORY REACTIONS, REPOST, SETTINGS.
+            YouTube links: the video's real cover with a play button, the title and channel; tapping opens the YouTube app, or the browser if it is not installed.
+            Unpin: the pin button only opens its menu now; if an unpin fails, a message says why.
+            Story reactions: no swipe to reply and no long press.
+            A repost of your own story: tapping your name swaps the same screen to your story; swipe down returns to the list where it was.
+            Settings search uses your Settings icons. Edit Photo is a small sheet.
+            PLEASE TEST: send a YouTube link and tap it; unpin from the bar; swipe and long-press a story reaction; open your story from a friend's repost and swipe down.
+
+            EARLIER (906): SWIPE TO THE NEXT PERSON'S VIDEO, UNPIN, STORY REACTIONS.
             Swiping from one person's video story to the next: the video starts as soon as the swipe ends (the extra second is gone).
             Pinned bar: Unpin from the pin button's menu works every time.
             Story reactions: the emoji is drawn over the story card and bigger; a react-bar reaction can't be replied to or reacted to.
