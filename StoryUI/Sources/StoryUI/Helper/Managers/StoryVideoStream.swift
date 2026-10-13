@@ -83,9 +83,11 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         init(task: URLSessionDataTask, offset: Int64) { self.task = task; self.offset = offset }
     }
 
-    private lazy var session: URLSession = {
-        URLSession(configuration: .default, delegate: self, delegateQueue: nil)
-    }()
+    // ⛔ NO SESSION OF ITS OWN ANY MORE — owner 2026-10-13, "make it as instant as the reference
+    // app". One session per clip meant a fresh TCP+TLS handshake on every story reached, and the
+    // reader could never ride the connection the lookahead's warm had just used for the same host.
+    // Every story fetch, warm or live, now goes through `storySession` and its router, which hands
+    // this reader's tasks back to the delegate methods below. The router holds readers weakly.
 
     /// Content-information requests held for a warm that has not learnt the clip's length yet.
     private var awaitingInfo: [AVAssetResourceLoadingRequest] = []
@@ -127,12 +129,8 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
 
     /// Let go of the reader when its asset does. Called from the item view's teardown.
     ///
-    /// ⚠️ DROPPING THE REFERENCE IS NOT ENOUGH, AND THIS IS A LEAK THAT KEEPS SPENDING DATA.
-    /// `URLSession(configuration:delegate:delegateQueue:)` RETAINS its delegate until the session is
-    /// invalidated. This class is its own delegate, so a stream that is merely forgotten keeps
-    /// itself alive through its session, and its transfers keep running — for a story nobody is
-    /// watching any more, which is precisely the waste this file exists to end. One per clip
-    /// watched, for the life of the process.
+    /// ⚠️ DROPPING THE REFERENCE IS NOT ENOUGH: its transfers run on the shared session and keep
+    /// spending data for a story nobody is watching until they are cancelled, which `teardown` does.
     @MainActor
     static func release(_ asset: AVAsset?) {
         guard let asset, let stream = retain.removeValue(forKey: ObjectIdentifier(asset)) else { return }
@@ -167,9 +165,8 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             // `didCompleteWithError`; this is a no-op then, and it is the only promotion for one
             // that was completed by a prefix warm.
             partial.promoteIfComplete()
-            // Breaks the delegate retain, cancels anything still in flight, and is the only thing
-            // that lets this object deallocate.
-            session.invalidateAndCancel()
+            // (The shared session is never invalidated: the transfers were cancelled above, and the
+            // router holds this reader weakly, so nothing keeps it alive.)
         }
     }
 
@@ -213,7 +210,7 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         // arrives, and its player reads whatever is there and waits for the rest. Now so does ours:
         // chunks land in the partial file and the map goes down every `warmAnnounceEvery`, and a
         // reader for this clip is told each time (see `warmMoved`).
-        let task = warmSession.dataTask(with: request)
+        let task = storySession.dataTask(with: request)
         task.priority = urgent ? URLSessionTask.highPriority : URLSessionTask.lowPriority
         let warm = Warm(key: remote.absoluteString, partial: partial, cursor: from, end: bytes,
                         urgent: urgent, task: task, onFinish: onFinish)
@@ -274,13 +271,23 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     /// chunk or two of it arriving — and the map is written ~12 times per prefix, not per packet.
     fileprivate static let warmAnnounceEvery: Int64 = 128 * 1024
 
-    /// ONE session for every warm, so the warms share their connections instead of each paying for
-    /// a handshake. Serial delegate queue: a warm's state is only touched there.
-    fileprivate static let warmSession: URLSession = {
+    /// ONE session for every story fetch — the lookahead's warms and every reader's live reads —
+    /// so they share connections instead of each paying for a handshake, and a reader picks up the
+    /// connection the warm for its clip has just used. Serial delegate queue: a warm's state is only
+    /// touched there; a reader's callbacks are handed straight on to its own queue.
+    fileprivate static let storySession: URLSession = {
         let q = OperationQueue()
         q.maxConcurrentOperationCount = 1
         return URLSession(configuration: .default, delegate: WarmRouter(), delegateQueue: q)
     }()
+
+    private final class WeakStream { weak var stream: StoryVideoStream?; init(_ s: StoryVideoStream) { stream = s } }
+    /// Live reads by task, so the router can hand their callbacks back. Under `warmLock`.
+    private static var streamsByTask: [Int: WeakStream] = [:]
+
+    fileprivate static func register(_ task: URLSessionTask, for stream: StoryVideoStream) {
+        warmLock.lock(); streamsByTask[task.taskIdentifier] = WeakStream(stream); warmLock.unlock()
+    }
 
     fileprivate static func announce(_ key: String) {
         NotificationCenter.default.post(name: warmMovedNote, object: nil, userInfo: ["url": key])
@@ -299,17 +306,29 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             return StoryVideoStream.warmsByTask[task.taskIdentifier]
         }
 
+        private func reader(for task: URLSessionTask) -> StoryVideoStream? {
+            StoryVideoStream.warmLock.lock(); defer { StoryVideoStream.warmLock.unlock() }
+            return StoryVideoStream.streamsByTask[task.taskIdentifier]?.stream
+        }
+
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
                         didReceive response: URLResponse,
                         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-            guard let w = warm(for: dataTask), let http = response as? HTTPURLResponse else {
-                completionHandler(.cancel); return
+            guard let w = warm(for: dataTask) else {
+                // A reader's read, or one whose reader has gone (cancel it: nobody wants the bytes).
+                if let r = reader(for: dataTask) {
+                    r.urlSession(session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
+                } else {
+                    completionHandler(.cancel)
+                }
+                return
             }
+            guard let http = response as? HTTPURLResponse else { completionHandler(.cancel); return }
             switch http.statusCode {
             case 206: break
             case 200: w.cursor = 0   // the server ignored the range: this is the file from byte 0
             default:
-                // An error body is not video (see the streaming session's same rule).
+                // An error body is not video (see the reader's same rule).
                 completionHandler(.cancel); return
             }
             if let total = StoryVideoStream.totalLength(from: http) {
@@ -321,7 +340,12 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         }
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-            guard let w = warm(for: dataTask), w.cursor < w.end else { dataTask.cancel(); return }
+            guard let w = warm(for: dataTask) else {
+                if let r = reader(for: dataTask) { r.urlSession(session, dataTask: dataTask, didReceive: data) }
+                else { dataTask.cancel() }
+                return
+            }
+            guard w.cursor < w.end else { dataTask.cancel(); return }
             // A whole-file answer is trimmed to the prefix; a ranged one already is.
             let keep = data.prefix(Int(min(Int64(data.count), w.end - w.cursor)))
             w.partial.write(offset: w.cursor, data: Data(keep))
@@ -341,7 +365,9 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             if let w, StoryVideoStream.warmsByURL[w.key] === w {
                 StoryVideoStream.warmsByURL.removeValue(forKey: w.key)
             }
+            let r = StoryVideoStream.streamsByTask.removeValue(forKey: task.taskIdentifier)?.stream
             StoryVideoStream.warmLock.unlock()
+            if let r { r.urlSession(session, task: task, didCompleteWithError: error); return }
             guard let w else { return }
             // Ended, finished or cancelled alike: everything that arrived is on disk, so the map
             // goes down and the reader is told, and whatever is missing it now fetches itself.
@@ -543,7 +569,10 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         }
         var request = URLRequest(url: remote)
         request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range")
-        let task = session.dataTask(with: request)
+        let task = Self.storySession.dataTask(with: request)
+        // The clip on screen: first in line on the shared connections, ahead of every warm.
+        task.priority = URLSessionTask.highPriority
+        Self.register(task, for: self)
         pending[ObjectIdentifier(task)] = Fetch(task: task, offset: offset)
         task.resume()
     }
