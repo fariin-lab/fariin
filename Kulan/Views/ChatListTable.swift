@@ -1074,8 +1074,14 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // Only the leftover is cleared. Showing the button is the search controller's own job
         // (`automaticallyShowsCancelButton`), so it draws in the system's iOS 26 style; forcing it
         // on here drew the classic one (owner, 2026-10-12: make search like the reference app).
+        // ⛔ NOT WHILE THE FIELD IS IN USE — owner 2026-10-13: tap search and there is no X, the
+        // search cannot be closed. This runs on every layout pass, and while search is OPENING the
+        // field is already being typed in with `isActive` still false: the check took away the
+        // button the controller had just shown, and nothing showed it again. A field that is
+        // first responder is a search in progress, never a leftover.
         let active = item.searchController?.isActive ?? false
-        if !active, bar.showsCancelButton { bar.setShowsCancelButton(false, animated: false) }
+        let inUse = bar.searchTextField.isFirstResponder || bar.searchTextField.isEditing
+        if !active, !inUse, bar.showsCancelButton { bar.setShowsCancelButton(false, animated: false) }
     }
 
     // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and
