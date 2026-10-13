@@ -43,6 +43,9 @@ final class InAppBrowserViewController: UIViewController {
     private let hostLabel = UILabel()
     private let lockView = UIImageView()
     private let progressFill = UIView()
+    /// Clips the fill to the capsule's own shape (owner 2026-10-13: the fill's square corners showed
+    /// past the round end while a page loaded).
+    private let progressClip = UIView()
 
     // Bottom: one floating capsule.
     // ⛔ TWO CAPSULES — owner 2026-10-13, with a picture: back/forward on the left, share /
@@ -169,7 +172,11 @@ final class InAppBrowserViewController: UIViewController {
         // The loading fill sweeps across the capsule behind the address, as the reference shows it.
         progressFill.backgroundColor = UIColor.label.withAlphaComponent(0.10)
         progressFill.alpha = 0
-        addressGlass.contentView.addSubview(progressFill)
+        progressClip.clipsToBounds = true
+        progressClip.layer.cornerCurve = .continuous
+        progressClip.isUserInteractionEnabled = false
+        progressClip.addSubview(progressFill)
+        addressGlass.contentView.addSubview(progressClip)
         hostLabel.font = .systemFont(ofSize: 17, weight: .regular)
         hostLabel.textColor = .label
         hostLabel.textAlignment = .center
@@ -302,6 +309,8 @@ final class InAppBrowserViewController: UIViewController {
         let rowX = (addressW - (lockW + gap + textW)) / 2
         lockView.frame = CGRect(x: rowX, y: (control - lockW) / 2, width: lockW, height: lockW)
         hostLabel.frame = CGRect(x: rowX + lockW + gap, y: 0, width: textW, height: control)
+        progressClip.frame = CGRect(x: 0, y: 0, width: addressW, height: control)
+        progressClip.layer.cornerRadius = control / 2
         progressFill.frame = CGRect(x: 0, y: 0, width: addressW * CGFloat(webView.estimatedProgress), height: control)
 
         // BOTTOM. Two capsules side by side, proportioned from his picture (left 37% of the row,
