@@ -74,9 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SETTINGS SPACING.
-            Settings: Edit profile and Share profile sit just under your username (the big gap is gone).
-            PLEASE TEST: open Settings and look at the space under your username.
+            THIS BUILD: PINNED BAR, GOLD BADGE EVERYWHERE, REPOST PROFILE.
+            Pinned bar: shows the real pinned message the moment you open the chat (no more "Pinned Message / Tap to view"). Unpin removes it at once, and says why if it fails.
+            Gold badge: also on the saved accounts at Log In (after that account is opened once) and on the story header.
+            Repost: open the person's profile from the bubble in the middle, close it, and the story keeps its name and badge and plays again.
+            PLEASE TEST: open a chat with a pin twice; unpin; the Log In accounts list; a repost's middle bubble, open profile, scroll, close.
+
+            EARLIER (902): SETTINGS SPACING. Edit profile and Share profile sit just under your username.
 
             EARLIER (901): STORY VIDEOS PLAY RIGHT AFTER THE SWIPE, STORY REPLY FIXES, BADGES, SETTINGS.
             The video you are about to swipe to (next story, next person, previous person) is downloaded in full ahead, so it plays as soon as the turn ends.
