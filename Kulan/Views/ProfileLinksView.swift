@@ -316,7 +316,6 @@ struct ProfileLinkChips: View {
     /// USED AGAIN since 2026-09-25, as the tint of the glass (see the fill below), the same colour
     /// the action circles are tinted with. Nil means plain glass.
     var tint: Color?
-    @Environment(\.openURL) private var openURL
 
     var body: some View {
         // Every profile that shows links draws them through here, so the switch is in one place.
@@ -326,7 +325,8 @@ struct ProfileLinkChips: View {
             HStack(spacing: 8) {
                 ForEach(links) { link in
                     Button {
-                        if let u = link.openURL { openURL(u) }
+                        // The in-app browser, not Safari (owner, 2026-10-13: links stay inside Kulan).
+                        if let u = link.openURL { WebLink.open(u) }
                     } label: {
                         // ⛔ SMALLER — owner, 2026-09-16: "make small badge". One step down on both
                         // the glyph and the label, and the gutters tightened to match, so the pill

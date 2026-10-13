@@ -209,7 +209,7 @@ struct VerificationDetailView: View {
             // website, through adminApi `verifyApply`. This screen still shows the badge, the notes and
             // the full history.
             Section {
-                Link(destination: URL(string: "https://admin.fariin.com")!) {
+                Button { WebLink.open(URL(string: "https://admin.fariin.com")!) } label: {
                     Label("Change this badge on admin.fariin.com", systemImage: "arrow.up.right.square")
                 }
             } footer: {

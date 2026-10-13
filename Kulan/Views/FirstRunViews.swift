@@ -43,6 +43,7 @@ struct AgreementView: View {
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .tint(.primary)
+                    .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
                     .multilineTextAlignment(.center)
                     .padding(.top, 8)
                 Text("You must be 13 or older to use Fariin.")

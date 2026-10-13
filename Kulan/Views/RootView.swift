@@ -945,6 +945,7 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .tint(.primary)
+                        .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
                         .padding(.top, 14)
                     #if DEBUG
                     Text("Preview: type **apple** in either field, then Continue, to load a demo account.")

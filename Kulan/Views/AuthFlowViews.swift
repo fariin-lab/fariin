@@ -450,6 +450,7 @@ struct AuthMethodView: View {
                 Text("By continuing, you agree to our [Terms of Service](https://fariin.com/terms) and [Privacy Policy](https://fariin.com/privacy).")
                     .font(.footnote).foregroundStyle(.secondary)
                     .tint(.primary)
+                    .environment(\.openURL, OpenURLAction { url in WebLink.open(url); return .handled })
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 8)
                     // Faded, not removed, so flipping modes does not slide the centred block.

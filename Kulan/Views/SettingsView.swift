@@ -1425,8 +1425,9 @@ struct AboutView: View {
     /// Every one of these was a bare `Link`, which draws nothing at all: four rows that hand you to
     /// Safari or to Mail looked exactly like the Version row, which does nothing. A chevron would be
     /// the wrong fix — that promises another screen inside the app and this is a door out of it.
+    /// Owner, 2026-10-13: through `WebLink`, so the page opens in Kulan's browser, not in Safari.
     private func outLink(_ title: String, _ url: URL) -> some View {
-        Link(destination: url) {
+        Button { WebLink.open(url) } label: {
             HStack {
                 Text(title).foregroundStyle(.primary)
                 Spacer()

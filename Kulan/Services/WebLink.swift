@@ -1,5 +1,4 @@
 import UIKit
-import SafariServices
 
 /// OPENS A LINK WITHOUT THROWING THE PERSON OUT OF THE APP.
 ///
@@ -7,17 +6,11 @@ import SafariServices
 /// and leaves. Tap a link preview in a chat and the app is behind you; coming back means finding it
 /// in the switcher and hoping the chat is where you left it.
 ///
-/// The reference secure messenger's Terms page (his screenshots, 2026-08-23) is the standard answer:
-/// `SFSafariViewController`, which is Safari presented as a sheet over the app. Close it and you are
-/// exactly where you were, with reader mode, sharing and history for free and no browser of our own
-/// to build.
-///
-/// ⛔ IT IS ALSO THE PRIVATE ONE, which matters more here than the convenience. SFSafariViewController
-/// runs OUT OF PROCESS: the page cannot read anything of ours, we cannot read anything of the page's,
-/// and it carries none of Safari's cookies. A `WKWebView` — the other way to keep someone in the app —
-/// would run the page inside our process and inside our sandbox. For an app whose whole promise is
-/// that we cannot see your messages, hosting somebody else's javascript next to them is not a
-/// trade worth making. Never swap this for a WKWebView to "style" it.
+/// ⛔ OWNER, 2026-10-13: KULAN'S OWN BROWSER, NOT THE SAFARI SHEET. Until then this presented
+/// `SFSafariViewController`, chosen for privacy. He was told the trade-off (the page runs inside
+/// Kulan) and chose the own browser, built on the reference app's behaviour: `InAppBrowserViewController`.
+/// The privacy line now lives there: WebKit still runs the page in its own process, and that browser
+/// has no script bridge and no injected scripts, so a page cannot call into the app. Keep it so.
 enum WebLink {
 
     /// Opens `url` in the way that suits what it actually is.
@@ -51,11 +44,7 @@ enum WebLink {
             UIApplication.shared.open(url)   // nothing to present from; better out than nowhere
             return
         }
-        let safari = SFSafariViewController(url: url)
-        safari.dismissButtonStyle = .close
-        // No colours set on purpose: it inherits the system look, so it matches Safari rather than
-        // wearing our tint over somebody else's website and implying the page is ours.
-        host.present(safari, animated: true)
+        host.present(InAppBrowserViewController(url: url), animated: true)
     }
 
     /// ⚠️ THE EXCLUSIONS ARE THE INTERESTING PART. A sheet is right for a WEB PAGE and wrong for
