@@ -950,10 +950,8 @@ struct StoryDetailView: View {
         .onReceive(timer) { _ in
             startProgress()
         }
-        .onChange(of: isAnimationStarted ? isAnimationStarted : false) { state in
-            syncVideoMode()
-            isTimerRunning = state
-        }
+        // (The reaction effect used to stop the bar and the clip here through `isTimerRunning`. It
+        // no longer does — see `videoMode`. Only taps are still held off while it flies.)
         .onChange(of: keyboardManager.isKeyboardOpen) { open in
             syncVideoMode()   // composing a reply pauses; resumes on dismiss
         }
@@ -2564,8 +2562,10 @@ private extension StoryDetailView {
         // The finger, the host (sheet, dismiss drag, hero flight), the scene, the keyboard.
         if isPaused || isHolding || hostPause.paused || scenePaused { return .pause }
         if keyboardManager.isKeyboardOpen { return .pause }
-        // An emoji reaction animation pauses the story, which is what `configureProgress` did.
-        if isAnimationStarted { return .pause }
+        // ⛔ THE REACTION EFFECT DOES NOT PAUSE — owner 2026-10-13: send a reaction, the keyboard
+        // closes, and the clip stayed frozen until the flying emojis had finished. The keyboard is
+        // what holds a story while you compose (the line above); once it is gone the story plays
+        // under the effect, as in the reference app.
         return .play
     }
 
