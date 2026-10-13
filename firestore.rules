@@ -645,6 +645,16 @@ service cloud.firestore {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
 
+      // 2026-10-13: the app's own connection log (DiagLog), sent after a "dead until relaunch"
+      // episode. Write-once by the owner, small, and read only by the admin console (server side).
+      match /diag/{id} {
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['text', 'build', 'ios', 'at'])
+          && request.resource.data.text is string && request.resource.data.text.size() <= 70000
+          && request.resource.data.at == request.time;
+        allow read, update, delete: if false;
+      }
+
       // WHERE PUSH TOKENS ARE MOVING TO, and why they cannot stay on the profile.
       //
       // They live at users/{uid}.fcmTokens / .voipTokens today, on a document any signed-in account
