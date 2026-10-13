@@ -145,6 +145,10 @@ final class InAppBrowserViewController: UIViewController {
         UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight))
     }
 
+    /// Bottom bar icons, all five at one size: the system toolbar's 17pt medium (owner 2026-10-13:
+    /// 21pt regular made share/book/tabs look big and thin next to the chevrons).
+    private func barSymbol(_ name: String) -> UIImage? { symbol(name, 17, .medium) }
+
     private func fill(_ glass: UIVisualEffectView, with button: UIButton) {
         button.frame = glass.contentView.bounds
         button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -195,7 +199,7 @@ final class InAppBrowserViewController: UIViewController {
 
     private func buildBottom() {
         func setUp(_ b: UIButton, _ name: String, _ label: String, _ action: @escaping () -> Void) {
-            b.setImage(symbol(name, 21, .regular), for: .normal)
+            b.setImage(barSymbol(name), for: .normal)
             b.tintColor = .label
             b.accessibilityLabel = label
             b.addAction(UIAction { _ in action() }, for: .touchUpInside)
@@ -496,10 +500,10 @@ final class InAppBrowserViewController: UIViewController {
         do {
             try SSReadingList.default()?.addItem(with: url, title: webView.title, previewText: nil)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            bookmarkButton.setImage(symbol("book.fill", 21, .regular), for: .normal)
+            bookmarkButton.setImage(barSymbol("book.fill"), for: .normal)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self else { return }
-                self.bookmarkButton.setImage(self.symbol("book", 21, .regular), for: .normal)
+                self.bookmarkButton.setImage(self.barSymbol("book"), for: .normal)
             }
         } catch {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
