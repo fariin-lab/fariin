@@ -2191,8 +2191,8 @@ struct FloatingCallWindow: View {
         }
     }
 
-    // The minimized VOICE call. Connected: the two people stacked, them on top, you underneath —
-    // the shape the reference uses. Still ringing: ONE face, theirs, with the stage under it, which
+    // The minimized VOICE call. Connected: black, their face big, mine in the bottom-right tile (owner
+    // 2026-10-13; it was two stacked halves). Still ringing: ONE face, theirs, with the stage under it, which
     // is also what the reference does before somebody answers.
     // A voice call has no picture of its own, so the card says WHO you are on with instead of a
     // phone glyph. On the person's own colour, the same one the full call screen paints: the card
@@ -2213,14 +2213,27 @@ struct FloatingCallWindow: View {
             .background(Color.white.opacity(0.06))
             .background(voiceCardColor)
         } else {
-            VStack(spacing: 0) {
-                voicePanel(name: call.otherName, photoUrl: call.otherPhotoUrl,
-                           avatar: 46, level: call.remoteLevel)
-                Rectangle().fill(.white.opacity(0.14)).frame(height: 0.5)
-                voicePanel(name: call.myName, photoUrl: call.myPhotoUrl,
-                           avatar: 38, level: call.localLevel)
+            // ⛔ CONNECTED = THE VIDEO CARD'S SHAPE WITH BOTH CAMERAS OFF — owner 2026-10-13, with the
+            // two pictures: not two stacked halves on their colour, but black, their face big in the
+            // middle and mine in the same bottom-right tile the video card uses (size, corner, hairline
+            // and inset copied from `videoWindow`). The talking wave stays on both faces.
+            let tw = w * 0.34
+            ZStack(alignment: .bottomTrailing) {
+                Color.black
+                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56, level: call.remoteLevel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ZStack {
+                    Color.black
+                    voiceFace(name: call.myName, photoUrl: call.myPhotoUrl, size: 22, level: call.localLevel)
+                }
+                .frame(width: tw, height: tw * 16 / 9)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(.white.opacity(0.35), lineWidth: 0.5)
+                )
+                .padding(5)
             }
-            .background(voiceCardColor)
         }
     }
 
@@ -2233,16 +2246,6 @@ struct FloatingCallWindow: View {
         if let shown = ProfilePhotoLoader.shared.cachedAvatar(url),
            let p = ProfilePalette.now(shown, url: url) { return Color(p.page) }
         return .black
-    }
-
-    /// One person's half of the connected voice card.
-    private func voicePanel(name: String, photoUrl: String?, avatar: CGFloat,
-                            level: Double) -> some View {
-        ZStack {
-            Color.white.opacity(0.06)
-            voiceFace(name: name, photoUrl: photoUrl, size: avatar, level: level)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// A face on the card, wearing the wave.
