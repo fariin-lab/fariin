@@ -2216,7 +2216,8 @@ struct FloatingCallWindow: View {
             // ⛔ CONNECTED = THE VIDEO CARD'S SHAPE WITH BOTH CAMERAS OFF — owner 2026-10-13, with the
             // two pictures: not two stacked halves on their colour, but black, their face big in the
             // middle and mine in the same bottom-right tile the video card uses (size, corner, hairline
-            // and inset copied from `videoWindow`).             let tw = w * 0.34
+            // and inset copied from `videoWindow`). No talking ring (see `voiceFace`).
+            let tw = w * 0.34
             ZStack(alignment: .bottomTrailing) {
                 Color.black
                 voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 56)
