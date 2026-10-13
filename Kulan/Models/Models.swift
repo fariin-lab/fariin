@@ -92,7 +92,8 @@ struct UserProfile: Identifiable, Equatable {
     /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
     /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
     var deletionScheduledFor: Date?
-    /// Banned from the admin panel. Server-only field; the rules refuse a banned account's stories,
+    /// Banned from the admin panel. Only the server writes it (readable like the rest of the profile);
+    /// the rules refuse a banned account's stories,
     /// and the app reads it only to say so before the picker opens (2026-10-13).
     var banned: Bool = false
 
