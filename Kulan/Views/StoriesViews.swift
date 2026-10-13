@@ -1268,6 +1268,7 @@ struct StoryViewer: View {
     /// rather than a flag because the sheet edits THAT story: same id, same posting time, same
     /// media. See `ShareStorySheet.editing`.
     @State private var editViewers: Story?
+    @State private var ownRepostGone = false            // the repost's original was mine and is gone
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
@@ -1697,7 +1698,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
-            || repostUp || repostLoading || shareURL != nil
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -2014,6 +2015,11 @@ struct StoryViewer: View {
         // confirmationDialog: over these full-screen covers dialogs render as centered popovers
         // that HIDE role-cancel buttons (the Discard bug). Alerts are liquid-glass native and
         // always show both buttons.
+        .alert("Your story is no longer available", isPresented: $ownRepostGone) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This repost is of your own story, which you deleted or which has expired, so it can't be opened.")
+        }
         .alert("Delete this story?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 // Seamless delete: the viewer slides to the adjacent item itself; we just remove from the db.
@@ -4885,6 +4891,14 @@ struct StoryViewer: View {
 
     /// The bubble's tap: the original author's profile, in the same sheet the header's tap uses.
     private func openRepostAuthor(_ uid: String) {
+        // ⛔ A REPOST OF MY OWN STORY OPENS THAT STORY, NOT MY PROFILE — owner 2026-10-13: "Ali
+        // reposts my story, I tap the middle and my name, and it opens my profile; open my story,
+        // the exact one he reposted". Everybody else's bubble still opens their profile (his
+        // 2026-10-11 ruling). Gone (deleted or expired) says so in words instead.
+        if uid == me, let r = currentStory?.repostOf, r.authorUid == me {
+            if !StoryDoor.reopen(onStory: r.storyId, by: me) { ownRepostGone = true }
+            return
+        }
         let r = groups.flatMap(\.stories).compactMap(\.repostOf).first { $0.authorUid == uid }
         profileSheet = groups.first(where: { $0.authorUid == uid })
             ?? StoryGroup(authorUid: uid, name: r?.authorName ?? "",
