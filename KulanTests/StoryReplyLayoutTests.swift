@@ -78,7 +78,7 @@ final class StoryReplyLayoutTests: XCTestCase {
             let corner = CGPoint(x: isMe ? card.minX : card.maxX, y: card.maxY)
             XCTAssertTrue(glyph.insetBy(dx: -2, dy: -2).contains(corner), "emoji covers the card corner, isMe=\(isMe)")
             XCTAssertGreaterThanOrEqual(meta.minY, card.maxY, "time under the card, isMe=\(isMe)")
-            XCTAssertLessThan(meta.minY - card.maxY, 12, "time close under the card, isMe=\(isMe)")
+            XCTAssertLessThan(meta.minY - card.maxY, 20, "time close under the card, isMe=\(isMe)")
         }
     }
 }

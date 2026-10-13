@@ -783,7 +783,8 @@ enum MessageRowLayout {
             let centerX = b.isMe ? cardMinX + 6 : cardMaxX - 6
             let g = CGRect(x: centerX - glyph.width / 2, y: cardBottom - glyph.height * 0.62,
                            width: glyph.width, height: glyph.height)
-            let m = CGRect(x: b.isMe ? cardMaxX - metaSize.width : cardMinX, y: cardBottom + 4,
+            // 12pt down, level with the emoji's lower half (owner's two drawings, measured).
+            let m = CGRect(x: b.isMe ? cardMaxX - metaSize.width : cardMinX, y: cardBottom + 12,
                            width: metaSize.width, height: metaSize.height)
             let u = g.union(m)
             let box = b.isMe ? CGRect(x: u.minX, y: u.minY, width: right - u.minX, height: u.height)
