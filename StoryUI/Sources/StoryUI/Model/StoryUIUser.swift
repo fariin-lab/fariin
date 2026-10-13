@@ -18,11 +18,15 @@ public struct StoryUIUser: Identifiable, Hashable {
     /// The host answers the question once, where it already knows, and the header draws the same glyph
     /// the app draws — so there is still exactly one place that DECIDES who is verified.
     public var isVerified: Bool
+    /// A company's gold badge rather than the blue one (owner 2026-10-13). Same plain-answer rule.
+    public var isGoldVerified: Bool
 
-    public init(id: String = UUID().uuidString, name: String, image: String, isVerified: Bool = false) {
+    public init(id: String = UUID().uuidString, name: String, image: String, isVerified: Bool = false,
+                isGoldVerified: Bool = false) {
         self.id = id
         self.name = name
         self.image = image
         self.isVerified = isVerified
+        self.isGoldVerified = isGoldVerified
     }
 }

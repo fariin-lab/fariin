@@ -16,6 +16,8 @@ struct UserView: View {
     /// the name in both header shapes, because a badge that appears only on some stories reads as a
     /// bug rather than as a distinction.
     var isVerified: Bool = false
+    /// Gold for a company's verification (owner 2026-10-13).
+    var isGoldVerified: Bool = false
     var date: String
     /// Who this story went to. Nil draws nothing and the header keeps its old two-line shape.
     var audience: StoryAudienceBadge? = nil
@@ -39,7 +41,9 @@ struct UserView: View {
             Image(systemName: "checkmark.seal.fill")
                 // The app's one badge blue and weight (`VerifiedMark` in the app, owner 2026-10-13).
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white, Color(red: 0x23 / 255.0, green: 0x92 / 255.0, blue: 0xFE / 255.0))
+                .foregroundStyle(.white, isGoldVerified
+                                 ? Color(red: 0xE8 / 255.0, green: 0xB2 / 255.0, blue: 0x1E / 255.0)
+                                 : Color(red: 0x23 / 255.0, green: 0x92 / 255.0, blue: 0xFE / 255.0))
                 .symbolRenderingMode(.palette)
                 .accessibilityLabel("Verified")
         }

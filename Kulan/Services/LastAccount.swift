@@ -24,6 +24,9 @@ enum LastAccount {
         /// that account was signed in. Optional so cards saved by older builds still decode (no badge
         /// until that account signs in once).
         var verified: Bool? = nil
+        /// A company's gold badge (`Verification.Kind.isGold`), same rule as `verified` (owner
+        /// 2026-10-13: the saved-account card showed a gold account in blue).
+        var gold: Bool? = nil
         var id: String { uid }
     }
 
@@ -87,8 +90,9 @@ enum LastAccount {
         // The live index first (it follows a badge granted or removed while signed in), then the
         // profile as loaded.
         let verified = VerificationIndex.of(user.uid)?.showsBadge ?? me.verification?.showsBadge ?? false
+        let gold = (VerificationIndex.of(user.uid) ?? me.verification)?.kind?.isGold == true
         let info = Info(uid: user.uid, name: me.name, handle: me.handle, method: method.rawValue,
-                        email: method == .email ? user.email : nil, verified: verified)
+                        email: method == .email ? user.email : nil, verified: verified, gold: gold)
         var list = all()
         if list.first != info {
             list.removeAll { $0.uid == info.uid }

@@ -518,7 +518,7 @@ struct AuthMethodView: View {
                         // The same seal VerifiedMark draws, from what the phone saved (signed out,
                         // there is no server to ask).
                         if info.verified == true {
-                            Image(uiImage: VerifiedMark.badge(size: 15 * VerifiedMark.scale, blue: VerifiedMark.blue, weight: VerifiedMark.weight)).frame(width: 15, height: 15)
+                            Image(uiImage: VerifiedMark.badge(size: 15 * VerifiedMark.scale, blue: info.gold == true ? VerifiedMark.gold : VerifiedMark.blue, weight: VerifiedMark.weight)).frame(width: 15, height: 15)
                                 .accessibilityLabel("Verified")
                         }
                     }

@@ -1762,7 +1762,8 @@ struct StoryViewer: View {
                 // the app reads), so the story header cannot disagree with the chat list about who
                 // is verified.
                 user: StoryUIUser(id: g.authorUid, name: g.name, image: g.photoUrl ?? "",
-                                  isVerified: VerificationIndex.isVerified(g.authorUid)),
+                                  isVerified: VerificationIndex.isVerified(g.authorUid),
+                                  isGoldVerified: VerificationIndex.of(g.authorUid)?.kind?.isGold == true),
                 isMine: g.isMine,   // drives the "…" menu: my story shows Delete, others show Hide Stories
                 stories: g.stories.map { s in
                     // ⚠️ HOISTED OUT OF THE CALL BELOW, and it is not a tidy-up. That initialiser
