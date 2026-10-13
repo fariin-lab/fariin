@@ -123,8 +123,14 @@ struct SettingsView: View {
                         profileButton("Edit profile") { showEdit = true }
                         profileButton("Share profile") { showQR = true }
                     }
+                    // ⛔ ROOM FOR THE PRESS — owner 2026-10-13: a cut, border-like edge on the buttons when
+                    // tapped. Interactive glass grows under the finger and the list row clips at its own
+                    // edges, which these capsules touched exactly (zero insets). The margin is inside
+                    // the row so the growth has somewhere to go; the top inset moves into it.
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 0, trailing: 0))
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                     .listRowSeparator(.hidden)
                 }
 
