@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CLEARER MESSAGES FOR SUSPENDED AND BANNED ACCOUNTS.
+            THIS BUILD: STORY VIDEOS PLAY RIGHT AFTER THE SWIPE, STORY REPLY FIXES, BADGES, SETTINGS.
+            The video you are about to swipe to (next story, next person, previous person) is downloaded in full ahead, so it plays as soon as the turn ends.
+            Story replies: no big gap between the preview and the reply; the grey line sits next to the picture; opening and closing the story from a reply works like a story link.
+            Verified badges: one size and colour for everybody; gold for companies (Business, Organization); the owner sets the Fariin badge (Settings > Official Announcements).
+            Settings: the old design, plus Edit profile and Share profile buttons. Chat list search: the X to close it is back.
+            Edit profile: names that copy a company, Fariin or a verified person are refused.
+            PLEASE TEST: swipe between people's video stories, watched and new, on Wi-Fi and mobile data; a story reply that is the first message of the day; tap a story reply preview; chat list search X.
+
+            EARLIER: CLEARER MESSAGES FOR SUSPENDED AND BANNED ACCOUNTS.
             A suspended account now sees "Account suspended" instead of "signed out from another device", and a clear message when it tries to sign in.
             A banned account is told "Can't upload story right now" before the story picker opens, not after the upload fails.
             PLEASE TEST: suspend a test account from the admin panel and open the app on it; ban a test account and tap add story.
