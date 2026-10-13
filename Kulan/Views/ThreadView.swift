@@ -3376,6 +3376,7 @@ struct ThreadView: View {
     private func uikitMenu(for rowId: String) -> UIMenu? {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
         let m = repo.items[idx]
+        if m.isStoryReaction { return nil }   // no long press on a story reaction (owner 2026-10-13)
         var items: [UIMenuElement] = []
         if !m.isStoryReaction {   // a story react-bar emoji takes no reply (see Message.isStoryReaction)
             items.append(UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in
@@ -3446,6 +3447,9 @@ struct ThreadView: View {
     private func customMenuActions(for rowId: String) -> [CMAction] {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return [] }
         let m = repo.items[idx]
+        // ⛔ A STORY REACTION HAS NO MENU — owner 2026-10-13: "block long press" on an emoji sent from
+        // a story's react bar. An empty list is what stops the press ripening (see the notice below).
+        if m.isStoryReaction { return [] }
         // ⛔ A NOTICE HAS NO MENU — owner, 2026-08-25: the disappearing-timer badge could be
         // long-pressed like a message. It is a line about the room, not a message in it; nothing on
         // that menu (reply, forward, copy, delete) means anything for it. An empty list is what stops
