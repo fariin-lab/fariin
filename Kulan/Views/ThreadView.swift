@@ -3679,7 +3679,7 @@ struct ThreadView: View {
     /// The confirm and the not-found alert are presented ONCE here at screen level, never per row —
     /// forty live cells each carrying their own `confirmationDialog` is forty presentation machines,
     /// and a dialog anchored inside a recycled cell can be torn down under the user's finger.
-    private func routeThreadURL(_ url: URL) {
+    private func routeThreadURL(_ url: URL, rowId: String? = nil) {
         // ⛔ A CALL LINK OPENS THE PRE-JOIN SCREEN, NOT "Open link?" — owner, 2026-10-07, screenshot:
         // tapping https://fariin.com/call/#key=… in a message asked "Open link?" and then went to a
         // web sheet. It is our own link: the same route the app takes when it is tapped from outside
@@ -3696,7 +3696,20 @@ struct ThreadView: View {
             openProfileHandle(handle)
             return
         }
-        if openStoryLink(url) { return }
+        // ⛔ THE LINK TEXT OPENS THE STORY EXACTLY AS ITS CARD DOES — owner 2026-10-13: tapping the
+        // picture flew the story out of the card and back into it; tapping the link under it opened
+        // the same story with no anchor (`from: ""`), because this route was handed the address
+        // alone. The row now comes with the tap, so both use the card's flight key.
+        // Only when that row's card IS this story; a second, different story link in the same
+        // message opens without an anchor rather than flying out of the wrong picture.
+        let cardRow = rowId.flatMap { id -> String? in
+            guard let m = repo.items.first(where: { $0.rowId == id }),
+                  let cardURL = m.linkPreview.flatMap({ URL(string: $0.url) }),
+                  let card = LinkPreviewService.storyLink(in: cardURL),
+                  card.id == LinkPreviewService.storyLink(in: url)?.id else { return nil }
+            return id
+        }
+        if openStoryLink(url, rowId: cardRow) { return }
         guard url.scheme == "kulan", url.host == "u" else {
             // ⛔ STRAIGHT INTO THE BROWSER, NO "Open link?" — owner 2026-10-13: "when I click every
             // link don't show the open menu, open the link directly using my browser".
@@ -3773,7 +3786,7 @@ struct ThreadView: View {
             // MUST stay directly after `rowModels:` — argument expressions evaluate in source order, and
             // reading `uikitModels` above is what refreshes the cache this version comes from.
             uikitModelsVersion: uikitModelCache.version,
-            onTapLink: { url in routeThreadURL(url) },
+            onTapLink: { url, rowId in routeThreadURL(url, rowId: rowId) },
             onTapQuote: { id in jumpToQuotedOriginal(id) },
             onTapStoryQuote: { rowId, replyId in
                 guard let m = repo.items.first(where: { $0.rowId == rowId }), let r = m.replyTo else { return }

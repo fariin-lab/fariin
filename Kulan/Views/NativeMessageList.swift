@@ -71,7 +71,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // retry line and a group sender are rectangles in the row's plan, so the CELL hit-tests them and
     // reports which one was hit — no gesture recogniser per element, and a row with none of them
     // installs nothing.
-    var onTapLink: (URL) -> Void = { _ in }
+    /// The tapped link and the row it sits in (a story link's card in that row is the open's anchor).
+    var onTapLink: (URL, String?) -> Void = { _, _ in }
     var onTapQuote: (String) -> Void = { _ in }              // jump to the quoted message
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }        // the picture opens the viewer
@@ -763,7 +764,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var uikitMenu: (String) -> UIMenu? = { _ in nil }
     var onUikitDoubleTap: (String) -> Void = { _ in }
     var hostedDoubleTap: (String) -> Bool = { _ in false }
-    var onTapLink: (URL) -> Void = { _ in }
+    /// The tapped link and the row it sits in (a story link's card in that row is the open's anchor).
+    var onTapLink: (URL, String?) -> Void = { _, _ in }
     var onTapQuote: (String) -> Void = { _ in }
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }
@@ -6261,7 +6263,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
 extension MessageListController: MessageRowCellDelegate {
     func rowCell(_ cell: MessageRowCell, didTapLink url: URL) {
-        onTapLink(url)
+        onTapLink(url, cell.rowId)
     }
 
     func rowCell(_ cell: MessageRowCell, didTapQuoteJumpTo id: String) {
