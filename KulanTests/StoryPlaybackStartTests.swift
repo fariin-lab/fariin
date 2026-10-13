@@ -39,13 +39,47 @@ final class StoryPlaybackStartTests: XCTestCase {
     @MainActor
     private func clip() async throws -> Data {
         if let d = Self.clipData { return d }
-        let src = try await StoryVideoEncoderTests.makeClip(size: CGSize(width: 1080, height: 1920), fps: 30,
-                                                            seconds: 6, colour: .systemTeal, audio: true)
+        // ⚠️ NOISE, NOT A SOLID COLOUR. The first run used `makeClip`'s flat colour and the posted
+        // file came out at 91KB, so every "network" case downloaded the whole clip in one chunk and
+        // measured nothing. Noise makes the encoder spend its full story bitrate (a few MB for 6s),
+        // which is what a real clip costs to fetch. No audio track (a limitation of this clip).
+        let src = try await Self.noiseClip(seconds: 6)
         let prepared = await VideoTranscoder.prepare(src, maxSeconds: 90, storyBackdrop: true)
         let p = try XCTUnwrap(prepared)
         Self.clipData = p.data
         note("clip: \(p.data.count) bytes, \(String(format: "%.1f", p.duration))s")
         return p.data
+    }
+
+    /// 720x1280, 30fps, every frame fresh random pixels.
+    private static func noiseClip(seconds: Double) async throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("noise-\(UUID().uuidString).mov")
+        let w = 720, h = 1280, fps = 30
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: w, AVVideoHeightKey: h,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 20_000_000]])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h])
+        writer.add(input)
+        XCTAssertTrue(writer.startWriting())
+        writer.startSession(atSourceTime: .zero)
+        for i in 0 ..< Int(Double(fps) * seconds) {
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
+            var pb: CVPixelBuffer?
+            if let pool = adaptor.pixelBufferPool { CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pb) }
+            let buf = try XCTUnwrap(pb)
+            CVPixelBufferLockBaseAddress(buf, [])
+            if let base = CVPixelBufferGetBaseAddress(buf) {
+                arc4random_buf(base, CVPixelBufferGetBytesPerRow(buf) * h)
+            }
+            CVPixelBufferUnlockBaseAddress(buf, [])
+            adaptor.append(buf, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: CMTimeScale(fps)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        return url
     }
 
     @MainActor
