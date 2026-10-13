@@ -53,6 +53,8 @@ struct ProfilePhotoSheet: View {
 
     @State private var palette: ProfilePalette?
     @State private var recents: [ProfilePhotoHistory.Entry] = []
+    /// The content's own height, measured, so the sheet hugs it (see the detent below).
+    @State private var contentHeight: CGFloat = 0
 
     private let circle: CGFloat = 190
 
@@ -85,11 +87,21 @@ struct ProfilePhotoSheet: View {
                     recentsSection
                     Color.clear.frame(height: 28)
                 }
+                .background(GeometryReader { g in
+                    Color.clear.onChange(of: g.size.height, initial: true) { _, h in contentHeight = h }
+                })
             }
         }
         // A photograph's tone is a dark ground; the ordinary background keeps the phone's own scheme.
         .environment(\.colorScheme, palette == nil ? scheme : .dark)
-        .presentationDetents([.large])
+        // ⛔ AS TALL AS WHAT IS IN IT — owner 2026-10-13: "Edit Photo has a lot of empty space, make
+        // it a small sheet". It was `.large` so the recents could fill it, which left most of the
+        // screen empty when there were few or none. It now hugs its measured content (header, photo,
+        // button, recents), plus the home-indicator band a height detent does not include
+        // (`WallpaperPickerSheet.bottomInset`), and never more than the full sheet.
+        .presentationDetents(contentHeight > 0
+                             ? [.height(contentHeight + WallpaperPickerSheet.bottomInset)]
+                             : [.medium])
         .presentationDragIndicator(.hidden)
         .task { await load() }
     }
