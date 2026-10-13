@@ -3,6 +3,7 @@ import AVFoundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Metal
+import UIKit
 
 /// ⛔ THE TRIM PAGE'S BRIGHTNESS, IN ONE PLACE (owner, 2026-08-20).
 ///
@@ -54,6 +55,21 @@ enum StoryVideoBrightness {
     // the trim page renders its own frames now and the exposure is a plain property on that view.
     // See `StoryVideoPreviewView`. Nothing in the app builds a composition for a PREVIEW any more;
     // the one below is the export's, and an export is the case a composition is actually right for.
+
+    /// ⛔ THE SAME EXPOSURE ON A STILL — owner 2026-10-13: "during upload, and the first seconds after,
+    /// the video shows its original brightness". The uploading card and the posted cover are STILLS,
+    /// and they were taken from the source clip with the dial never applied, so they showed the clip
+    /// unadjusted until the player's first real frame replaced them. Same filter, same EV.
+    static func apply(to image: UIImage, value: Double) -> UIImage {
+        guard !isNeutral(value), let cg = image.cgImage else { return image }
+        let input = CIImage(cgImage: cg)
+        let f = CIFilter.exposureAdjust()
+        f.inputImage = input
+        f.ev = exposureEV(for: value)
+        guard let out = f.outputImage?.cropped(to: input.extent),
+              let rendered = ciContext.createCGImage(out, from: input.extent) else { return image }
+        return UIImage(cgImage: rendered, scale: image.scale, orientation: image.imageOrientation)
+    }
 
     /// The composition to hang on a player item or an export session. Nil when there is nothing to
     /// do, so a clip nobody adjusted keeps whatever path it had — for a plain video that is a

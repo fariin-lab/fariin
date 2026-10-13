@@ -118,7 +118,12 @@ enum StoryVideoEncoder {
         guard size > 0, Double(size) <= Double(Limits.storyUploadBytes - 512 * 1024) else {
             try? FileManager.default.removeItem(at: out); return nil
         }
+        // "Its frames differ from the source", which is what decides where the cover is taken from.
+        // ⛔ BRIGHTNESS COUNTS — owner 2026-10-13: a brightness-only clip got its cover (and the
+        // blurred placeholder made from it) from the SOURCE, so the posted story showed the original
+        // light until the player's first frame replaced it.
         let reframed = edits.composing || edits.gradientAspect != nil
+            || !StoryVideoBrightness.isNeutral(edits.brightness)
         return Output(url: out, reframed: reframed)
     }
 

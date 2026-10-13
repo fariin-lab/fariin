@@ -698,7 +698,10 @@ enum VideoTranscoder {
     /// A clip the editor cropped keeps the plain poster: the overlay was placed against the cropped
     /// frame and would land in the wrong place on an uncropped one, and a crop and a shrink never
     /// travel together (`videoBurnIn`).
-    static func storyPlaceholderPoster(_ poster: UIImage, burn: StoryBurnIn?) -> UIImage {
+    static func storyPlaceholderPoster(_ source: UIImage, burn: StoryBurnIn?) -> UIImage {
+        // The editor's poster is the SOURCE frame; the dial is applied here or the uploading card
+        // shows the clip at its original light (owner 2026-10-13).
+        let poster = StoryVideoBrightness.apply(to: source, value: burn?.brightness ?? 0)
         let plain = storyCanvasPoster(poster)
         guard let burn, burn.cropRect == nil else { return plain }
         let shrunk = burn.contentScale < 0.999 && burn.backdrop != nil
