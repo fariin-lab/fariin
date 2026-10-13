@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY VIDEOS PLAY RIGHT AFTER THE SWIPE, STORY REPLY FIXES, BADGES, SETTINGS.
+            THIS BUILD: SETTINGS SPACING.
+            Settings: Edit profile and Share profile sit just under your username (the big gap is gone).
+            PLEASE TEST: open Settings and look at the space under your username.
+
+            EARLIER (901): STORY VIDEOS PLAY RIGHT AFTER THE SWIPE, STORY REPLY FIXES, BADGES, SETTINGS.
             The video you are about to swipe to (next story, next person, previous person) is downloaded in full ahead, so it plays as soon as the turn ends.
             Story replies: no big gap between the preview and the reply; the grey line sits next to the picture; opening and closing the story from a reply works like a story link.
             Verified badges: one size and colour for everybody; gold for companies (Business, Organization); the owner sets the Fariin badge (Settings > Official Announcements).
