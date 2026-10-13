@@ -23,6 +23,25 @@ enum WebLink {
     /// Opens `url` in the way that suits what it actually is.
     @MainActor
     static func open(_ url: URL) {
+        // ⛔ A YOUTUBE LINK OPENS THE YOUTUBE APP WHEN IT IS INSTALLED — owner 2026-10-13 ("open the
+        // YouTube app automatically, the browser if he does not have it", as the reference app does).
+        // `.universalLinksOnly` asks iOS to hand the link to the app that claims it and reports whether
+        // one did; only when none did does it open here in the in-app browser, as every other page does.
+        if isYouTube(url) {
+            UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { opened in
+                if !opened { presentSheet(url) }
+            }
+            return
+        }
+        presentSheet(url)
+    }
+
+    private static func isYouTube(_ url: URL) -> Bool {
+        guard let h = url.host?.lowercased() else { return false }
+        return h == "youtu.be" || h == "youtube.com" || h.hasSuffix(".youtube.com")
+    }
+
+    private static func presentSheet(_ url: URL) {
         guard useSheet(for: url) else {
             UIApplication.shared.open(url)   // let iOS route it to whichever app owns this
             return
