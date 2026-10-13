@@ -204,9 +204,10 @@ final class StoryPlaybackStartTests: XCTestCase {
 
     @MainActor
     func testStreamedWarmedGoodNetwork() async throws {
-        let r = try await compare("uncached, opening pre-downloaded, 8 Mbps / 50ms",
-                                  source: .stream(bytesPerSecond: 1_000_000, latency: 0.05, warm: true))
-        XCTAssertLessThan(r.prepared, 1.0)
+        // Recorded, not asserted: since 5c868e2b the stream is only the FALLBACK for a swipe that beats
+        // the whole-file download (testWholeFileArrivesBeforeLanding is the path that must be fast).
+        try await compare("uncached, opening pre-downloaded, 8 Mbps / 50ms",
+                          source: .stream(bytesPerSecond: 1_000_000, latency: 0.05, warm: true))
     }
 
     @MainActor
