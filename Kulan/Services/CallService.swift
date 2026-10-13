@@ -3424,7 +3424,7 @@ final class CallService: NSObject {
         // 1:1 audit r2 D1, 2026-10-08: caller only. The callee's unit starts in didActivate, never
         // inside the Answer action before CallKit hands over the session (the reference app's rule).
         if isCaller { startCallAudioUnitIfDue() }
-        updateAudioRoute()
+        updateAudioRoute(firstRead: true)
         routeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
                 // The reason tells a person's pick in the system picker apart from a session reset
@@ -3540,13 +3540,31 @@ final class CallService: NSObject {
         externalAudioAvailable = externalOutputAround
     }
 
-    private func updateAudioRoute(reason: AVAudioSession.RouteChangeReason? = nil) {
+    private func updateAudioRoute(reason: AVAudioSession.RouteChangeReason? = nil, firstRead: Bool = false) {
         let session = AVAudioSession.sharedInstance()
         let outputs = session.currentRoute.outputs
         let previous = audioRoute
         if outputs.contains(where: { $0.portType == .builtInSpeaker }) { audioRoute = .speaker }
         else if outputs.contains(where: { $0.portType == .builtInReceiver }) || outputs.isEmpty { audioRoute = .earpiece }
         else { audioRoute = .external }
+        // ⛔ A VOICE CALL MUST NOT INHERIT THE LOUDSPEAKER — owner 2026-10-13: "when someone calls me
+        // with a voice call, after I answer the speaker is on; that is only for video calls".
+        // `.active` starts this observer before CallKit hands over the call's session, so the first
+        // reading was the session as the ring or any earlier sound left it. Outside .playAndRecord
+        // the output IS the loudspeaker, and the latch below took that as the person's pick
+        // (`wantsSpeaker`), so didActivate set .videoChat + the speaker override and the re-assert
+        // kept it there. Two guards: a reading taken before the call's own category is not the
+        // call's route (the activation's own route change reports the real one), and a voice call's
+        // first reading on the loudspeaker, with nobody having chosen it, is moved to the earpiece.
+        if session.category != .playAndRecord { return }
+        if firstRead, !(cameraOn || remoteCameraOn || startedAsVideo), !speakerChosenByUser,
+           !wantsSpeaker, audioRoute == .speaker {
+            isSpeaker = false
+            try? session.overrideOutputAudioPort(.none)
+            if session.mode != .voiceChat { try? session.setMode(.voiceChat) }
+            // The follow-up routeChange notification re-runs this with the earpiece.
+            return
+        }
         updateInCallScreenBehavior()
         // Any external playback device around? Bluetooth headsets surface as available INPUTS
         // during a playAndRecord call; a currently-external route obviously counts too.
