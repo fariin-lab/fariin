@@ -148,10 +148,12 @@ struct SecurityCheckupSheet: View {
     @State private var path: [Item] = []
     @State private var detent: PresentationDetent = .fraction(0.8)
     @State private var contentH: CGFloat = 0
+    /// Space above the whole stack, so a pushed page's back button clears the sheet's corner.
+    private static let topGap: CGFloat = 14
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
     /// it is not added. 0.8 of the screen until the content has been measured once.
     private var fitDetent: PresentationDetent {
-        contentH > 0 ? .height(contentH + 68) : .fraction(0.8)
+        contentH > 0 ? .height(contentH + 68 + Self.topGap) : .fraction(0.8)
     }
     private var profile = ProfileStore.shared
 
@@ -283,6 +285,13 @@ struct SecurityCheckupSheet: View {
                 }
             }
         }
+        // ⛔ HEADER CLEAR OF THE SHEET'S TOP — owner 2026-10-14 screenshots: on Passkeys, Chat Key,
+        // Password and "Are these you?" the back button sat on the sheet's top edge, cut by its
+        // rounded corner, with the grab bar on top of the title. The whole stack starts 14pt down
+        // (counted into `fitDetent`), and the grab bar is hidden on a pushed page, where the back
+        // button is the way out.
+        .padding(.top, Self.topGap)
+        .presentationBackground(Color(.systemGroupedBackground))   // the gap is the page's own colour
         // ⛔ TALL ENOUGH FOR EVERYTHING — owner 2026-10-14: at 70% the last rows needed a scroll;
         // "always show all of it". The sheet is the content's own height (rows + Continue), never
         // taller than the screen allows. A setup page pushed inside it gets the full height.
@@ -291,7 +300,7 @@ struct SecurityCheckupSheet: View {
         .presentationDetents(path.isEmpty ? [fitDetent] : [.large], selection: $detent)
         .onChange(of: contentH) { _, _ in if path.isEmpty { detent = fitDetent } }
         .onChange(of: path) { _, now in withAnimation { detent = now.isEmpty ? fitDetent : .large } }
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(path.isEmpty ? .visible : .hidden)
         .task { await check.run() }
         // Back from a setup page: ask again, so the tick follows what was just done.
         .onChange(of: path) { _, now in
