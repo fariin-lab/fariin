@@ -721,8 +721,15 @@ enum MediaOpen {
     /// `x = A(1 - e^(-βt)·cos(ωt))` (JNWAbsolutePosition, phase 0), β = damping / 2·mass = 15.625,
     /// whose speed at t = 0 is β·A, not zero. Ours started at rest, so it eased in slowly. The same
     /// spring through UIKit needs that start speed, in distances per second, slowed by f like the rest.
+    ///
+    /// ⛔ SLOWER, WITH A GRADUAL SETTLE — owner 2026-10-14: "make the transition much slower; when the
+    /// image opens to 90 or 99%, make the zoom-back take more time and feel very smooth and gradual".
+    /// The same spring played 3x slower instead of 1.8x: its shape (damping ratio ~0.81, the same
+    /// ~1% overshoot) is unchanged, so the last few percent and the gentle settle back simply take
+    /// longer (settle ~1.3s instead of ~0.8s). The start push is slowed by the same factor.
+    static let attachOpenSlowdown: CGFloat = 3.0
     static var attachOpenSpring: UISpringTimingParameters {
-        let f: CGFloat = 1.8
+        let f = attachOpenSlowdown
         let v0 = (25 / (2 * 0.8)) / f
         return UISpringTimingParameters(mass: 0.8, stiffness: 300 / (f * f), damping: 25 / f,
                                         initialVelocity: CGVector(dx: v0, dy: v0))
@@ -731,7 +738,8 @@ enum MediaOpen {
     /// How long `attachOpenSpring` takes to settle, for the corner radius that rides beside it.
     static var attachOpenDuration: TimeInterval {
         let s = CASpringAnimation()
-        s.mass = 0.8; s.stiffness = 300 / (1.8 * 1.8); s.damping = 25 / 1.8
+        let f = Double(attachOpenSlowdown)
+        s.mass = 0.8; s.stiffness = 300 / (f * f); s.damping = 25 / f
         return s.settlingDuration
     }
 
