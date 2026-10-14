@@ -1896,6 +1896,8 @@ struct FloatingCallWindow: View {
     /// Live drag on the tab, as a transform. Transient by design: it is either mid-gesture or zero,
     /// and it must not survive the tab turning back into a card.
     @State private var tabDrag: CGSize = .zero
+    /// How far the card has been pulled out of its tab, inward, in points (0 = just the tab).
+    @State private var pull: CGFloat = 0
 
     /// The card's live drag, as a TRANSFORM. Zero except while a finger is down — see the drag's
     /// `onChanged` for why the settled position and the moving one are kept apart.
@@ -1955,50 +1957,78 @@ struct FloatingCallWindow: View {
                 // event — the card's own August stutter, never fixed on the tab. The live drag is
                 // now a transform (`tabDrag`) like the card's `dragLive`, the tab's insides are
                 // frozen like the card's, and layout is written once, when the finger lifts.
-                FrozenCardContent { stashTab }.equatable()
-                    // ONE OBJECT IN TWO SHAPES: the card and the tab share an identity, so the card's
-                    // frame travels to the tab's and back. The settled position stays PADDING (a
-                    // morph reads layout); only the finger's movement is a transform.
-                    .matchedGeometryEffect(id: Self.morphID, in: morph)
-                    .offset(tabDrag)
-                    // Up and down it slides along the edge. Pulled INWARD it gives a little and the
-                    // CARD comes back when let go (past `pullBack`, or flicked inward), on its own edge.
-                    // ⛔ THE TAB STAYS ON THE EDGE — owner 2026-10-14: "the arrow moves everywhere,
-                    // that is not how I want it", pointing at Apple's own stashed window (the repo he
-                    // linked only decorates that window). Its tab never travels: it gives under an
-                    // inward pull and the window comes back, and it is never thrown to the far side.
-                    // The 1:1 inward ride and the cross-screen landing from earlier today are gone.
-                    .gesture(
-                        DragGesture(minimumDistance: 4)
-                            .onChanged { v in
-                                let (_, maxDown) = limits(geo.size)
-                                let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
-                                let inward = stashedLeft ? v.translation.width : -v.translation.width
-                                // 1:1 for the first `pullMax`, stiff past it; outward a little give.
-                                let x = inward >= 0
-                                    ? (inward <= pullMax ? inward : pullMax + rubber(inward - pullMax, 12))
-                                    : -rubber(-inward, 30)
-                                tabDrag = CGSize(width: stashedLeft ? x : -x, height: y)
+                // ⛔ THE CARD COMES OUT UNDER THE FINGER — owner 2026-10-14, six frames of the system
+                // window: pulled from its tab, the whole card slides in from the edge with the finger,
+                // blurred with the arrow on it, and both clear as it comes; let go and it settles out.
+                // Ours only nudged the tab and showed the card on release. Now the tab gives way to the
+                // real card the moment the pull starts, moved by the finger 1:1.
+                ZStack(alignment: stashedLeft ? .topLeading : .topTrailing) {
+                    if pull > 0 {
+                        let p = min(1, pull / w)
+                        FrozenCardContent { window }.equatable()
+                            .blur(radius: 12 * (1 - p))
+                            .overlay {
+                                Image(systemName: stashedLeft ? "chevron.compact.right" : "chevron.compact.left")
+                                    .font(.system(size: 26, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.9))
+                                    .opacity(1 - p)
                             }
-                            .onEnded { v in
-                                let (_, maxDown) = limits(geo.size)
-                                // The finger's real travel decides, not the capped picture.
-                                let inward = stashedLeft ? v.translation.width : -v.translation.width
-                                let inwardSpeed = stashedLeft ? v.velocity.width : -v.velocity.width
-                                let y = min(maxDown, max(0, base.height + tabDrag.height))
-                                let comesOut = inward >= pullBack || inwardSpeed > 400
+                            .offset(x: stashedLeft ? pull - w : w - pull, y: tabDrag.height)
+                    } else {
+                        FrozenCardContent { stashTab }.equatable()
+                            .matchedGeometryEffect(id: Self.morphID, in: morph)
+                            .offset(tabDrag)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { v in
+                            let (_, maxDown) = limits(geo.size)
+                            let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
+                            let inward = stashedLeft ? v.translation.width : -v.translation.width
+                            // Inward: the card follows 1:1 until it is fully out, then stiffens.
+                            pull = inward > 0 ? (inward <= w ? inward : w + rubber(inward - w, 20)) : 0
+                            // Outward has nowhere to go: a little give on the tab, not a second exit.
+                            let give = inward < 0 ? -rubber(-inward, 30) : 0
+                            tabDrag = CGSize(width: stashedLeft ? give : -give, height: y)
+                        }
+                        .onEnded { v in
+                            let (_, maxDown) = limits(geo.size)
+                            let inward = stashedLeft ? v.translation.width : -v.translation.width
+                            let inwardSpeed = stashedLeft ? v.velocity.width : -v.velocity.width
+                            let y = min(maxDown, max(0, base.height + tabDrag.height))
+                            let comesOut = inward >= w * 0.3 || inwardSpeed > 400
+                            guard comesOut else {
                                 withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
                                     base = CGSize(width: base.width, height: y)
                                     offset = base
+                                    pull = 0
                                     tabDrag = .zero
-                                    if comesOut { call.cardStashed = false }
                                 }
+                                return
                             }
-                    )
-                    // FLUSH WITH THE EDGE, not tucked under it. See `stashTab` for why.
-                    .padding(.top, insets.top + 8 + min(base.height, max(0, limits(geo.size).1)))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity,
-                           alignment: stashedLeft ? .topLeading : .topTrailing)
+                            // Hand over to the card where the finger left it, then let it settle on
+                            // its edge: the card's own transform starts at the peek's position.
+                            let restX: CGFloat = stashedLeft ? 12 : geo.size.width - w - 12
+                            let peekX: CGFloat = stashedLeft ? pull - w : geo.size.width - pull
+                            var t = Transaction(); t.disablesAnimations = true
+                            withTransaction(t) {
+                                base = CGSize(width: base.width, height: y)
+                                offset = base
+                                dragLive = CGSize(width: peekX - restX, height: 0)
+                                pull = 0
+                                tabDrag = .zero
+                                call.cardStashed = false
+                            }
+                            DispatchQueue.main.async {
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { dragLive = .zero }
+                            }
+                        }
+                )
+                .padding(.top, insets.top + 8 + min(base.height, max(0, limits(geo.size).1)))
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: stashedLeft ? .topLeading : .topTrailing)
             } else {
                 // ⛔ THE TRANSFORM SITS ON `window`, INSIDE THE GESTURE, which is where the smooth
                 // build had it. Hung on the outside it moves the very view the drag is measured on,
