@@ -955,6 +955,15 @@ struct StoryDetailView: View {
         // The cube has landed: play now, not on the next tick (see `storyTurnLanded`).
         .onReceive(NotificationCenter.default.publisher(for: .storyTurnLanded)) { _ in
             syncVideoMode()
+            guard viewModel.currentStoryUser != model.id else { return }
+            // ⛔ OUT OF SIGHT NOW, SO THE REWIND HAPPENS HERE — owner 2026-10-14 ("the video does a
+            // small move" swiping back) and the five-agent check: a person returned to was rewound
+            // at the commit, mid-turn, with their face showing, so the frame jumped to zero in
+            // front of him. Rewound here as soon as they have left the screen, the return finds
+            // the clip already at its start and the rewind on arrival changes nothing visible.
+            if getStoryOrNil(with: getCurrentIndex())?.config.mediaType == .video { video.restart() }
+            // And a file that finished downloading during the turn is taken up now, out of sight.
+            video.turnLanded()
         }
         // (The reaction effect used to stop the bar and the clip here through `isTimerRunning`. It
         // no longer does — see `videoMode`. Only taps are still held off while it flies.)
@@ -2629,6 +2638,8 @@ private extension StoryDetailView {
     /// Re-take the decision and hand it to the item. Cheap and safe to call from anywhere, and every
     /// former `playVideo()` / `pauseVideo()` call site now calls this instead.
     func syncVideoMode() {
+        // On screen first: the swap onto a downloaded file is only for pages out of sight.
+        video.setOnScreen(viewModel.currentStoryUser == model.id)
         // Mode FIRST: a page landing must already be `.play` when it is re-asked about preparing.
         video.setMode(videoMode)
         video.setPrepared(videoPrepared)

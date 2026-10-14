@@ -109,7 +109,21 @@ final class StoryVideoSession {
         view?.setPrepared(on)
     }
 
-    /// Restart what is playing, in place. One caller: tapping back past the first story.
+    /// This page is the person on screen (2026-10-14). Stored like `prepared`, so a view that binds
+    /// later is told too: a page out of sight may swap its player onto a downloaded file, the one
+    /// being looked at never does (`StoryItemVideoView.adoptWholeFileWhileWaiting`).
+    private(set) var onScreen = false
+
+    func setOnScreen(_ on: Bool) {
+        onScreen = on
+        view?.setOnScreen(on)
+    }
+
+    /// A person turn has landed: a page out of sight takes up a file that finished during the turn.
+    func turnLanded() { view?.adoptWholeFileWhileWaiting() }
+
+    /// Restart what is playing, in place. Callers: tapping back past the first story, and a page
+    /// rewound out of sight once a turn has landed.
     func restart() { view?.restart() }
 
     /// The view announcing itself. Takes the claim, applies the mode it should already be in, and
@@ -118,6 +132,7 @@ final class StoryVideoSession {
     func bind(_ v: StoryItemVideoView) {
         view = v
         takeClaim(v.storyKey)
+        v.setOnScreen(onScreen)
         v.setPrepared(prepared)
         v.apply(mode: mode)
     }

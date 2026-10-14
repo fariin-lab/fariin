@@ -388,8 +388,11 @@ final class StoryItemVideoView: UIView {
     /// swap moved here: the moment the whole file lands, a prepared neighbour that is still waiting
     /// to the side rebuilds on it, paused, and landing is play() on a local file. Never during a
     /// turn (its face may be showing) and never once it has played.
-    private func adoptWholeFileWhileWaiting() {
-        guard mode == .pause, prepared, player != nil, streamedAsset != nil, !didBeginPlayback,
+    /// 2026-10-14 five-agent check: also re-tried when a turn lands (`StoryVideoSession.turnLanded`),
+    /// because a file that finished DURING the turn was dropped by the turn guard below, and never on
+    /// the page being looked at (`onScreen`), whose swap would show (a held, never-played clip).
+    func adoptWholeFileWhileWaiting() {
+        guard mode == .pause, prepared, !onScreen, player != nil, streamedAsset != nil, !didBeginPlayback,
               !StoryPager.personTurnActive, let storyURL,
               let file = CacheManager.cachedFileIfUsable(for: storyURL) else { return }
         StoryVideoTrace.note("prepared: whole file arrived, rebuilt on it out of sight")
@@ -397,6 +400,10 @@ final class StoryItemVideoView: UIView {
         localFile = file
         initializeVideoIfReady()
     }
+
+    /// This item's page is the person on screen. See `StoryVideoSession.setOnScreen`.
+    private var onScreen = false
+    func setOnScreen(_ on: Bool) { onScreen = on }
 
     func setPrepared(_ on: Bool) {
         guard on != prepared else { return }
