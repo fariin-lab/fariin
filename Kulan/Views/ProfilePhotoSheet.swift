@@ -281,13 +281,9 @@ struct ProfilePhotoSheet: View {
     // MARK: - Loading
 
     private func load() async {
-        if let url = photoUrl, !url.isEmpty {
-            if let hit = ProfilePalette.cached(for: url) {
-                palette = hit
-            } else {
-                palette = await ProfilePalette.resolve(url: url)
-            }
-        }
+        // ⛔ NO PHOTO COLOUR BEHIND IT — owner 2026-10-14: "Edit Photo, don't use background colour".
+        // The page used to take the photo's tone; `palette` now stays nil, which is the ordinary
+        // background with the phone's own scheme everywhere below.
         // ⛔ YOUR PAST PROFILE PHOTOS, NOT THE CAMERA ROLL — owner, 2026-09-25 (see
         // `ProfilePhotoHistory`). The newest entry is the photo on show right now, so it is left out
         // while there is one; after a removal there is none, and every past photo is offered.
