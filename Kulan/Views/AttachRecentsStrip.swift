@@ -481,6 +481,15 @@ struct AttachRecentsStrip: View {
 
     // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
     private var albumsList: some View {
+        albumsScroll
+            // Owner 2026-10-14: the close button shows here too once the list has scrolled a row,
+            // exactly as on the grid. One row of this list is about 66pt (52 thumbnail + 7 + 7).
+            .onScrollGeometryChange(for: Bool.self) { g in
+                g.contentOffset.y + g.contentInsets.top >= 66
+            } action: { _, scrolled in onScrolledARow(scrolled) }
+    }
+
+    private var albumsScroll: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 0) {
                 ForEach(albums) { album in

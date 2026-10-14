@@ -4917,10 +4917,12 @@ struct ThreadView: View {
                                 for: .scrollContent)
                 .overlay(alignment: .bottom) { sourceBar }
                 // ⛔ THE CLOSE SITS TOP-LEFT OF THE SHEET — owner 2026-10-14: "top left, 44, liquid
-                // glass". Shown only at full height once the grid has been scrolled a row, and not
-                // in the album list or a folder; it fades in and out, the album button is untouched.
+                // glass". Shown only at full height once the grid has been scrolled a row; it fades in
+                // and out, the album button is untouched. Owner 2026-10-14 later: the same in the
+                // folder list and inside a folder, exactly as in Recents (the folder list reports its
+                // own scrolling; a folder uses the same grid).
                 .overlay(alignment: .topLeading) {
-                    if attachSheetFull && attachGridScrolled && !attachShowAlbums && !attachInAlbum {
+                    if attachSheetFull && attachGridScrolled {
                         CloseXButton(diameter: 44) { showAttachPanel = false }
                             .padding(.leading, 12)
                             .padding(.top, 12)
@@ -4928,6 +4930,10 @@ struct ThreadView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.2), value: attachSheetFull && attachGridScrolled)
+                // Switching between Recents, the folder list and a folder starts the count again: the
+                // view now showing reports its own scrolling from the top.
+                .onChange(of: attachShowAlbums) { _, _ in attachGridScrolled = false }
+                .onChange(of: attachInAlbum) { _, _ in attachGridScrolled = false }
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
