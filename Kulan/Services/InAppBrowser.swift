@@ -1,6 +1,5 @@
 import UIKit
 import WebKit
-import SafariServices
 
 /// KULAN'S OWN BROWSER — owner, 2026-10-13: "whenever a user taps any link … open it inside Kulan's
 /// own browser sheet", with the reference app's browsing behaviour.
@@ -425,7 +424,8 @@ final class InAppBrowserViewController: UIViewController {
 
     private func menuItems() -> [UIMenuElement] {
         let url = webView.url ?? initialURL
-        // Forward, Share and Reading List lived on the bottom bar before the 2026-10-14 redesign.
+        // Forward and Share lived on the bottom bar before the 2026-10-14 redesign. Reading List is
+        // gone altogether (owner, 2026-10-14: "I don't need it").
         let forward = UIAction(title: "Forward", image: UIImage(systemName: "chevron.forward"),
                                attributes: webView.canGoForward ? [] : .disabled) { [weak self] _ in
             self?.webView.goForward()
@@ -433,8 +433,6 @@ final class InAppBrowserViewController: UIViewController {
         let pageLoaded = webView.url != nil
         let shareItem = UIAction(title: "Share", image: UIImage(systemName: "square.and.arrow.up"),
                                  attributes: pageLoaded ? [] : .disabled) { [weak self] _ in self?.share() }
-        let readingList = UIAction(title: "Add to Reading List", image: UIImage(systemName: "eyeglasses"),
-                                   attributes: pageLoaded ? [] : .disabled) { [weak self] _ in self?.addToReadingList() }
         let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
             UIPasteboard.general.url = url
         }
@@ -454,7 +452,7 @@ final class InAppBrowserViewController: UIViewController {
 
         return [
             UIMenu(options: .displayInline, children: [forward]),
-            UIMenu(options: .displayInline, children: [shareItem, copy, readingList]),
+            UIMenu(options: .displayInline, children: [shareItem, copy]),
             UIMenu(options: .displayInline, children: [find, textSize]),
         ]
     }
@@ -479,18 +477,6 @@ final class InAppBrowserViewController: UIViewController {
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         sheet.popoverPresentationController?.sourceView = menuButton
         present(sheet, animated: true)
-    }
-
-    /// The menu's Reading List item: the page goes into the system Reading List (Safari's), which
-    /// needs no list of our own. A success haptic says it worked.
-    private func addToReadingList() {
-        guard let url = webView.url, SSReadingList.supportsURL(url) else { return }
-        do {
-            try SSReadingList.default()?.addItem(with: url, title: webView.title, previewText: nil)
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        } catch {
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-        }
     }
 
     // MARK: - Leaving the browser for another app
