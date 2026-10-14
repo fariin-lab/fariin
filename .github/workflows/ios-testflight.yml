@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CALL CARD DRAG, ATTACH OPEN SPEED, SECURITY CHECKUP FIXES.
+            THIS BUILD: ATTACH SHEET WITH A SELECTION.
+            With photos or videos already selected, tapping one now flies out of its tile and opens on the one you tapped (it slid up from the bottom). X or swipe down puts it back in its own tile.
+            PLEASE TEST: select two photos, tap one, swipe, close; select one video, tap it, close.
+
+            EARLIER: CALL CARD DRAG, ATTACH OPEN SPEED, SECURITY CHECKUP FIXES.
             The floating call card follows your finger again while you drag it (it only jumped when you let go).
             Attach sheet: photos and videos open at the reference speed (a fast start, no slow motion), and their buttons only fade in (they slid up from the bottom). X while zoomed in closes straight back to the tile.
             Security Checkup: "Yes, these are mine" now stays green; the sheet fits its content; Passkey, Chat Key, Password and device pages open with the header in place.
