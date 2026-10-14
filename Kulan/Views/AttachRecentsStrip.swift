@@ -717,7 +717,7 @@ struct AttachRecentsStrip: View {
             // shows the poster in the gallery and builds no player until playback is asked for;
             // it never copies the file first. Ours copied the whole clip to a temp folder before
             // the flight began: seconds on a long one. Now the poster request starts the flight
-            // (opportunistic 1280, as for photos), the library's own file is handed over the
+            // (one sharp screen-size poster, as for photos), the library's own file is handed over the
             // moment it is known so the editor can play it, and our copy, for sending, is made
             // behind that.
             let load = AttachVideoLoad()
