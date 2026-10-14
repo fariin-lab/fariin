@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct MessageView: View {
     
@@ -18,6 +19,7 @@ struct MessageView: View {
     // MARK: Private Properties
     @State private var text: String = ""
     @State private var likeButtonTapped: Bool = false
+    @State private var likePop: CGFloat = 1.0          // extra swell for a moment after a like
     @State private var clearText: Bool = false
     @FocusState private var replyFocused: Bool   // swipe-up on a friend's story focuses the reply field
 
@@ -90,6 +92,15 @@ private extension MessageView {
         Button {
             likeButtonTapped.toggle()
             userClosure?(story, text, nil, likeButtonTapped)
+            // Owner 2026-10-14: "when I give react, add vibrate + small animation". A firm tap and
+            // a quick swell past the resting size that springs back; taking it off is a softer tap.
+            if likeButtonTapped {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                likePop = 1.3
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { likePop = 1.0 }
+            } else {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
         } label: {
             Image(systemName: likeButtonTapped ? Constant.MessageView.likeImageTapped : Constant.MessageView.likeImage)
                 // A step up from `.title3` on his 2026-08-12 screenshot: beside a full-width reply
@@ -101,6 +112,8 @@ private extension MessageView {
                 .shadow(color: .black.opacity(0.35), radius: 4, y: 1)   // soft shadow so it reads on any photo
                 .scaleEffect(likeButtonTapped ? 1.18 : 1.0)      // pop when you give love
                 .animation(.spring(response: 0.3, dampingFraction: 0.45), value: likeButtonTapped)
+                .scaleEffect(likePop)                            // the brief swell on a like
+                .animation(.spring(response: 0.22, dampingFraction: 0.4), value: likePop)
                 // ROOM TO BREATHE AND TO TAP (owner 2026-08-05: "React give more space plz" — the
                 // heart sat squeezed against the screen edge). A 44pt target, Apple's floor.
                 .frame(width: 44, height: 44)
