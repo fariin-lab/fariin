@@ -142,7 +142,7 @@ struct AttachRecentsStrip: View {
     /// The photo, and the PHAsset id of the tile it was tapped on: the editor flies out of that tile
     /// and back into it (`MediaOpenRects.Scope.attach`).
     var onPickPhoto: (UIImage, String) -> Void
-    var onPickVideo: (URL) -> Void                             // TAP a video → open the trim editor
+    var onPickVideo: (URL, String, UIImage?) -> Void           // TAP a video → trim editor (file, asset id, still frame to fly)
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
     var onSendMixed: ([ApprovalMedia], String, String?) -> Void = { _, _, _ in }   // items, caption, clientId of the already-posted bubble
@@ -695,7 +695,14 @@ struct AttachRecentsStrip: View {
         Task {
             defer { Task { @MainActor in loadingPick = false } }
             if a.mediaType == .video {
-                if let url = await Self.videoURL(a) { await MainActor.run { onPickVideo(url) } }
+                // The still frame is what flies out of the tile (the reference picker flies a
+                // picture for video too), fetched beside the file so the open waits for neither twice.
+                async let file = Self.videoURL(a)
+                async let still = Self.videoPoster(a)
+                if let url = await file {
+                    let poster = await still
+                    await MainActor.run { onPickVideo(url, a.localIdentifier, poster) }
+                }
             } else if let ui = await Self.fullImage(a) {
                 await MainActor.run { onPickPhoto(ui, a.localIdentifier) }
             }
@@ -872,6 +879,20 @@ struct AttachRecentsStrip: View {
             o.isNetworkAccessAllowed = true
             PHImageManager.default().requestImageDataAndOrientation(for: asset, options: o) { data, _, _, _ in
                 cont.resume(returning: data.flatMap(UIImage.init(data:)))
+            }
+        }
+    }
+
+    // A screen-sized still of a video, the right way up, for the open's flight.
+    private static func videoPoster(_ asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { cont in
+            let o = PHImageRequestOptions()
+            o.deliveryMode = .highQualityFormat   // single callback
+            o.isNetworkAccessAllowed = true
+            let side = UIScreen.main.bounds.height * UIScreen.main.scale
+            PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: side, height: side),
+                                                  contentMode: .aspectFit, options: o) { img, _ in
+                cont.resume(returning: img)
             }
         }
     }

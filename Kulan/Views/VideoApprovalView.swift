@@ -44,13 +44,30 @@ struct VideoApprovalView: View {
     let selfDismissOnSend: Bool
     @Environment(\.dismiss) private var dismiss
 
+    // ⛔ OUT OF THE TILE AND BACK — owner 2026-10-14: "when I tap a video it is the old design,
+    // coming from the bottom". Same as the photo editor: opened from an attach tile, a still of the
+    // video flies out of the tile onto `restRect`, the tools fade in during the flight (`arrival`),
+    // and X / a drag down fly it back through `MediaDismissHost`. Nil keeps the plain cover.
+    private let sourceKey: String?
+    private let poster: UIImage?
+    @ObservedObject private var arrival: EditorArrival
+    private var arrived: Bool { arrival.landed }
+    @State private var dismissing = false   // a close is flying: the live video hidden, the copy shows it
+    @State private var closeToken = 0       // bump: MediaDismissHost runs the X as a fly-home
+    @State private var chromeShown = false
+
     // Single video (the existing call sites, unchanged).
     init(url: URL, onSend: @escaping (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void,
-         selfDismissOnSend: Bool = true) {
+         selfDismissOnSend: Bool = true,
+         sourceKey: String? = nil, poster: UIImage? = nil,
+         arrival: EditorArrival = EditorArrival(landed: true)) {
         _clipList = State(initialValue: [ApprovalClip(url: url, thumb: nil, duration: 0)])
         self.onSend = onSend
         self.onSendMulti = nil
         self.selfDismissOnSend = selfDismissOnSend
+        self.sourceKey = poster == nil ? nil : sourceKey   // nothing to fly without a still
+        self.poster = poster
+        _arrival = ObservedObject(wrappedValue: arrival)
     }
 
     // Multiple videos → the same editor with the thumbnail rail.
@@ -61,6 +78,35 @@ struct VideoApprovalView: View {
         self.onSendMulti = onSendMulti
         self.selfDismissOnSend = selfDismissOnSend
         self.onRemove = onRemove
+        self.sourceKey = nil
+        self.poster = nil
+        _arrival = ObservedObject(wrappedValue: EditorArrival(landed: true))
+    }
+
+    /// The last measured height of the bottom controls, so the open can land before this screen
+    /// exists to measure them: strip 40 + gap 12 + caption bar (4 above + 40) + 8 below.
+    private static var lastControlsH: CGFloat = 104
+
+    /// Where the video sits at rest, in window coordinates: the safe-area box minus the bottom
+    /// controls (the `safeAreaInset`), the video aspect-fit inside, as `.resizeAspect` draws it.
+    static func restRect(_ video: CGSize, controlsH: CGFloat? = nil) -> CGRect? {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
+        let inset = window.safeAreaInsets, b = window.bounds
+        let width = b.width - inset.left - inset.right
+        let height = max(0, b.height - inset.top - inset.bottom - (controlsH ?? lastControlsH))
+        return mediaFitRect(video, in: CGRect(x: inset.left, y: inset.top, width: width, height: height))
+    }
+    @State private var controlsH: CGFloat = VideoApprovalView.lastControlsH
+
+    private func close() {
+        guard sourceKey != nil else { dismiss(); return }
+        // The keyboard goes down and the zoom goes back first: a close that starts with either
+        // lifts off the wrong rect.
+        guard captionFocused || zoom > 1.01 else { closeToken += 1; return }
+        captionFocused = false
+        withAnimation(.easeInOut(duration: 0.2)) { zoom = 1; pan = .zero }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { closeToken += 1 }
     }
 
     private var activeURL: URL { clipList[current].url }
@@ -99,7 +145,8 @@ struct VideoApprovalView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // While the still flies, its own black backdrop (under this cover) is the background.
+            Color.black.ignoresSafeArea().opacity(arrived ? 1 : 0)
             // Same layout as the image editor: the video aspect-FITS the area BETWEEN the chrome (the
             // top bar + trim strip + caption, reserved by safeAreaInset below) instead of filling the
             // whole screen behind them — fully visible / zoomed-out, letterboxed on black, rounded
@@ -114,6 +161,13 @@ struct VideoApprovalView: View {
                                               scrubTime: scrubTime,
                                               onTime: { t in if scrubTime == nil { playhead = t } })
                     .id(activeClipId)   // switching clips rebuilds the player (the UIView holds its url)
+                    // Opened out of a tile: the still that flew in waits UNDER the player, fitted the
+                    // same way, so the hand-over never shows black while the first frame decodes.
+                    .background {
+                        if let poster, current == 0 {
+                            Image(uiImage: poster).resizable().scaledToFit()
+                        }
+                    }
                 if isTallVideo {
                     // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
                     // ROUNDED CORNERS hug the video itself — standard ratios keep the untouched chain.
@@ -125,6 +179,7 @@ struct VideoApprovalView: View {
             }
                 .scaleEffect(max(1, zoom * pinch))
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
+                .opacity(dismissing || !arrived ? 0 : 1)   // the flying still stands in for it
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
                 .gesture(
@@ -155,6 +210,7 @@ struct VideoApprovalView: View {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
                     .allowsHitTesting(false)
+                    .opacity(dismissing ? 0 : chromeOpacity)
             }
             if exporting {
                 ZStack { Color.black.opacity(0.4).ignoresSafeArea(); ProgressView().tint(.white).scaleEffect(1.3) }
@@ -162,15 +218,61 @@ struct VideoApprovalView: View {
         }
         // Top bar FLOATS over the video (X · HD) instead of sitting on a black band above it — the
         // video extends up to the top, no black "header". Only the bottom chrome insets the video.
-        .overlay(alignment: .top) { topBar }
+        .overlay(alignment: .top) { topBar.opacity(chromeOpacity) }
         // Thumbnail RAIL (multi-video only): bottom-right of the canvas, above the trim strip — the
         // reference position. Hidden while the caption keyboard is up (the strip area is reclaimed).
         .overlay(alignment: .bottomTrailing) {
             if clipList.count > 1 && !captionFocused { thumbRail }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomControls
+                .opacity(chromeOpacity)
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { if !captionFocused { controlsH = g.size.height; Self.lastControlsH = g.size.height } }
+                            .onChange(of: g.size.height) { _, h in if !captionFocused { controlsH = h; Self.lastControlsH = h } }
+                    }
+                )
+        }
+        .overlay {
+            if let sourceKey, let poster {
+                MediaDismissHost(
+                    canBegin: { arrived && !captionFocused && zoom <= 1.01 && !exporting },
+                    media: {
+                        let size = videoSize.width > 0 ? videoSize : poster.size
+                        guard let r = Self.restRect(size, controlsH: controlsH) else { return nil }
+                        return (r, poster)
+                    },
+                    onHideContent: { hide in
+                        dismissing = hide
+                        if hide { playing = false }
+                    },
+                    targetRect: { MediaOpenRects.liveRect(sourceKey) },
+                    targetId: { sourceKey },
+                    clipRect: { MediaOpenRects.attachClipRect },
+                    closeToken: closeToken,
+                    onDismiss: {
+                        // The copy IS the animation, so the cover goes without its own slide.
+                        MediaPresentGate.noteDismissed()
+                        withoutPresentationAnimation { dismiss() }
+                    })
+            }
+        }
+        .onAppear {
+            // One hop, so the fade runs outside the no-animation transaction that presented the cover.
+            if sourceKey != nil, !chromeShown {
+                DispatchQueue.main.async { withAnimation(.easeInOut(duration: 0.15)) { chromeShown = true } }
+            }
+        }
+        .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }
+        // Nothing is tappable until the still has landed.
+        .allowsHitTesting(arrived)
         .task(id: activeClipId) { await loadVideoIfNeeded() }
     }
+
+    /// The tools fade in over 0.15s when opened out of a tile (the reference picker's interface fade).
+    private var chromeOpacity: Double { sourceKey == nil || chromeShown ? 1 : 0 }
 
     // MARK: - Thumbnail rail (multi-video)
 
@@ -295,7 +397,7 @@ struct VideoApprovalView: View {
 
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { close() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).liquidGlass(Circle(), interactive: true).contentShape(Circle())
             }

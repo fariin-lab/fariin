@@ -107,7 +107,11 @@ struct ThreadView: View {
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
     struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
-    struct VideoWrap: Identifiable { let id = UUID(); let url: URL }   // picked video → approval page (caption)
+    struct VideoWrap: Identifiable {   // picked video → approval page (caption)
+        let id = UUID(); let url: URL
+        // Set when it was opened out of an attach tile (see onPickVideo).
+        var sourceKey: String? = nil; var poster: UIImage? = nil; var arrival: EditorArrival? = nil
+    }
     struct MultiVideoWrap: Identifiable { let id = UUID(); let clips: [ApprovalClip] }   // ALL-video multi → single-editor chassis + rail
 
     // A 2+ selection that is ENTIRELY videos routes to the multi-video editor (the single video editor's
@@ -4845,11 +4849,38 @@ struct ThreadView: View {
                         DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
                     }
                 },
-                onPickVideo: { url in
+                onPickVideo: { url, assetId, poster in
                     // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
                     // the editor and lands BACK on the sheet to pick another (was closing the sheet first,
                     // which dumped you all the way to the chat on a stray X).
-                    panelVideoApprove = VideoWrap(url: url)
+                    //
+                    // ⛔ VIDEOS TOO — owner 2026-10-14: "you forgot videos, it still comes from the
+                    // bottom". The photo's open exactly, with a still of the video as the flying copy.
+                    let key = MediaOpenRects.key(.attach, assetId)
+                    guard let poster, let from = MediaOpenRects.liveRect(key),
+                          let to = VideoApprovalView.restRect(poster.size) else {
+                        panelVideoApprove = VideoWrap(url: url)
+                        return
+                    }
+                    MediaSourceVisibility.shared.hide(key)
+                    let arrival = EditorArrival(landed: false)
+                    MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
+                                  clip: MediaOpenRects.attachClipRect,
+                                  to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(poster.size),
+                                  timing: MediaOpen.attachOpenSpring,
+                                  timingDuration: MediaOpen.attachOpenDuration,
+                                  backdropFade: MediaOpen.attachBackdropFade,
+                                  onStart: {
+                                      MediaPresentGate.present {
+                                          withoutPresentationAnimation {
+                                              panelVideoApprove = VideoWrap(url: url, sourceKey: key,
+                                                                            poster: poster, arrival: arrival)
+                                          }
+                                      }
+                                  }) {
+                        arrival.landed = true
+                        DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
+                    }
                 },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
@@ -4966,7 +4997,12 @@ struct ThreadView: View {
                                   Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
                                   showAttachPanel = false
                               },
-                              selfDismissOnSend: false)
+                              selfDismissOnSend: false,
+                              sourceKey: wrap.sourceKey, poster: wrap.poster,
+                              arrival: wrap.arrival ?? EditorArrival(landed: true))
+            // Clear, so a drag-close fades the editor down to the SHEET underneath, not to black.
+            // The editor paints its own black at rest.
+            .presentationBackground(.clear)
         }
         // Mixed approval pager OVER the sheet: X returns to the sheet; Send delivers the group + closes it.
         .fullScreenCover(item: $panelMediaApprove) { wrap in
