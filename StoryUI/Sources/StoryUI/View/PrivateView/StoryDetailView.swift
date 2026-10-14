@@ -2159,7 +2159,9 @@ private extension StoryDetailView {
                 // so the cube lands on a local file instead of a stream.
                 if let bi = viewModel.stories.firstIndex(where: { $0.id == model.id }) {
                     var landing: [Story] = []
-                    for j in [bi + 1, bi - 1] where viewModel.stories.indices.contains(j) {
+                    // Two ahead (owner 2026-10-14): a quick swipe past the next person still lands on
+                    // a file that has had a whole story's time to download.
+                    for j in [bi + 1, bi - 1, bi + 2] where viewModel.stories.indices.contains(j) {
                         let b = viewModel.stories[j]
                         let k = viewModel.lastIndex[b.id] ?? (b.stories.firstIndex(where: { !$0.isSeen }) ?? 0)
                         if b.stories.indices.contains(k) { landing.append(b.stories[k]) }

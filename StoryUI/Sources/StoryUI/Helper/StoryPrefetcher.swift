@@ -241,6 +241,9 @@ public enum StoryPrefetcher {
     private static let cellularLeadingVideos = 10
     /// A person's second and third stories, warmed on arrival: the opening only, as before.
     private static let trailingPrefix: Int64 = 512 * 1024
+    /// People whose first story comes down WHOLE on arrival (owner 2026-10-14, see `prefetchFirsts`).
+    private static let wifiWholeLeading = 8
+    private static let cellularWholeLeading = 3
 
     /// - Parameter decode: false = bytes to disk only, no decoded pixels. For the app's arrival
     ///   download (owner 2026-10-11, cube lag): decoding dozens of full-size pictures for stories
@@ -251,11 +254,24 @@ public enum StoryPrefetcher {
         queue.async {
             let cellular = Net.isExpensive
             var cellularVideos = 0
+            var wholeLeading = 0
             for (i, item) in firsts.enumerated() {
                 warmImage(item.poster, poster: true, decode: decode)
                 guard i < mediaDepth else { continue }
                 guard item.isVideo else { warmImage(item.media, poster: false, decode: decode); continue }
                 if Net.isConstrained { continue }
+                // ⛔ THE FIRST PEOPLE'S OPENING CLIP COMES DOWN WHOLE — owner 2026-10-14, third day of
+                // "the next person's video starts late", with the reference app beside it starting
+                // within a frame of the landing. Only a prefix ever came down ahead, and the whole
+                // file only once the person before was already playing (`warmWhole`), so a swipe
+                // after a second or two always landed on the stream (~1.5s to start, measured
+                // 2026-10-13) instead of a local file (8-300ms). The reference app downloads statuses
+                // in full before they are opened. Capped: 8 people on Wi-Fi, 3 on mobile data.
+                if item.leading, wholeLeading < (cellular ? Self.cellularWholeLeading : Self.wifiWholeLeading) {
+                    wholeLeading += 1
+                    startWhole(item.media, window: false)
+                    continue
+                }
                 // Wi-Fi: every one, but only a person's first story gets the full opening; the ones
                 // behind it keep the old 512KB, or twenty people x three is ~90MB per arrival.
                 if !cellular {
