@@ -144,7 +144,9 @@ struct AttachRecentsStrip: View {
     /// TAP a photo: the picture to start the flight on, the asset id, and the loader that hands over
     /// the sharper picture and then the full-resolution photo as they arrive (see `pick`).
     var onPickPhoto: (UIImage, String, AttachPhotoLoad) -> Void
-    var onPickVideo: (URL, String, UIImage?) -> Void           // TAP a video → trim editor (file, asset id, still frame to fly)
+    /// TAP a video: the poster to start the flight on (nil when none could be read), the asset id,
+    /// and the loader that hands over the sharper poster, the playable file and our copy (see `pick`).
+    var onPickVideo: (UIImage?, String, AttachVideoLoad) -> Void
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
     var onSendMixed: ([ApprovalMedia], String, String?) -> Void = { _, _, _ in }   // items, caption, clientId of the already-posted bubble
@@ -695,15 +697,54 @@ struct AttachRecentsStrip: View {
     private func pick(_ a: PHAsset) {
         loadingPick = true
         if a.mediaType == .video {
-            Task {
-                defer { Task { @MainActor in loadingPick = false } }
-                // The still frame is what flies out of the tile (the reference picker flies a
-                // picture for video too), fetched beside the file so the open waits for neither twice.
-                async let file = Self.videoURL(a)
-                async let still = Self.videoPoster(a)
-                if let url = await file {
-                    let poster = await still
-                    await MainActor.run { onPickVideo(url, a.localIdentifier, poster) }
+            // ⛔ SAME AS A PHOTO — owner 2026-10-14: the flight starts at once on the poster, and the
+            // file follows. The reference picker's video item flies its poster, waits on nothing,
+            // shows the poster in the gallery and builds no player until playback is asked for;
+            // it never copies the file first. Ours copied the whole clip to a temp folder before
+            // the flight began: seconds on a long one. Now the poster request starts the flight
+            // (opportunistic 1280, as for photos), the library's own file is handed over the
+            // moment it is known so the editor can play it, and our copy, for sending, is made
+            // behind that.
+            let load = AttachVideoLoad()
+            let id = a.localIdentifier
+            var started = false
+            let start: (UIImage?) -> Void = { img in
+                guard !started else { return }
+                started = true
+                loadingPick = false
+                onPickVideo(img, id, load)
+            }
+            let o = PHImageRequestOptions()
+            o.deliveryMode = .opportunistic
+            o.resizeMode = .fast
+            o.isNetworkAccessAllowed = true
+            PHImageManager.default().requestImage(for: a, targetSize: CGSize(width: 1280, height: 1280),
+                                                  contentMode: .aspectFit, options: o) { img, info in
+                let degraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
+                DispatchQueue.main.async {
+                    guard let img else {
+                        // No poster at all (an error, nothing cached): open plainly once the file is known.
+                        if info?[PHImageErrorKey] != nil, load.playback != nil { start(nil) }
+                        return
+                    }
+                    if !started { start(img) } else if !degraded { load.deliverScreen(img) }
+                }
+            }
+            let vo = PHVideoRequestOptions()
+            vo.deliveryMode = .mediumQualityFormat
+            vo.isNetworkAccessAllowed = true
+            PHImageManager.default().requestAVAsset(forVideo: a, options: vo) { av, _, _ in
+                guard let urlAsset = av as? AVURLAsset else {
+                    DispatchQueue.main.async { if !started { loadingPick = false } }
+                    return
+                }
+                let src = urlAsset.url
+                DispatchQueue.main.async { load.deliverPlayback(src) }
+                // Our own copy, for the send: made behind the flight, never waited for to open.
+                let ext = src.pathExtension.isEmpty ? "mov" : src.pathExtension
+                let dest = FileManager.default.temporaryDirectory.appendingPathComponent("pick-\(UUID().uuidString).\(ext)")
+                if (try? FileManager.default.copyItem(at: src, to: dest)) != nil {
+                    DispatchQueue.main.async { load.deliverFile(dest) }
                 }
             }
             return
@@ -916,20 +957,6 @@ struct AttachRecentsStrip: View {
             o.isNetworkAccessAllowed = true
             PHImageManager.default().requestImageDataAndOrientation(for: asset, options: o) { data, _, _, _ in
                 cont.resume(returning: data.flatMap(UIImage.init(data:)))
-            }
-        }
-    }
-
-    // A screen-sized still of a video, the right way up, for the open's flight.
-    private static func videoPoster(_ asset: PHAsset) async -> UIImage? {
-        await withCheckedContinuation { cont in
-            let o = PHImageRequestOptions()
-            o.deliveryMode = .highQualityFormat   // single callback
-            o.isNetworkAccessAllowed = true
-            let side = UIScreen.main.bounds.height * UIScreen.main.scale
-            PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: side, height: side),
-                                                  contentMode: .aspectFit, options: o) { img, _ in
-                cont.resume(returning: img)
             }
         }
     }
@@ -1232,4 +1259,21 @@ struct FolderNavHost: UIViewControllerRepresentable {
         onScreen?(image)
     }
     func deliverFull(_ image: UIImage) { full = image; onFull?(image) }
+}
+
+/// What a tapped video hands over while its pieces are still arriving (see `pick`). The flight
+/// starts on the poster it was given; `onScreen` brings the sharper poster; `onPlayback` brings the
+/// library's own file, playable at once, so the editor can build its player; `onFile` brings our
+/// copy, which Send prefers. Each may already be here when its handler is set, in which case the
+/// handler runs at once.
+@MainActor final class AttachVideoLoad {
+    private(set) var screen: UIImage?
+    private(set) var playback: URL?
+    private(set) var file: URL?
+    var onScreen: ((UIImage) -> Void)? { didSet { if let screen, let onScreen { onScreen(screen) } } }
+    var onPlayback: ((URL) -> Void)? { didSet { if let playback, let onPlayback { onPlayback(playback) } } }
+    var onFile: ((URL) -> Void)? { didSet { if let file, let onFile { onFile(file) } } }
+    func deliverScreen(_ image: UIImage) { screen = image; onScreen?(image) }
+    func deliverPlayback(_ url: URL) { playback = url; onPlayback?(url) }
+    func deliverFile(_ url: URL) { file = url; onFile?(url) }
 }

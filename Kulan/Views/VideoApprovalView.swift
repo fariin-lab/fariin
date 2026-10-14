@@ -57,7 +57,7 @@ struct VideoApprovalView: View {
         return clipList.indices.contains(current) ? clipList[current].assetId.map { MediaOpenRects.key(.attach, $0) } : nil
     }
     private var poster: UIImage? {
-        guard clipsFromAttach else { return singlePoster }
+        guard clipsFromAttach else { return arrival.image ?? singlePoster }   // the sharper one, when it came
         return clipList.indices.contains(current) ? clipList[current].thumb : nil
     }
     @ObservedObject private var arrival: EditorArrival
@@ -78,6 +78,28 @@ struct VideoApprovalView: View {
         self.singleKey = poster == nil ? nil : sourceKey   // nothing to fly without a still
         self.singlePoster = poster
         self.clipsFromAttach = false
+        self.pendingLoad = nil
+        _arrival = ObservedObject(wrappedValue: arrival)
+    }
+
+    /// Opened out of an attach tile before its file is here (owner 2026-10-14, the same recipe as the
+    /// photo: the reference picker flies the poster and builds no player until it is needed). The
+    /// poster stands in on the page; the player is built the moment `load` says the library's file
+    /// can be played; our copy, when it is made, is what Send uses.
+    init(pending load: AttachVideoLoad,
+         onSend: @escaping (_ finalURL: URL, _ caption: String, _ hd: Bool) -> Void,
+         selfDismissOnSend: Bool = true,
+         sourceKey: String? = nil, poster: UIImage? = nil,
+         arrival: EditorArrival = EditorArrival(landed: true)) {
+        _clipList = State(initialValue: [ApprovalClip(url: Self.placeholderURL, thumb: poster, duration: 0)])
+        _clipReady = State(initialValue: false)
+        self.onSend = onSend
+        self.onSendMulti = nil
+        self.selfDismissOnSend = selfDismissOnSend
+        self.singleKey = poster == nil ? nil : sourceKey
+        self.singlePoster = poster
+        self.clipsFromAttach = false
+        self.pendingLoad = load
         _arrival = ObservedObject(wrappedValue: arrival)
     }
 
@@ -95,8 +117,20 @@ struct VideoApprovalView: View {
         self.singleKey = nil
         self.singlePoster = nil
         self.clipsFromAttach = arrival != nil
+        self.pendingLoad = nil
         _arrival = ObservedObject(wrappedValue: arrival ?? EditorArrival(landed: true))
     }
+
+    /// The file still arriving, for an editor opened on its poster (see `init(pending:)`).
+    private let pendingLoad: AttachVideoLoad?
+    /// False while the clip's url is `placeholderURL`: no player is built, the poster stands in.
+    @State private var clipReady = true
+    /// Our own copy of a pending file, preferred by Send over the library's url.
+    @State private var sendFile: URL?
+    /// What a pending clip carries until its file is known. Never opened: `clipReady` gates it.
+    static let placeholderURL = URL(fileURLWithPath: "/dev/null")
+    private var sendURL: URL { sendFile ?? activeURL }
+    private func isTall(_ s: CGSize) -> Bool { s.width > 0 && s.height >= s.width * (16.0 / 9.0) - 1 }
 
     /// The last measured height of the bottom controls, so the open can land before this screen
     /// exists to measure them: strip 40 + gap 12 + caption bar (4 above + 40) + 8 below.
@@ -192,7 +226,9 @@ struct VideoApprovalView: View {
                             Image(uiImage: poster).resizable().scaledToFit()
                         }
                     }
-                if isTallVideo {
+                if !clipReady {
+                    posterStandIn   // the file cannot be played yet (see `pendingLoad`)
+                } else if isTallVideo {
                     // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
                     // ROUNDED CORNERS hug the video itself — standard ratios keep the untouched chain.
                     base.aspectRatio(videoSize.width / videoSize.height, contentMode: .fit)
@@ -236,6 +272,10 @@ struct VideoApprovalView: View {
                     .allowsHitTesting(false)
                     .opacity(dismissing ? 0 : 1)   // a close hides it at once, as before
                     .animation(.easeInOut(duration: 0.15)) { $0.opacity(chromeOpacity) }
+            }
+            // Play tapped before the file was playable: it starts the moment the player exists.
+            if playing && !clipReady {
+                ProgressView().tint(.white).scaleEffect(1.3).allowsHitTesting(false)
             }
             if exporting {
                 ZStack { Color.black.opacity(0.4).ignoresSafeArea(); ProgressView().tint(.white).scaleEffect(1.3) }
@@ -288,6 +328,16 @@ struct VideoApprovalView: View {
         }
         .onAppear {
             // One hop, so the fade runs outside the no-animation transaction that presented the cover.
+            // A file still arriving (see `pendingLoad`): the player is built when it can be played,
+            // and our copy, when made, is what Send uses. Either may already be here.
+            if let pendingLoad {
+                pendingLoad.onPlayback = { url in
+                    guard !clipReady, let first = clipList.first else { return }
+                    clipList[0] = ApprovalClip(assetId: first.assetId, url: url, thumb: first.thumb, duration: 0)
+                    clipReady = true
+                }
+                pendingLoad.onFile = { sendFile = $0 }
+            }
             if sourceKey != nil, !chromeShown {
                 // No withAnimation: it also animated the cover's first layout, sliding the tools up
                 // from the bottom (owner 2026-10-14). Only the scoped opacities below animate.
@@ -297,7 +347,7 @@ struct VideoApprovalView: View {
         .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }
         // Nothing is tappable until the still has landed.
         .allowsHitTesting(arrived)
-        .task(id: activeClipId) { await loadVideoIfNeeded() }
+        .task(id: activeClipId) { if clipReady { await loadVideoIfNeeded() } }
     }
 
     /// The tools fade in over 0.15s when opened out of a tile (the reference picker's interface fade).
@@ -492,7 +542,7 @@ struct VideoApprovalView: View {
                     .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))   // 40px send (user spec)
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain).disabled(exporting)
+            .buttonStyle(.plain).disabled(exporting || !clipReady)   // nothing to send until the file is playable
         }
         .padding(.horizontal, 16).padding(.top, 4)
     }
@@ -565,11 +615,11 @@ struct VideoApprovalView: View {
             }
             return
         }
-        guard trimmed else { onSend(activeURL, cap, hd); if selfDismissOnSend { dismiss() }; return }
+        guard trimmed else { onSend(sendURL, cap, hd); if selfDismissOnSend { dismiss() }; return }
         exporting = true
         Task {
-            let out = await exportTrimmed(url: activeURL, start: trimStart, end: trimEnd)
-            await MainActor.run { exporting = false; onSend(out ?? activeURL, cap, hd); if selfDismissOnSend { dismiss() } }
+            let out = await exportTrimmed(url: sendURL, start: trimStart, end: trimEnd)
+            await MainActor.run { exporting = false; onSend(out ?? sendURL, cap, hd); if selfDismissOnSend { dismiss() } }
         }
     }
 
@@ -653,5 +703,21 @@ final class TrimPlayerUIView: UIView {
     func teardown() {
         player.pause()
         if let o = timeObserver { player.removeTimeObserver(o) }
+    }
+}
+
+extension VideoApprovalView {
+    /// The poster, laid out as the player will be, while a pending file is not playable yet.
+    @ViewBuilder var posterStandIn: some View {
+        if let poster {
+            let image = Image(uiImage: poster).resizable().scaledToFit()
+            if isTall(poster.size) {
+                image.clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            } else {
+                image
+            }
+        } else {
+            Color.clear
+        }
     }
 }

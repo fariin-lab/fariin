@@ -115,6 +115,8 @@ struct ThreadView: View {
         let id = UUID(); let url: URL
         // Set when it was opened out of an attach tile (see onPickVideo).
         var sourceKey: String? = nil; var poster: UIImage? = nil; var arrival: EditorArrival? = nil
+        /// The file still arriving (see openAttachVideo); `url` is a placeholder when this is set.
+        var load: AttachVideoLoad? = nil
     }
     struct MultiVideoWrap: Identifiable {   // ALL-video multi → single-editor chassis + rail
         let id = UUID(); let clips: [ApprovalClip]
@@ -4809,7 +4811,7 @@ struct ThreadView: View {
                 // same 0.35s before opening the next screen.
                 onClose: { showAttachPanel = false },
                 onPickPhoto: { ui, assetId, load in openAttachPhoto(ui, assetId: assetId, load: load) },
-                onPickVideo: { url, assetId, poster in openAttachVideo(url, assetId: assetId, poster: poster) },
+                onPickVideo: { poster, assetId, load in openAttachVideo(poster: poster, assetId: assetId, load: load) },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
                     // SELECT + Send → send each selected video directly (no editor). The caption rides
@@ -4864,7 +4866,9 @@ struct ThreadView: View {
                     if items.count == 1, case .image(let id, let ui) = items[0] {
                         openAttachPhoto(ui, assetId: id)
                     } else if items.count == 1, case .video(let id, let url, let thumb, _) = items[0] {
-                        openAttachVideo(url, assetId: id, poster: thumb)
+                        let load = AttachVideoLoad()   // the file is already here
+                        load.deliverPlayback(url); load.deliverFile(url)
+                        openAttachVideo(poster: thumb, assetId: id, load: load)
                     } else {
                         openAttachSelection(items, tapped: tapped)
                     }
@@ -4920,14 +4924,22 @@ struct ThreadView: View {
         }
         // Single-video trim editor OVER the sheet: X returns to the sheet; Send delivers + closes the sheet.
         .fullScreenCover(item: $panelVideoApprove) { wrap in
-            VideoApprovalView(url: wrap.url,
-                              onSend: { finalURL, caption, hd in
-                                  Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
-                                  showAttachPanel = false
-                              },
-                              selfDismissOnSend: false,
-                              sourceKey: wrap.sourceKey, poster: wrap.poster,
-                              arrival: wrap.arrival ?? EditorArrival(landed: true))
+            let send: (URL, String, Bool) -> Void = { finalURL, caption, hd in
+                Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
+                showAttachPanel = false
+            }
+            Group {
+                if let load = wrap.load {
+                    // Opened on its poster while the file is still arriving (see openAttachVideo).
+                    VideoApprovalView(pending: load, onSend: send, selfDismissOnSend: false,
+                                      sourceKey: wrap.sourceKey, poster: wrap.poster,
+                                      arrival: wrap.arrival ?? EditorArrival(landed: true))
+                } else {
+                    VideoApprovalView(url: wrap.url, onSend: send, selfDismissOnSend: false,
+                                      sourceKey: wrap.sourceKey, poster: wrap.poster,
+                                      arrival: wrap.arrival ?? EditorArrival(landed: true))
+                }
+            }
             // Clear, so a drag-close fades the editor down to the SHEET underneath, not to black.
             // The editor paints its own black at rest.
             .presentationBackground(.clear)
@@ -6163,7 +6175,10 @@ struct ThreadView: View {
         }
     }
 
-    private func openAttachVideo(_ url: URL, assetId: String, poster: UIImage?) {
+    /// `load`: the video's pieces still arriving (see `AttachRecentsStrip.pick`). The flight starts
+    /// on `poster` at once; the sharper poster replaces the flying copy mid-air and reaches the
+    /// editor; the editor builds its player when the file can be played.
+    private func openAttachVideo(poster: UIImage?, assetId: String, load: AttachVideoLoad) {
         // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
         // the editor and lands BACK on the sheet to pick another (was closing the sheet first,
         // which dumped you all the way to the chat on a stray X).
@@ -6171,14 +6186,15 @@ struct ThreadView: View {
         // ⛔ VIDEOS TOO — owner 2026-10-14: "you forgot videos, it still comes from the
         // bottom". The photo's open exactly, with a still of the video as the flying copy.
         let key = MediaOpenRects.key(.attach, assetId)
-        guard let poster, let from = MediaOpenRects.liveRect(key),
+        guard let poster, poster.size.width > 0, let from = MediaOpenRects.liveRect(key),
               let to = VideoApprovalView.restRect(poster.size) else {
-            panelVideoApprove = VideoWrap(url: url)
+            // No poster or no geometry to fly from: the plain cover, which waits for the file itself.
+            panelVideoApprove = VideoWrap(url: VideoApprovalView.placeholderURL, poster: poster, load: load)
             return
         }
         MediaSourceVisibility.shared.hide(key)
         let arrival = EditorArrival(landed: false)
-        MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
+        let flight = MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(poster.size),
                       timing: MediaOpen.attachOpenSpring,
@@ -6187,14 +6203,17 @@ struct ThreadView: View {
                       onStart: {
                           MediaPresentGate.present {
                               InstantCover.run {   // see openAttachPhoto
-                                  panelVideoApprove = VideoWrap(url: url, sourceKey: key,
-                                                                poster: poster, arrival: arrival)
+                                  panelVideoApprove = VideoWrap(url: VideoApprovalView.placeholderURL, sourceKey: key,
+                                                                poster: poster, arrival: arrival, load: load)
                               }
                           }
                       }) {
             arrival.landed = true
             DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
         }
+        // The sharper poster, when it comes: onto the flying copy and into the editor (its stand-in
+        // and its fly-home read `arrival.image`).
+        load.onScreen = { better in flight.replace(image: better); arrival.image = better }
     }
 
     private func sendPhoto(_ data: Data, viewOnce: Bool = false, caption: String = "") async {
