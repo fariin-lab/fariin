@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: "APP GOES DEAD UNTIL I REFRESH", PART 2.
+            THIS BUILD: CALLS, BROWSER, STORIES.
+            Minimize on a 1:1 call now opens Apple's own picture-in-picture window (test). Tap its expand button to come back.
+            A call nobody answers stays on a "No answer" page: Cancel, Record voice message, Call again.
+            The green Return button in Calls shows the moment you dial and stays until the call ends.
+            Browser redesigned: X top-left; back, address bar with menu and reload, and Safari button at the bottom.
+            Stories: the next person's video waits until the cube has finished turning.
+            Also: Official Chat bell is an outline icon; attach photo opens from its tile; Devices page Security Checkup.
+            PLEASE TEST: minimize a call; call someone who won't answer; swipe between video stories; open a link.
+
+            EARLIER: "APP GOES DEAD UNTIL I REFRESH", PART 2.
             The app now notices a stuck connection within about 20 seconds and reconnects by itself, retrying every minute at most. Before, your own unsent message fooled it into thinking all was fine, and a leftover call state could block the reconnect for hours.
             A hidden log on the phone records what got stuck. Nothing on screen.
             Also: the call card's edge tab is really slim now; browser bottom icons are the normal iPhone size.
