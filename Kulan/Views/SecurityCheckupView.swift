@@ -158,7 +158,11 @@ struct SecurityCheckupSheet: View {
     /// height: presenting at 0.8 of the screen and switching to the measured height a frame later
     /// changed the detents mid-slide and cut the slide-up short (owner 2026-10-14: "the sheet is not
     /// coming from the bottom, make it Apple style"). 640 until measured once.
-    private static var lastContentH: CGFloat = 640
+    /// Kept across launches, so even the first open after a relaunch presents at its real height.
+    private static var lastContentH: CGFloat {
+        get { let v = UserDefaults.standard.double(forKey: "securityCheckup.contentH"); return v > 0 ? v : 640 }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "securityCheckup.contentH") }
+    }
     private var fitDetent: PresentationDetent {
         .height((contentH > 0 ? contentH : Self.lastContentH) + 68)
     }
@@ -323,11 +327,15 @@ struct SecurityCheckupSheet: View {
         // "always show all of it". The sheet is the content's own height (rows + Continue), never
         // taller than the screen allows. ONE height: with a second, taller stop the sheet could be
         // dragged up and the Continue bar was left floating mid-sheet (owner's screenshot).
-        // ⛔ FROM THE VERY BOTTOM — owner 2026-10-14, twice: "it comes from the centre, make it come
-        // from the bottom". On iOS 26 a sheet shorter than the screen floats, inset from the bottom
-        // and sides, so it rises from mid-screen. Only the full-height detent is joined to the bottom
-        // edge. One fixed height also means the sheet can never resize under the reader.
-        .presentationDetents([.large])
+        // ⛔ ONLY AS TALL AS ITS CONTENT, AND IT SLIDES UP AT THAT HEIGHT (owner 2026-10-14: "use our
+        // logic, the sheet uses enough size only", and it must come from the bottom). A full-height
+        // sheet was tried and he wants the fitted one back. The slide looked like it came from the
+        // middle when the detent changed during it; the height it presents at is the last one
+        // measured on this phone (kept across launches) and the answers are ready before it opens,
+        // so the height it opens at is the height it keeps. A real change later (a row answered
+        // differently) still follows the content.
+        .presentationDetents([fitDetent], selection: $detent)
+        .onChange(of: contentH) { _, _ in withAnimation { detent = fitDetent } }
         .presentationDragIndicator(.visible)
         .task { await check.run() }
         .onChange(of: scenePhase) { _, phase in

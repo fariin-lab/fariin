@@ -278,29 +278,16 @@ struct DevicesView: View {
     /// The device whose sheet is open (owner, 2026-09-29: a sheet, not a pushed page).
     @State private var detail: DeviceSession?
     @State private var showCheckup = false
-    /// The checkup, run BEFORE its sheet opens, so the sheet opens once with its answers.
+    /// The checkup, started when this page appears, so the sheet opens AT ONCE and already answered.
+    ///
+    /// ⛔ OWNER 2026-10-14: "the sheet comes late, before it came early". The button used to wait up
+    /// to 3s for the four answers before opening anything. Now the answers are fetched while he looks
+    /// at this page, and the tap only presents; anything still unanswered fills in on the open sheet.
     @State private var checkup = SecurityCheckup()
-    @State private var checkupPreparing = false
 
-    /// Owner 2026-10-14: one sheet, already answered. Runs the four checks first (side by side, as
-    /// the sheet would), then opens the sheet; a slow network opens it after 3 seconds anyway, with
-    /// whatever is still unanswered marked as checking.
     private func openCheckup() {
-        guard !checkupPreparing, !showCheckup else { return }
-        checkupPreparing = true
-        let c = SecurityCheckup()
-        Task {
-            // Started, not awaited: the sheet opens the moment all four answers are in, or at 3s.
-            Task { await c.run() }
-            let start = Date()
-            let answered = { [c.passkey, c.chatKey, c.password, c.devices].allSatisfy { $0 != .checking } }
-            while !answered(), Date().timeIntervalSince(start) < 3 {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            checkup = c
-            checkupPreparing = false
-            showCheckup = true
-        }
+        guard !showCheckup else { return }
+        showCheckup = true
     }
     /// Seconds until this sign-in may sign out other devices (`DeviceRegistry.freshSessionWindow`).
     @State private var freshLeft: TimeInterval?
@@ -464,7 +451,10 @@ struct DevicesView: View {
         }
         .sheet(item: $detail) { s in DeviceDetailView(session: s) }
         .sheet(isPresented: $showCheckup) { SecurityCheckupSheet(check: checkup) }
-        .onAppear { startListening() }
+        .onAppear {
+            startListening()
+            Task { await checkup.run() }   // ready before the button is tapped (see `checkup`)
+        }
         .onDisappear { listener?.remove(); listener = nil }
         .task {
             freshLeft = await DeviceRegistry.shared.freshSessionRemaining()
