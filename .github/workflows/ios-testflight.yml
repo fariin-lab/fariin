@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: EXACT OPENING TIMINGS.
+            THIS BUILD: STORY UPLOAD CANCEL.
+            Stories: the X on an uploading story cancels only that story; your other uploads keep going.
+            PLEASE TEST: post two stories, tap X on one while both upload.
+
+            EARLIER: EXACT OPENING TIMINGS.
             Attach sheet: a photo, a video or a selection opens in 0.4 seconds to a slight zoom past full size, then settles back over 0.5 seconds; the black behind fades in 0.15 seconds.
             PLEASE TEST: open photos and videos from the attach sheet and watch the opening and the settle.
 
