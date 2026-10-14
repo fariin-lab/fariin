@@ -499,13 +499,6 @@ struct CallView: View {
 
     // MARK: - Top bar
 
-    /// Owner test, 2026-10-14: Minimize opens Apple's own picture-in-picture window, replacing our
-    /// shrink-into-the-card flight (`CallPipMorph`) and the floating card. `minimized` flips when the
-    /// window has opened (see `CallPiPController.startFromMinimize`), or now if it cannot open.
-    private func minimizeToSystemPiP() {
-        if !CallPiPController.shared.startFromMinimize() { call.minimized = true }
-    }
-
     private func topBar(safeTop: CGFloat) -> some View {
         // Owner, 2026-10-10: the two buttons must not drop when "Muted" adds a line. They line up on
         // `headerButtons`, which the NAME row fixes at the middle of name + timer (where the centre
@@ -529,10 +522,10 @@ struct CallView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         minimizeQueued = false
                         guard !call.minimized, call.state != .ended, call.state != .idle else { return }
-                        minimizeToSystemPiP()
+                        CallPipMorph.minimize { call.minimized = true }
                     }
                 } else {
-                    minimizeToSystemPiP()
+                    CallPipMorph.minimize { call.minimized = true }
                 }
             } label: {
                 // The minimise glyph rather than a bare chevron: this button shrinks the call
@@ -927,11 +920,10 @@ struct CallView: View {
                     .accessibilityHidden(true)
                 // 1:1 audit r2 I3, 2026-10-08: the same rule as the card and the tab (`isVideoCall`),
                 // so a video call with both cameras off still has a PiP source from this screen.
-                // Owner test, 2026-10-14: voice calls too, so Minimize can open Apple's window for
-                // them (it shows the person's photo). Only video calls start it by themselves on
-                // leaving the app (`canStartPictureInPictureAutomaticallyFromInline`).
-                // The whole layout, not one feed — see CallService.pipFeeds.
-                CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
+                if call.isVideoCall {
+                    // The whole layout, not one feed — see CallService.pipFeeds.
+                    CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)   // native PiP source
+                }
                 // Tap anywhere that is not a button or the tile to show/hide the controls. It sits
                 // ABOVE the video and BELOW everything interactive, so the buttons and the corner tile
                 // keep their own taps.
@@ -1607,16 +1599,7 @@ struct CallContainer<Content: View>: View {
                 //
                 // The matched-geometry morph between card and tab stays — that is a DIFFERENT moment,
                 // with no cover involved and nothing else animating.
-                //
-                // ⛔ Owner test, 2026-10-14: the card is OFF while he tries Apple's own picture-in-
-                // picture window, which Minimize now opens. This invisible full-screen view only
-                // gives that window a source on screen while the call screen is down (the expand
-                // button grows back into it). To bring the card back, put `FloatingCallWindow()` here
-                // and `CallPipMorph.minimize` back on the Minimize button.
-                CallView.CallPiPHost(feeds: call.pipFeeds)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                    .ignoresSafeArea()
+                FloatingCallWindow()
             }
         }
         .environment(\.callZoomNamespace, callZoom)
@@ -1678,9 +1661,6 @@ struct CallContainer<Content: View>: View {
             // Both ways a hard cut; the card flight is `CallPipMorph`'s (2026-10-06).
             // Audit M-147, 2026-10-07: wanted back while still shrinking into the card (their camera
             // came on mid-flight) → the flight's overlay goes first, or it draws over the call screen.
-            // Owner test, 2026-10-14: the call screen coming back some other way than the window's
-            // expand button (the chat list's call row) takes Apple's window down, one call on screen.
-            if want { CallPiPController.shared.stopSystemPiP() }
             if want { CallPipMorph.cancelMinimizeFlight(); presentCover(animated: false) } else { dismissCoverAfterNotice() }
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;

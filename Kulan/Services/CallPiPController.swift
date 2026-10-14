@@ -75,30 +75,7 @@ final class CallPiPController: NSObject {
         } else if self.sourceView !== sourceView {
             rebindSource(sourceView)
         }
-        // Owner test, 2026-10-14: voice calls have a source too now (for the Minimize button), but
-        // only a video call detaches into the window by itself when the app goes to the background.
-        controller?.canStartPictureInPictureAutomaticallyFromInline = CallService.shared.isVideoCall
         applyFeeds(feeds)
-    }
-
-    /// Owner test, 2026-10-14: the Minimize button opens Apple's window instead of our own floating
-    /// card. The call is marked minimized at didStart (the call screen must stay up as the window's
-    /// source until it has opened), or at once when no window can open (PiP off in Settings, no
-    /// controller yet), so the button is never dead. Returns false in that second case.
-    private var startedByMinimize = false
-    func startFromMinimize() -> Bool {
-        guard let controller, controller.isPictureInPicturePossible, !isPiPStartingOrActive else { return false }
-        startedByMinimize = true
-        attachFrames()
-        controller.startPictureInPicture()
-        return true
-    }
-
-    private func finishMinimize() {
-        guard startedByMinimize else { return }
-        startedByMinimize = false
-        let call = CallService.shared
-        if call.state != .ended, call.state != .idle { call.minimized = true }
     }
 
     /// The window's content for `feeds` (r3 H4: split from `configure` for the refresh tick).
@@ -471,7 +448,6 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
         // 1:1 audit r3 H5, 2026-10-08: a window that finished opening after its call ended goes.
         guard controller === self.controller else { controller.stopPictureInPicture(); return }
         pipStarting = false
-        finishMinimize()
         startRefresh()   // r2 I4
         CallService.shared.pipWindowChanged()   // r3 I1/H2: the freeze watch runs while it is up
     }
@@ -485,7 +461,6 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
         }
         // 1:1 audit r2 I7, 2026-10-08: no window will show these frames; stop converting them.
         pipStarting = false
-        finishMinimize()   // the window could not open: minimize anyway, the button is never dead
         detachFrames()
         CallService.shared.pipWindowChanged()   // r3 I1
     }
@@ -524,7 +499,6 @@ extension CallPiPController: AVPictureInPictureControllerDelegate {
         // r3 H3: a start cancelled before didStart (the user came straight back) ends here too, and a
         // stale `pipStarting` kept frames converting in the background with no window.
         pipStarting = false
-        finishMinimize()   // a Minimize start cancelled before didStart still minimizes
         defer { CallService.shared.pipWindowChanged() }   // r3 I1: closed in the background, watch stops
         stopRefresh()   // r2 I4
         // Audit M-054, 2026-10-07: this used to keep the renderers bound for the life of the call so a
