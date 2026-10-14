@@ -158,6 +158,11 @@ struct ThreadView: View {
     // The attach sheet is `AttachSheetController` (grows out of the "+", 62% at rest, full on caption
     // focus). Bumping this asks it for the full height.
     @State private var attachExpandTick = 0
+    /// Owner 2026-10-14: the attach bar's left button becomes a close (X) only while the sheet is at
+    /// its full height AND the grid has been scrolled by at least a row; it goes back to the album
+    /// button the moment the sheet starts to leave full height or the grid returns to its top.
+    @State private var attachSheetFull = false
+    @State private var attachGridScrolled = false
     /// Runs once the attach sheet is fully gone (a tile's next screen), instead of a guessed delay.
     @State private var attachAfterClose: (() -> Void)?
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
@@ -1505,8 +1510,11 @@ struct ThreadView: View {
         // at the top of that file. The solid system background and the 62% rest are unchanged.
         // The panel covers (editor after Send etc.) are cleared here too: the container takes them
         // down with it, and a stale item would re-present on the next open.
-        .attachSheet(isPresented: $showAttachPanel, expandTick: attachExpandTick, onDismiss: {
+        .attachSheet(isPresented: $showAttachPanel, expandTick: attachExpandTick,
+                     onExpanded: { attachSheetFull = $0 },
+                     onDismiss: {
             recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false
+            attachSheetFull = false; attachGridScrolled = false
             panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
             if let next = attachAfterClose { attachAfterClose = nil; next() }
         }) {
@@ -4880,7 +4888,8 @@ struct ThreadView: View {
                 removedIds: deselectedIds,
                 showAlbums: $attachShowAlbums,
                 inAlbum: $attachInAlbum,
-                albumsInstant: $attachAlbumsInstant)
+                albumsInstant: $attachAlbumsInstant,
+                onScrolledARow: { attachGridScrolled = $0 })
                 // (The back swipe out of a folder is the SYSTEM's now: the folder is a page pushed
                 // inside the strip — owner, 2026-10-04, "use the native Apple swipe". See
                 // `AttachRecentsStrip.selectAlbum` and `FolderNavHost`.)
@@ -5057,7 +5066,14 @@ struct ThreadView: View {
             // can reach is 24 — and the tile-width arithmetic above is written against 12. On a
             // group that four-point difference is the whole margin.
             HStack(spacing: 0) {
-                albumButton
+                // The close takes the album button's place only at full height with the grid
+                // scrolled a row (owner 2026-10-14); in the album list and inside a folder the
+                // button is the way back, so it stays.
+                if attachSheetFull && attachGridScrolled && !attachShowAlbums && !attachInAlbum {
+                    closeSheetButton
+                } else {
+                    albumButton
+                }
                 Spacer(minLength: 12)
                 HStack(spacing: 2) {
                     // Order: Camera · GIF · Files · Location · Poll (groups only). The Contacts tile
@@ -5131,6 +5147,21 @@ struct ThreadView: View {
     /// Round, and as tall as the bar beside it, so the two read as one row rather than two
     /// unrelated controls. The diameter is the bar's own height rather than a second number — the
     /// day the bar changes height, this follows it.
+    /// The attach sheet's close, in the album button's seat (owner 2026-10-14): shown only while the
+    /// sheet is at full height and the grid has been scrolled a row (`attachSheetFull`,
+    /// `attachGridScrolled`). Same circle, same glass, the X at the chevron's size.
+    private var closeSheetButton: some View {
+        Button { showAttachPanel = false } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 24, weight: .regular))
+                .foregroundStyle(Color(.label))
+                .frame(width: Self.attachBarHeight, height: Self.attachBarHeight)
+                .liquidGlass(Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var albumButton: some View {
         Button {
             // ⛔ NO `withAnimation` HERE — owner, 2026-09-29, the bar and this button vanishing on

@@ -188,6 +188,9 @@ struct AttachRecentsStrip: View {
     /// transaction (build 806) did not reach `.animation(_:value:)`, so the value itself decides.
     /// Last of the external inputs, the memberwise-init position rule.
     @Binding var albumsInstant: Bool
+    /// The grid has been scrolled by at least a row (or back above it). Declared last: see the
+    /// note on `removedIds` at the call site, the arguments are matched by position too.
+    var onScrolledARow: (Bool) -> Void = { _ in }
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
@@ -415,6 +418,16 @@ struct AttachRecentsStrip: View {
     }
 
     private var grid: some View {
+        gridScroll
+            // Owner 2026-10-14: the attach bar's close button appears once the sheet is full AND the
+            // grid has been scrolled by at least a row. One row = a tile's side plus the gap.
+            .onScrollGeometryChange(for: Bool.self) { g in
+                let side = (g.containerSize.width - 2 * Self.tileGap) / 3
+                return g.contentOffset.y + g.contentInsets.top >= side + Self.tileGap
+            } action: { _, scrolled in onScrolledARow(scrolled) }
+    }
+
+    private var gridScroll: some View {
         ScrollView(.vertical, showsIndicators: false) {
             // Limited access: a slim banner with a Manage button so the user can add more photos to the
             // shared selection (otherwise the picker silently shows only the old subset forever).

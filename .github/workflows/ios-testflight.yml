@@ -77,7 +77,8 @@ jobs:
             THIS BUILD: STORY SWITCH TIMING RECORDED, ATTACH SHEET SELECTION.
             Stories: the phone now writes down the timing of every person switch (nothing on screen). Swipe through 2 or 3 video stories, keep the app open 10 seconds, then tell me; I read the record and fix the real cause of the late start.
             Attach sheet: with photos or videos already selected, tapping one flies out of its tile and opens on the one you tapped. X or swipe down puts it back in its own tile.
-            Attach sheet photos: the photo starts flying the instant you tap (it used to wait for the full-size photo to load first); it sharpens in the air and the editor's tools unlock when the full photo is in. The tools now only ever fade in; the occasional slide-up from the bottom is gone (photos and videos).
+            Attach sheet photos and videos: the picture starts flying the instant you tap (it used to wait for the full photo or video file first); it sharpens in the air, the editor's tools unlock when the full photo is in, and a video's player is built the moment its file is ready. The tools now only ever fade in; the occasional slide-up from the bottom is gone.
+            Attach sheet: with the sheet at full height and the grid scrolled a row, the left button becomes an X that closes the sheet; it goes back to the album button when the sheet starts to shrink or you scroll back to the top.
             Call card: the edge arrow stays on the edge. Pull it a little or tap it and the card comes back; it no longer rides your finger across the screen.
             Also: sign-in alerts switch is off by default; a 4pt gap between an official post's title and its text.
             PLEASE TEST: swipe between video stories; select two photos, tap one, swipe, close; stash the call card and pull its arrow.

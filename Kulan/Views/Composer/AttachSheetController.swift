@@ -79,6 +79,10 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     var onReopenTap: (() -> Void)?
     /// Once, when the sheet is fully gone and dismissed.
     var onClosed: (() -> Void)?
+    /// The sheet is at its full height, or has just started leaving it (said at the snap, before
+    /// the movement, so what depends on it can go before the sheet looks small). Owner 2026-10-14:
+    /// the attach bar's close button shows only when the sheet is full.
+    var onExpandedChange: ((Bool) -> Void)?
 
     private let metrics = AttachSheetMetrics()
     private let host: UIHostingController<AttachSheetRoot>
@@ -92,7 +96,9 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     private var animators: [UIViewPropertyAnimator] = []
     private var laterGen = 0
     private var sheetTop: CGFloat = 0
-    private var isExpanded = false
+    private var isExpanded = false {
+        didSet { if isExpanded != oldValue { onExpandedChange?(isExpanded) } }
+    }
     private var keyboardUp = false
 
     // Drag state
@@ -751,9 +757,11 @@ extension View {
     /// closes it, and flips back to false when the user closes it; `onDismiss` runs once it is gone.
     /// `expandTick` changing asks for the full height.
     func attachSheet<Content: View>(isPresented: Binding<Bool>, expandTick: Int,
+                                    onExpanded: @escaping (Bool) -> Void = { _ in },
                                     onDismiss: @escaping () -> Void,
                                     @ViewBuilder content: @escaping () -> Content) -> some View {
         background(AttachSheetAnchor(isPresented: isPresented, expandTick: expandTick,
+                                     onExpanded: onExpanded,
                                      onDismiss: onDismiss, content: { AnyView(content()) })
             .frame(width: 0, height: 0)
             .allowsHitTesting(false))
@@ -763,6 +771,7 @@ extension View {
 private struct AttachSheetAnchor: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let expandTick: Int
+    let onExpanded: (Bool) -> Void
     let onDismiss: () -> Void
     let content: () -> AnyView
 
@@ -772,6 +781,7 @@ private struct AttachSheetAnchor: UIViewControllerRepresentable {
         let binding = $isPresented
         a.setPresented = { binding.wrappedValue = $0 }
         a.onDismiss = onDismiss
+        a.onExpanded = onExpanded
         a.sync(isPresented: isPresented, expandTick: expandTick, content: content)
     }
 
@@ -781,6 +791,7 @@ private struct AttachSheetAnchor: UIViewControllerRepresentable {
         private(set) weak var sheet: AttachSheetController?
         var setPresented: ((Bool) -> Void)?
         var onDismiss: (() -> Void)?
+        var onExpanded: ((Bool) -> Void)?
         private var lastTick = 0
         private var presenting = false
         /// The owner's flag as last seen. Every async step re-reads it, so a tap that lands between
@@ -828,6 +839,7 @@ private struct AttachSheetAnchor: UIViewControllerRepresentable {
             let s = AttachSheetController(root: content())
             s.onUserClose = { [weak self] in self?.setPresented?(false) }
             s.onReopenTap = { [weak self] in self?.setPresented?(true) }
+            s.onExpandedChange = { [weak self] in self?.onExpanded?($0) }
             s.onClosed = { [weak self, weak s] in
                 guard let self, self.sheet === s else { return }
                 self.sheet = nil
