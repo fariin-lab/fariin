@@ -43,14 +43,16 @@ struct ChatImageEditor: View {
     private static let zoomFitTolerance: CGFloat = 1.02
 
     /// The viewer's rule: zoom back to fit FIRST (a zoomed live photo swapped for a fitted copy is a
-    /// visible jump), then close no matter what.
+    /// visible jump), then close no matter what. The caption keyboard goes down first for the same
+    /// reason: `canBegin` refuses while it is up, and a refused button close is a plain dismiss
+    /// with no animation at all.
     private func closeHome() {
-        if zoom > Self.zoomFitTolerance {
-            zoomOutToken += 1
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeToken += 1 }
-        } else {
-            closeToken += 1
-        }
+        let zoomed = zoom > Self.zoomFitTolerance
+        let typing = captionFocused
+        guard zoomed || typing else { closeToken += 1; return }
+        if zoomed { zoomOutToken += 1 }
+        if typing { captionFocused = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { closeToken += 1 }
     }
 
     /// The copy IS the animation, so the cover goes without its own slide.
