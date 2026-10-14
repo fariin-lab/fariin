@@ -25,12 +25,10 @@ struct DeviceDetailView: View {
                 VStack(spacing: 10) {
                     DeviceTile(session: session, size: 64)
                     Text(session.displayName).font(.title2.weight(.bold))
+                    // ⛔ "Online", GREY, NO DOT — owner, 2026-10-14: "remove This device and Active
+                    // now, only make it Online", in the grey of the line under the name.
                     if isActive {
-                        HStack(spacing: 5) {
-                            Circle().fill(Color.blue).frame(width: 7, height: 7)
-                            Text(session.isThisDevice ? "This device · Active now" : "Active now")
-                                .font(.subheadline.weight(.medium)).foregroundStyle(.blue)
-                        }
+                        Text("Online").font(.subheadline).foregroundStyle(.secondary)
                     } else {
                         Text("Last active \(session.lastSeenAt.formatted(.relative(presentation: .named)))")
                             .font(.subheadline).foregroundStyle(.secondary)
@@ -123,16 +121,25 @@ struct DeviceTile: View {
     let size: CGFloat
 
     var body: some View {
-        let colour: Color = session.isThisDevice ? .blue : Color(.systemGray)
-        Image(systemName: session.isPad ? "ipad" : "iphone")
+        let glyph = Image(systemName: session.isPad ? "ipad" : "iphone")
             .font(.system(size: size * 0.5, weight: .medium))
-            .foregroundStyle(.white)
             .frame(width: size, height: size)
-            .background(
-                LinearGradient(colors: [colour.opacity(0.95), colour.opacity(0.7)],
-                               startPoint: .top, endPoint: .bottom),
-                // ⛔ ROUND AND BLUE — owner, 2026-09-29: "green is not my app's colour, use blue; make
-                // the icons circles". This device is the app's blue; the others stay system grey.
-                in: Circle())
+        if session.isThisDevice {
+            glyph
+                .foregroundStyle(.white)
+                .background(
+                    LinearGradient(colors: [Color.blue.opacity(0.95), Color.blue.opacity(0.7)],
+                                   startPoint: .top, endPoint: .bottom),
+                    // ⛔ ROUND AND BLUE — owner, 2026-09-29: "green is not my app's colour, use blue;
+                    // make the icons circles". This device is the app's blue.
+                    in: Circle())
+        } else {
+            // ⛔ THE REFERENCE MESSENGER'S GREY — owner, 2026-10-14: "the grey is too dark, use their
+            // grey". Their linked-device row draws its icon on `Color(.systemFill)` with the glyph in
+            // the primary colour; a white glyph would vanish on that light grey, so it comes too.
+            glyph
+                .foregroundStyle(.primary)
+                .background(Color(.systemFill), in: Circle())
+        }
     }
 }

@@ -277,6 +277,9 @@ struct DevicesView: View {
     @State private var autoLoaded = false
     /// The device whose sheet is open (owner, 2026-09-29: a sheet, not a pushed page).
     @State private var detail: DeviceSession?
+    @State private var showCheckup = false
+    /// Seconds until this sign-in may sign out other devices (`DeviceRegistry.freshSessionWindow`).
+    @State private var freshLeft: TimeInterval?
 
     private var others: [DeviceSession] { sessions.filter { !$0.isThisDevice } }
 
@@ -319,10 +322,9 @@ struct DevicesView: View {
 
     var body: some View {
         List {
-            // A drawn header so the page opens on a picture of what it is about, not three grey
-            // labels (owner, 2026-10-11: "give illustration art like big apps").
+            // The shield, the line and the Security Checkup button (owner, 2026-10-14 mock).
             Section {
-                DevicesHeader()
+                DevicesHeader(onCheckup: { showCheckup = true })
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
             }
@@ -373,6 +375,11 @@ struct DevicesView: View {
                                     .tint(.red)
                             }
                     }
+                    // Edit (top right, 2026-10-14 mock): the red minus asks the same question
+                    // the swipe does. Nothing is signed out without the alert below.
+                    .onDelete { offsets in
+                        if let i = offsets.first, others.indices.contains(i) { pendingSignOut = others[i] }
+                    }
                 }
             } header: {
                 Text("Other devices")
@@ -381,7 +388,13 @@ struct DevicesView: View {
                 // its next launch is true and was answering a question nobody asks standing here.
                 // This screen was three paragraphs of grey for two rows of content, and the sentence
                 // that matters ("it stops straight away") was buried at the end of the longest one.
-                Text("If you do not recognise a device, sign it out. It stops receiving messages and calls straight away.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("If you do not recognise a device, sign it out. It stops receiving messages and calls straight away.")
+                    // The 24-hour rule, said up front rather than only as an error after tapping.
+                    if let left = freshLeft, left > 0, !others.isEmpty {
+                        Text("This device signed in less than 24 hours ago, so for your security it can sign out other devices in about \(Int((left / 3600).rounded(.up))) h.")
+                    }
+                }
             }
 
             if !others.isEmpty {
@@ -421,10 +434,15 @@ struct DevicesView: View {
         }
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !others.isEmpty { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
+        }
         .sheet(item: $detail) { s in DeviceDetailView(session: s) }
+        .sheet(isPresented: $showCheckup) { SecurityCheckupSheet() }
         .onAppear { startListening() }
         .onDisappear { listener?.remove(); listener = nil }
         .task {
+            freshLeft = await DeviceRegistry.shared.freshSessionRemaining()
             autoDays = await DeviceRegistry.shared.autoSignOutDays()
             autoLoaded = true
         }
@@ -484,9 +502,13 @@ struct DevicesView: View {
                 // and a green status dot.
                 // The real model ("iPhone 16 Pro"), owner 2026-09-25: every row read "iPhone".
                 Text(s.displayName).font(.body.weight(.semibold))
+                // ⛔ THE REFERENCE APP'S SIZES — owner, 2026-10-14: "font and size wrong". Their session
+                // row is semibold 17 for the name and regular 15 for both lines under it
+                // (ItemListRecentSessionItem). `.subheadline` is 15 regular and follows Dynamic Type,
+                // as their item-list base size does.
                 Text([s.os, s.appVersion.isEmpty ? nil : "Fariin \(s.appVersion)"]
                         .compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.subheadline).foregroundStyle(.secondary)
                 statusLine(s)
             }
             Spacer(minLength: 0)
@@ -498,17 +520,9 @@ struct DevicesView: View {
         .opacity(signingOut.contains(s.id) ? 0.5 : 1)   // 2026-09-24 fix-all #143
     }
 
-    // "Active now" is the one piece of good news on this page â€” it gets the live green dot.
+    // ⛔ "Online", GREY, NO DOT — owner, 2026-10-14: the same grey and size as the line above it.
     @ViewBuilder private func statusLine(_ s: DeviceSession) -> some View {
-        let text = subtitle(s)
-        if text == "Active now" {
-            HStack(spacing: 5) {
-                Circle().fill(Color.blue).frame(width: 7, height: 7)
-                Text(text).font(.caption.weight(.medium)).foregroundStyle(.blue)
-            }
-        } else {
-            Text(text).font(.caption).foregroundStyle(.secondary)
-        }
+        Text(subtitle(s)).font(.subheadline).foregroundStyle(.secondary)
     }
 
     /// The interval the heartbeat writes on, plus a minute of slack. A device in use has written
@@ -534,8 +548,8 @@ struct DevicesView: View {
     /// reported in within the heartbeat window — a second phone in your other hand is active, and
     /// saying "last active 2 minutes ago" about it was only ever true because nothing was writing.
     private func subtitle(_ s: DeviceSession) -> String {
-        if s.isThisDevice { return "Active now" }
-        if s.lastSeenAt > Date().addingTimeInterval(-Self.activeWindow) { return "Active now" }
+        if s.isThisDevice { return "Online" }
+        if s.lastSeenAt > Date().addingTimeInterval(-Self.activeWindow) { return "Online" }
         let last = s.lastSeenAt.formatted(.relative(presentation: .named))
         guard let created = s.createdAt else { return "Last active \(last)" }
         return "Last active \(last) · signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
@@ -926,24 +940,105 @@ private struct BlockPickerView: View {
 /// iPhone beside them with a blue shield, on a pale blue card (the card keeps the ink line readable
 /// at night), then the page's name and what it is for. Fariin is iPhone only, so no other kind of
 /// device is drawn. The drawing is `devices-art` in the asset catalog, a vector, credited inside.
+/// ⛔ THE SHIELD, THE LINE AND THE CHECKUP BUTTON — owner, 2026-10-14, with a drawn mock: a line-art
+/// shield over "Review your account security and check active devices" and a wide blue Security
+/// Checkup button. Replaces the 2026-10-11 illustration.
 private struct DevicesHeader: View {
+    let onCheckup: () -> Void
+
     var body: some View {
-        VStack(spacing: 14) {
-            Image("devices-art")
-                .resizable()
-                .scaledToFit()
-                .frame(maxWidth: 300)
+        VStack(spacing: 18) {
+            SecurityShieldIcon()
+                .frame(width: 112, height: 112)
                 .accessibilityHidden(true)
-            VStack(spacing: 4) {
-                Text("Your devices")
-                    .font(.title3.weight(.bold))
-                Text("Every iPhone signed in to your account shows here. Sign out any you do not recognise.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+            (Text("Review your ") + Text("account security").foregroundColor(.blue)
+                + Text(" and check active devices"))
+                .font(.body)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .onTapGesture { onCheckup() }
+            Button(action: onCheckup) {
+                Text("Security Checkup")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.blue, in: Capsule())
             }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// The header's icon, drawn rather than shipped as a picture so it is sharp at any size and follows
+/// dark mode: a shield outline with an "i" on its left, and a round check badge cut into its lower
+/// right corner. All strokes share one width so it reads as a single line drawing.
+struct SecurityShieldIcon: View {
+    var body: some View {
+        GeometryReader { g in
+            let s = min(g.size.width, g.size.height)
+            let line = s * 0.062
+            ZStack(alignment: .topLeading) {
+                ShieldOutline()
+                    .stroke(.primary, style: StrokeStyle(lineWidth: line, lineCap: .round, lineJoin: .round))
+                    .frame(width: s * 0.78, height: s * 0.9)
+                    .offset(x: s * 0.04, y: s * 0.02)
+                // The "i": a dot and a short stem.
+                Circle()
+                    .fill(.primary)
+                    .frame(width: line * 1.25, height: line * 1.25)
+                    .position(x: s * 0.24, y: s * 0.27)
+                Capsule()
+                    .fill(.primary)
+                    .frame(width: line, height: s * 0.2)
+                    .position(x: s * 0.24, y: s * 0.46)
+                // The badge: the page colour first, so it cuts the shield's line where they overlap.
+                Circle()
+                    .fill(Color(.systemGroupedBackground))
+                    .frame(width: s * 0.46, height: s * 0.46)
+                    .position(x: s * 0.72, y: s * 0.72)
+                Circle()
+                    .stroke(.primary, lineWidth: line)
+                    .frame(width: s * 0.36, height: s * 0.36)
+                    .position(x: s * 0.72, y: s * 0.72)
+                CheckStroke()
+                    .stroke(Color.blue, style: StrokeStyle(lineWidth: line, lineCap: .round, lineJoin: .round))
+                    .frame(width: s * 0.17, height: s * 0.12)
+                    .position(x: s * 0.72, y: s * 0.725)
+            }
+            .frame(width: s, height: s)
+        }
+    }
+
+    private struct ShieldOutline: Shape {
+        func path(in r: CGRect) -> Path {
+            var p = Path()
+            let w = r.width, h = r.height
+            p.move(to: CGPoint(x: r.minX + w * 0.5, y: r.minY))
+            p.addQuadCurve(to: CGPoint(x: r.minX + w, y: r.minY + h * 0.14),
+                           control: CGPoint(x: r.minX + w * 0.76, y: r.minY + h * 0.12))
+            p.addLine(to: CGPoint(x: r.minX + w, y: r.minY + h * 0.46))
+            p.addCurve(to: CGPoint(x: r.minX + w * 0.5, y: r.maxY),
+                       control1: CGPoint(x: r.minX + w, y: r.minY + h * 0.74),
+                       control2: CGPoint(x: r.minX + w * 0.78, y: r.minY + h * 0.9))
+            p.addCurve(to: CGPoint(x: r.minX, y: r.minY + h * 0.46),
+                       control1: CGPoint(x: r.minX + w * 0.22, y: r.minY + h * 0.9),
+                       control2: CGPoint(x: r.minX, y: r.minY + h * 0.74))
+            p.addLine(to: CGPoint(x: r.minX, y: r.minY + h * 0.14))
+            p.addQuadCurve(to: CGPoint(x: r.minX + w * 0.5, y: r.minY),
+                           control: CGPoint(x: r.minX + w * 0.24, y: r.minY + h * 0.12))
+            p.closeSubpath()
+            return p
+        }
+    }
+
+    private struct CheckStroke: Shape {
+        func path(in r: CGRect) -> Path {
+            var p = Path()
+            p.move(to: CGPoint(x: r.minX, y: r.minY + r.height * 0.5))
+            p.addLine(to: CGPoint(x: r.minX + r.width * 0.36, y: r.maxY))
+            p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+            return p
+        }
     }
 }
