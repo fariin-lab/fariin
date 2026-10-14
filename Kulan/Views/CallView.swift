@@ -2124,11 +2124,26 @@ struct FloatingCallWindow: View {
                                 let flickLeft = !startedRight && v.velocity.width < -1200 && thrown.width < maxLeft - w * 0.6
                                 if ended.width > stashAt || ended.width < maxLeft - stashAt || flickRight || flickLeft {
                                     let x: CGFloat = (ended.width > stashAt || flickRight) ? 0 : maxLeft
-                                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                        base = CGSize(width: x, height: y)
+                                    // ⛔ OWNER 2026-10-14 (screen recording): swiping the card off to hide
+                                    // it showed the arrow tab in the middle of the screen, flying in from
+                                    // the card's HOME. The drag is a transform, so the card's layout frame
+                                    // was still at the spot the drag started from, and the tab's morph
+                                    // (matchedGeometryEffect reads layout) started there. Fold the drag
+                                    // into the layout first, with no animation, so the card's real frame
+                                    // is where it is on screen; then morph into the tab from there. The
+                                    // same hand-over the tab already does when the card is pulled out.
+                                    var t = Transaction(); t.disablesAnimations = true
+                                    withTransaction(t) {
+                                        base = ended
                                         offset = base
-                                        dragLive = .zero   // fold the transform back into the layout
-                                        call.cardStashed = true
+                                        dragLive = .zero
+                                    }
+                                    DispatchQueue.main.async {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                            base = CGSize(width: x, height: y)
+                                            offset = base
+                                            call.cardStashed = true
+                                        }
                                     }
                                     return
                                 }
