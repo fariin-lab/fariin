@@ -1872,20 +1872,26 @@ struct FloatingCallWindow: View {
         get { call.cardBase } nonmutating set { call.cardBase = newValue }
     }
 
-    private let w: CGFloat = 112
-    private let h: CGFloat = 199   // 9:16
+    /// ⛔ PINCH TO RESIZE, AS APPLE'S OWN FLOATING WINDOW DOES — owner, 2026-10-14: keep this card and
+    /// its design, make it behave like the system's picture-in-picture window. Three sizes, the
+    /// middle one the card he chose (112x199); a pinch scales it live and lets go onto the nearest.
+    private static let sizeSteps: [CGFloat] = [0.8, 1.0, 1.35]
+    private var w: CGFloat { 112 * call.cardScale }
+    private var h: CGFloat { 199 * call.cardScale }   // 9:16
+    /// The live pinch, as a transform (like `dragLive`); folded into `cardScale` when the fingers lift.
+    @State private var pinchLive: CGFloat = 1
 
     // Hiding it to the side.
     private let overshoot: CGFloat = 70   // how far past the edge a drag is allowed to pull it
     private let stashAt: CGFloat = 42     // let go beyond this and it parks as a tab
     private let tabW: CGFloat = 32        // owner 2026-10-13: a slim edge tab, not the wedge
-    private let tabH: CGFloat = 120
-    private let pullMax: CGFloat = 34     // how far the tab rubber-bands inward before letting go
+    /// Owner 2026-10-14, with a picture: shorter, cut top and bottom where he marked (was 120).
+    private let tabH: CGFloat = 88
     private let pullBack: CGFloat = 22    // pulled at least this far → the card comes back
 
-    /// Live inward drag on the tab. Transient by design: it is either mid-gesture or zero, and it
-    /// must not survive the tab turning back into a card.
-    @State private var tabPull: CGFloat = 0
+    /// Live drag on the tab, as a transform. Transient by design: it is either mid-gesture or zero,
+    /// and it must not survive the tab turning back into a card.
+    @State private var tabDrag: CGSize = .zero
 
     /// The card's live drag, as a TRANSFORM. Zero except while a finger is down — see the drag's
     /// `onChanged` for why the settled position and the moving one are kept apart.
@@ -1907,18 +1913,9 @@ struct FloatingCallWindow: View {
     @Namespace private var morph
     private static let morphID = "call.card.morph"
 
-    /// ⚠️ `base` IS THE ANCHOR AND MUST NOT MOVE MID-DRAG. Every gesture update reports the
-    /// translation from where the finger went DOWN, so a version of this that wrote `base` on each
-    /// change re-added the whole translation to an already-moved anchor and the tab shot off the
-    /// screen. `offset` is the live position; `base` is only committed when the finger lifts. The
-    /// card's own drag has always worked this way — this is the same contract.
-    private func setLiveY(_ y: CGFloat) {
-        offset = CGSize(width: offset.width, height: y)
-    }
-
-    private func commitY() {
-        base = CGSize(width: base.width, height: offset.height)
-    }
+    // ⚠️ `base` IS THE ANCHOR AND MUST NOT MOVE MID-DRAG, on the card or the tab. Every gesture
+    // update reports the translation from where the finger went DOWN; the live movement is a
+    // transform (`dragLive`, `tabDrag`) and `base` is only committed when the finger lifts.
 
     /// ⛔ CACHED, BECAUSE THIS IS READ FROM `body`. It walks every connected scene and every window
     /// to find the notch, and `body` re-runs on every frame of a drag — sixty scene-graph walks a
@@ -1946,44 +1943,52 @@ struct FloatingCallWindow: View {
     var body: some View {
         GeometryReader { geo in
             if call.cardStashed {
-                stashTab
-                    // ONE OBJECT IN TWO SHAPES. The card does not vanish and a tab appear in its
-                    // place: they share an identity, so the card's frame travels to the wedge's frame
-                    // and back. Like the card, the tab's position is PADDING rather than `.offset` —
-                    // a morph reads layout geometry, and an offset tab would have flown to the corner
-                    // instead of to where it is sitting.
+                // ⛔ THE TAB FOLLOWS THE FINGER — owner, 2026-10-14: "the arrow does not follow my
+                // finger in real time, it feels delayed". Two causes, both fixed at the root: the
+                // inward pull was CAPPED at 34pt, so past that the tab simply stopped moving under
+                // the finger; and every touch wrote `call.cardOffset` (shared, observed) and two
+                // paddings, a full layout pass of this screen-sized view plus the blurred photo per
+                // event — the card's own August stutter, never fixed on the tab. The live drag is
+                // now a transform (`tabDrag`) like the card's `dragLive`, the tab's insides are
+                // frozen like the card's, and layout is written once, when the finger lifts.
+                FrozenCardContent { stashTab }.equatable()
+                    // ONE OBJECT IN TWO SHAPES: the card and the tab share an identity, so the card's
+                    // frame travels to the tab's and back. The settled position stays PADDING (a
+                    // morph reads layout); only the finger's movement is a transform.
                     .matchedGeometryEffect(id: Self.morphID, in: morph)
-                    // THE TAB DRAGS TOO (owner, 2026-08-23). Up and down it slides along the edge and
-                    // stays where it is put. Pulled INWARD it comes back as the card — the same
-                    // gesture that hid it, run backwards. A tap does nothing but bring the card back,
-                    // so the two never have to be told apart.
+                    .offset(tabDrag)
+                    // Up and down it slides along the edge; pulled INWARD it follows the finger 1:1
+                    // and comes out as the card when let go (past `pullBack`, or flicked inward),
+                    // on the side the finger was heading for.
                     .gesture(
-                        DragGesture(minimumDistance: 8)
+                        DragGesture(minimumDistance: 4)
                             .onChanged { v in
                                 let (_, maxDown) = limits(geo.size)
-                                setLiveY(min(maxDown, max(0, base.height + v.translation.height)))
-                                // Only the inward direction is live. Pushing further out has nowhere
-                                // to go, and letting it move would look like it could leave twice.
+                                let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
                                 let inward = stashedLeft ? v.translation.width : -v.translation.width
-                                let pull = max(0, min(pullMax, inward))
-                                tabPull = stashedLeft ? pull : -pull
+                                // Outward has nowhere to go: a little give, not a second exit.
+                                let x = inward >= 0 ? inward : -rubber(-inward, 30)
+                                tabDrag = CGSize(width: stashedLeft ? x : -x, height: y)
                             }
-                            .onEnded { _ in
-                                commitY()
-                                let pulled = abs(tabPull)
-                                tabPull = 0
-                                if pulled >= pullBack {
-                                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                        call.cardStashed = false
-                                    }
+                            .onEnded { v in
+                                let (maxLeft, maxDown) = limits(geo.size)
+                                let inward = stashedLeft ? tabDrag.width : -tabDrag.width
+                                let inwardSpeed = stashedLeft ? v.velocity.width : -v.velocity.width
+                                let y = min(maxDown, max(0, base.height + tabDrag.height))
+                                let comesOut = inward >= pullBack || inwardSpeed > 400
+                                // Carried past the middle of the screen: it lands on the far side.
+                                let crossed = comesOut && inward + inwardSpeed * 0.2 > geo.size.width / 2
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                    let x = crossed ? (stashedLeft ? 0 : maxLeft) : base.width
+                                    base = CGSize(width: x, height: y)
+                                    offset = base
+                                    tabDrag = .zero
+                                    if comesOut { call.cardStashed = false }
                                 }
                             }
                     )
                     // FLUSH WITH THE EDGE, not tucked under it. See `stashTab` for why.
-                    // `tabPull` is the live inward drag; its sign already says which way inward is,
-                    // so the magnitude is all this side needs.
-                    .padding(.top, insets.top + 8 + min(offset.height, max(0, limits(geo.size).1)))
-                    .padding(stashedLeft ? .leading : .trailing, abs(tabPull))
+                    .padding(.top, insets.top + 8 + min(base.height, max(0, limits(geo.size).1)))
                     .frame(maxWidth: .infinity, maxHeight: .infinity,
                            alignment: stashedLeft ? .topLeading : .topTrailing)
             } else {
@@ -2003,7 +2008,14 @@ struct FloatingCallWindow: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { call.cardFrame = $0 }
                     .onDisappear { call.cardFrame = .zero }
                     .opacity(call.cardHiddenForMorph ? 0 : 1)
-                    .offset(dragLive)))
+                    .offset(dragLive)
+                    // The live pinch grows the card from the corner nearest its edge, as the system's does.
+                    .scaleEffect(pinchLive, anchor: onLeft(geo.size) ? .topLeading : .topTrailing)))
+                    .simultaneousGesture(
+                        MagnifyGesture()
+                            .onChanged { v in pinchLive = rubberScale(v.magnification) }
+                            .onEnded { _ in settlePinch(geo.size) }
+                    )
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
@@ -2013,9 +2025,11 @@ struct FloatingCallWindow: View {
                                 // Deliberately allowed PAST the edge by `overshoot`. The card sliding
                                 // partly off is the only warning that letting go will hide it — clamped
                                 // dead at the edge, hiding would happen out of nowhere.
+                                // Past the top or bottom it stretches with resistance instead of
+                                // stopping dead, the way the system's window does (2026-10-14).
                                 let target = CGSize(
                                     width: min(overshoot, max(maxLeft - overshoot, base.width + v.translation.width)),
-                                    height: min(maxDown, max(0, base.height + v.translation.height))
+                                    height: rubberBand(base.height + v.translation.height, max: maxDown)
                                 )
                                 // ⛔ THE LIVE DRAG IS A TRANSFORM, NOT LAYOUT, and that is the whole
                                 // reason this variable exists (owner, 2026-08-23: "when i drag and
@@ -2069,8 +2083,14 @@ struct FloatingCallWindow: View {
                                                    height: base.height + dragLive.height)
                                 let y = min(maxDown, max(0, thrown.height))
                                 // Shoved far enough past a side → park it there as a tab.
-                                if ended.width > stashAt || ended.width < maxLeft - stashAt {
-                                    let x: CGFloat = ended.width > stashAt ? 0 : maxLeft
+                                // 2026-10-14: or THROWN hard off the side it already sits on, as the
+                                // system's window parks on a flick. A throw across the screen still
+                                // lands on the other side; only a flick outward parks.
+                                let startedRight = base.width > maxLeft / 2
+                                let flickRight = startedRight && v.velocity.width > 1200 && thrown.width > w * 0.6
+                                let flickLeft = !startedRight && v.velocity.width < -1200 && thrown.width < maxLeft - w * 0.6
+                                if ended.width > stashAt || ended.width < maxLeft - stashAt || flickRight || flickLeft {
+                                    let x: CGFloat = (ended.width > stashAt || flickRight) ? 0 : maxLeft
                                     withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
                                         base = CGSize(width: x, height: y)
                                         offset = base
@@ -2080,7 +2100,9 @@ struct FloatingCallWindow: View {
                                     return
                                 }
                                 let x: CGFloat = thrown.width < maxLeft / 2 ? maxLeft : 0
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                // 2026-10-14: the landing carries the flick's own speed, as the
+                                // system's window does, instead of every landing starting from rest.
+                                withAnimation(landingSpring(from: ended, to: CGSize(width: x, height: y), velocity: v.velocity)) {
                                     base = CGSize(width: x, height: y)
                                     offset = base
                                     dragLive = .zero
@@ -2199,6 +2221,50 @@ struct FloatingCallWindow: View {
         let maxLeft = -(size.width - w - 24)
         let maxDown = max(0, size.height - h - (insets.top + 8) - (insets.bottom + 76))
         return (maxLeft, maxDown)
+    }
+
+    // MARK: Native-window feel (owner, 2026-10-14)
+
+    private func onLeft(_ size: CGSize) -> Bool { base.width < limits(size).0 / 2 }
+
+    /// UIScrollView's own rubber-band curve: the further past the stop, the less it gives.
+    private func rubber(_ d: CGFloat, _ dim: CGFloat) -> CGFloat { (1 - 1 / (d * 0.55 / dim + 1)) * dim }
+
+    private func rubberBand(_ y: CGFloat, max m: CGFloat) -> CGFloat {
+        if y < 0 { return -rubber(-y, 120) }
+        if y > m { return m + rubber(y - m, 120) }
+        return y
+    }
+
+    /// The pinch, held between the smallest and largest step with a little give past either.
+    private func rubberScale(_ g: CGFloat) -> CGFloat {
+        let lo = Self.sizeSteps.first! / call.cardScale, hi = Self.sizeSteps.last! / call.cardScale
+        if g < lo { return lo - rubber(lo - g, 0.15) }
+        if g > hi { return hi + rubber(g - hi, 0.15) }
+        return g
+    }
+
+    /// Fingers up: the nearest size step, kept against the same edge, never pushed past the bottom.
+    private func settlePinch(_ size: CGSize) {
+        let wanted = call.cardScale * pinchLive
+        let step = Self.sizeSteps.min { abs($0 - wanted) < abs($1 - wanted) } ?? 1
+        let wasLeft = onLeft(size)
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+            call.cardScale = step
+            pinchLive = 1
+            let (maxLeft, maxDown) = limits(size)   // read at the new size
+            base = CGSize(width: wasLeft ? maxLeft : 0, height: min(base.height, maxDown))
+            offset = base
+        }
+    }
+
+    /// A spring that starts at the finger's speed toward where the card is landing.
+    private func landingSpring(from: CGSize, to: CGSize, velocity: CGSize) -> Animation {
+        let dx = to.width - from.width, dy = to.height - from.height
+        let dist2 = dx * dx + dy * dy
+        guard dist2 > 1 else { return .spring(response: 0.35, dampingFraction: 0.78) }
+        let rel = (velocity.width * dx + velocity.height * dy) / dist2
+        return .interpolatingSpring(mass: 1, stiffness: 322, damping: 28, initialVelocity: max(-10, min(10, rel)))
     }
 
     private var window: some View {

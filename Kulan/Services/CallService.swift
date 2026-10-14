@@ -745,6 +745,10 @@ final class CallService: NSObject {
     /// Which side it went is not stored: `cardBase.width` is negative only when it was parked on the
     /// left, so the side is already written down and cannot disagree with itself.
     var cardStashed = false
+    /// The card's size step, set by pinching it (owner, 2026-10-14: behave like Apple's own floating
+    /// window, which pinches between three sizes and keeps the one you chose). 1 is the 112x199 card.
+    /// Kept for the life of the app, as the system keeps its window size.
+    var cardScale: CGFloat = 1
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
 
