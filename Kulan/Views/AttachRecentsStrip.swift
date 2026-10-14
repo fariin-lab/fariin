@@ -729,12 +729,10 @@ struct AttachRecentsStrip: View {
                 loadingPick = false
                 onPickVideo(img, id, load)
             }
-            let o = PHImageRequestOptions()
-            o.deliveryMode = .opportunistic
-            o.resizeMode = .fast
-            o.isNetworkAccessAllowed = true
-            PHImageManager.default().requestImage(for: a, targetSize: CGSize(width: 1280, height: 1280),
-                                                  contentMode: .aspectFit, options: o) { img, info in
+            // ⛔ NO BLUR, EVER — owner 2026-10-14: "I don't want to see any blur". One sharp poster at
+            // screen size; see `Self.sharpOpenOptions`.
+            PHImageManager.default().requestImage(for: a, targetSize: Self.sharpOpenSize,
+                                                  contentMode: .aspectFit, options: Self.sharpOpenOptions) { img, info in
                 let degraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
                 DispatchQueue.main.async {
                     guard let img else {
@@ -781,12 +779,13 @@ struct AttachRecentsStrip: View {
             loadingPick = false
             onPickPhoto(img, id, load)
         }
-        let o = PHImageRequestOptions()
-        o.deliveryMode = .opportunistic   // a rough one at once, the real one when it is ready
-        o.resizeMode = .fast
-        o.isNetworkAccessAllowed = true
-        PHImageManager.default().requestImage(for: a, targetSize: CGSize(width: 1280, height: 1280),
-                                              contentMode: .aspectFit, options: o) { img, info in
+        // ⛔ NO BLUR, EVER — owner 2026-10-14, "this is the last time I tell you": the photo opened
+        // blurred for a second. The opportunistic request handed over a tiny degraded picture FIRST
+        // and the flight started on it, and its "sharp" follow-up was only 1280px, below this
+        // phone's 2796px screen. Now one high-quality picture at screen size starts the flight;
+        // nothing rough is ever shown. See `Self.sharpOpenOptions`.
+        PHImageManager.default().requestImage(for: a, targetSize: Self.sharpOpenSize,
+                                              contentMode: .aspectFit, options: Self.sharpOpenOptions) { img, info in
             guard let img else { return }
             let degraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
             DispatchQueue.main.async {
@@ -963,6 +962,19 @@ struct AttachRecentsStrip: View {
             }
         }
     }
+
+    /// The picture a tapped photo or video OPENS on. `.highQualityFormat` calls back once, with a
+    /// sharp picture, never a degraded one first; 3000px on the long side covers every iPhone screen
+    /// (the largest is 2868px), so it is never stretched. A photo stored on the phone decodes at this
+    /// size in tens of milliseconds; one only in iCloud downloads first, with no rough preview.
+    static let sharpOpenSize = CGSize(width: 3000, height: 3000)
+    static let sharpOpenOptions: PHImageRequestOptions = {
+        let o = PHImageRequestOptions()
+        o.deliveryMode = .highQualityFormat
+        o.resizeMode = .fast
+        o.isNetworkAccessAllowed = true
+        return o
+    }()
 
     // Full-quality photo bytes (may pull from iCloud — network allowed).
     // (The tap no longer waits for this: see `pick`.)
