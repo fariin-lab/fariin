@@ -2695,7 +2695,12 @@ struct ChatsView: View {
         // Both stores seeded from disk on the SAME line, synchronously, before the first frame.
         // The stories row had a persisted copy all along; it just could not reach the screen in
         // time, because every path to it went through `await load(force:)`. See `seedRowFromDisk`.
-        .onAppear { repo.start(); StoriesRepository.shared.seedRowFromDisk(); openPendingChat() }
+        .onAppear {
+            repo.start(); StoriesRepository.shared.seedRowFromDisk(); openPendingChat()
+            // The attach grid's recents and their first thumbnails, fetched now rather than when
+            // the sheet opens (owner 2026-10-14: blank for seconds after a relaunch). No-op once warm.
+            RecentsCache.prewarm()
+        }
         .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
         .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
     }

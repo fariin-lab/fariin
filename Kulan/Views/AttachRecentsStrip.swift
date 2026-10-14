@@ -594,19 +594,17 @@ struct AttachRecentsStrip: View {
         f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         f.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d",
                                   PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
-        // The fetch RESULT is lazy and cheap, so it stays here. Materialising it is not.
-        let res = selectedAlbum.map { PHAsset.fetchAssets(in: $0, options: f) } ?? PHAsset.fetchAssets(with: f)
-        let end = min(pageSize, res.count)
-        let isRecents = selectedAlbum == nil
-        // ⛔ THE 200 ASSETS ARE BUILT OFF THE MAIN THREAD NOW — owner, 2026-08-24, "images coming late".
-        // `enumerateObjects` over a page is the expensive half and it ran right here, on main, inside
-        // `.task` — which SwiftUI runs AFTER the first frame. So the sheet drew its empty grid, then
-        // froze while the page was materialised, then the photos appeared. That sequence is exactly
-        // what "coming late" looks like from the outside.
-        //
-        // Same shape as `loadAlbums` directly below, deliberately: detached work, one hop back to the
-        // main actor, one assignment.
+        let album = selectedAlbum
+        let isRecents = album == nil
+        let page = pageSize
         Task.detached(priority: .userInitiated) {
+            // ⛔ THE QUERY ITSELF OFF THE MAIN THREAD — owner 2026-10-14: "after a relaunch the
+            // pictures take seconds to appear". Cold after a launch, Photos' first sorted query of
+            // a big library is a good part of a second, and it ran here on main, at the sheet's
+            // open, holding the open and every tile behind it. The recents are also warmed before
+            // the sheet is ever opened now (`RecentsCache.prewarm`, from the chat list and the chat).
+            let res = album.map { PHAsset.fetchAssets(in: $0, options: f) } ?? PHAsset.fetchAssets(with: f)
+            let end = min(page, res.count)
             var out: [PHAsset] = []
             if end > 0 {
                 out.reserveCapacity(end)
@@ -614,23 +612,15 @@ struct AttachRecentsStrip: View {
             }
             let built = out
             await MainActor.run {
-                // ⚠️ ALL FOUR LAND TOGETHER. `fetchResult` and `loadedCount` used to be set here while
-                // the page was still being built, which left a window where the paging state described
-                // a page that did not exist yet — `loadedCount` at 0 against a grid still showing the
-                // cached photos, so a scroll could have paged the first batch in a second time.
                 fetchResult = res
-                // Swapped in ONE assignment — never blank `assets` to [] first (that wiped the
-                // instantly-shown cache and flashed the grid empty on every open).
                 assets = built
                 loadedCount = end
                 if isRecents { RecentsCache.assets = built }
-                // Warm the new page's thumbnails (album switches included) so tiles never fill in late.
                 RecentsCache.precache(Array(built.prefix(60)))
             }
         }
     }
 
-    // Materialize the next page of the fetch result into the grid's array.
     private func appendNextPage() {
         guard let res = fetchResult, loadedCount < res.count else { return }
         let end = min(loadedCount + pageSize, res.count)

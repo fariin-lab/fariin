@@ -1845,6 +1845,9 @@ struct ThreadView: View {
         // changes, so a burst of five arriving messages does not start five sweeps — the first four are
         // cancelled inside the sleep and one sweep runs 1.2s after the last one lands. The sweep itself
         // is already idempotent: it skips anything cached and anything in flight.
+        // The attach grid's recents, warmed before the sheet is ever opened (a no-op once warm;
+        // see RecentsCache.prewarm and the same call on the chat list).
+        .onAppear { RecentsCache.prewarm() }
         .task(id: "\(cid)-\(repo.items.count)") {
             // ⛔ VOICE NOTES DO NOT WAIT FOR THE DEBOUNCE — his report, 2026-08-27, and the reference
             // app's own trigger: their file node calls `fetch(false)` as the bubble lays out, with no
