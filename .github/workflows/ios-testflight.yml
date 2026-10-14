@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: ATTACH PHOTOS AND VIDEOS, SECURITY CHECKUP.
+            THIS BUILD: CALL CARD DRAG, ATTACH OPEN SPEED, SECURITY CHECKUP FIXES.
+            The floating call card follows your finger again while you drag it (it only jumped when you let go).
+            Attach sheet: photos and videos open at the reference speed (a fast start, no slow motion). X while zoomed in closes straight back to the tile.
+            Security Checkup: "Yes, these are mine" now stays green; the sheet fits its content; Passkey, Chat Key, Password and device pages open with the header in place.
+            Edit Photo sheet uses the normal background, not the photo's colour.
+            Stories: the next person's video is ready and plays the moment the turn lands.
+            PLEASE TEST: drag the call card around; open, zoom and close a photo from the attach sheet; Security Checkup, tap Yes; swipe between video stories.
+
+            EARLIER: ATTACH PHOTOS AND VIDEOS, SECURITY CHECKUP.
             Tap a photo or a video in the attach sheet: it grows out of its tile slowly and smoothly, and the buttons fade in while it moves. X or swipe down puts it back in its tile.
             Security Checkup opens at 70% height. "Review new devices" now asks "Are these you?": Yes turns it green, No takes you to Devices.
             Story heart: a small vibration and pop when you like a story.
