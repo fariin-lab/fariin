@@ -732,6 +732,27 @@ enum MediaOpen {
     /// radius keeps its curve over the 0.4s; the black fades in 0.15s.
     // Owner 2026-10-14 later: 0.7s open, 1.3s settle back (was 0.4 / 0.5, then 0.6 / 1.3); the black stays 0.15s.
     static let attachOpenPhases = OpenPhases(open: 0.7, settle: 1.3, overshoot: 0.013)
+
+    /// ⛔ THE REFERENCE OPEN, EXACTLY — owner 2026-10-14 (latest): "the reference's open and close
+    /// have the same speed; ours closes right but opens too slow". The timed steps above (0.7s + a
+    /// 1.3s settle, 2s in all) were longer than the reference's whole open. Its gallery opens on
+    /// `JNWSpringAnimation` stiffness 300 (the default), damping 25, mass 0.8, durationFactor 1.8
+    /// (TGModernGalleryController.m:930-932). Played 1.8x slower = stiffness / 1.8², damping / 1.8,
+    /// with the curve's own start speed (β = damping / 2·mass) slowed the same: about 95% of the way
+    /// in 0.2s and at rest by ~0.73s. The close is untouched.
+    static let attachOpenSlowdown: CGFloat = 1.8
+    static var attachOpenSpring: UISpringTimingParameters {
+        let f = attachOpenSlowdown
+        let v0 = (25 / (2 * 0.8)) / f
+        return UISpringTimingParameters(mass: 0.8, stiffness: 300 / (f * f), damping: 25 / f,
+                                        initialVelocity: CGVector(dx: v0, dy: v0))
+    }
+    static var attachOpenDuration: TimeInterval {
+        let s = CASpringAnimation()
+        let f = Double(attachOpenSlowdown)
+        s.mass = 0.8; s.stiffness = 300 / (f * f); s.damping = 25 / f
+        return s.settlingDuration
+    }
     static let attachBackdropFade: TimeInterval = 0.15
 
     struct OpenPhases {

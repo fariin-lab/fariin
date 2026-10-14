@@ -77,6 +77,7 @@ jobs:
             THIS BUILD: SECURITY CHECKUP OPENS AT ONCE.
             Devices: tapping Security Checkup opens the sheet straight away, already checked. The sheet is only as tall as what it shows and slides up at that height.
             Attach sheet: tall photos and videos open with their rounded corners again.
+            Attach sheet: photos and videos open at the reference speed again (about 0.7 seconds in all, most of it in the first 0.2), not the slow 2-second open. Closing is unchanged.
             PLEASE TEST: open Devices, tap Security Checkup a few times; open a tall photo from the attach sheet.
 
             EARLIER: THE APP NO LONGER STAYS DEAD UNTIL YOU RESTART IT.
