@@ -278,6 +278,30 @@ struct DevicesView: View {
     /// The device whose sheet is open (owner, 2026-09-29: a sheet, not a pushed page).
     @State private var detail: DeviceSession?
     @State private var showCheckup = false
+    /// The checkup, run BEFORE its sheet opens, so the sheet opens once with its answers.
+    @State private var checkup = SecurityCheckup()
+    @State private var checkupPreparing = false
+
+    /// Owner 2026-10-14: one sheet, already answered. Runs the four checks first (side by side, as
+    /// the sheet would), then opens the sheet; a slow network opens it after 3 seconds anyway, with
+    /// whatever is still unanswered marked as checking.
+    private func openCheckup() {
+        guard !checkupPreparing, !showCheckup else { return }
+        checkupPreparing = true
+        let c = SecurityCheckup()
+        Task {
+            // Started, not awaited: the sheet opens the moment all four answers are in, or at 3s.
+            Task { await c.run() }
+            let start = Date()
+            let answered = { [c.passkey, c.chatKey, c.password, c.devices].allSatisfy { $0 != .checking } }
+            while !answered(), Date().timeIntervalSince(start) < 3 {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            checkup = c
+            checkupPreparing = false
+            showCheckup = true
+        }
+    }
     /// Seconds until this sign-in may sign out other devices (`DeviceRegistry.freshSessionWindow`).
     @State private var freshLeft: TimeInterval?
 
@@ -324,7 +348,7 @@ struct DevicesView: View {
         List {
             // The shield, the line and the Security Checkup button (owner, 2026-10-14 mock).
             Section {
-                DevicesHeader(onCheckup: { showCheckup = true })
+                DevicesHeader(onCheckup: { openCheckup() })
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
             }
@@ -439,7 +463,7 @@ struct DevicesView: View {
             if !others.isEmpty { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
         }
         .sheet(item: $detail) { s in DeviceDetailView(session: s) }
-        .sheet(isPresented: $showCheckup) { SecurityCheckupSheet() }
+        .sheet(isPresented: $showCheckup) { SecurityCheckupSheet(check: checkup) }
         .onAppear { startListening() }
         .onDisappear { listener?.remove(); listener = nil }
         .task {

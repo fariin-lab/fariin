@@ -144,8 +144,12 @@ final class SecurityCheckup {
 struct SecurityCheckupSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var check = SecurityCheckup()
+    @State private var check: SecurityCheckup
     @State private var open: Item?
+    /// ⛔ ONE SHEET, ALREADY ANSWERED — owner 2026-10-14: "it has two sheets, the loading one and the
+    /// first one". It opened on four "Checking…" rows and then re-laid itself out (and resized) when
+    /// the answers came. The Devices page now runs the check BEFORE presenting and hands it in here.
+    init(check: SecurityCheckup = SecurityCheckup()) { _check = State(initialValue: check) }
     @State private var detent: PresentationDetent = .height(SecurityCheckupSheet.lastContentH + 68)
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
@@ -230,7 +234,9 @@ struct SecurityCheckupSheet: View {
                         }
                     }
                     if !rest.isEmpty {
-                        section(missing.isEmpty && failed.isEmpty ? "Everything is set up" : "Set up",
+                        // "Everything is set up" only once nothing is still being checked.
+                        section(rest.contains { $0.status == .checking } ? "Checking your account…"
+                                : missing.isEmpty && failed.isEmpty ? "Everything is set up" : "Set up",
                                 footer: nil) {
                             ForEach(rest) { e in
                                 if case .done(let line) = e.status {
@@ -317,8 +323,11 @@ struct SecurityCheckupSheet: View {
         // "always show all of it". The sheet is the content's own height (rows + Continue), never
         // taller than the screen allows. ONE height: with a second, taller stop the sheet could be
         // dragged up and the Continue bar was left floating mid-sheet (owner's screenshot).
-        .presentationDetents([fitDetent], selection: $detent)
-        .onChange(of: contentH) { _, _ in withAnimation { detent = fitDetent } }
+        // ⛔ FROM THE VERY BOTTOM — owner 2026-10-14, twice: "it comes from the centre, make it come
+        // from the bottom". On iOS 26 a sheet shorter than the screen floats, inset from the bottom
+        // and sides, so it rises from mid-screen. Only the full-height detent is joined to the bottom
+        // edge. One fixed height also means the sheet can never resize under the reader.
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .task { await check.run() }
         .onChange(of: scenePhase) { _, phase in
