@@ -323,6 +323,8 @@ struct ThreadView: View {
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
     @State private var searchIndex = 0
+    /// The results as a list instead of in the chat (the reference's "Show as List").
+    @State private var searchAsList = false
     @State private var lastSearchText: String?   // identical-query dedup: arrows/focus don't re-run the search
     @State private var searchJumpSeq = 0         // coalesces rapid next/prev jumps — only the latest target lands
     @FocusState private var searchFocused: Bool
@@ -621,8 +623,12 @@ struct ThreadView: View {
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
             .overlay(alignment: .bottomTrailing) {
                 VStack(spacing: 10) {
-                    reactionJumpButton   // sits ABOVE the arrow, like the reference
-                    jumpToBottomButton
+                    if searchActive {
+                        searchArrows   // the reference shows the search arrows here instead
+                    } else {
+                        reactionJumpButton   // sits ABOVE the arrow, like the reference
+                        jumpToBottomButton
+                    }
                 }
                 // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
                 // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
@@ -643,6 +649,16 @@ struct ThreadView: View {
                 }
             }
             .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
+            // In-chat search as a list ("Show as List"): over the conversation, under the bars.
+            .overlay {
+                if searchActive && searchAsList && !searchMatches.isEmpty {
+                    InChatSearchList(rows: searchListRows,
+                                     terms: ChatSearch.queryTerms(searchQuery.trimmingCharacters(in: .whitespaces)),
+                                     bottomInset: composerLift + 8,
+                                     onSelect: openSearchResult)
+                        .transition(.opacity)
+                }
+            }
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
             .floatingBottomBar {
@@ -4644,7 +4660,7 @@ struct ThreadView: View {
 
     private func activateSearch() {
         setUIMode(.search)
-        searchQuery = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil
+        searchQuery = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil; searchAsList = false
         inputFocused = false
         Task {
             let corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
@@ -4660,7 +4676,7 @@ struct ThreadView: View {
     private func closeSearch() {
         searchFocused = false
         setUIMode(.normal)
-        searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil
+        searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil; searchAsList = false
         // Leave the conversation where the last result was — no scroll restore on close.
     }
 
@@ -7236,37 +7252,100 @@ struct ThreadView: View {
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
     }
 
-    // Bottom bar shown during search (replaces the composer, sits above the keyboard): ↑/↓ through
-    // matches + a count.
+    // Bottom bar shown during search (replaces the composer, sits above the keyboard).
+    //
+    // ⛔ THE REFERENCE'S PANEL (owner 2026-10-14: "add Show as List, copy it"), from its
+    // `ChatTagSearchInputPanelNode`: 40pt high; on the left a glass pill with the count in 15pt
+    // secondary ("3 of 12", counted from the NEWEST match as 1; "12 messages" in list mode, where
+    // tapping it goes back to the chat; "No results"); on the right a glass pill with "Show as List"
+    // or "Show as Chat" in 15pt, shown only when there are results. The up/down arrows are not in the
+    // panel: they float where the jump-to-bottom arrow sits (see the bottom-trailing overlay).
     private var searchNavBar: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 24) {
-                Button { stepSearch(-1) } label: { Image(systemName: "chevron.up").font(.system(size: 16, weight: .semibold)) }
-                    .disabled(searchIndex <= 0 || searchMatches.isEmpty)
-                Button { stepSearch(1) } label: { Image(systemName: "chevron.down").font(.system(size: 16, weight: .semibold)) }
-                    .disabled(searchIndex >= searchMatches.count - 1 || searchMatches.isEmpty)
-            }
-            .tint(.primary)
-            .padding(.horizontal, 18).frame(height: 44)   // 44pt Apple tap target, matches the close X
-            .liquidGlass(Capsule(), interactive: true)
-            Spacer()
-            // ⛔ NOTHING IS SHOWN FOR A QUERY THAT WAS NEVER RUN. Matches are only computed at two
-            // characters and up, but this appeared as soon as the field was non-empty — so one
-            // letter produced a confident "No results" about a search that had not happened, with
-            // both arrows dead beside it. It read as a finished, empty search.
-            //
-            // Theirs makes the same distinction structurally: their current index is optional and
-            // the results bar takes a nil result set, so "not searched" has no appearance at all.
+            // NOTHING IS SHOWN FOR A QUERY THAT WAS NEVER RUN. Matches are only computed at two
+            // characters and up; one letter must not produce a confident "No results".
             if !searchMatches.isEmpty || searchTermIsSearchable {
-                // Same rounded glass pill as the up/down arrow nav (same height / corner / background),
-                // text centered. It's a status label, so the glass is non-interactive; search logic unchanged.
-                Text(searchMatches.isEmpty ? "No results" : "\(searchIndex + 1) of \(searchMatches.count)")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .padding(.horizontal, 18).frame(height: 44)
-                    .liquidGlass(Capsule(), interactive: false)
+                Button { if searchAsList { setSearchAsList(false) } } label: {
+                    Text(searchCountText)
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).frame(height: 40)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .allowsHitTesting(searchAsList)
+                .liquidGlass(Capsule(), interactive: false)
+            }
+            Spacer()
+            if !searchMatches.isEmpty {
+                Button { setSearchAsList(!searchAsList) } label: {
+                    Text(searchAsList ? "Show as Chat" : "Show as List")
+                        .font(.system(size: 15)).foregroundStyle(.primary)
+                        .padding(.horizontal, 16).frame(height: 40)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .liquidGlass(Capsule(), interactive: true)
             }
         }
         .padding(.horizontal, 16).padding(.bottom, 6)
+    }
+
+    private var searchCountText: String {
+        if searchMatches.isEmpty { return "No results" }
+        let n = searchMatches.count
+        if searchAsList { return n == 1 ? "1 message" : "\(n) messages" }
+        return "\(n - searchIndex) of \(n)"
+    }
+
+    private func setSearchAsList(_ on: Bool) {
+        withAnimation(.easeInOut(duration: 0.2)) { searchAsList = on }
+    }
+
+    /// The up/down arrows during search, stacked where the jump-to-bottom arrow sits. Up is the older match.
+    @ViewBuilder private var searchArrows: some View {
+        if searchActive && !searchAsList && !searchMatches.isEmpty {
+            VStack(spacing: 10) {
+                searchArrow("chevron.up", enabled: searchIndex > 0) { stepSearch(-1) }
+                searchArrow("chevron.down", enabled: searchIndex < searchMatches.count - 1) { stepSearch(1) }
+            }
+        }
+    }
+
+    private func searchArrow(_ symbol: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 16, weight: .bold))
+                .foregroundStyle(dark ? .white : .black)
+                .opacity(enabled ? 1 : 0.35)
+                .frame(width: 40, height: 40)
+                .liquidGlass(Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    /// The list rows, newest first, in the chat list's shape.
+    private var searchListRows: [InChatSearchRow] {
+        let byId = Dictionary(repo.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let myPhoto = ProfileStore.shared.me?.photoUrl
+        return searchMatches.reversed().map { m in
+            let mine = m.authorId == me
+            let live = byId[m.id]
+            let photo = conversation?.photos[m.authorId] ?? (mine ? myPhoto : (isGroup ? nil : photoUrl))
+            let media = live.flatMap { ($0.type == "image" || $0.type == "video") && !$0.viewOnce ? $0.previewImage : nil }
+            return InChatSearchRow(id: m.id, name: personName(m.authorId), photoUrl: photo, date: m.date,
+                                   text: m.text, outgoing: mine,
+                                   read: mine && m.date.timeIntervalSince1970 * 1000 <= repo.otherLastReadMillis,
+                                   thumb: media)
+        }
+    }
+
+    /// A row tapped: that message becomes the current match, the chat comes back and jumps to it.
+    private func openSearchResult(_ id: String) {
+        if let i = searchMatches.firstIndex(where: { $0.id == id }) { searchIndex = i }
+        setSearchAsList(false)
+        searchFocused = false
+        goToCurrentMatch()
     }
 
     // Bottom action bar during selection (reference design): Delete (glass circle, leading), "N Selected"
