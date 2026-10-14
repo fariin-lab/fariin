@@ -4914,6 +4914,18 @@ struct ThreadView: View {
                 .contentMargins(.bottom, recentsHasSelection ? 0 : Self.attachBarHeight - Self.composerRestDip,
                                 for: .scrollContent)
                 .overlay(alignment: .bottom) { sourceBar }
+                // ⛔ THE CLOSE SITS TOP-LEFT OF THE SHEET — owner 2026-10-14: "top left, 44, liquid
+                // glass". Shown only at full height once the grid has been scrolled a row, and not
+                // in the album list or a folder; it fades in and out, the album button is untouched.
+                .overlay(alignment: .topLeading) {
+                    if attachSheetFull && attachGridScrolled && !attachShowAlbums && !attachInAlbum {
+                        CloseXButton(diameter: 44) { showAttachPanel = false }
+                            .padding(.leading, 12)
+                            .padding(.top, 12)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: attachSheetFull && attachGridScrolled)
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
@@ -5069,14 +5081,7 @@ struct ThreadView: View {
             // can reach is 24 — and the tile-width arithmetic above is written against 12. On a
             // group that four-point difference is the whole margin.
             HStack(spacing: 0) {
-                // The close takes the album button's place only at full height with the grid
-                // scrolled a row (owner 2026-10-14); in the album list and inside a folder the
-                // button is the way back, so it stays.
-                if attachSheetFull && attachGridScrolled && !attachShowAlbums && !attachInAlbum {
-                    closeSheetButton
-                } else {
-                    albumButton
-                }
+                albumButton
                 Spacer(minLength: 12)
                 HStack(spacing: 2) {
                     // Order: Camera · GIF · Files · Location · Poll (groups only). The Contacts tile
@@ -5150,21 +5155,6 @@ struct ThreadView: View {
     /// Round, and as tall as the bar beside it, so the two read as one row rather than two
     /// unrelated controls. The diameter is the bar's own height rather than a second number — the
     /// day the bar changes height, this follows it.
-    /// The attach sheet's close, in the album button's seat (owner 2026-10-14): shown only while the
-    /// sheet is at full height and the grid has been scrolled a row (`attachSheetFull`,
-    /// `attachGridScrolled`). Same circle, same glass, the X at the chevron's size.
-    private var closeSheetButton: some View {
-        Button { showAttachPanel = false } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 24, weight: .regular))
-                .foregroundStyle(Color(.label))
-                .frame(width: Self.attachBarHeight, height: Self.attachBarHeight)
-                .liquidGlass(Circle())
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-    }
-
     private var albumButton: some View {
         Button {
             // ⛔ NO `withAnimation` HERE — owner, 2026-09-29, the bar and this button vanishing on
@@ -6118,10 +6108,13 @@ struct ThreadView: View {
         // cover appears under the copy with no animation. The tile is hidden for the flight
         // so the photo is never on screen twice. The sheet itself is not touched.
         let key = MediaOpenRects.key(.attach, assetId)
+        // The landing is sized from the photo's exact pixel size when the library gave it (the
+        // rough preview's can be a pixel off in aspect; see `AttachPhotoLoad.pixelSize`).
+        let size = (load?.pixelSize).flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil } ?? ui.size
         // liveRect asks the tile's own view (converted to the window), so the sheet
         // sitting part-way down the screen is measured, not assumed.
         guard let from = MediaOpenRects.liveRect(key),
-              let to = ChatImageEditor.restRect(ui.size) else {
+              let to = ChatImageEditor.restRect(size) else {
             // No geometry to fly from: the plain cover, still fed the better pictures as they come.
             let arrival = EditorArrival(landed: true, fullReady: load == nil)
             load?.onScreen = { arrival.image = $0 }
@@ -6133,7 +6126,7 @@ struct ThreadView: View {
         let arrival = EditorArrival(landed: false, fullReady: load == nil)
         let flight = MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
-                      to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size),
+                      to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(size),
                       // The reference picker's slower spring; the house one read as a "pop".
                       timing: MediaOpen.attachOpenSpring,
                       timingDuration: MediaOpen.attachOpenDuration,

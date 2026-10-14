@@ -760,6 +760,7 @@ struct AttachRecentsStrip: View {
         // decode before the flight began: hundreds of milliseconds of nothing after the tap, and
         // THAT was the slowness, not the spring, whose numbers already match. Same recipe now.
         let load = AttachPhotoLoad()
+        load.pixelSize = CGSize(width: a.pixelWidth, height: a.pixelHeight)
         let id = a.localIdentifier
         var started = false
         let start: (UIImage) -> Void = { img in
@@ -1251,6 +1252,11 @@ struct FolderNavHost: UIViewControllerRepresentable {
 /// editor; `onFull` brings the full-resolution photo to the editor. Either may already be here
 /// when its handler is set, in which case the handler runs at once.
 @MainActor final class AttachPhotoLoad {
+    /// The photo's exact size from the library, so the flight lands on the rect the editor will lay
+    /// the FULL photo out in. The rough preview's size can be a pixel off in aspect, and a landing
+    /// sized from it re-fitted by a few points at the hand-over: the "small zoom back at the end"
+    /// (owner 2026-10-14, build 918).
+    var pixelSize: CGSize = .zero
     private(set) var screen: UIImage?
     private(set) var full: UIImage?
     var onScreen: ((UIImage) -> Void)? { didSet { if full == nil, let screen, let onScreen { onScreen(screen) } } }
