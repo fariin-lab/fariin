@@ -6103,7 +6103,13 @@ struct ThreadView: View {
                           // no-animation transaction, so it carries its own: otherwise
                           // the cover would slide up from the bottom again.
                           MediaPresentGate.present {
-                              withoutPresentationAnimation {
+                              // ⛔ UIKIT'S OWN SWITCH TOO, NOT ONLY THE TRANSACTION — owner 2026-10-14:
+                              // "sometimes the buttons come up from the bottom, sometimes not". The
+                              // call screen hit the same thing (`InstantCover`): on device a
+                              // no-animation transaction alone does not always stop the system
+                              // cover's slide, so the tools slid up under the flying photo now and
+                              // then. Same guard here, for every attach editor.
+                              InstantCover.run {
                                   panelEditImage = EditImageWrap(image: ui, sourceKey: key, arrival: arrival)
                               }
                           }
@@ -6143,7 +6149,7 @@ struct ThreadView: View {
                       backdropFade: MediaOpen.attachBackdropFade,
                       onStart: {
                           MediaPresentGate.present {
-                              withoutPresentationAnimation {
+                              InstantCover.run {   // see openAttachPhoto
                                   if let clips {
                                       panelMultiVideo = MultiVideoWrap(clips: clips, start: start, arrival: arrival)
                                   } else {
@@ -6180,7 +6186,7 @@ struct ThreadView: View {
                       backdropFade: MediaOpen.attachBackdropFade,
                       onStart: {
                           MediaPresentGate.present {
-                              withoutPresentationAnimation {
+                              InstantCover.run {   // see openAttachPhoto
                                   panelVideoApprove = VideoWrap(url: url, sourceKey: key,
                                                                 poster: poster, arrival: arrival)
                               }
