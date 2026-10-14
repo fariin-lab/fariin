@@ -2213,8 +2213,17 @@ struct FloatingCallWindow: View {
             topLeadingRadius: stashedLeft ? 0 : 12, bottomLeadingRadius: stashedLeft ? 0 : 12,
             bottomTrailingRadius: stashedLeft ? 12 : 0, topTrailingRadius: stashedLeft ? 12 : 0,
             style: .continuous)
+        // DARK FROSTED GLASS, not a blur of the picture (owner 2026-10-14: the hidden card showed
+        // as a flat WHITE slab). A blur filter on the live call picture does not reach a video layer
+        // drawn by UIKit, so what came out was a bright empty shape. A dark material samples whatever
+        // is under it, picture or not, and it fades out as the card comes out of the edge.
         return FrozenCardContent { cardPicture }.equatable()
-            .blur(radius: blur, opaque: true)
+            .overlay {
+                Rectangle().fill(.regularMaterial)
+                    .overlay(Color.black.opacity(0.25))
+                    .environment(\.colorScheme, .dark)
+                    .opacity(blur / 28)
+            }
             .scaleEffect(x: (w + reach) / w, y: 1, anchor: stashedLeft ? .leading : .trailing)
             .mask(alignment: edge) {
                 ZStack(alignment: edge) {
