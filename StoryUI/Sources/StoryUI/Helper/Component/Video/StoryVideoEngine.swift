@@ -31,12 +31,15 @@
 import UIKit
 import AVFoundation
 
-// MARK: - Timeline (tests only)
+// MARK: - Timeline
 
-/// A step-by-step timeline of one story video's start, for `StoryPlaybackStartTests`. Nil in the
-/// app, so each call is one nil check and nothing is ever shown or stored.
-enum StoryVideoTrace {
-    static var sink: ((String) -> Void)?
+/// A step-by-step timeline of one story video's start, for `StoryPlaybackStartTests` and, since
+/// 2026-10-14, for the app's hidden diagnostic log (`StoryTraceBridge` in the app): the owner's
+/// "the next person's clip starts late" had six fixes written from code alone, because the phone
+/// never wrote down what its player was doing at the landing. Nil = one nil check per call and
+/// nothing stored. Called from any thread; the sink must cope.
+public enum StoryVideoTrace {
+    public static var sink: ((String) -> Void)?
     static func note(_ s: @autoclosure () -> String) { sink?(s()) }
 }
 

@@ -750,6 +750,7 @@ struct StoryPager: UIViewControllerRepresentable {
             // time from it would trade a faster arrival for a jerkier animation.
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                StoryVideoTrace.note("prewarm: building the pages beside \(id.suffix(6))")
                 for off in [1, -1] {
                     let j = idx + off
                     guard self.parent.viewModel.stories.indices.contains(j) else { continue }
@@ -804,7 +805,7 @@ struct StoryPager: UIViewControllerRepresentable {
             // Owner 2026-10-14 (the reference app's next clip moves within a frame of landing): the
             // landed page re-takes its play decision NOW, after everything below, instead of on its
             // next 0.05s tick. `resumeStory` from `endTurn` arrives before the flag above comes down.
-            defer { NotificationCenter.default.post(name: .storyTurnLanded, object: nil) }
+            defer { StoryVideoTrace.note("turn landed"); NotificationCenter.default.post(name: .storyTurnLanded, object: nil) }
             // ⚠️ THE TURN IS OVER BEFORE ANY EARLY RETURN CAN SKIP SAYING SO. THIS ORDER IS THE BUG.
             //
             // `isTurning = false` and the replay used to sit BELOW the `pendingLanding` branch, and

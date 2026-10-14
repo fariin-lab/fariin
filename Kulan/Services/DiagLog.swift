@@ -42,10 +42,33 @@ enum DiagLog {
         let text = "\(stamp.string(from: Date())) \(line)\n"
         queue.async {
             guard let url = fileURL else { return }
+            // Appended, not rewritten: the story trace (2026-10-14) writes dozens of lines a second
+            // around a landing, and reading and rewriting 60 KB for each was needless disk work.
+            // The file is cut back to its tail once it has grown to twice the cap.
+            var appended = false
+            if let h = try? FileHandle(forWritingTo: url) {
+                defer { try? h.close() }
+                if (try? h.seekToEnd()) != nil, (try? h.write(contentsOf: Data(text.utf8))) != nil {
+                    appended = true
+                    let size = (try? h.offset()).map { Int($0) } ?? 0
+                    if size <= maxBytes * 2 { return }
+                }
+            }
             var data = (try? Data(contentsOf: url)) ?? Data()
-            data.append(Data(text.utf8))
+            if !appended { data.append(Data(text.utf8)) }
             if data.count > maxBytes { data = data.suffix(maxBytes) }
             try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
+    /// Something worth reading happened (a slow story landing, say): flag the file and send it in a
+    /// few seconds, rather than waiting for the next launch's connection probe.
+    static func flagForUpload(after seconds: TimeInterval = 3) {
+        UserDefaults.standard.set(true, forKey: pendingKey)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let uid = Auth.auth().currentUser?.uid else { return }
+            uploadIfPending(uid: uid)
         }
     }
 

@@ -59,6 +59,9 @@ final class StoryItemVideoView: UIView {
     /// reports as failed rather than sitting on for ever.
     let storyURL: URL?
     var storyKey: String { storyId }
+    /// Trace lines carry the clip's tail, so the pages in the hidden log can be told apart.
+    private func trace(_ s: @autoclosure () -> String) { StoryVideoTrace.note("[\(storyId.suffix(6))] \(s())") }
+    private var notedMoving = false   // "clock moving" is said once per start
 
     /// Whether this view is holding a decoder. The store keeps only views that are — see `keep`.
     var hasPlayer: Bool { player != nil }
@@ -314,6 +317,10 @@ final class StoryItemVideoView: UIView {
     /// trigger — an item whose media finished loading while it was paused has no player at all, and
     /// nothing else would ever come along to build one for it.
     func apply(mode newMode: StoryProgressMode) {
+        if newMode != mode {
+            trace("mode \(newMode): player=\(player != nil) streamed=\(streamedAsset != nil) began=\(didBeginPlayback) frame=\(didShowFirstFrame) prepared=\(prepared) window=\(window != nil) file=\(localFile?.isFileURL == true)")
+            if newMode == .pause { notedMoving = false }
+        }
         mode = newMode
         // ⛔ A WHOLE FILE THAT ARRIVED AFTER THIS PLAYER WAS BUILT WINS (owner 2026-10-13). A prepared
         // neighbour may have built on the stream while `StoryPrefetcher.warmWhole` was still fetching;
@@ -326,7 +333,7 @@ final class StoryItemVideoView: UIView {
         // person switch whose file had finished in time. Swapped only while nothing is shown yet.
         if newMode == .play, !didBeginPlayback, !didShowFirstFrame, streamedAsset != nil, let storyURL,
            let file = CacheManager.cachedFileIfUsable(for: storyURL) {
-            StoryVideoTrace.note("landing: whole file arrived, player rebuilt on it")
+            trace("landing: whole file arrived, player rebuilt on it")
             teardownPlayer()
             localFile = file
         }
@@ -392,10 +399,13 @@ final class StoryItemVideoView: UIView {
     /// because a file that finished DURING the turn was dropped by the turn guard below, and never on
     /// the page being looked at (`onScreen`), whose swap would show (a held, never-played clip).
     func adoptWholeFileWhileWaiting() {
+        let whole = storyURL.flatMap { CacheManager.cachedFileIfUsable(for: $0) }
         guard mode == .pause, prepared, !onScreen, player != nil, streamedAsset != nil, !didBeginPlayback,
-              !StoryPager.personTurnActive, let storyURL,
-              let file = CacheManager.cachedFileIfUsable(for: storyURL) else { return }
-        StoryVideoTrace.note("prepared: whole file arrived, rebuilt on it out of sight")
+              !StoryPager.personTurnActive, let file = whole else {
+            trace("whole file not adopted: mode=\(mode) prepared=\(prepared) onScreen=\(onScreen) player=\(player != nil) streamed=\(streamedAsset != nil) began=\(didBeginPlayback) turn=\(StoryPager.personTurnActive) file=\(whole != nil)")
+            return
+        }
+        trace("prepared: whole file arrived, rebuilt on it out of sight")
         teardownPlayer()
         localFile = file
         initializeVideoIfReady()
@@ -410,9 +420,13 @@ final class StoryItemVideoView: UIView {
         prepared = on
         if on {
             initializeVideoIfReady()
+            trace("prepared: player=\(player != nil) content=\(contentLoaded) file=\(localFile?.isFileURL == true) streamed=\(streamedAsset != nil)")
         } else if mode == .pause, !didBeginPlayback, player != nil {
             // No longer next to the person on screen, and never watched: give the decoder back.
+            trace("unprepared: player given back")
             teardownPlayer()
+        } else {
+            trace("unprepared: player kept (mode=\(mode) began=\(didBeginPlayback) player=\(player != nil))")
         }
     }
 
@@ -501,7 +515,7 @@ final class StoryItemVideoView: UIView {
         }
         if streamed != nil, Self.experimentNoWaitOnStream { p.currentItem?.preferredForwardBufferDuration = 1 }
         player = p
-        StoryVideoTrace.note("player built: streamed=\(streamed != nil) waits=\(p.automaticallyWaitsToMinimizeStalling) mode=\(mode)")
+        trace("player built: streamed=\(streamed != nil) file=\(file.isFileURL) waits=\(p.automaticallyWaitsToMinimizeStalling) mode=\(mode) prepared=\(prepared)")
 
         let pl = AVPlayerLayer(player: p)
         // CLEAR, not black: the canvas lives behind this layer and a black fill would cover it.
@@ -583,13 +597,13 @@ final class StoryItemVideoView: UIView {
         // changes this property SYNCHRONOUSLY, so an inline call re-entered `startIfBuffered`, which
         // called `playImmediately` again, until the stack ran out. See also `kickedThisWait`.
         reasonObservation = p.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] pl, _ in
-            StoryVideoTrace.note("reason \(pl.reasonForWaitingToPlay?.rawValue ?? "nil")")
+            trace("reason \(pl.reasonForWaitingToPlay?.rawValue ?? "nil")")
             DispatchQueue.main.async { self?.startIfBuffered() }
         }
 
         // Every new run of buffered bytes is a chance to start: see `startIfBuffered`.
         bufferObservation = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] i, _ in
-            StoryVideoTrace.note("buffered to \(String(format: "%.2f", i.loadedTimeRanges.map { ($0.timeRangeValue.start + $0.timeRangeValue.duration).seconds }.max() ?? 0))s")
+            trace("buffered to \(String(format: "%.2f", i.loadedTimeRanges.map { ($0.timeRangeValue.start + $0.timeRangeValue.duration).seconds }.max() ?? 0))s")
             guard let self else { return }
             if Thread.isMainThread { self.startIfBuffered() }
             else { DispatchQueue.main.async { self.startIfBuffered() } }
@@ -601,7 +615,13 @@ final class StoryItemVideoView: UIView {
         timeObserver = p.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main
         ) { [weak self] _ in
-            self?.publishStatus()
+            guard let self else { return }
+            self.publishStatus()
+            // The first moving frame after a start, said once: the moment the person actually sees.
+            if !self.notedMoving, self.player?.timeControlStatus == .playing, self.currentSecond > 0.02 {
+                self.notedMoving = true
+                self.trace("clock moving at \(String(format: "%.2f", self.currentSecond))s")
+            }
         }
     }
 
@@ -618,7 +638,7 @@ final class StoryItemVideoView: UIView {
 
     private func noteItemStatus(_ item: AVPlayerItem) {
         guard item === player?.currentItem else { return }
-        StoryVideoTrace.note("item status \(item.status == .readyToPlay ? "readyToPlay" : String(item.status.rawValue))")
+        trace("item status \(item.status == .readyToPlay ? "readyToPlay" : String(item.status.rawValue))")
         switch item.status {
         case .failed:
             // ⚠️ HOPPED OUT OF THE OBSERVER'S OWN CALLBACK. The recovery below tears the player down,
@@ -644,7 +664,7 @@ final class StoryItemVideoView: UIView {
     }
 
     private func noteTimeControl(_ s: AVPlayer.TimeControlStatus) {
-        StoryVideoTrace.note("timeControl \(s == .playing ? "playing" : s == .paused ? "paused" : "waiting(\(player?.reasonForWaitingToPlay?.rawValue ?? "-"))")")
+        trace("timeControl \(s == .playing ? "playing" : s == .paused ? "paused" : "waiting(\(player?.reasonForWaitingToPlay?.rawValue ?? "-"))")")
         switch s {
         case .playing:
             didBeginPlayback = true
@@ -701,7 +721,7 @@ final class StoryItemVideoView: UIView {
         if ahead >= min(0.5, max(0.05, rest)) {
             // ONCE per wait: set before the call, because the call itself fires the observers.
             kickedThisWait = true
-            StoryVideoTrace.note("kick playImmediately, ahead \(String(format: "%.2f", ahead))s")
+            trace("kick playImmediately, ahead \(String(format: "%.2f", ahead))s")
             p.playImmediately(atRate: 1)
         }
     }
@@ -767,7 +787,7 @@ final class StoryItemVideoView: UIView {
         applyGravity()
         refreshBackdrop()
         didShowFirstFrame = true
-        StoryVideoTrace.note("first frame shown")
+        trace("first frame shown")
         CATransaction.begin()
         CATransaction.setDisableActions(true)   // an appearance must not fade in
         pl.isHidden = false
@@ -1134,6 +1154,8 @@ final class StoryItemVideoView: UIView {
         StoryVideoStream.release(streamedAsset)
         streamedAsset = nil
         didShowFirstFrame = false
+        notedMoving = false
+        trace("player torn down")
     }
 
     /// The end of this view. Called by the store when it decides not to keep it, and by the

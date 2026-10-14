@@ -533,6 +533,7 @@ final class StoryCubePagerVC: UIViewController {
         let token = settleToken
         settling = true
         panFraction = target
+        StoryVideoTrace.note("turn settling from \(String(format: "%.2f", from)) to \(Int(target))")
 
         let duration = Self.releaseDuration
         let fps = max(60, view.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond)
@@ -545,6 +546,7 @@ final class StoryCubePagerVC: UIViewController {
             self.settling = false
             self.settleDone = nil
             self.applyFold()   // hands hit testing back to the face now square to the camera
+            StoryVideoTrace.note("turn settled: animation over, landing work begins")
             done?()
         }
         // ⚠️ AND A BELT. The display link this replaces ran its completion whatever happened to the

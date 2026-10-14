@@ -954,6 +954,7 @@ struct StoryDetailView: View {
         }
         // The cube has landed: play now, not on the next tick (see `storyTurnLanded`).
         .onReceive(NotificationCenter.default.publisher(for: .storyTurnLanded)) { _ in
+            if viewModel.currentStoryUser == model.id { StoryVideoTrace.note("landed page \(model.id.suffix(6)): mode \(videoMode)") }
             syncVideoMode()
             guard viewModel.currentStoryUser != model.id else { return }
             // ⛔ OUT OF SIGHT NOW, SO THE REWIND HAPPENS HERE — owner 2026-10-14 ("the video does a
@@ -2042,6 +2043,9 @@ private extension StoryDetailView {
             // `StoryPager.Coordinator.prewarmWhenStarted`).
             if !announcedStart, cur.config.mediaType != .video || (video.isPlaying && video.timestamp > 0) {
                 announcedStart = true
+                StoryVideoTrace.note(cur.config.mediaType == .video
+                                     ? "landing started: clip at \(String(format: "%.2f", video.timestamp))s"
+                                     : "landing started: photo")
                 NotificationCenter.default.post(name: .storyLandingStarted, object: model.id)
             }
             // ⚠️ THE MODE IS RE-ASSERTED HERE, AND THAT CLOSES A WHOLE CLASS OF DEAD STORY.
