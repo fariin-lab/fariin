@@ -146,12 +146,17 @@ struct SecurityCheckupSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var check = SecurityCheckup()
     @State private var open: Item?
-    @State private var detent: PresentationDetent = .fraction(0.8)
+    @State private var detent: PresentationDetent = .height(SecurityCheckupSheet.lastContentH + 68)
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
     /// it is not added. 0.8 of the screen until the content has been measured once.
+    /// The last measured content height on this phone, so the sheet PRESENTS at nearly its final
+    /// height: presenting at 0.8 of the screen and switching to the measured height a frame later
+    /// changed the detents mid-slide and cut the slide-up short (owner 2026-10-14: "the sheet is not
+    /// coming from the bottom, make it Apple style"). 640 until measured once.
+    private static var lastContentH: CGFloat = 640
     private var fitDetent: PresentationDetent {
-        contentH > 0 ? .height(contentH + 68) : .fraction(0.8)
+        .height((contentH > 0 ? contentH : Self.lastContentH) + 68)
     }
     private var profile = ProfileStore.shared
 
@@ -247,8 +252,8 @@ struct SecurityCheckupSheet: View {
                 .background(
                     GeometryReader { g in
                         Color.clear
-                            .onAppear { contentH = g.size.height }
-                            .onChange(of: g.size.height) { _, h in contentH = h }
+                            .onAppear { contentH = g.size.height; Self.lastContentH = g.size.height }
+                            .onChange(of: g.size.height) { _, h in contentH = h; Self.lastContentH = h }
                     }
                 )
             }
@@ -297,7 +302,12 @@ struct SecurityCheckupSheet: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        CloseXButton(diameter: 44) { open = nil }
+                        // A plain button: the bar draws the glass circle itself. `CloseXButton`
+                        // brought a second circle of its own, so the X wore two rings (owner
+                        // 2026-10-14, "two duplicate X buttons").
+                        Button { open = nil } label: {
+                            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                        }
                     }
                 }
             }
@@ -308,7 +318,7 @@ struct SecurityCheckupSheet: View {
         // taller than the screen allows. ONE height: with a second, taller stop the sheet could be
         // dragged up and the Continue bar was left floating mid-sheet (owner's screenshot).
         .presentationDetents([fitDetent], selection: $detent)
-        .onChange(of: contentH) { _, _ in detent = fitDetent }
+        .onChange(of: contentH) { _, _ in withAnimation { detent = fitDetent } }
         .presentationDragIndicator(.visible)
         .task { await check.run() }
         .onChange(of: scenePhase) { _, phase in
