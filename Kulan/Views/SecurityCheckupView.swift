@@ -146,6 +146,19 @@ struct SecurityCheckupSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var check = SecurityCheckup()
     @State private var path: [Item] = []
+    /// The sheet is at full height (or growing to it) for a pushed page.
+    @State private var expanded = false
+
+    /// ⛔ GROW FIRST, THEN PUSH — owner 2026-10-14: "the back arrow and title touch the top corner,
+    /// only for the first second". The page was pushed while the sheet was still growing from its
+    /// fitted height, so the header was laid out against a sheet edge that was still moving. The
+    /// sheet now reaches full height, then the page slides in.
+    private func go(_ item: Item) {
+        guard !expanded else { path.append(item); return }
+        expanded = true
+        withAnimation { detent = .large }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { path.append(item) }
+    }
     @State private var detent: PresentationDetent = .fraction(0.8)
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
@@ -171,11 +184,11 @@ struct SecurityCheckupSheet: View {
         return [
             Entry(id: "passkey", title: "Passkey", missingTitle: "Create a passkey",
                   why: "Sign in with Face ID. There is no password for anyone to steal.",
-                  status: check.passkey, open: { path.append(.passkey) }),
+                  status: check.passkey, open: { go(.passkey) }),
             Entry(id: "password", title: "Password",
                   missingTitle: passwordSet ? "Password" : "Set a password",
                   why: "A password lets you sign in again if you lose this phone.",
-                  status: check.password, open: { path.append(.password) }),
+                  status: check.password, open: { go(.password) }),
             Entry(id: "devices", title: "Where you're signed in",
                   missingTitle: check.unreviewedCount == 1 ? "Review 1 new device"
                                                            : "Review \(check.unreviewedCount) new devices",
@@ -185,11 +198,11 @@ struct SecurityCheckupSheet: View {
                       // New devices open an "Is this you?" page (the reference app's new-login
                       // question); only its Yes marks them reviewed. A tick row has nothing new to
                       // confirm, so it goes to the full list behind this sheet.
-                      if check.unreviewed.isEmpty { dismiss() } else { path.append(.devices) }
+                      if check.unreviewed.isEmpty { dismiss() } else { go(.devices) }
                   }),
             Entry(id: "chatKey", title: "Chat Key", missingTitle: "Set a Chat Key",
                   why: "People who know your Chat Key can start a chat with you.",
-                  status: check.chatKey, open: { path.append(.chatKey) }),
+                  status: check.chatKey, open: { go(.chatKey) }),
         ]
     }
 
@@ -288,9 +301,13 @@ struct SecurityCheckupSheet: View {
         // taller than the screen allows. A setup page pushed inside it gets the full height.
         // ONE height at a time: with a second, taller stop the sheet could be dragged up and the
         // Continue bar was left floating mid-sheet (owner's screenshot).
-        .presentationDetents(path.isEmpty ? [fitDetent] : [.large], selection: $detent)
-        .onChange(of: contentH) { _, _ in if path.isEmpty { detent = fitDetent } }
-        .onChange(of: path) { _, now in withAnimation { detent = now.isEmpty ? fitDetent : .large } }
+        .presentationDetents(expanded ? [.large] : [fitDetent], selection: $detent)
+        .onChange(of: contentH) { _, _ in if !expanded { detent = fitDetent } }
+        .onChange(of: path) { _, now in
+            guard now.isEmpty else { return }
+            expanded = false
+            withAnimation { detent = fitDetent }
+        }
         .presentationDragIndicator(.visible)
         .task { await check.run() }
         // Back from a setup page: ask again, so the tick follows what was just done.
