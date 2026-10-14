@@ -455,9 +455,7 @@ struct AttachRecentsStrip: View {
             // edges of the sheet; the only curve is the one the presentation cuts for itself.
         }
         // The region a tile may be drawn in while the editor flies out of it or back into it.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-            MediaOpenRects.attachClipRect = $0
-        }
+        .background { MediaViewAnchor(key: MediaOpenRects.attachGridKey) }
         // ⛔ NO TOP MARGIN — owner, 2026-09-02. It existed to hold the first row clear of an opaque
         // header, and there is no header. The photos begin at the sheet's own top edge, which is the
         // whole of what "no header" looks like; the system drag indicator floats over them, exactly

@@ -4797,7 +4797,9 @@ struct ThreadView: View {
                     // cover appears under the copy with no animation. The tile is hidden for the flight
                     // so the photo is never on screen twice. The sheet itself is not touched.
                     let key = MediaOpenRects.key(.attach, assetId)
-                    guard let from = MediaOpenRects.rect(key),
+                    // liveRect asks the tile's own view (converted to the window), so the sheet
+                    // sitting part-way down the screen is measured, not assumed.
+                    guard let from = MediaOpenRects.liveRect(key),
                           let to = ChatImageEditor.restRect(ui.size) else {
                         panelEditImage = EditImageWrap(image: ui)
                         return

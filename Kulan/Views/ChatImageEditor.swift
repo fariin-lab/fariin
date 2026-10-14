@@ -145,7 +145,7 @@ struct ChatImageEditor: View {
                         return (r, img)
                     },
                     onHideContent: { dismissing = $0 },
-                    targetRect: { MediaOpenRects.rect(sourceKey) },
+                    targetRect: { MediaOpenRects.liveRect(sourceKey) },
                     targetId: { sourceKey },
                     clipRect: { MediaOpenRects.attachClipRect },
                     closeToken: closeToken,
