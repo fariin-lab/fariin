@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CALLS, BROWSER, STORIES.
+            THIS BUILD: ATTACH PHOTOS AND VIDEOS, SECURITY CHECKUP.
+            Tap a photo or a video in the attach sheet: it grows out of its tile slowly and smoothly, and the buttons fade in while it moves. X or swipe down puts it back in its tile.
+            Security Checkup opens at 70% height. "Review new devices" now asks "Are these you?": Yes turns it green, No takes you to Devices.
+            Story heart: a small vibration and pop when you like a story.
+            Also: minimize is the floating call card again (picture-in-picture test removed), its edge tab follows your finger; stories no longer restart the next person's clip; Add to Reading List removed from the browser menu.
+            PLEASE TEST: open and close photos and videos from the attach sheet; open Security Checkup; like a story.
+
+            EARLIER: CALLS, BROWSER, STORIES.
             Minimize on a 1:1 call now opens Apple's own picture-in-picture window (test). Tap its expand button to come back.
             A call nobody answers stays on a "No answer" page: Cancel, Record voice message, Call again.
             The green Return button in Calls shows the moment you dial and stays until the call ends.
