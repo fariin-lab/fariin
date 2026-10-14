@@ -27,6 +27,11 @@ struct ChatImageEditor: View {
     /// and a drag down fly the photo back INTO that tile, through the same `MediaDismissHost` the chat
     /// viewer closes with. Nil keeps the plain close for every other caller.
     var sourceKey: String? = nil
+    /// Opened out of an attach tile: the editor is on screen WHILE the photo flies (so its tools can
+    /// fade in during the flight, as the reference picker's do) and shows only its tools until the
+    /// flying copy lands. Default = already landed, for every other caller.
+    @ObservedObject var arrival = EditorArrival(landed: true)
+    private var arrived: Bool { arrival.landed }
     @Environment(\.dismiss) private var dismiss
 
     private func close() {
@@ -126,13 +131,14 @@ struct ChatImageEditor: View {
     // modifiers inline blew the expression limit).
     private func editorBody(_ size: CGSize) -> some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // While the copy flies, its own black backdrop (under this cover) is the background.
+            Color.black.ignoresSafeArea().opacity(arrived ? 1 : 0)
             // FULL-SCREEN image (matches the multi-image editor): the photo fills the screen and the
             // tools/caption float over it. Canvas, drawing layer, and flatten all share this rect.
             // Only the photo hides while a close flies; the black and the tools stay live and are
             // faded with the finger by MediaDismissHost (the root's alpha), as in the chat viewer.
             canvasView(canvasArea(size))
-                .opacity(dismissing ? 0 : 1)
+                .opacity(dismissing || !arrived ? 0 : 1)
             chromeOverlay
                 // Opened out of an attach tile: the tools fade in over 0.15s (the reference
                 // picker's interface fade) instead of appearing all at once when the photo lands.
@@ -144,7 +150,7 @@ struct ChatImageEditor: View {
                 MediaDismissHost(
                     // Never while drawing, cropping, typing a caption, or zoomed in: each of those
                     // owns the vertical drag.
-                    canBegin: { !isDrawing && !showCrop && !captionFocused && zoom <= Self.zoomFitTolerance },
+                    canBegin: { arrived && !isDrawing && !showCrop && !captionFocused && zoom <= Self.zoomFitTolerance },
                     media: {
                         let img = edited
                         guard let r = Self.restRect(img.size, chromeH: bottomChromeH) else { return nil }
@@ -167,8 +173,13 @@ struct ChatImageEditor: View {
             canvasSize = canvasArea(size)
             recomputeEdited()
             if startDrawing { isDrawing = true }
-            if sourceKey != nil, !chromeShown { withAnimation(.easeInOut(duration: 0.15)) { chromeShown = true } }
+            // One hop, so the fade runs outside the no-animation transaction that presented the cover.
+            if sourceKey != nil, !chromeShown {
+                DispatchQueue.main.async { withAnimation(.easeInOut(duration: 0.15)) { chromeShown = true } }
+            }
         }
+        // Nothing is tappable until the photo has landed (the reference blocks touches in flight too).
+        .allowsHitTesting(arrived)
         // The cover is really gone: release a tap on another tile that came in while it was leaving.
         .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }
         .onChange(of: size) { _, s in canvasSize = canvasArea(s) }
@@ -595,4 +606,10 @@ struct ChatImageEditor: View {
         guard let cropped = cg.cropping(to: rect) else { return image }
         return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
     }
+}
+
+/// Whether the photo flying out of an attach tile has landed in the editor yet (see `arrival`).
+final class EditorArrival: ObservableObject {
+    @Published var landed: Bool
+    init(landed: Bool) { self.landed = landed }
 }

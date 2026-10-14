@@ -797,8 +797,10 @@ enum MediaOpen {
                     timing: UISpringTimingParameters? = nil,
                     timingDuration: TimeInterval? = nil,
                     backdropFade: TimeInterval? = nil,
+                    onStart: (() -> Void)? = nil,
                     present: @escaping () -> Void) {
         guard let window = keyWindow, source != .zero, !source.isEmpty else {
+            onStart?()  // a caller that opens its screen at the start must still open it
             present()   // no geometry to fly from — never block opening the viewer
             return
         }
@@ -861,11 +863,16 @@ enum MediaOpen {
             // later. Presenting first would put the viewer OVER the copy mid-flight; removing the copy
             // first would show one frame of the chat underneath. Neither order flashes if they overlap.
             withoutPresentationAnimation { present() }
-            DispatchQueue.main.async {
+            // A screen already up since `onStart` (under the copy) only has to draw its photo, but
+            // give it a few frames: the copy sits UNDER that screen, so overlap never shows twice.
+            DispatchQueue.main.asyncAfter(deadline: .now() + (onStart == nil ? 0 : 0.05)) {
                 backdrop.removeFromSuperview()
                 clipView.removeFromSuperview()
             }
         }
         animator.startAnimation()
+        // The screen being opened may come up NOW, over the flying copy, if it keeps its own photo
+        // and background hidden until `present` (the attach editor does: its tools fade in mid-flight).
+        onStart?()
     }
 }

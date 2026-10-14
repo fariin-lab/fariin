@@ -100,7 +100,10 @@ struct ThreadView: View {
     @State private var deselectedIds: Set<String> = []
     @State private var multiVideoApprove: MultiVideoWrap? // ALL-video multi (main picker) → multi-video editor
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
-    struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage; var sourceKey: String? = nil }
+    struct EditImageWrap: Identifiable {
+        let id = UUID(); let image: UIImage; var sourceKey: String? = nil
+        var arrival: EditorArrival? = nil   // set when the photo is still flying in (attach tile open)
+    }
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
     struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
@@ -4813,19 +4816,31 @@ struct ThreadView: View {
                         return
                     }
                     MediaSourceVisibility.shared.hide(key)
+                    let arrival = EditorArrival(landed: false)
                     MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                                   clip: MediaOpenRects.attachClipRect,
                                   to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size),
                                   // The reference picker's slower spring; the house one read as a "pop".
                                   timing: MediaOpen.attachOpenSpring,
                                   timingDuration: MediaOpen.attachOpenDuration,
-                                  backdropFade: MediaOpen.attachBackdropFade) {
-                        // Through the gate: a tap right after a close must not be dropped by SwiftUI.
-                        // A queued open runs later, outside the fly's no-animation transaction, so it
-                        // carries its own: otherwise the cover would slide up from the bottom again.
-                        MediaPresentGate.present {
-                            withoutPresentationAnimation { panelEditImage = EditImageWrap(image: ui, sourceKey: key) }
-                        }
+                                  backdropFade: MediaOpen.attachBackdropFade,
+                                  // ⛔ THE TOOLS FADE IN DURING THE FLIGHT — owner 2026-10-14: they
+                                  // "pop" when they appear after the photo lands. The reference picker
+                                  // puts its gallery up at the START, tools fading in 0.15s with the
+                                  // black, photo flying under them. So the editor is presented now,
+                                  // showing only its tools until `arrival` says the photo landed.
+                                  onStart: {
+                                      // Through the gate: a tap right after a close must not be
+                                      // dropped by SwiftUI. A queued open runs later, outside this
+                                      // no-animation transaction, so it carries its own: otherwise
+                                      // the cover would slide up from the bottom again.
+                                      MediaPresentGate.present {
+                                          withoutPresentationAnimation {
+                                              panelEditImage = EditImageWrap(image: ui, sourceKey: key, arrival: arrival)
+                                          }
+                                      }
+                                  }) {
+                        arrival.landed = true
                         // The editor is opaque over the tile by now; give it back for the close to find.
                         DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
                     }
@@ -4938,7 +4953,8 @@ struct ThreadView: View {
                                 showAttachPanel = false
                             },
                             selfDismissOnSend: false,
-                            sourceKey: wrap.sourceKey)
+                            sourceKey: wrap.sourceKey,
+                            arrival: wrap.arrival ?? EditorArrival(landed: true))
             // Clear, so a drag-close fades the editor down to the SHEET underneath, not to black.
             // The editor paints its own black at rest.
             .presentationBackground(.clear)
