@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: STORY SWITCH TIMING RECORDED, ATTACH SHEET SELECTION.
+            THIS BUILD: LINKS IN THE OFFICIAL CHAT, FASTER ATTACH SHEET.
+            Official chat: a web address in a message (like fariin.com/help) is now a link. Tap it and it opens in the app's browser, like the link buttons.
+            Attach sheet: your recent photos are loaded before the sheet opens, so it opens without a pause.
+            PLEASE TEST: open the Fariin official chat and tap fariin.com/help in a message; open the attach sheet.
+
+            EARLIER: STORY SWITCH TIMING RECORDED, ATTACH SHEET SELECTION.
             Stories: the phone now writes down the timing of every person switch (nothing on screen). Swipe through 2 or 3 video stories, keep the app open 10 seconds, then tell me; I read the record and fix the real cause of the late start.
             Attach sheet: with photos or videos already selected, tapping one flies out of its tile and opens on the one you tapped. X or swipe down puts it back in its own tile.
             Attach sheet photos and videos: the picture starts flying the instant you tap (it used to wait for the full photo or video file first); it sharpens in the air, the editor's tools unlock when the full photo is in, and a video's player is built the moment its file is ready. The tools now only ever fade in; the occasional slide-up from the bottom is gone.
