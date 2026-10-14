@@ -10,11 +10,10 @@ import FirebaseFirestore
 // which is the one thing this project's own rules forbid outright — if the server could not be made
 // to honour it, the row should not have been added.
 //
-// ⚠️ ABSENT MEANS ON, on both sides. Every account that predates the switch has no such field, and
-// the safe reading of a missing preference about a security warning is that they want it. Only an
-// explicit false turns it off.
+// ⚠️ ABSENT MEANS OFF, on both sides — owner, 2026-10-14: "make off this button by default". Only an
+// explicit true (the person turned it on) sends the mail. Was absent-means-on before.
 struct SecurityNotificationsView: View {
-    @State private var alerts = true
+    @State private var alerts = false
     @State private var loading = true
     @State private var error: String?
 
@@ -50,9 +49,9 @@ struct SecurityNotificationsView: View {
         guard let uid else { return }
         do {
             let snap = try await Firestore.firestore().collection("users").document(uid).getDocument()
-            // ⚠️ The nil-coalesce is the "absent means on" rule, and it must stay on both sides of
+            // ⚠️ The nil-coalesce is the "absent means off" rule, and it must stay on both sides of
             // the wire — see the file note.
-            alerts = (snap.data()?["securityAlerts"] as? Bool) ?? true
+            alerts = (snap.data()?["securityAlerts"] as? Bool) ?? false
         } catch {
             self.error = error.localizedDescription
         }
