@@ -399,7 +399,8 @@ struct OfficialChatView: View {
     private var bellButton: ChatNavigationItem.BarButton {
         ChatNavigationItem.BarButton(
             id: "bell",
-            image: store.state.isMutedNow ? "ic_bell_off" : "ic_bell",
+            // Outline, not filled (owner, 2026-10-14).
+            image: store.state.isMutedNow ? "ic_bell_off_outline" : "ic_bell_outline",
             accessibilityLabel: store.state.isMutedNow ? "Notifications off" : "Notifications on",
             action: { store.setMuted(!store.state.isMutedNow) })
     }
