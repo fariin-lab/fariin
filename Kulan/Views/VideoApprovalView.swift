@@ -503,7 +503,9 @@ struct VideoApprovalView: View {
             // typing needs the space, and trimming while typing isn't a real flow.
             if !captionFocused {
                 if !thumbnails.isEmpty && duration > 0 {
-                    trimStrip
+                    // Owner 2026-10-14: the trim bar arrives the way the caption bar does, a 0.15s
+                    // fade in place. It popped in when its filmstrip finished loading.
+                    trimStrip.transition(.opacity)
                 } else {
                     // RESERVE the strip's slot while the filmstrip loads: the strip appearing LATE grew
                     // the bottom inset after the first frame, so the video fitted BIG first and re-fitted
@@ -516,6 +518,7 @@ struct VideoApprovalView: View {
         }
         .padding(.bottom, 8)
         .animation(.easeInOut(duration: 0.2), value: captionFocused)
+        .animation(.easeInOut(duration: 0.15), value: thumbnails.isEmpty || duration <= 0)
     }
 
     // THE shared trimmer (VideoTrimStrip) — one implementation for the single editor AND the multi
