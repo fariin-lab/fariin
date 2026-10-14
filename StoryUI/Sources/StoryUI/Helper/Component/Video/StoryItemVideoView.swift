@@ -597,13 +597,13 @@ final class StoryItemVideoView: UIView {
         // changes this property SYNCHRONOUSLY, so an inline call re-entered `startIfBuffered`, which
         // called `playImmediately` again, until the stack ran out. See also `kickedThisWait`.
         reasonObservation = p.observe(\.reasonForWaitingToPlay, options: [.new]) { [weak self] pl, _ in
-            self.trace("reason \(pl.reasonForWaitingToPlay?.rawValue ?? "nil")")
+            self?.trace("reason \(pl.reasonForWaitingToPlay?.rawValue ?? "nil")")
             DispatchQueue.main.async { self?.startIfBuffered() }
         }
 
         // Every new run of buffered bytes is a chance to start: see `startIfBuffered`.
         bufferObservation = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] i, _ in
-            self.trace("buffered to \(String(format: "%.2f", i.loadedTimeRanges.map { ($0.timeRangeValue.start + $0.timeRangeValue.duration).seconds }.max() ?? 0))s")
+            self?.trace("buffered to \(String(format: "%.2f", i.loadedTimeRanges.map { ($0.timeRangeValue.start + $0.timeRangeValue.duration).seconds }.max() ?? 0))s")
             guard let self else { return }
             if Thread.isMainThread { self.startIfBuffered() }
             else { DispatchQueue.main.async { self.startIfBuffered() } }
