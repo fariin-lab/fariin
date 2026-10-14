@@ -389,10 +389,11 @@ struct DevicesView: View {
                 // This screen was three paragraphs of grey for two rows of content, and the sentence
                 // that matters ("it stops straight away") was buried at the end of the longest one.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("If you do not recognise a device, sign it out. It stops receiving messages and calls straight away.")
+                    // Owner 2026-10-14: "explains too much". One short line each.
+                    Text("Sign out any device you don't recognise.")
                     // The 24-hour rule, said up front rather than only as an error after tapping.
                     if let left = freshLeft, left > 0, !others.isEmpty {
-                        Text("This device signed in less than 24 hours ago, so for your security it can sign out other devices in about \(Int((left / 3600).rounded(.up))) h.")
+                        Text("You can sign out other devices in about \(Int((left / 3600).rounded(.up))) h.")
                     }
                 }
             }
