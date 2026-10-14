@@ -1393,7 +1393,8 @@ struct ThreadView: View {
 
     // First half of the picker chain (story/image/video viewers, camera source, etc.).
     private var threadPickersA: some View {
-        threadCovers
+        // Split point (see `SplitBody`): the covers and the navigation bar are built in their own update.
+        SplitBody { threadCovers }
         // (No story cover here any more: a reply quote opens through `StoryDoor`, on the app's own
         // presentation, so the scroll-down close is the same gesture here as everywhere else. It was
         // the last of the six doors still running Apple's zoom.)
@@ -1667,7 +1668,8 @@ struct ThreadView: View {
 
     // Fifth slice of the picker chain (link/not-found/pdf/reaction/forward/group/info), erased boundary.
     private var threadPickersD: some View {
-        AnyView(threadPickersC)
+        // Split point (see `SplitBody`): pickers C, B and A are built in their own update.
+        AnyView(SplitBody { threadPickersC })
         // ONE link-confirm + one not-found alert for the whole conversation (hoisted out of every bubble:
         // ~40 live cells each carried their own presentation machinery, anchored inside recyclable cells).
         .confirmationDialog("Open link?",
@@ -11376,4 +11378,19 @@ private struct PinBarMenuButton: UIViewRepresentable {
         items.append(UIAction(title: "See All", image: UIImage(systemName: "list.bullet")) { _ in c.onSeeAll() })
         b.menu = UIMenu(children: items)
     }
+}
+
+/// ⛔ OPENING A CHAT CRASHED ON iOS 27 — owner 2026-10-14, builds 919 and 920, two crash reports,
+/// both EXC_BAD_ACCESS "stack guard region" on the main thread while a chat was being pushed. Read
+/// from the build's dSYM: `body → threadContent → threadPickers → D → C → B → A → threadCovers →
+/// navigationBar`, nine computed views called one inside another, each frame holding copies of this
+/// very large view, and the main thread's stack (about 1 MB) ran out right there.
+///
+/// A computed property is called INLINE, inside its caller's frame. A `View` struct's body is not:
+/// SwiftUI evaluates it in its own update. Wrapping a link of the chain in `SplitBody` turns one
+/// nine-deep call into three short ones without changing what is drawn: the closure reads the same
+/// `self` the computed property did, and @State still lives in ThreadView.
+private struct SplitBody<Content: View>: View {
+    let content: () -> Content
+    var body: some View { content() }
 }
