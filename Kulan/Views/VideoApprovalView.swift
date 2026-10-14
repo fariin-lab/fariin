@@ -99,14 +99,23 @@ struct VideoApprovalView: View {
     }
     @State private var controlsH: CGFloat = VideoApprovalView.lastControlsH
 
+    /// No zoom-out first (owner 2026-10-14, as the photo editor): a zoomed X lifts off the zoomed
+    /// rect (`zoomedRect`). The keyboard still goes down first, or the close is refused.
     private func close() {
         guard sourceKey != nil else { dismiss(); return }
-        // The keyboard goes down and the zoom goes back first: a close that starts with either
-        // lifts off the wrong rect.
-        guard captionFocused || zoom > 1.01 else { closeToken += 1; return }
+        closeFlag.buttonClose = true
+        guard captionFocused else { closeToken += 1; return }
         captionFocused = false
-        withAnimation(.easeInOut(duration: 0.2)) { zoom = 1; pan = .zero }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { closeToken += 1 }
+    }
+    @State private var closeFlag = ZoomRectProbe()   // only its buttonClose flag is used here
+
+    /// Where the zoomed video is drawn: `scaleEffect` about the rest rect's centre (the view's frame
+    /// is centred on it in both layouts), then `offset` by the pan.
+    private func zoomedRect(_ rest: CGRect) -> CGRect {
+        let z = max(1, zoom)
+        let w = rest.width * z, h = rest.height * z
+        return CGRect(x: rest.midX - w / 2 + pan.width, y: rest.midY - h / 2 + pan.height, width: w, height: h)
     }
 
     private var activeURL: URL { clipList[current].url }
@@ -238,11 +247,12 @@ struct VideoApprovalView: View {
         .overlay {
             if let sourceKey, let poster {
                 MediaDismissHost(
-                    canBegin: { arrived && !captionFocused && zoom <= 1.01 && !exporting },
+                    // The X may start zoomed; a drag still needs fit (zoomed, it pans the video).
+                    canBegin: { arrived && !captionFocused && !exporting && (zoom <= 1.01 || closeFlag.buttonClose) },
                     media: {
                         let size = videoSize.width > 0 ? videoSize : poster.size
                         guard let r = Self.restRect(size, controlsH: controlsH) else { return nil }
-                        return (r, poster)
+                        return (zoom > 1.01 ? zoomedRect(r) : r, poster)
                     },
                     onHideContent: { hide in
                         dismissing = hide
@@ -256,7 +266,8 @@ struct VideoApprovalView: View {
                         // The copy IS the animation, so the cover goes without its own slide.
                         MediaPresentGate.noteDismissed()
                         withoutPresentationAnimation { dismiss() }
-                    })
+                    },
+                    copyFromMediaFrame: true)   // lift off where the video is drawn, above the tools
             }
         }
         .onAppear {

@@ -49,6 +49,9 @@ struct MediaDismissHost: UIViewRepresentable {
     /// `onHideContent(false)`, which also runs on the way OUT (a close with no copy, the dropped-
     /// dismiss recovery): the video resumes its clip here and only here (2026-09-28).
     var onCancel: () -> Void = {}
+    /// true = the copy starts on `media().frame` as given (window coords). The attach editors set it:
+    /// their media sits above the tools, or zoomed past the screen edge, not fitted to the screen.
+    var copyFromMediaFrame = false
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -239,7 +242,10 @@ struct MediaDismissHost: UIViewRepresentable {
         @discardableResult
         private func buildCopy(_ m: (frame: CGRect, image: UIImage?)) -> UIView? {
             guard let root, let win = root.window else { return nil }
-            fromFrame = m.image.map { mediaFitRect($0.size, in: root.bounds) } ?? m.frame
+            // The attach editors draw the media above their tools, or zoomed past the screen, and
+            // say exactly where: their copy lifts off that rect, not a whole-screen fit.
+            fromFrame = parent.copyFromMediaFrame ? m.frame
+                : (m.image.map { mediaFitRect($0.size, in: root.bounds) } ?? m.frame)
 
             // The lightweight copy: the image itself when loaded (a media transition image view),
             // else a live snapshot of the media's region (videos without a poster).

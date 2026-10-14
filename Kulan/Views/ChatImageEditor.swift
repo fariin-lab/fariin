@@ -47,18 +47,20 @@ struct ChatImageEditor: View {
     @State private var zoom: CGFloat = 1
     private static let zoomFitTolerance: CGFloat = 1.02
 
-    /// The viewer's rule: zoom back to fit FIRST (a zoomed live photo swapped for a fitted copy is a
-    /// visible jump), then close no matter what. The caption keyboard goes down first for the same
-    /// reason: `canBegin` refuses while it is up, and a refused button close is a plain dismiss
-    /// with no animation at all.
+    /// ⛔ NO ZOOM-OUT FIRST — owner 2026-10-14: "zoomed in, X zooms out and then closes; close it
+    /// straight away". The reference picker's X flies the photo home from its CURRENT frame
+    /// (`transitionViewContentRect` is the content view converted through the zoomed scroll view),
+    /// so the copy is built from `zoomProbe.imageWindowRect()`, the zoomed rect, and no zoom-out runs.
+    /// (The chat viewer keeps its own zoom-out-first rule; this is the attach editor only.)
+    /// The caption keyboard still goes down first: `canBegin` refuses while it is up, and a refused
+    /// button close is a plain dismiss with no animation at all.
     private func closeHome() {
-        let zoomed = zoom > Self.zoomFitTolerance
-        let typing = captionFocused
-        guard zoomed || typing else { closeToken += 1; return }
-        if zoomed { zoomOutToken += 1 }
-        if typing { captionFocused = false }
+        zoomProbe.buttonClose = true
+        guard captionFocused else { closeToken += 1; return }
+        captionFocused = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { closeToken += 1 }
     }
+    @State private var zoomProbe = ZoomRectProbe()
 
     /// The copy IS the animation, so the cover goes without its own slide.
     private func instantDismiss() {
@@ -150,9 +152,16 @@ struct ChatImageEditor: View {
                 MediaDismissHost(
                     // Never while drawing, cropping, typing a caption, or zoomed in: each of those
                     // owns the vertical drag.
-                    canBegin: { arrived && !isDrawing && !showCrop && !captionFocused && zoom <= Self.zoomFitTolerance },
+                    // The X may start zoomed (see closeHome); a drag still needs fit, since a
+                    // zoomed drag is the photo's own pan.
+                    canBegin: { arrived && !isDrawing && !showCrop && !captionFocused
+                                && (zoom <= Self.zoomFitTolerance || zoomProbe.buttonClose) },
                     media: {
                         let img = edited
+                        if zoomProbe.buttonClose, zoom > Self.zoomFitTolerance,
+                           let r = zoomProbe.imageWindowRect() {
+                            return (r, img)   // lift off exactly where the zoomed photo is drawn
+                        }
                         guard let r = Self.restRect(img.size, chromeH: bottomChromeH) else { return nil }
                         return (r, img)
                     },
@@ -161,7 +170,8 @@ struct ChatImageEditor: View {
                     targetId: { sourceKey },
                     clipRect: { MediaOpenRects.attachClipRect },
                     closeToken: closeToken,
-                    onDismiss: { instantDismiss() })
+                    onDismiss: { instantDismiss() },
+                    copyFromMediaFrame: true)
             }
         }
         // Swipe DOWN anywhere on the canvas closes the keyboard (reads the drag without consuming it).
@@ -296,7 +306,8 @@ struct ChatImageEditor: View {
                               // Video-editor parity: the zoomed photo overflows the letterboxed canvas and
                               // covers the full screen at high zoom (no top/bottom borders); chrome floats.
                               clipsZoomOverflow: false,
-                              zoomOutToken: zoomOutToken)
+                              zoomOutToken: zoomOutToken,
+                              probe: zoomProbe)
                     .frame(width: area.width, height: area.height)
             }
         }

@@ -893,9 +893,12 @@ struct ZoomImageView: UIViewControllerRepresentable {
     /// Identity of the PHOTO, not of the UIImage object. Given one, a reload happens only when this
     /// changes — see updateUIViewController for why that matters.
     var imageKey: String? = nil
+    /// Lets the owner ask where the photo is on screen right now, zoom included (attach editor's X).
+    var probe: ZoomRectProbe? = nil
 
     func makeUIViewController(context: Context) -> ZoomImageController {
         let vc = ZoomImageController()
+        probe?.controller = vc
         vc.image = image
         vc.onSingleTap = onSingleTap
         vc.onZoom = onZoom
@@ -935,6 +938,14 @@ struct ZoomImageView: UIViewControllerRepresentable {
     }
 }
 
+/// A handle on a `ZoomImageView`'s controller, held by its owner (see `ZoomImageView.probe`).
+final class ZoomRectProbe {
+    weak var controller: ZoomImageController?
+    /// Set by the attach editor's X: this close may start zoomed in, from `imageWindowRect`.
+    var buttonClose = false
+    func imageWindowRect() -> CGRect? { controller?.imageWindowRect() }
+}
+
 final class ZoomImageController: UIViewController, UIScrollViewDelegate {
     var image: UIImage!
     var onSingleTap: (() -> Void)?
@@ -957,6 +968,13 @@ final class ZoomImageController: UIViewController, UIScrollViewDelegate {
     // Editor swaps the image (filter/crop applied) — refresh in place, keeping the zoom view.
     /// Return this page to fit. the reference app zooms out BEFORE dismissing - swapping a zoomed live view for an
     /// unzoomed transition copy is visible as a jump, which their own source calls "perceptible".
+    /// The photo's frame in window coordinates as drawn now: zoomed and panned, it is bigger than
+    /// the screen and offset, which is exactly where a close copy has to lift off from.
+    func imageWindowRect() -> CGRect? {
+        guard let imageView, imageView.window != nil else { return nil }
+        return imageView.convert(imageView.bounds, to: nil)
+    }
+
     func zoomOutToFit(animated: Bool) {
         guard let sv = scrollView, sv.zoomScale != sv.minimumZoomScale else { return }
         sv.setZoomScale(sv.minimumZoomScale, animated: animated)
