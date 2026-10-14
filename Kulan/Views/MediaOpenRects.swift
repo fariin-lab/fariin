@@ -182,9 +182,11 @@ import Combine
     /// read only through the closures the chat wires up, so other screens (gallery, profile) are
     /// unaffected by a stale value.
     static var clipRect: CGRect?
-    /// The same thing for the attach sheet's photo grid: its scroll view's frame, written by the grid.
-    /// A tile half under the sheet's top edge flies out from behind that edge, not over it.
-    static var attachClipRect: CGRect?
+    /// The same thing for the attach sheet's photo grid: its scroll view's frame, asked of the view
+    /// itself (the grid carries a `MediaViewAnchor` under this key). A tile half under the sheet's top
+    /// edge flies out from behind that edge, not over it. Nil once the grid is gone.
+    static let attachGridKey = key(.attach, "grid")
+    static var attachClipRect: CGRect? { liveViewRect(attachGridKey) }
 }
 
 /// Whether a media bubble should render itself, so a transition can HIDE the tile it is flying to or
@@ -247,7 +249,7 @@ import Combine
 /// A `.background` of the same content, so its frame IS the content's frame, and it draws nothing.
 /// Only the story hero reads these: every other caller still uses the written-down rect, so the
 /// chat media pipeline is untouched.
-private struct MediaViewAnchor: UIViewRepresentable {
+struct MediaViewAnchor: UIViewRepresentable {
     let key: String
     func makeUIView(context: Context) -> UIView {
         let v = Anchor()
