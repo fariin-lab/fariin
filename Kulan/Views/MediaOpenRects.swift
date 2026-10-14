@@ -29,7 +29,8 @@ import Combine
     /// others do — a rectangle in window coordinates and the real corner radius — and because a
     /// second dictionary answering the same question is how the three chat scopes ended up
     /// overwriting each other in the first place.
-    enum Scope: String { case chat, gallery, profile, album, storyRow }
+    /// `attach` is the attach sheet's photo grid, keyed by PHAsset local identifier.
+    enum Scope: String { case chat, gallery, profile, album, storyRow, attach }
     static func key(_ scope: Scope, _ id: String) -> String { "\(scope.rawValue)|\(id)" }
 
     static func capture(_ key: String, _ rect: CGRect, cornerRadius: CGFloat) {
@@ -181,6 +182,9 @@ import Combine
     /// read only through the closures the chat wires up, so other screens (gallery, profile) are
     /// unaffected by a stale value.
     static var clipRect: CGRect?
+    /// The same thing for the attach sheet's photo grid: its scroll view's frame, written by the grid.
+    /// A tile half under the sheet's top edge flies out from behind that edge, not over it.
+    static var attachClipRect: CGRect?
 }
 
 /// Whether a media bubble should render itself, so a transition can HIDE the tile it is flying to or

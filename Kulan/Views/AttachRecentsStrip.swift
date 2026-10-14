@@ -139,8 +139,10 @@ struct AttachRecentsStrip: View {
     /// Dismiss the sheet. The ✕ that used to call this is gone (owner, 2026-09-02: no header, swipe
     /// down to close) — SEND still calls it, which is the one place the sheet closes itself.
     var onClose: () -> Void = {}
-    var onPickPhoto: (UIImage) -> Void
-    var onPickVideo: (URL) -> Void                              // TAP a video → open the trim editor
+    /// The photo, and the PHAsset id of the tile it was tapped on: the editor flies out of that tile
+    /// and back into it (`MediaOpenRects.Scope.attach`).
+    var onPickPhoto: (UIImage, String) -> Void
+    var onPickVideo: (URL) -> Void                             // TAP a video → open the trim editor
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
     var onSendMixed: ([ApprovalMedia], String, String?) -> Void = { _, _, _ in }   // items, caption, clientId of the already-posted bubble
@@ -452,6 +454,10 @@ struct AttachRecentsStrip: View {
             // ⛔ NO SIDE MARGIN AND NO TOP GAP — see `tileGap`. The photographs reach all four
             // edges of the sheet; the only curve is the one the presentation cuts for itself.
         }
+        // The region a tile may be drawn in while the editor flies out of it or back into it.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+            MediaOpenRects.attachClipRect = $0
+        }
         // ⛔ NO TOP MARGIN — owner, 2026-09-02. It existed to hold the first row clear of an opaque
         // header, and there is no header. The photos begin at the sheet's own top edge, which is the
         // whole of what "no header" looks like; the system drag indicator floats over them, exactly
@@ -693,7 +699,7 @@ struct AttachRecentsStrip: View {
             if a.mediaType == .video {
                 if let url = await Self.videoURL(a) { await MainActor.run { onPickVideo(url) } }
             } else if let ui = await Self.fullImage(a) {
-                await MainActor.run { onPickPhoto(ui) }
+                await MainActor.run { onPickPhoto(ui, a.localIdentifier) }
             }
         }
     }
@@ -1028,6 +1034,9 @@ private struct RecentThumb: View {
                 }
                 .buttonStyle(.plain)
             }
+            // Reports the tile's window rect for the editor's fly-out and fly-home, and hides the
+            // whole tile (circle too, as the reference app hides the cell) while the copy covers it.
+            .modifier(MediaRectReporter(id: asset.localIdentifier, scope: .attach, cornerRadius: 0))
             .task(id: asset.localIdentifier) {
             // Request through the CACHING manager with the exact precache params: pre-warmed thumbs
             // return instantly (the "images coming late" fix); anything not warmed loads as before.

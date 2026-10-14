@@ -23,9 +23,62 @@ struct ChatImageEditor: View {
     // closes the SHEET, which takes the whole stack down in ONE motion. Self-dismissing first revealed
     // the sheet for a beat before it closed (the flash the user reported).
     var selfDismissOnSend: Bool = true
+    /// Opened from a tile in the attach sheet's grid (`MediaOpenRects.key(.attach, assetId)`): the X
+    /// and a drag down fly the photo back INTO that tile, through the same `MediaDismissHost` the chat
+    /// viewer closes with. Nil keeps the plain close for every other caller.
+    var sourceKey: String? = nil
     @Environment(\.dismiss) private var dismiss
 
-    private func close() { if inline { onClose?() } else { dismiss() } }
+    private func close() {
+        if sourceKey != nil, !inline { closeHome() }
+        else if inline { onClose?() } else { dismiss() }
+    }
+
+    // MARK: Fly home to the attach tile (sourceKey != nil)
+
+    @State private var dismissing = false   // a close is flying → the live photo hidden, the copy shows it
+    @State private var closeToken = 0       // bump → MediaDismissHost runs the button close as a fly-home
+    @State private var zoomOutToken = 0
+    @State private var zoom: CGFloat = 1
+    private static let zoomFitTolerance: CGFloat = 1.02
+
+    /// The viewer's rule: zoom back to fit FIRST (a zoomed live photo swapped for a fitted copy is a
+    /// visible jump), then close no matter what.
+    private func closeHome() {
+        if zoom > Self.zoomFitTolerance {
+            zoomOutToken += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { closeToken += 1 }
+        } else {
+            closeToken += 1
+        }
+    }
+
+    /// The copy IS the animation, so the cover goes without its own slide.
+    private func instantDismiss() {
+        MediaPresentGate.noteDismissed()
+        withoutPresentationAnimation { dismiss() }
+    }
+
+    /// The last measured height of the bottom tools, so the OPEN can land on the rest rect before the
+    /// editor exists to measure it. 118 is the same first guess `bottomChromeH` starts from.
+    private static var lastChromeH: CGFloat = 118
+
+    /// Where the photo sits at rest, in window coordinates. The open flies onto it and the close
+    /// lifts off it, so it is the SAME arithmetic as `canvasArea` + `canvasView`: the safe-area box,
+    /// minus the bottom tools and the 12pt gap, top-anchored, the photo aspect-fit inside.
+    static func restRect(_ image: CGSize, chromeH: CGFloat? = nil) -> CGRect? {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
+        let inset = window.safeAreaInsets, b = window.bounds
+        let width = b.width - inset.left - inset.right
+        let height = max(0, b.height - inset.top - inset.bottom - (chromeH ?? lastChromeH) - 12)
+        return mediaFitRect(image, in: CGRect(x: inset.left, y: inset.top, width: width, height: height))
+    }
+
+    /// 9:16 or taller gets rounded corners at rest; the open lands on the same radius.
+    static func restCornerRadius(_ image: CGSize) -> CGFloat {
+        image.width > 0 && image.height >= image.width * (16.0 / 9.0) - 1 ? 22 : 0
+    }
 
     @State private var viewOnce = false   // view-once: recipient can open the photo exactly once
     @State private var penHue = 0.01      // palette slider (0 = white end); default RED (user spec
@@ -73,9 +126,31 @@ struct ChatImageEditor: View {
             Color.black.ignoresSafeArea()
             // FULL-SCREEN image (matches the multi-image editor): the photo fills the screen and the
             // tools/caption float over it. Canvas, drawing layer, and flatten all share this rect.
+            // Only the photo hides while a close flies; the black and the tools stay live and are
+            // faded with the finger by MediaDismissHost (the root's alpha), as in the chat viewer.
             canvasView(canvasArea(size))
+                .opacity(dismissing ? 0 : 1)
             chromeOverlay
             cropOverlay
+        }
+        .overlay {
+            if let sourceKey, !inline {
+                MediaDismissHost(
+                    // Never while drawing, cropping, typing a caption, or zoomed in: each of those
+                    // owns the vertical drag.
+                    canBegin: { !isDrawing && !showCrop && !captionFocused && zoom <= Self.zoomFitTolerance },
+                    media: {
+                        let img = edited
+                        guard let r = Self.restRect(img.size, chromeH: bottomChromeH) else { return nil }
+                        return (r, img)
+                    },
+                    onHideContent: { dismissing = $0 },
+                    targetRect: { MediaOpenRects.rect(sourceKey) },
+                    targetId: { sourceKey },
+                    clipRect: { MediaOpenRects.attachClipRect },
+                    closeToken: closeToken,
+                    onDismiss: { instantDismiss() })
+            }
         }
         // Swipe DOWN anywhere on the canvas closes the keyboard (reads the drag without consuming it).
         .simultaneousGesture(
@@ -87,6 +162,8 @@ struct ChatImageEditor: View {
             recomputeEdited()
             if startDrawing { isDrawing = true }
         }
+        // The cover is really gone: release a tap on another tile that came in while it was leaving.
+        .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }
         .onChange(of: size) { _, s in canvasSize = canvasArea(s) }
         .onChange(of: bottomChromeH) { _, _ in canvasSize = canvasArea(size) }
         .onChange(of: filterIndex) { _, _ in recomputeEdited() }
@@ -129,8 +206,8 @@ struct ChatImageEditor: View {
             .background(
                 GeometryReader { g in
                     Color.clear
-                        .onAppear { if !captionFocused { bottomChromeH = g.size.height } }
-                        .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h } }
+                        .onAppear { if !captionFocused { bottomChromeH = g.size.height; Self.lastChromeH = g.size.height } }
+                        .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h; Self.lastChromeH = h } }
                 }
             )
         }
@@ -196,10 +273,12 @@ struct ChatImageEditor: View {
                 // screen); tall (9:16+) images get rounded corners on the IMAGE itself via cornerRadius
                 // (kept visually constant across zoom). Normal ratios: cornerRadius 0 → unchanged.
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
+                              onZoom: { zoom = $0 },   // gates the drag-close, as in the viewer
                               cornerRadius: isTallMedia ? 22 : 0,
                               // Video-editor parity: the zoomed photo overflows the letterboxed canvas and
                               // covers the full screen at high zoom (no top/bottom borders); chrome floats.
-                              clipsZoomOverflow: false)
+                              clipsZoomOverflow: false,
+                              zoomOutToken: zoomOutToken)
                     .frame(width: area.width, height: area.height)
             }
         }
