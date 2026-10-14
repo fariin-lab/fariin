@@ -1974,8 +1974,12 @@ struct FloatingCallWindow: View {
                                     let (_, maxDown) = limits(geo.size)
                                     let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
                                     let inward = stashedLeft ? v.translation.width : -v.translation.width
-                                    // Inward: the card follows 1:1 until it is fully out, then stiffens.
-                                    pull = inward > 0 ? (inward <= w ? inward : w + rubber(inward - w, 20)) : 0
+                                    // Inward: the card follows 1:1 the whole way, out of the edge and on
+                                    // across the screen (owner 2026-10-14: once it is out he wants to move it
+                                    // left and right without lifting the finger first). It stiffens only
+                                    // past the far side, where a normal drag stops too.
+                                    let across = geo.size.width - 12
+                                    pull = inward > 0 ? (inward <= across ? inward : across + rubber(inward - across, 20)) : 0
                                     // Outward has nowhere to go: a little give on the handle, not a second exit.
                                     let give = inward < 0 ? -rubber(-inward, 30) : 0
                                     tabDrag = CGSize(width: stashedLeft ? give : -give, height: y)
@@ -1991,6 +1995,35 @@ struct FloatingCallWindow: View {
                                         tabDrag = CGSize(width: tabDrag.width, height: base.height + tabDrag.height - y)
                                         base = CGSize(width: base.width, height: y)
                                         offset = base
+                                    }
+                                    // Carried past where it rests (12pt in): it is a card being dragged now.
+                                    // It becomes the real card at exactly that spot and lands like any
+                                    // card drag, on the side the throw is heading for, at this height.
+                                    if pull > w + 12 {
+                                        let (maxLeft, _) = limits(geo.size)
+                                        let beyond = pull - (w + 12)
+                                        let xNow = stashedLeft ? maxLeft + beyond : -beyond
+                                        let thrownX = xNow + v.predictedEndTranslation.width - v.translation.width
+                                        let x: CGFloat = thrownX < maxLeft / 2 ? maxLeft : 0
+                                        let stretch = tabDrag.height
+                                        withTransaction(t) {
+                                            base = CGSize(width: xNow, height: y)
+                                            offset = base
+                                            dragLive = CGSize(width: 0, height: stretch)
+                                            pull = 0
+                                            tabDrag = .zero
+                                            call.cardStashed = false
+                                        }
+                                        DispatchQueue.main.async {
+                                            withAnimation(landingSpring(from: CGSize(width: xNow, height: y + stretch),
+                                                                        to: CGSize(width: x, height: y),
+                                                                        velocity: v.velocity)) {
+                                                base = CGSize(width: x, height: y)
+                                                offset = base
+                                                dragLive = .zero
+                                            }
+                                        }
+                                        return
                                     }
                                     guard inward >= w * 0.3 || inwardSpeed > 400 else {
                                         withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
