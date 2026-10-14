@@ -1855,6 +1855,17 @@ enum CallZoomSource {
 /// A view whose parent can never make it re-run: `==` is always true, so SwiftUI skips its body on
 /// a parent update and runs it only when something its OWN body read (an @Observable property)
 /// changes. For content that must stay still while its container moves under a finger.
+/// A clear UIView that takes the touch, so nothing underneath (a list's pans) sees it. SwiftUI
+/// gestures on it still run: they are recognisers on the hosting view, an ancestor of this one.
+private struct TouchShield: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
 private struct FrozenCardContent<Content: View>: View, Equatable {
     let content: () -> Content
     static func == (lhs: Self, rhs: Self) -> Bool { true }
@@ -1964,7 +1975,14 @@ struct FloatingCallWindow: View {
                         .allowsHitTesting(false)
                     // What a finger can hold: the handle at rest, the whole card once it is coming out.
                     // Only this is touchable, so the hidden card never covers the list behind it.
-                    Color.clear
+                    // ⛔ A REAL UIView UNDER THE FINGER (owner 2026-10-14: on the RIGHT edge the arrow
+                    // did not follow, on the left it did). A plain `Color.clear` is not a UIView, so the
+                    // touch hit-tested through it to the chat list behind, and the list's own pans got
+                    // it too. Pulling the right-hand tab is a drag to the LEFT, which is the list's
+                    // swipe-to-reply direction, so the list won and the tab never moved; the left-hand
+                    // tab drags right, which nothing behind claims. With a view here the touch belongs
+                    // to the tab alone, on both sides.
+                    TouchShield()
                         .frame(width: tabW + max(0, pull), height: pull > 0 ? h : tabH)
                         .contentShape(Rectangle())
                         .offset(y: (pull > 0 ? 0 : (h - tabH) / 2) + tabDrag.height)
