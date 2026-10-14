@@ -85,10 +85,10 @@ struct ChatImageEditor: View {
         return mediaFitRect(image, in: CGRect(x: inset.left, y: inset.top, width: width, height: height))
     }
 
-    /// 9:16 or taller gets rounded corners at rest; the open lands on the same radius.
-    static func restCornerRadius(_ image: CGSize) -> CGFloat {
-        image.width > 0 && image.height >= image.width * (16.0 / 9.0) - 1 ? 22 : 0
-    }
+    /// The corner the picture rests with, and the open lands on. 0 for every shape now.
+    /// Owner 2026-10-14: no rounded card on tall photos and videos, just the picture ("don't add border, just make it photo").
+    /// Tall (9:16+) media had 22pt corners, which read as a frame around the picture.
+    static func restCornerRadius(_ image: CGSize) -> CGFloat { 0 }
 
     @State private var viewOnce = false   // view-once: recipient can open the photo exactly once
     @State private var penHue = 0.01      // palette slider (0 = white end); default RED (user spec
@@ -318,7 +318,7 @@ struct ChatImageEditor: View {
                 // (kept visually constant across zoom). Normal ratios: cornerRadius 0 → unchanged.
                 ZoomImageView(image: edited, onSingleTap: { captionFocused = false },
                               onZoom: { zoom = $0 },   // gates the drag-close, as in the viewer
-                              cornerRadius: isTallMedia ? 22 : 0,
+                              cornerRadius: 0,   // Owner 2026-10-14: no rounded card on tall photos and videos, just the picture ("don't add border, just make it photo").
                               // Video-editor parity: the zoomed photo overflows the letterboxed canvas and
                               // covers the full screen at high zoom (no top/bottom borders); chrome floats.
                               clipsZoomOverflow: false,
