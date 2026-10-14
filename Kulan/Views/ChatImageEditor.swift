@@ -144,7 +144,11 @@ struct ChatImageEditor: View {
             chromeOverlay
                 // Opened out of an attach tile: the tools fade in over 0.15s (the reference
                 // picker's interface fade) instead of appearing all at once when the photo lands.
-                .opacity(sourceKey == nil || chromeShown ? 1 : 0)
+                // ⛔ ONLY THE OPACITY ANIMATES — owner 2026-10-14: the buttons came up from the
+                // bottom. A `withAnimation` around `chromeShown` also animated the cover's first
+                // real layout, which lands in the same tick, so the tools slid into place. The
+                // scoped animation touches nothing but this opacity.
+                .animation(.easeInOut(duration: 0.15)) { $0.opacity(sourceKey == nil || chromeShown ? 1 : 0) }
             cropOverlay
         }
         .overlay {
@@ -185,7 +189,7 @@ struct ChatImageEditor: View {
             if startDrawing { isDrawing = true }
             // One hop, so the fade runs outside the no-animation transaction that presented the cover.
             if sourceKey != nil, !chromeShown {
-                DispatchQueue.main.async { withAnimation(.easeInOut(duration: 0.15)) { chromeShown = true } }
+                DispatchQueue.main.async { chromeShown = true }   // animated by the scoped .animation only
             }
         }
         // Nothing is tappable until the photo has landed (the reference blocks touches in flight too).

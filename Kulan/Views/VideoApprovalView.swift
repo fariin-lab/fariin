@@ -219,7 +219,8 @@ struct VideoApprovalView: View {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 66)).foregroundStyle(.white.opacity(0.85))
                     .allowsHitTesting(false)
-                    .opacity(dismissing ? 0 : chromeOpacity)
+                    .opacity(dismissing ? 0 : 1)   // a close hides it at once, as before
+                    .animation(.easeInOut(duration: 0.15)) { $0.opacity(chromeOpacity) }
             }
             if exporting {
                 ZStack { Color.black.opacity(0.4).ignoresSafeArea(); ProgressView().tint(.white).scaleEffect(1.3) }
@@ -227,7 +228,7 @@ struct VideoApprovalView: View {
         }
         // Top bar FLOATS over the video (X · HD) instead of sitting on a black band above it — the
         // video extends up to the top, no black "header". Only the bottom chrome insets the video.
-        .overlay(alignment: .top) { topBar.opacity(chromeOpacity) }
+        .overlay(alignment: .top) { topBar.animation(.easeInOut(duration: 0.15)) { $0.opacity(chromeOpacity) } }
         // Thumbnail RAIL (multi-video only): bottom-right of the canvas, above the trim strip — the
         // reference position. Hidden while the caption keyboard is up (the strip area is reclaimed).
         .overlay(alignment: .bottomTrailing) {
@@ -235,7 +236,7 @@ struct VideoApprovalView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomControls
-                .opacity(chromeOpacity)
+                .animation(.easeInOut(duration: 0.15)) { $0.opacity(chromeOpacity) }
                 .background(
                     GeometryReader { g in
                         Color.clear
@@ -273,7 +274,9 @@ struct VideoApprovalView: View {
         .onAppear {
             // One hop, so the fade runs outside the no-animation transaction that presented the cover.
             if sourceKey != nil, !chromeShown {
-                DispatchQueue.main.async { withAnimation(.easeInOut(duration: 0.15)) { chromeShown = true } }
+                // No withAnimation: it also animated the cover's first layout, sliding the tools up
+                // from the bottom (owner 2026-10-14). Only the scoped opacities below animate.
+                DispatchQueue.main.async { chromeShown = true }
             }
         }
         .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }
