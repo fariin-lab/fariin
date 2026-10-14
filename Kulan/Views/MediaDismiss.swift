@@ -716,10 +716,16 @@ enum MediaOpen {
     /// spring by f is the same spring with stiffness / f² and damping / f, which is what this is.
     /// Owner 2026-10-14: the house spring above made the attach open look like a "pop"; this one is
     /// slower and lands with a ~1% settle. Its background fades in a fixed 0.15s, not on the spring.
+    ///
+    /// ⛔ IT STARTS WITH A PUSH — owner 2026-10-14: "it opens in slow motion". Their curve is
+    /// `x = A(1 - e^(-βt)·cos(ωt))` (JNWAbsolutePosition, phase 0), β = damping / 2·mass = 15.625,
+    /// whose speed at t = 0 is β·A, not zero. Ours started at rest, so it eased in slowly. The same
+    /// spring through UIKit needs that start speed, in distances per second, slowed by f like the rest.
     static var attachOpenSpring: UISpringTimingParameters {
         let f: CGFloat = 1.8
+        let v0 = (25 / (2 * 0.8)) / f
         return UISpringTimingParameters(mass: 0.8, stiffness: 300 / (f * f), damping: 25 / f,
-                                        initialVelocity: .zero)
+                                        initialVelocity: CGVector(dx: v0, dy: v0))
     }
     static let attachBackdropFade: TimeInterval = 0.15
     /// How long `attachOpenSpring` takes to settle, for the corner radius that rides beside it.
