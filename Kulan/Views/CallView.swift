@@ -1949,83 +1949,64 @@ struct FloatingCallWindow: View {
     var body: some View {
         GeometryReader { geo in
             if call.cardStashed {
-                // ⛔ THE TAB FOLLOWS THE FINGER — owner, 2026-10-14: "the arrow does not follow my
-                // finger in real time, it feels delayed". Two causes, both fixed at the root: the
-                // inward pull was CAPPED at 34pt, so past that the tab simply stopped moving under
-                // the finger; and every touch wrote `call.cardOffset` (shared, observed) and two
-                // paddings, a full layout pass of this screen-sized view plus the blurred photo per
-                // event — the card's own August stutter, never fixed on the tab. The live drag is
-                // now a transform (`tabDrag`) like the card's `dragLive`, the tab's insides are
-                // frozen like the card's, and layout is written once, when the finger lifts.
-                // ⛔ THE CARD COMES OUT UNDER THE FINGER — owner 2026-10-14, six frames of the system
-                // window: pulled from its tab, the whole card slides in from the edge with the finger,
-                // blurred with the arrow on it, and both clear as it comes; let go and it settles out.
-                // Ours only nudged the tab and showed the card on release. Now the tab gives way to the
-                // real card the moment the pull starts, moved by the finger 1:1.
+                // ⛔ APPLE'S OWN PULL-OUT — owner 2026-10-14, seven frames of the system's floating
+                // window: "exactly like this animation, make sure 3 times, also wrong blur". The tab is
+                // not a separate badge. It is a HANDLE on the edge of the card itself, and the card waits
+                // just off screen, its own picture heavily blurred (the old tab painted a zoomed, blurred
+                // profile photo instead: the wrong blur). Pulled, the whole card slides out under the
+                // finger with the handle leading on its edge; the handle sinks into the card once about a
+                // third is out; the blur clears as it comes and is gone where it settles. One view,
+                // `stashedCard`, draws every stage, so the tab at rest and the card coming out can never
+                // jump between two different looks.
                 ZStack(alignment: stashedLeft ? .topLeading : .topTrailing) {
-                    if pull > 0 {
-                        let p = min(1, pull / w)
-                        FrozenCardContent { window }.equatable()
-                            .blur(radius: 12 * (1 - p))
-                            .overlay {
-                                Image(systemName: stashedLeft ? "chevron.compact.right" : "chevron.compact.left")
-                                    .font(.system(size: 26, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.9))
-                                    .opacity(1 - p)
-                            }
-                            .offset(x: stashedLeft ? pull - w : w - pull, y: tabDrag.height)
-                    } else {
-                        FrozenCardContent { stashTab }.equatable()
-                            .matchedGeometryEffect(id: Self.morphID, in: morph)
-                            .offset(tabDrag)
-                    }
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 4)
-                        .onChanged { v in
-                            let (_, maxDown) = limits(geo.size)
-                            let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
-                            let inward = stashedLeft ? v.translation.width : -v.translation.width
-                            // Inward: the card follows 1:1 until it is fully out, then stiffens.
-                            pull = inward > 0 ? (inward <= w ? inward : w + rubber(inward - w, 20)) : 0
-                            // Outward has nowhere to go: a little give on the tab, not a second exit.
-                            let give = inward < 0 ? -rubber(-inward, 30) : 0
-                            tabDrag = CGSize(width: stashedLeft ? give : -give, height: y)
-                        }
-                        .onEnded { v in
-                            let (_, maxDown) = limits(geo.size)
-                            let inward = stashedLeft ? v.translation.width : -v.translation.width
-                            let inwardSpeed = stashedLeft ? v.velocity.width : -v.velocity.width
-                            let y = min(maxDown, max(0, base.height + tabDrag.height))
-                            let comesOut = inward >= w * 0.3 || inwardSpeed > 400
-                            guard comesOut else {
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                    base = CGSize(width: base.width, height: y)
-                                    offset = base
-                                    pull = 0
-                                    tabDrag = .zero
+                    stashedCard(pull: pull)
+                        .offset(x: (stashedLeft ? pull - w : w - pull) + tabDrag.width, y: tabDrag.height)
+                        .allowsHitTesting(false)
+                    // What a finger can hold: the handle at rest, the whole card once it is coming out.
+                    // Only this is touchable, so the hidden card never covers the list behind it.
+                    Color.clear
+                        .frame(width: tabW + max(0, pull), height: pull > 0 ? h : tabH)
+                        .contentShape(Rectangle())
+                        .offset(y: (pull > 0 ? 0 : (h - tabH) / 2) + tabDrag.height)
+                        .gesture(
+                            DragGesture(minimumDistance: 4)
+                                .onChanged { v in
+                                    let (_, maxDown) = limits(geo.size)
+                                    let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
+                                    let inward = stashedLeft ? v.translation.width : -v.translation.width
+                                    // Inward: the card follows 1:1 until it is fully out, then stiffens.
+                                    pull = inward > 0 ? (inward <= w ? inward : w + rubber(inward - w, 20)) : 0
+                                    // Outward has nowhere to go: a little give on the handle, not a second exit.
+                                    let give = inward < 0 ? -rubber(-inward, 30) : 0
+                                    tabDrag = CGSize(width: stashedLeft ? give : -give, height: y)
                                 }
-                                return
-                            }
-                            // Hand over to the card where the finger left it, then let it settle on
-                            // its edge: the card's own transform starts at the peek's position.
-                            let restX: CGFloat = stashedLeft ? 12 : geo.size.width - w - 12
-                            let peekX: CGFloat = stashedLeft ? pull - w : geo.size.width - pull
-                            var t = Transaction(); t.disablesAnimations = true
-                            withTransaction(t) {
-                                base = CGSize(width: base.width, height: y)
-                                offset = base
-                                dragLive = CGSize(width: peekX - restX, height: 0)
-                                pull = 0
-                                tabDrag = .zero
-                                call.cardStashed = false
-                            }
-                            DispatchQueue.main.async {
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { dragLive = .zero }
-                            }
-                        }
-                )
+                                .onEnded { v in
+                                    let (_, maxDown) = limits(geo.size)
+                                    let inward = stashedLeft ? v.translation.width : -v.translation.width
+                                    let inwardSpeed = stashedLeft ? v.velocity.width : -v.velocity.width
+                                    let y = min(maxDown, max(0, base.height + tabDrag.height))
+                                    // Height is committed where the finger left it, without a jump.
+                                    var t = Transaction(); t.disablesAnimations = true
+                                    withTransaction(t) {
+                                        tabDrag = CGSize(width: tabDrag.width, height: base.height + tabDrag.height - y)
+                                        base = CGSize(width: base.width, height: y)
+                                        offset = base
+                                    }
+                                    guard inward >= w * 0.3 || inwardSpeed > 400 else {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                            pull = 0
+                                            tabDrag = .zero
+                                        }
+                                        return
+                                    }
+                                    bringOut(geo.size)
+                                }
+                        )
+                        .onTapGesture { bringOut(geo.size) }
+                        .accessibilityElement()
+                        .accessibilityLabel("Back to the call")
+                        .accessibilityAddTraits(.isButton)
+                }
                 .padding(.top, insets.top + 8 + min(base.height, max(0, limits(geo.size).1)))
                 .frame(maxWidth: .infinity, maxHeight: .infinity,
                        alignment: stashedLeft ? .topLeading : .topTrailing)
@@ -2124,25 +2105,27 @@ struct FloatingCallWindow: View {
                                 let flickLeft = !startedRight && v.velocity.width < -1200 && thrown.width < maxLeft - w * 0.6
                                 if ended.width > stashAt || ended.width < maxLeft - stashAt || flickRight || flickLeft {
                                     let x: CGFloat = (ended.width > stashAt || flickRight) ? 0 : maxLeft
-                                    // ⛔ OWNER 2026-10-14 (screen recording): swiping the card off to hide
-                                    // it showed the arrow tab in the middle of the screen, flying in from
-                                    // the card's HOME. The drag is a transform, so the card's layout frame
-                                    // was still at the spot the drag started from, and the tab's morph
-                                    // (matchedGeometryEffect reads layout) started there. Fold the drag
-                                    // into the layout first, with no animation, so the card's real frame
-                                    // is where it is on screen; then morph into the tab from there. The
-                                    // same hand-over the tab already does when the card is pulled out.
+                                    // ⛔ HIDING IS THE PULL-OUT RUN BACKWARDS (owner 2026-10-14). The card
+                                    // becomes the hidden card at exactly the spot it is on screen (its
+                                    // visible extent becomes `pull`, its height offset `tabDrag`), with no
+                                    // animation, and then slides into its handle, blurring as it goes. The
+                                    // drag is a transform, so the layout frame was still at the spot the
+                                    // drag started from: morphing from it flew the tab across the screen.
+                                    let toLeft = x < 0
+                                    let startPull = max(0, toLeft ? geo.size.width - 12 + ended.width : 12 + w - ended.width)
                                     var t = Transaction(); t.disablesAnimations = true
                                     withTransaction(t) {
-                                        base = ended
+                                        base = CGSize(width: x, height: y)
                                         offset = base
                                         dragLive = .zero
+                                        pull = startPull
+                                        tabDrag = CGSize(width: 0, height: ended.height - y)
+                                        call.cardStashed = true
                                     }
                                     DispatchQueue.main.async {
-                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                            base = CGSize(width: x, height: y)
-                                            offset = base
-                                            call.cardStashed = true
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                                            pull = 0
+                                            tabDrag = .zero
                                         }
                                     }
                                     return
@@ -2211,48 +2194,76 @@ struct FloatingCallWindow: View {
     /// left of it, so the drag has already recorded this and there is no second flag to keep in step.
     private var stashedLeft: Bool { base.width < 0 }
 
-    /// THE TAB. ⛔ OWNER 2026-10-13, with a picture: a slim rounded tab flush with the edge, the call
-    /// blurred behind it and a white chevron pointing back in — not the green wedge with the clock
-    /// (his 2026-08-23 pick, reversed by him). The blur is the other person's photo, so it reads as
-    /// the card tucked away rather than a button.
+    /// THE HIDDEN CARD AND ITS HANDLE, as one piece, for every stage from tab to card (owner
+    /// 2026-10-14, the system window's own frames). `pull` is how far the card is out of the edge, in
+    /// points: 0 shows only the handle; `w + 12` is the card at rest, 12pt in from the edge.
     ///
-    /// Tap brings the card back and does nothing else — never the full call screen, which is one more
-    /// tap on the card itself. Dragging it is handled where the geometry is, at the call site.
-    private var stashTab: some View {
-        let inner: CGFloat = 12   // the system tab's, measured (see `tabW`)
-        let shape = UnevenRoundedRectangle(
-            topLeadingRadius: stashedLeft ? 0 : inner, bottomLeadingRadius: stashedLeft ? 0 : inner,
-            bottomTrailingRadius: stashedLeft ? inner : 0, topTrailingRadius: stashedLeft ? inner : 0,
+    /// The picture is the card's own (`cardPicture`), blurred hard while it is mostly hidden and
+    /// clearing as it comes out. The handle shows the same blurred picture: the picture is stretched
+    /// sideways by the handle's width, which cannot be seen under this much blur, and cut to the card
+    /// plus the handle. The handle rides the card's edge until about a fifth of the card is out, then
+    /// sinks into it, chevron and all.
+    private func stashedCard(pull: CGFloat) -> some View {
+        let p = max(0, min(1, pull / w))
+        let blur = 28 * (1 - p * p)
+        let handle = max(0, min(1, 1 - (pull - w * 0.2) / (w * 0.15)))
+        let reach = tabW * handle                 // how far the handle sticks out past the card's edge
+        let edge: Alignment = stashedLeft ? .trailing : .leading
+        let tongue = UnevenRoundedRectangle(
+            topLeadingRadius: stashedLeft ? 0 : 12, bottomLeadingRadius: stashedLeft ? 0 : 12,
+            bottomTrailingRadius: stashedLeft ? 12 : 0, topTrailingRadius: stashedLeft ? 12 : 0,
             style: .continuous)
-        return ZStack {
-            Color(white: 0.35)
-            AvatarView(name: call.otherName, photoUrl: call.otherPhotoUrl, size: tabH)
-                .scaleEffect(1.6)
-                .blur(radius: 14)
-            Color.black.opacity(0.18)
-            Image(systemName: stashedLeft ? "chevron.compact.right" : "chevron.compact.left")
-                .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+        return FrozenCardContent { cardPicture }.equatable()
+            .blur(radius: blur, opaque: true)
+            .scaleEffect(x: (w + reach) / w, y: 1, anchor: stashedLeft ? .leading : .trailing)
+            .mask(alignment: edge) {
+                ZStack(alignment: edge) {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .frame(width: w, height: h)
+                    // Starts 20pt inside the card so the join has no gap; sticks out by `reach`.
+                    tongue
+                        .frame(width: tabW + 20, height: tabH)
+                        .offset(x: stashedLeft ? reach : -reach)
+                }
+            }
+            .overlay(alignment: edge) {
+                Image(systemName: stashedLeft ? "chevron.compact.right" : "chevron.compact.left")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: tabW, height: tabH)
+                    .offset(x: stashedLeft ? reach : -reach)
+                    .opacity(handle)
+            }
+            .frame(width: w, height: h)
+            .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
+    }
+
+    /// The card's picture alone (voice or video), at card size, without the border and shadow that
+    /// `window` adds. The video half carries the call's one picture-in-picture source, so while the
+    /// card is hidden this view keeps it alive (Audit M-053: a hidden video call needs one, and only
+    /// one of card / hidden card exists at a time).
+    private var cardPicture: some View {
+        Group {
+            if call.isVideo { videoWindow } else { voiceWindow }
         }
-        // Size BEFORE the clip: the blurred photo is tabH wide, so clipping first cut the shape at
-        // 120pt and the 32pt frame after it clipped nothing (owner 2026-10-13: "cut that area").
-        .frame(width: tabW, height: tabH)
-        .clipShape(shape)
-        // Audit M-053, 2026-10-07: the PiP source view lived only on the video CARD, so a video call
-        // parked as this tab had none, and leaving the app then had no window to detach into: the
-        // capture was interrupted and the other side dropped to the avatar. The tab carries one too
-        // (only one of card / tab exists at a time, so there is still a single source).
-        .background {
-            if call.isVideoCall {
-                CallView.CallPiPHost(feeds: call.pipFeeds).allowsHitTesting(false)
+        .frame(width: w, height: h)
+    }
+
+    /// Out of the edge to where the card rests (12pt in), then the hidden card hands over to the real
+    /// one at exactly that spot, so nothing jumps and the blur has already cleared on the way.
+    private func bringOut(_ size: CGSize) {
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) {
+            pull = w + 12
+            tabDrag = .zero
+        } completion: {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) {
+                pull = 0
+                tabDrag = .zero
+                dragLive = .zero
+                call.cardStashed = false
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { call.cardStashed = false }
-        }
-        .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
-        .accessibilityLabel("Back to the call")
     }
 
     /// ⛔ ALWAYS ATTACHED. IT IS NOT WHAT SHOOK THE CARD, AND SWITCHING IT OFF MID-DRAG IS WHAT
