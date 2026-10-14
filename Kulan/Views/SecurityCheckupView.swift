@@ -28,7 +28,9 @@ final class SecurityCheckup {
     var password: Status = .checking
     var devices: Status = .checking
     /// Other devices signed in since the last review, for the "missing" line.
-    private(set) var unreviewedCount = 0
+    var unreviewedCount: Int { unreviewed.count }
+    /// Those devices themselves, for the "Is this you?" page.
+    private(set) var unreviewed: [DeviceSession] = []
     private var running = false
 
     func run() async {
@@ -42,9 +44,9 @@ final class SecurityCheckup {
         passkey = await a
         chatKey = await b
         password = await c
-        let (status, count) = await d
+        let (status, list) = await d
         devices = status
-        unreviewedCount = count
+        unreviewed = list
     }
 
     private static func date(_ d: Date) -> String {
@@ -81,18 +83,18 @@ final class SecurityCheckup {
 
     /// The device list straight from the server (`fetchOnce` reads with `source: .server`). Every
     /// other device signed in after the last review counts as unreviewed.
-    private static func checkDevices() async -> (Status, Int) {
-        guard let list = try? await DeviceRegistry.shared.fetchOnce() else { return (.failed, 0) }
+    private static func checkDevices() async -> (Status, [DeviceSession]) {
+        guard let list = try? await DeviceRegistry.shared.fetchOnce() else { return (.failed, []) }
         let others = list.filter { !$0.isThisDevice }
         let reviewed = reviewedAt()
         let unreviewed = others.filter { s in
             guard let reviewed else { return true }
             return (s.createdAt ?? .distantFuture) > reviewed
         }
-        if !unreviewed.isEmpty { return (.missing, unreviewed.count) }
+        if !unreviewed.isEmpty { return (.missing, unreviewed) }
         let total = list.count == 1 ? "Only this device" : "\(list.count) devices"
-        guard let reviewed else { return (.done(total), 0) }
-        return (.done("\(total) · reviewed \(reviewed.formatted(.relative(presentation: .named)))"), 0)
+        guard let reviewed else { return (.done(total), []) }
+        return (.done("\(total) · reviewed \(reviewed.formatted(.relative(presentation: .named)))"), [])
     }
 
     // MARK: Device review
@@ -104,7 +106,7 @@ final class SecurityCheckup {
         guard let k = reviewKey() else { return nil }
         return UserDefaults.standard.object(forKey: k) as? Date
     }
-    /// Looking at the device list is the review: called when the checkup sends you to it.
+    /// Called when the owner answers "Yes, these are mine" on the review page.
     static func markDevicesReviewed() {
         guard let k = reviewKey() else { return }
         UserDefaults.standard.set(Date(), forKey: k)
@@ -116,9 +118,10 @@ struct SecurityCheckupSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var check = SecurityCheckup()
     @State private var path: [Item] = []
+    @State private var detent: PresentationDetent = .fraction(0.7)
     private var profile = ProfileStore.shared
 
-    enum Item: Hashable { case passkey, chatKey, password }
+    enum Item: Hashable { case passkey, chatKey, password, devices }
 
     private struct Entry: Identifiable {
         let id: String
@@ -144,9 +147,11 @@ struct SecurityCheckupSheet: View {
                                                            : "Review \(check.unreviewedCount) new devices",
                   why: "Make sure you recognise every device signed in to your account.",
                   status: check.devices, open: {
-                      // The list is on the page behind this sheet; going there IS the review.
-                      SecurityCheckup.markDevicesReviewed()
-                      dismiss()
+                      // ⛔ THE OWNER SAYS YES — owner 2026-10-14: "how does a user say I am sure".
+                      // New devices open an "Is this you?" page (the reference app's new-login
+                      // question); only its Yes marks them reviewed. A tick row has nothing new to
+                      // confirm, so it goes to the full list behind this sheet.
+                      if check.unreviewed.isEmpty { dismiss() } else { path.append(.devices) }
                   }),
             Entry(id: "chatKey", title: "Chat Key", missingTitle: "Set a Chat Key",
                   why: "People who know your Chat Key can start a chat with you.",
@@ -225,10 +230,18 @@ struct SecurityCheckupSheet: View {
                 case .password:
                     PasswordView(address: AuthService.shared.passwordAddress ?? "",
                                  isFirstPassword: check.password == .missing)
+                case .devices:
+                    DeviceReviewPage(devices: check.unreviewed,
+                                     onYes: {
+                                         SecurityCheckup.markDevicesReviewed()
+                                         path.removeAll()   // back to the checkup, which asks again
+                                     },
+                                     onNo: { dismiss() })   // the Devices page is behind this sheet
                 }
             }
         }
-        .presentationDetents([.large])
+        // Owner 2026-10-14: opens at 70% of the screen; drag up for the rest.
+        .presentationDetents([.fraction(0.7), .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .task { await check.run() }
         // Back from a setup page: ask again, so the tick follows what was just done.
@@ -300,5 +313,80 @@ struct SecurityCheckupSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(action == nil)
+    }
+}
+
+/// "Is this you?" for devices that signed in since the last review: the reference app's new-login
+/// question. Yes marks them reviewed; No goes to the Devices page, where any of them can be signed out.
+private struct DeviceReviewPage: View {
+    let devices: [DeviceSession]
+    let onYes: () -> Void
+    let onNo: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                VStack(spacing: 8) {
+                    Text(devices.count == 1 ? "Is this you?" : "Are these you?")
+                        .font(.title2.weight(.bold))
+                    Text(devices.count == 1
+                         ? "This device signed in to your account. Check that you recognise it."
+                         : "These devices signed in to your account. Check that you recognise each one.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 0) {
+                    ForEach(devices) { d in
+                        HStack(spacing: 14) {
+                            DeviceTile(session: d, size: 40)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(d.displayName).font(.body.weight(.semibold))
+                                Text(detail(d)).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        if d.id != devices.last?.id { Divider().padding(.leading, 70) }
+                    }
+                }
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 28)
+            .padding(.bottom, 24)
+        }
+        .background(Color(.systemGroupedBackground))
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 4) {
+                Button(action: onYes) {
+                    Text(devices.count == 1 ? "Yes, it's me" : "Yes, these are mine")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .background(Color.blue, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Button(action: onNo) {
+                    Text("No, it's not me")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+            .background(Color(.systemGroupedBackground))
+        }
+    }
+
+    /// "Kampala, Uganda · signed in 3 days ago"; the place is left out until the server has one.
+    private func detail(_ d: DeviceSession) -> String {
+        let when = d.createdAt.map { "signed in \($0.formatted(.relative(presentation: .named)))" } ?? "signed in"
+        return d.location.isEmpty ? when.prefix(1).uppercased() + when.dropFirst() : "\(d.location) · \(when)"
     }
 }
