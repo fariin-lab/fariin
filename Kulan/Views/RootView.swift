@@ -35,6 +35,8 @@ struct RootView: View {
     // The session ended because the account was disabled (a suspension from the admin panel), not
     // because another device signed this one out. 2026-10-13.
     @State private var endedBySuspension = false
+    /// The server refused this phone: the account is already on `DeviceRegistry.maxDevices` devices.
+    @State private var endedByDeviceLimit = false
     @State private var userLinkAlert: String?   // 2026-09-24 fix-all #167
     /// audit M-098, 2026-10-07: true while the lock or the switcher blank is drawn in its own window
     /// above the call screens (see `PrivacyShield`); the in-tree copies below are then skipped.
@@ -273,10 +275,13 @@ struct RootView: View {
         // as tapping Sign Out here, then back to the front door with a word about why.
         .onChange(of: devices.revoked) { _, revoked in
             guard revoked else { return }
+            // Read before the teardown, which resets it.
+            let overLimit = DeviceRegistry.shared.refusedForLimit
             Task {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
                 endedBySuspension = false
+                endedByDeviceLimit = overLimit
                 showRevokedNotice = true
             }
         }
@@ -306,14 +311,18 @@ struct RootView: View {
                 await DeviceRegistry.shared.performRevokedSignOut()
                 await route()
                 endedBySuspension = suspended
+                endedByDeviceLimit = false
                 showRevokedNotice = true
             }
         }
-        .alert(endedBySuspension ? "Account suspended" : "Signed out", isPresented: $showRevokedNotice) {
+        .alert(endedBySuspension ? "Account suspended"
+               : endedByDeviceLimit ? "Too many devices" : "Signed out", isPresented: $showRevokedNotice) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(endedBySuspension
                  ? "This account can't be used right now. If you think this is a mistake, contact us at fariin.com/help."
+                 : endedByDeviceLimit
+                 ? "Your account is already signed in on \(DeviceRegistry.maxDevices) devices. On one of them, open Settings > Devices and sign out a device you no longer use, then sign in here again."
                  : "This device was signed out from another device.")
         }
         // 2026-09-24 fix-all #167: see `openPendingUserLink`.

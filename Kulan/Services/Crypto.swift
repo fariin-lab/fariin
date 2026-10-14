@@ -818,6 +818,24 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Like `get`, but tells "not there" (`notFound`) apart from "could not be read right now" (the
+    /// phone has not been unlocked since it started), which `get` reports the same way.
+    static func lookup(_ key: String) -> (value: String?, notFound: Bool) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else {
+            return (nil, status == errSecItemNotFound)
+        }
+        return (String(data: data, encoding: .utf8), false)
+    }
+
     @discardableResult
     static func set(_ key: String, _ value: String) -> Bool {
         let data = Data(value.utf8)

@@ -51,8 +51,50 @@ final class DeviceRegistry: ObservableObject {
     /// whole feature rather than invent an id that would multiply on every launch.
     /// `nonisolated` because `DeviceSession` (a plain struct, built off the Firestore callback)
     /// compares against it.
-    nonisolated static var thisDeviceId: String {
-        UIDevice.current.identifierForVendor?.uuidString ?? ""
+    ///
+    /// ⛔ ONE PHONE, ONE RECORD, ACROSS REINSTALLS — 2026-10-14, for the five-device limit.
+    /// `identifierForVendor` is a new value after the app is deleted and installed again, so the
+    /// same phone came back as a second device and the stale record counted against the limit. The
+    /// first id this install ever used is kept in the Keychain (`ThisDeviceOnly`: never synced to
+    /// another phone, never restored onto one) and reused. An existing install adopts its current
+    /// `identifierForVendor`, so no record anywhere changes id.
+    nonisolated static let thisDeviceId: String = {
+        let key = "device.installId"
+        let read = Keychain.lookup(key)
+        if let saved = read.value, !saved.isEmpty { return saved }
+        let vendor = UIDevice.current.identifierForVendor?.uuidString ?? ""
+        // Saved only when the Keychain answered "not there". Locked (a launch before the first
+        // unlock) is a different answer: writing then could replace an id it simply cannot read.
+        if read.notFound, !vendor.isEmpty { Keychain.set(key, vendor) }
+        return vendor
+    }()
+
+    /// ⛔ A NEW SIGN-IN CANNOT SIGN OUT OLDER DEVICES FOR 24 HOURS — owner, 2026-10-14. The reference
+    /// messenger's rule, from its API docs (`FRESH_RESET_AUTHORISATION_FORBIDDEN`: "You can't logout
+    /// other sessions if less than 24 hours have passed since you logged on the current session").
+    /// The clock is this sign-in's `auth_time`, which the server signs into the token, so nothing on
+    /// the phone can move it. The SERVER enforces it (firestore.rules, devices; revokeDeviceSessions);
+    /// this copy only lets the page say so before asking.
+    nonisolated static let freshSessionWindow: TimeInterval = 24 * 60 * 60
+
+    /// Seconds until this sign-in may sign out other devices; 0 once it can. nil when it could not be
+    /// read, which callers treat as "unknown" and leave to the server.
+    func freshSessionRemaining() async -> TimeInterval? {
+        guard let result = try? await Auth.auth().currentUser?.getIDTokenResult() else { return nil }
+        let left = result.authDate.addingTimeInterval(Self.freshSessionWindow).timeIntervalSinceNow
+        return max(0, left)
+    }
+
+    /// Set together with `revoked` when the server refused this phone because the account is
+    /// already on `maxDevices` devices, so the notice can say that instead of "signed out".
+    @Published private(set) var refusedForLimit = false
+    nonisolated static let maxDevices = 5
+
+    /// The server's note that it removed this phone's new record for the device limit.
+    private func wasRefusedForLimit(_ uid: String) async -> Bool {
+        let ref = db.collection("users").document(uid).collection("deviceRefusals").document(Self.thisDeviceId)
+        guard let snap = try? await ref.getDocument(source: .server) else { return false }
+        return snap.exists
     }
 
     private func devices(_ uid: String) -> CollectionReference {
@@ -102,6 +144,7 @@ final class DeviceRegistry: ObservableObject {
             let fromServer = try await ref.getDocument(source: .server)
             existing = fromServer
             if !fromServer.exists && hadRegistered {
+                refusedForLimit = await wasRefusedForLimit(uid)
                 revoked = true
                 return
             }
@@ -111,12 +154,30 @@ final class DeviceRegistry: ObservableObject {
 
         // First sign-in on this device sets the date it started. Written only when the record
         // is new, so "signed in on" keeps meaning the first time, not the last launch.
-        if existing?.exists != true { data["createdAt"] = FieldValue.serverTimestamp() }
+        if existing?.exists != true {
+            data["createdAt"] = FieldValue.serverTimestamp()
+            // When this sign-in happened, as the server signed it into the token. The rules check it
+            // equals the token's own `auth_time`, so it cannot be backdated; it is what lets this
+            // phone remove its OWN record inside its first 24 hours (signing out) while still
+            // refusing it everybody else's. Left out if the token cannot be read; the rules allow that.
+            if let at = try? await Auth.auth().currentUser?.getIDTokenResult().authDate {
+                data["authTime"] = Int(at.timeIntervalSince1970)
+            }
+        }
 
+        // Tokens that came in before the record existed ride on this write.
+        data.merge(pendingTokens) { $1 }
+        pendingTokens = [:]
         do {
             try await ref.setData(data, merge: true)
             UserDefaults.standard.set(true, forKey: marker)
             registered = true
+            // …and any that arrived while it was in flight.
+            if !pendingTokens.isEmpty {
+                let late = pendingTokens
+                pendingTokens = [:]
+                writeTokenFields(late)
+            }
             watchThisDevice()
             startHeartbeat()   // the registration write IS the first beat; this keeps it honest after
             // "Location: Kampala, Uganda" on the device sheet (owner, 2026-09-30). The SERVER works
@@ -132,6 +193,10 @@ final class DeviceRegistry: ObservableObject {
             // A failed write must NOT arm the watcher: it would see no record and sign the
             // user out of a device that simply never managed to register.
             registered = false
+            // Keep the tokens for the next attempt (SessionRecovery calls `start` again).
+            for (k, v) in data where k == "fcmToken" || k == "voipToken" {
+                if pendingTokens[k] == nil { pendingTokens[k] = v }
+            }
         }
     }
 
@@ -200,16 +265,22 @@ final class DeviceRegistry: ObservableObject {
 
     /// Keep the push tokens on the record, so signing this device out from another phone can
     /// strip exactly this device's tokens and nothing else.
-    func recordFCMToken(_ token: String) {
-        guard let uid, !Self.thisDeviceId.isEmpty else { return }
-        devices(uid).document(Self.thisDeviceId)
-            .setData(["fcmToken": token, "lastSeenAt": FieldValue.serverTimestamp()], merge: true)
-    }
+    func recordFCMToken(_ token: String) { writeTokenFields(["fcmToken": token]) }
 
-    func recordVoipToken(_ token: String) {
+    func recordVoipToken(_ token: String) { writeTokenFields(["voipToken": token]) }
+
+    /// Push tokens that arrived before this phone's record existed (2026-10-14). A record may only be
+    /// CREATED with the server's `createdAt` (firestore.rules, devices), and a token write landing
+    /// first used to create it bare. They wait here and ride on the registration write, or are
+    /// written straight after it.
+    private var pendingTokens: [String: Any] = [:]
+
+    private func writeTokenFields(_ fields: [String: Any]) {
         guard let uid, !Self.thisDeviceId.isEmpty else { return }
-        devices(uid).document(Self.thisDeviceId)
-            .setData(["voipToken": token, "lastSeenAt": FieldValue.serverTimestamp()], merge: true)
+        guard registered else { pendingTokens.merge(fields) { $1 }; return }
+        var data = fields
+        data["lastSeenAt"] = FieldValue.serverTimestamp()
+        devices(uid).document(Self.thisDeviceId).setData(data, merge: true)
     }
 
     /// Watch our own record. If it stops existing, another device signed us out.
@@ -231,7 +302,10 @@ final class DeviceRegistry: ObservableObject {
             // `isFromCache` matters: offline, Firestore reports a document it has never seen as
             // missing. Only the SERVER's word that it is gone counts as a sign-out.
             guard let snap, !snap.metadata.isFromCache, !snap.exists else { return }
-            Task { @MainActor in self.revoked = true }
+            Task { @MainActor in
+                if let uid = self.uid { self.refusedForLimit = await self.wasRefusedForLimit(uid) }
+                self.revoked = true
+            }
         }
     }
 
@@ -244,6 +318,7 @@ final class DeviceRegistry: ObservableObject {
         try? Auth.auth().signOut()
         SessionWipe.wipeAccountData()
         revoked = false
+        refusedForLimit = false
     }
 
     /// Normal sign-out on this phone: drop our own record so it does not linger as a ghost
@@ -304,6 +379,8 @@ final class DeviceRegistry: ObservableObject {
     func signOut(deviceId: String) async throws {
         guard let uid else { throw AuthFlowError.notSignedIn }
         guard deviceId != Self.thisDeviceId else { return }   // use Sign Out for this phone
+        // The 24-hour rule, said before asking. The server refuses it anyway; this is the sentence.
+        if let left = await freshSessionRemaining(), left > 0 { throw DeviceSignOutError.tooNew(left) }
 
         let ref = devices(uid).document(deviceId)
         let snap = try await ref.getDocument()
@@ -336,13 +413,20 @@ final class DeviceRegistry: ObservableObject {
             batch.setData(pushRemovals, forDocument: user.collection("push").document("tokens"), merge: true)
         }
         batch.deleteDocument(ref)
-        try await batch.commit()
+        do {
+            try await batch.commit()
+        } catch let e as NSError where e.domain == FirestoreErrorDomain
+                                    && e.code == FirestoreErrorCode.permissionDenied.rawValue {
+            // The server's 24-hour rule (our clock may have said otherwise).
+            throw DeviceSignOutError.tooNew(nil)
+        }
         // 2026-09-25: and its saved-account one-tap key (DeviceSessionKeys), so that phone asks for
         // the password next time instead of signing straight back in.
         await DeviceSessionKeys.revoke(deviceIds: [deviceId])
     }
 
     func signOutAllOthers(_ sessions: [DeviceSession]) async throws {
+        if let left = await freshSessionRemaining(), left > 0 { throw DeviceSignOutError.tooNew(left) }
         for s in sessions where !s.isThisDevice {
             try await signOut(deviceId: s.id)
         }
@@ -435,4 +519,21 @@ enum DeviceNames {
         "iPhone18,1": "iPhone 17 Pro", "iPhone18,2": "iPhone 17 Pro Max",
         "iPhone18,3": "iPhone 17", "iPhone18,4": "iPhone Air",
     ]
+}
+
+/// Why signing another device out was refused.
+enum DeviceSignOutError: LocalizedError {
+    /// This sign-in is under 24 hours old (`DeviceRegistry.freshSessionWindow`). The time left
+    /// when known; nil when only the server said so.
+    case tooNew(TimeInterval?)
+
+    var errorDescription: String? {
+        switch self {
+        case .tooNew(let left):
+            let base = "For your security, a device signed in less than 24 hours ago can't sign out other devices. Use a device you have been signed in on longer"
+            guard let left, left > 0 else { return base + ", or try again later." }
+            let hours = Int((left / 3600).rounded(.up))
+            return base + ", or try again in \(hours == 1 ? "1 hour" : "\(hours) hours")."
+        }
+    }
 }

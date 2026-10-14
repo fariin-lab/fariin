@@ -641,8 +641,46 @@ service cloud.firestore {
       // iOS version, app version, first/last seen and its push tokens. Private to the
       // owner in both directions - only you can see where you are signed in, and
       // deleting a doc here is how you sign that device out.
+      // ⛔ A NEW SIGN-IN CANNOT SIGN OUT OLDER DEVICES — owner, 2026-10-14. "If device B can
+      // immediately remove device A, the person who owns the account loses it." The reference
+      // messenger's rule, from its own API docs: a session may not log out other sessions until 24
+      // hours after it logged on (`FRESH_RESET_AUTHORISATION_FORBIDDEN`).
+      //
+      // Signing a device out IS deleting its record here, so the delete is the gate. The clock is
+      // the token's `auth_time` — the moment THIS sign-in happened, signed by the auth server — and
+      // `request.time` is the server's clock, so neither end is the phone's to set.
+      //
+      //   settled  ⇔  request.time ≥ auth_time + 24 h
+      //   delete   ⇔  owner ∧ (settled ∨ record.authTime == auth_time)
+      //
+      // The second clause is a phone removing ITS OWN record when it signs out in its first day: the
+      // record carries the `auth_time` of the sign-in that created it, which `create` proves equals
+      // the token's, and which no update may change — otherwise a new sign-in could copy its own
+      // value onto an older device's record and then delete it as "its own".
+      //
+      // `createdAt` is the server's time on create and fixed after, so the device limit (oldest five
+      // stay, enforced by the server's `enforceDeviceLimit`) cannot be dodged by backdating.
       match /devices/{deviceId} {
-        allow read, write: if signedIn() && request.auth.uid == uid;
+        function sessionSettled() {
+          return request.time >= timestamp.value(request.auth.token.auth_time * 1000) + duration.value(24, 'h');
+        }
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.get('createdAt', null) == request.time
+          && (!('authTime' in request.resource.data)
+              || request.resource.data.authTime == request.auth.token.auth_time);
+        allow update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+          && request.resource.data.get('authTime', null) == resource.data.get('authTime', null);
+        allow delete: if signedIn() && request.auth.uid == uid
+          && (sessionSettled() || resource.data.get('authTime', -1) == request.auth.token.auth_time);
+      }
+
+      // Written only by the server (`enforceDeviceLimit`) when it refused a new device because the
+      // account was already on five; the refused phone reads it to say why it was signed out.
+      match /deviceRefusals/{deviceId} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
       }
 
       // 2026-10-13: the app's own connection log (DiagLog), sent after a "dead until relaunch"
