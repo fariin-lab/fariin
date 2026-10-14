@@ -730,7 +730,8 @@ enum MediaOpen {
     /// the rest along the same path (its overshoot at damping ratio ~0.81), starting with a push and
     /// coming to rest at the peak as the spring does; then 0.5s easing back to the rest. The corner
     /// radius keeps its curve over the 0.4s; the black fades in 0.15s.
-    static let attachOpenPhases = OpenPhases(open: 0.4, settle: 0.5, overshoot: 0.013)
+    // Owner 2026-10-14 later: 0.6s open, 1.3s settle back (was 0.4 / 0.5); the black stays 0.15s.
+    static let attachOpenPhases = OpenPhases(open: 0.6, settle: 1.3, overshoot: 0.013)
     static let attachBackdropFade: TimeInterval = 0.15
 
     struct OpenPhases {
