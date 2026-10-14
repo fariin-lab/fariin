@@ -1884,9 +1884,12 @@ struct FloatingCallWindow: View {
     // Hiding it to the side.
     private let overshoot: CGFloat = 70   // how far past the edge a drag is allowed to pull it
     private let stashAt: CGFloat = 42     // let go beyond this and it parks as a tab
-    private let tabW: CGFloat = 32        // owner 2026-10-13: a slim edge tab, not the wedge
-    /// Owner 2026-10-14, with a picture: shorter, cut top and bottom where he marked (was 120).
-    private let tabH: CGFloat = 88
+    /// ⛔ APPLE'S OWN STASH TAB'S SIZE — owner, 2026-10-14: "exactly copy size the native one".
+    /// Measured from his two screenshots, same phone: the system tab is 66x264 px, ours (32pt wide)
+    /// was 88 px wide, so 2.75 px/pt (a 430pt-wide screen) and the system tab is 24 x 96 pt with
+    /// ~12pt inner corners. Was 32 x 120 (then 88 tall for one unshipped commit).
+    private let tabW: CGFloat = 24
+    private let tabH: CGFloat = 96
     private let pullBack: CGFloat = 22    // pulled at least this far → the card comes back
 
     /// Live drag on the tab, as a transform. Transient by design: it is either mid-gesture or zero,
@@ -2160,7 +2163,7 @@ struct FloatingCallWindow: View {
     /// Tap brings the card back and does nothing else — never the full call screen, which is one more
     /// tap on the card itself. Dragging it is handled where the geometry is, at the call site.
     private var stashTab: some View {
-        let inner: CGFloat = 14
+        let inner: CGFloat = 12   // the system tab's, measured (see `tabW`)
         let shape = UnevenRoundedRectangle(
             topLeadingRadius: stashedLeft ? 0 : inner, bottomLeadingRadius: stashedLeft ? 0 : inner,
             bottomTrailingRadius: stashedLeft ? inner : 0, topTrailingRadius: stashedLeft ? inner : 0,
