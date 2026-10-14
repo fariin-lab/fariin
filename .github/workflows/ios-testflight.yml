@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CHAT CRASH FIX, CALL CARD PULL-OUT, NO BLUR ON PHOTOS.
+            THIS BUILD: EXACT OPENING TIMINGS.
+            Attach sheet: a photo, a video or a selection opens in 0.4 seconds to a slight zoom past full size, then settles back over 0.5 seconds; the black behind fades in 0.15 seconds.
+            PLEASE TEST: open photos and videos from the attach sheet and watch the opening and the settle.
+
+            EARLIER: CHAT CRASH FIX, CALL CARD PULL-OUT, NO BLUR ON PHOTOS.
             Chats: opening a chat no longer crashes on iOS 27 (builds 919 and 920 crashed here).
             Call card: the edge tab is now a handle on the hidden card itself, showing the call blurred. Pull it and the whole card slides out with the handle leading; the blur clears as it comes. Hiding it slides it off from where it is, not from the corner.
             Attach sheet: a photo or video opens sharp straight away, never blurred first. The opening is slower, with a long gentle settle at the end. The top-left X also shows in the folder list and inside a folder.
