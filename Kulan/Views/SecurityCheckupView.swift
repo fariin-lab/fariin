@@ -145,7 +145,7 @@ struct SecurityCheckupSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var check = SecurityCheckup()
-    @State private var path: [Item] = []
+    @State private var open: Item?
     @State private var detent: PresentationDetent = .fraction(0.8)
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
@@ -155,7 +155,10 @@ struct SecurityCheckupSheet: View {
     }
     private var profile = ProfileStore.shared
 
-    enum Item: Hashable { case passkey, chatKey, password, devices }
+    enum Item: Hashable, Identifiable {
+        case passkey, chatKey, password, devices
+        var id: Self { self }
+    }
 
     private struct Entry: Identifiable {
         let id: String
@@ -171,11 +174,11 @@ struct SecurityCheckupSheet: View {
         return [
             Entry(id: "passkey", title: "Passkey", missingTitle: "Create a passkey",
                   why: "Sign in with Face ID. There is no password for anyone to steal.",
-                  status: check.passkey, open: { path.append(.passkey) }),
+                  status: check.passkey, open: { open = .passkey }),
             Entry(id: "password", title: "Password",
                   missingTitle: passwordSet ? "Password" : "Set a password",
                   why: "A password lets you sign in again if you lose this phone.",
-                  status: check.password, open: { path.append(.password) }),
+                  status: check.password, open: { open = .password }),
             Entry(id: "devices", title: "Where you're signed in",
                   missingTitle: check.unreviewedCount == 1 ? "Review 1 new device"
                                                            : "Review \(check.unreviewedCount) new devices",
@@ -185,16 +188,16 @@ struct SecurityCheckupSheet: View {
                       // New devices open an "Is this you?" page (the reference app's new-login
                       // question); only its Yes marks them reviewed. A tick row has nothing new to
                       // confirm, so it goes to the full list behind this sheet.
-                      if check.unreviewed.isEmpty { dismiss() } else { path.append(.devices) }
+                      if check.unreviewed.isEmpty { dismiss() } else { open = .devices }
                   }),
             Entry(id: "chatKey", title: "Chat Key", missingTitle: "Set a Chat Key",
                   why: "People who know your Chat Key can start a chat with you.",
-                  status: check.chatKey, open: { path.append(.chatKey) }),
+                  status: check.chatKey, open: { open = .chatKey }),
         ]
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
                     header
@@ -266,7 +269,12 @@ struct SecurityCheckupSheet: View {
                 .background(Color(.systemGroupedBackground))
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: Item.self) { item in
+        }
+        // ⛔ FROM THE BOTTOM, NOT THE RIGHT — owner 2026-10-14: "page is coming right side, make it
+        // coming bottom". Each setup page is its own sheet over the checkup (it used to be pushed
+        // inside it), with its own bar and an X, and its own dismiss() closes just that sheet.
+        .sheet(item: $open, onDismiss: { Task { await check.run() } }) { item in
+            NavigationStack {
                 Group {
                     switch item {
                     case .passkey: PasskeysView()
@@ -278,33 +286,31 @@ struct SecurityCheckupSheet: View {
                         DeviceReviewPage(devices: check.unreviewed,
                                          onYes: {
                                              check.confirmDevices()
-                                             path.removeAll()   // back to the checkup, which asks again
+                                             open = nil   // back to the checkup, which asks again
                                          },
-                                         onNo: { dismiss() })   // the Devices page is behind this sheet
+                                         onNo: {
+                                             // The Devices page is behind the checkup: close both.
+                                             open = nil
+                                             dismiss()
+                                         })
                     }
                 }
-                // ⛔ SAY "VISIBLE" ON THE PUSHED PAGE — owner 2026-10-14: its back button and title
-                // sat too high, then moved into place seconds later. The first page hides the bar
-                // and the pushed pages never said otherwise, so the bar was placed from that stale
-                // hidden state until the sheet next re-rendered (the server check landing, which is
-                // why "Are these you?", a page that loads nothing, fixed itself too).
-                .toolbar(.visible, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        CloseXButton(diameter: 44) { open = nil }
+                    }
+                }
             }
+            .presentationDragIndicator(.visible)
         }
         // ⛔ TALL ENOUGH FOR EVERYTHING — owner 2026-10-14: at 70% the last rows needed a scroll;
         // "always show all of it". The sheet is the content's own height (rows + Continue), never
-        // taller than the screen allows. A setup page pushed inside it gets the full height.
-        // ONE height at a time: with a second, taller stop the sheet could be dragged up and the
-        // Continue bar was left floating mid-sheet (owner's screenshot).
-        .presentationDetents(path.isEmpty ? [fitDetent] : [.large], selection: $detent)
-        .onChange(of: contentH) { _, _ in if path.isEmpty { detent = fitDetent } }
-        .onChange(of: path) { _, now in withAnimation { detent = now.isEmpty ? fitDetent : .large } }
+        // taller than the screen allows. ONE height: with a second, taller stop the sheet could be
+        // dragged up and the Continue bar was left floating mid-sheet (owner's screenshot).
+        .presentationDetents([fitDetent], selection: $detent)
+        .onChange(of: contentH) { _, _ in detent = fitDetent }
         .presentationDragIndicator(.visible)
         .task { await check.run() }
-        // Back from a setup page: ask again, so the tick follows what was just done.
-        .onChange(of: path) { _, now in
-            if now.isEmpty { Task { await check.run() } }
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await check.run() } }
         }
