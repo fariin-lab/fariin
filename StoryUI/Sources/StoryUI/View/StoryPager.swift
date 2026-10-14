@@ -801,6 +801,10 @@ struct StoryPager: UIViewControllerRepresentable {
 
         func cubePager(_ pager: StoryCubePagerVC, didSettleOn vc: UIViewController, committed: Bool) {
                 StoryPager.personTurnActive = false
+            // Owner 2026-10-14 (the reference app's next clip moves within a frame of landing): the
+            // landed page re-takes its play decision NOW, after everything below, instead of on its
+            // next 0.05s tick. `resumeStory` from `endTurn` arrives before the flag above comes down.
+            defer { NotificationCenter.default.post(name: .storyTurnLanded, object: nil) }
             // ⚠️ THE TURN IS OVER BEFORE ANY EARLY RETURN CAN SKIP SAYING SO. THIS ORDER IS THE BUG.
             //
             // `isTurning = false` and the replay used to sit BELOW the `pendingLanding` branch, and

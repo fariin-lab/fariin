@@ -253,4 +253,7 @@ public extension Notification.Name {
     /// A story clip's WHOLE file has finished downloading (`StoryPrefetcher.warmWhole`). Object: its
     /// url string. A prepared neighbour still on the stream moves onto the file while out of sight.
     static let storyWholeFileReady = Notification.Name("storyWholeFileReady")
+    /// A person turn has landed and `StoryPager.personTurnActive` is down: pages re-take their play
+    /// decision at once (`StoryDetailView.syncVideoMode`).
+    static let storyTurnLanded = Notification.Name("storyTurnLanded")
 }

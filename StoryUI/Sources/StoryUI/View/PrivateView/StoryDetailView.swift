@@ -952,6 +952,10 @@ struct StoryDetailView: View {
         .onReceive(timer) { _ in
             startProgress()
         }
+        // The cube has landed: play now, not on the next tick (see `storyTurnLanded`).
+        .onReceive(NotificationCenter.default.publisher(for: .storyTurnLanded)) { _ in
+            syncVideoMode()
+        }
         // (The reaction effect used to stop the bar and the clip here through `isTimerRunning`. It
         // no longer does — see `videoMode`. Only taps are still held off while it flies.)
         .onChange(of: keyboardManager.isKeyboardOpen) { open in
