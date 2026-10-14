@@ -267,20 +267,28 @@ struct SecurityCheckupSheet: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Item.self) { item in
-                switch item {
-                case .passkey: PasskeysView()
-                case .chatKey: ChatPinPage()
-                case .password:
-                    PasswordView(address: AuthService.shared.passwordAddress ?? "",
-                                 isFirstPassword: check.password == .missing)
-                case .devices:
-                    DeviceReviewPage(devices: check.unreviewed,
-                                     onYes: {
-                                         check.confirmDevices()
-                                         path.removeAll()   // back to the checkup, which asks again
-                                     },
-                                     onNo: { dismiss() })   // the Devices page is behind this sheet
+                Group {
+                    switch item {
+                    case .passkey: PasskeysView()
+                    case .chatKey: ChatPinPage()
+                    case .password:
+                        PasswordView(address: AuthService.shared.passwordAddress ?? "",
+                                     isFirstPassword: check.password == .missing)
+                    case .devices:
+                        DeviceReviewPage(devices: check.unreviewed,
+                                         onYes: {
+                                             check.confirmDevices()
+                                             path.removeAll()   // back to the checkup, which asks again
+                                         },
+                                         onNo: { dismiss() })   // the Devices page is behind this sheet
+                    }
                 }
+                // ⛔ SAY "VISIBLE" ON THE PUSHED PAGE — owner 2026-10-14: its back button and title
+                // sat too high, then moved into place seconds later. The first page hides the bar
+                // and the pushed pages never said otherwise, so the bar was placed from that stale
+                // hidden state until the sheet next re-rendered (the server check landing, which is
+                // why "Are these you?", a page that loads nothing, fixed itself too).
+                .toolbar(.visible, for: .navigationBar)
             }
         }
         // ⛔ TALL ENOUGH FOR EVERYTHING — owner 2026-10-14: at 70% the last rows needed a scroll;
