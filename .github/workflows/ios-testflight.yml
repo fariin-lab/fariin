@@ -78,6 +78,7 @@ jobs:
             Attach sheet: a photo, a video or a selection now opens in 0.7 seconds and settles back over 1.3 seconds; the black behind still fades in 0.15 seconds.
             Editors: tall photos and videos (like screen recordings) show as the plain picture, with no rounded frame around them.
             Security Checkup: opens once, already checked (no "Checking..." sheet first), as a full sheet sliding up from the very bottom.
+            Call card: the hidden card's handle is dark frosted glass (the blur could show white).
             PLEASE TEST: open photos and videos from the attach sheet and watch the opening and the settle.
 
             EARLIER: STORY UPLOAD CANCEL.
