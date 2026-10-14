@@ -108,6 +108,15 @@ struct StoryPager: UIViewControllerRepresentable {
     /// built — the same belt `dismissActive` has.
     static var personTurnActive = false
 
+    /// ⛔ THE PERSON A FINGER'S TURN STARTED FROM — owner, 2026-10-14: the next person's video
+    /// played while the cube was still turning. `didFocus` names the new person at the commit, not
+    /// at the landing, and `videoMode` asked only "is this the current person". While
+    /// `personTurnActive` is up, only this page may play (a swipe that springs back keeps playing);
+    /// every other page waits for the landing. nil for a tap's turn, which names the new person
+    /// before it starts, so nobody plays until it lands. Read only while `personTurnActive` is up,
+    /// so it needs no clearing of its own.
+    static var turnOrigin: String?
+
     /// ⛔ THE LIVE COORDINATOR, SO A TAP CAN START THE CUBE BEFORE IT WRITES THE MODEL.
     ///
     /// This exists for one reason and it is the owner's "swipe is smooth, tap lags". The two
@@ -574,6 +583,7 @@ struct StoryPager: UIViewControllerRepresentable {
             // on answering taps; these two are what stop a second tap computing its destination from
             // it. See `StoryPager.personTurnActive`.
             isTurning = true
+            StoryPager.turnOrigin = nil   // a tap's turn: nobody plays until it lands
             StoryPager.personTurnActive = true
             let land: () -> Void = { [weak self] in
                 StoryPager.personTurnActive = false
@@ -660,6 +670,7 @@ struct StoryPager: UIViewControllerRepresentable {
             let next = parent.viewModel.currentStoryUser
             isTurning = true
             // The tap's lock, raised with the sync's — see `StoryPager.personTurnActive`.
+            StoryPager.turnOrigin = nil   // the model already names the new person: nobody plays until it lands
             StoryPager.personTurnActive = true
             // ⚠️ ONE PATH. THE CUBE IS THE PERSON-TO-PERSON TURN — his 2026-08-12 ruling, after
             // comparing it against the flat slide that used to be the default here.
@@ -765,6 +776,9 @@ struct StoryPager: UIViewControllerRepresentable {
         /// landing mid-swipe passed every guard and named "the person after ME" — the page being
         /// left. That is his bounce report, and it is closed by there being one path.
         func cubePagerWillBeginTurn(_ pager: StoryCubePagerVC) {
+            // A tap's turn raised the flag (and nil'd the origin) before `navigate` got here, with
+            // the model already naming the NEW person; only a finger's turn records where it began.
+            if !StoryPager.personTurnActive { StoryPager.turnOrigin = parent.viewModel.currentStoryUser }
             StoryPager.personTurnActive = true
         }
 

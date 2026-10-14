@@ -2580,6 +2580,12 @@ private extension StoryDetailView {
         // A page that is not the one being looked at never plays, whatever its own flags say. This
         // is what stops a story you have swiped away from playing on off-screen.
         guard viewModel.currentStoryUser == model.id else { return .pause }
+        // ⛔ AND NOT WHILE THE CUBE IS STILL TURNING ONTO IT — owner, 2026-10-14: the next person's
+        // clip played on the turning face. The model names the new person at the commit, not at the
+        // landing, so the line above let it start mid-turn. Only the page the turn started from may
+        // play until it lands (`StoryPager.turnOrigin`); the progress tick re-asks every 0.05s, so
+        // the landed page starts on the first tick after the settle lowers the flag.
+        if StoryPager.personTurnActive, StoryPager.turnOrigin != model.id { return .pause }
         guard !model.stories.isEmpty else { return .pause }
         // ⚠️ AND THE ITEM ON SCREEN HAS TO BE A VIDEO, which this never asked.
         //
