@@ -149,7 +149,7 @@ struct SecurityCheckupSheet: View {
     /// ⛔ ONE SHEET, ALREADY ANSWERED — owner 2026-10-14: "it has two sheets, the loading one and the
     /// first one". It opened on four "Checking…" rows and then re-laid itself out (and resized) when
     /// the answers came. The Devices page now runs the check BEFORE presenting and hands it in here.
-    init(check: SecurityCheckup = SecurityCheckup()) { _check = State(initialValue: check) }
+    @MainActor init(check: SecurityCheckup = SecurityCheckup()) { _check = State(initialValue: check) }
     @State private var detent: PresentationDetent = .height(SecurityCheckupSheet.lastContentH + 68)
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
