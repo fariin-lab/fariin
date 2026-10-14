@@ -948,6 +948,9 @@ struct CallView: View {
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
+                        // The No answer page has only its three buttons (owner, 2026-10-14).
+                        .opacity(call.noAnswerHold ? 0 : 1)
+                        .allowsHitTesting(!call.noAnswerHold)
                         // Landscape: clear the notch side and the far side (both zero in portrait).
                         .padding(.leading, winInsets.left)
                         .padding(.trailing, winInsets.right)
@@ -998,12 +1001,17 @@ struct CallView: View {
                         .accessibilityHidden(!controlsVisible)
                         .allowsHitTesting(controlsVisible)
                     }
-                    controlBar
-                        .frame(maxWidth: .infinity)        // centered control pill
-                        .padding(.bottom, winInsets.bottom + 22)
-                        .opacity(controlsVisible ? 1 : 0)
-                        .allowsHitTesting(controlsVisible)
-                        .accessibilityHidden(!controlsVisible)   // #19, as the top bar
+                    if call.noAnswerHold {
+                        noAnswerBar
+                            .padding(.bottom, winInsets.bottom + 22)
+                    } else {
+                        controlBar
+                            .frame(maxWidth: .infinity)        // centered control pill
+                            .padding(.bottom, winInsets.bottom + 22)
+                            .opacity(controlsVisible ? 1 : 0)
+                            .allowsHitTesting(controlsVisible)
+                            .accessibilityHidden(!controlsVisible)   // #19, as the top bar
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the screen (never collapse/offset)
 
@@ -1257,6 +1265,64 @@ struct CallView: View {
     }
 
     // MARK: - Control capsule (dark, icon-only, red end)
+
+    // MARK: - No answer page
+
+    /// ⛔ THE NO ANSWER PAGE — owner, 2026-10-14, with a picture: a call I placed that nobody picked
+    /// up stays on screen (`CallService.noAnswerHold`) with the avatar, the name and "No answer"
+    /// above, and three liquid-glass circles below: Cancel, Record voice message (opens the chat
+    /// with the recorder running, his choice) and Call again. Our own call background stays.
+    private var noAnswerBar: some View {
+        HStack(alignment: .top, spacing: 0) {
+            noAnswerButton("xmark", "Cancel", tint: .white, ink: .black) { call.closeNoAnswer() }
+            noAnswerButton("mic.fill", "Record voice\nmessage", tint: nil, ink: .white) { recordVoiceNoteAfterNoAnswer() }
+            noAnswerButton("phone.fill", "Call again", tint: .green, ink: .white) { callAgainAfterNoAnswer() }
+        }
+        .padding(.horizontal, 20)
+        // Nobody is looking at it once the app has gone; it closes the way the old tail did.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            call.closeNoAnswer()
+        }
+    }
+
+    private func noAnswerButton(_ icon: String, _ label: String, tint: Color?, ink: Color,
+                                action: @escaping () -> Void) -> some View {
+        VStack(spacing: 10) {
+            Button(action: action) {
+                Image(systemName: icon)
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(ink)
+                    .frame(width: 72, height: 72)
+                    .glassEffect(tint.map { Glass.regular.tint($0).interactive() } ?? .regular.interactive(), in: .circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label.replacingOccurrences(of: "\n", with: " "))
+            Text(label)
+                .font(.system(size: 15))
+                .foregroundStyle(.white.opacity(0.6))
+                .multilineTextAlignment(.center)
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Same person, same kind of call. `startCall` closes the No answer page itself.
+    private func callAgainAfterNoAnswer() {
+        call.startCall(to: call.otherUid, name: call.otherName, photo: call.otherPhotoUrl, video: call.isVideoCall)
+    }
+
+    /// The page closes and the chat opens with the voice recorder running (`ThreadView` spends
+    /// `pendingVoiceNoteCid` when it appears).
+    private func recordVoiceNoteAfterNoAnswer() {
+        guard let me = AuthService.shared.uid, !call.otherUid.isEmpty else { call.closeNoAnswer(); return }
+        let cid = ChatService.convId(me, call.otherUid)
+        let router = AppRouter.shared
+        router.pendingChatName = call.otherName
+        router.pendingChatPhoto = call.otherPhotoUrl
+        router.pendingVoiceNoteCid = cid
+        call.closeNoAnswer()
+        router.pendingChatId = cid
+    }
 
     private var controlBar: some View {
         HStack(spacing: 14) {

@@ -91,6 +91,7 @@ final class CallService: NSObject {
 
     var state: State = .idle {
         didSet {
+            if state != .ended { noAnswerHold = false }   // the No answer page lives only in `.ended`
             // 1:1 audit check, 2026-10-08: a new call never inherits the teardown flag.
             if state == .outgoing || state == .incoming { tearingDown = false }
             // 1:1 audit r2 C4/D5, 2026-10-08: the ring screen reads the live route, not the last call's.
@@ -7552,6 +7553,16 @@ final class CallService: NSObject {
             return
         }
         state = .ended
+        // ⛔ THE NO ANSWER PAGE — owner, 2026-10-14, with a picture: a call I placed that nobody
+        // answered stays on screen with Cancel, Record voice message and Call again, until one is
+        // tapped, instead of closing after a second. Only on the full call screen in front of me:
+        // minimized or in the background there is nobody looking at it, and it closes as before.
+        // A new call (either way) still cuts it short through `closeEndedTail`.
+        if isCaller, !micDenied, !minimized, reason == .missed || reason == .declined,
+           UIApplication.shared.applicationState == .active {
+            noAnswerHold = true
+            return
+        }
         // Keep the final state visible briefly (longer for the busy tone) before idle.
         // The mic-denied line needs time to be read; one second is gone before the eye lands on it.
         let idleDelay = ((!localUser && reason == .busy) || micDenied) ? 2.0 : 1.0
@@ -7561,6 +7572,15 @@ final class CallService: NSObject {
     }
     /// Bumped once per finished call; see the #45 note in `finishCall`.
     private var endSeq = 0
+
+    /// The No answer page is up (see `finishCall`). Cleared whenever `state` leaves `.ended`.
+    private(set) var noAnswerHold = false
+
+    /// The No answer page's Cancel (and its other two buttons, before they act): the page closes.
+    func closeNoAnswer() {
+        guard state == .ended, noAnswerHold else { return }
+        closeEndedTail()
+    }
     /// 1:1 audit r2 C3, 2026-10-08: the CallKit end the tone path is holding back; closeEndedTail
     /// reports it if a new call cuts the tone short.
     private var pendingKitEnd: CallKitManager.EndKind?

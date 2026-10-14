@@ -347,6 +347,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     /// instead of replacing the stack. Set by a tap made inside a chat (a profile card's Send
     /// Message); a notification tap leaves it false. Cleared with the intent.
     var pendingChatPush = false
+    /// Owner, 2026-10-14: "Record voice message" on the No answer page opens this chat with the
+    /// voice recorder already running, hands-free. Spent by `ThreadView` when that chat appears.
+    var pendingVoiceNoteCid: String?
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
     /// 2026-09-24 decision D4: a kulan://u/<handle> link, kept like the invite code above until the
     /// app is signed in and on its main screen (RootView opens it then). A link tapped while signed

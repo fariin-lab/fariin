@@ -2019,6 +2019,14 @@ struct ThreadView: View {
         .modifier(RetrySweep(itemCount: repo.items.count,
                              onNetworkBack: signalReturned,
                              onFirstLoad: sweepOnFirstLoad))
+        // Owner, 2026-10-14: arriving from the No answer page's "Record voice message", the recorder
+        // starts at once, locked hands-free, the same state a hold dragged up to the lock leaves.
+        .task {
+            guard !preview, AppRouter.shared.pendingVoiceNoteCid == cid else { return }
+            AppRouter.shared.pendingVoiceNoteCid = nil
+            beginHoldRecording()
+            if holdStarted { lockRecording() }
+        }
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             // A preview owns its repository; a real chat shares the live one (`forChat`), so it
