@@ -1891,6 +1891,7 @@ struct FloatingCallWindow: View {
     private let tabW: CGFloat = 24
     private let tabH: CGFloat = 96
     private let pullBack: CGFloat = 22    // pulled at least this far → the card comes back
+    private let pullMax: CGFloat = 34     // how far the tab itself moves inward before it goes stiff
 
     /// Live drag on the tab, as a transform. Transient by design: it is either mid-gesture or zero,
     /// and it must not survive the tab turning back into a card.
@@ -1960,30 +1961,34 @@ struct FloatingCallWindow: View {
                     // morph reads layout); only the finger's movement is a transform.
                     .matchedGeometryEffect(id: Self.morphID, in: morph)
                     .offset(tabDrag)
-                    // Up and down it slides along the edge; pulled INWARD it follows the finger 1:1
-                    // and comes out as the card when let go (past `pullBack`, or flicked inward),
-                    // on the side the finger was heading for.
+                    // Up and down it slides along the edge. Pulled INWARD it gives a little and the
+                    // CARD comes back when let go (past `pullBack`, or flicked inward), on its own edge.
+                    // ⛔ THE TAB STAYS ON THE EDGE — owner 2026-10-14: "the arrow moves everywhere,
+                    // that is not how I want it", pointing at Apple's own stashed window (the repo he
+                    // linked only decorates that window). Its tab never travels: it gives under an
+                    // inward pull and the window comes back, and it is never thrown to the far side.
+                    // The 1:1 inward ride and the cross-screen landing from earlier today are gone.
                     .gesture(
                         DragGesture(minimumDistance: 4)
                             .onChanged { v in
                                 let (_, maxDown) = limits(geo.size)
                                 let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
                                 let inward = stashedLeft ? v.translation.width : -v.translation.width
-                                // Outward has nowhere to go: a little give, not a second exit.
-                                let x = inward >= 0 ? inward : -rubber(-inward, 30)
+                                // 1:1 for the first `pullMax`, stiff past it; outward a little give.
+                                let x = inward >= 0
+                                    ? (inward <= pullMax ? inward : pullMax + rubber(inward - pullMax, 12))
+                                    : -rubber(-inward, 30)
                                 tabDrag = CGSize(width: stashedLeft ? x : -x, height: y)
                             }
                             .onEnded { v in
-                                let (maxLeft, maxDown) = limits(geo.size)
-                                let inward = stashedLeft ? tabDrag.width : -tabDrag.width
+                                let (_, maxDown) = limits(geo.size)
+                                // The finger's real travel decides, not the capped picture.
+                                let inward = stashedLeft ? v.translation.width : -v.translation.width
                                 let inwardSpeed = stashedLeft ? v.velocity.width : -v.velocity.width
                                 let y = min(maxDown, max(0, base.height + tabDrag.height))
                                 let comesOut = inward >= pullBack || inwardSpeed > 400
-                                // Carried past the middle of the screen: it lands on the far side.
-                                let crossed = comesOut && inward + inwardSpeed * 0.2 > geo.size.width / 2
                                 withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                    let x = crossed ? (stashedLeft ? 0 : maxLeft) : base.width
-                                    base = CGSize(width: x, height: y)
+                                    base = CGSize(width: base.width, height: y)
                                     offset = base
                                     tabDrag = .zero
                                     if comesOut { call.cardStashed = false }
