@@ -2014,11 +2014,6 @@ struct FloatingCallWindow: View {
                     .offset(dragLive)
                     // The live pinch grows the card from the corner nearest its edge, as the system's does.
                     .scaleEffect(pinchLive, anchor: onLeft(geo.size) ? .topLeading : .topTrailing)))
-                    .simultaneousGesture(
-                        MagnifyGesture()
-                            .onChanged { v in pinchLive = rubberScale(v.magnification) }
-                            .onEnded { _ in settlePinch(geo.size) }
-                    )
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
@@ -2119,6 +2114,17 @@ struct FloatingCallWindow: View {
                         // The reference app's 0.2s grow out of the card (`CallPipMorph`).
                         CallPipMorph.restore { call.minimized = false }
                     }
+                    // ⛔ THE PINCH GOES ON AFTER THE DRAG — owner 2026-10-14: "it does not follow my
+                    // finger, it only moves there after I lift". Attached before the drag, the pinch
+                    // sat closer to the card, and an outer `.gesture` waits for the gestures inside it
+                    // to fail. A one-finger pinch never fails until the finger lifts, so the drag got
+                    // no `onChanged` at all and only its `onEnded` moved the card. Out here it is
+                    // simultaneous with the drag and blocks nothing.
+                    .simultaneousGesture(
+                        MagnifyGesture()
+                            .onChanged { v in pinchLive = rubberScale(v.magnification) }
+                            .onEnded { _ in settlePinch(geo.size) }
+                    )
                     // ⛔ PADDING, NOT `.offset`, AND THAT IS THE WHOLE POINT (owner, 2026-08-23: he
                     // dragged the card to the bottom-left, reopened the call, and the zoom still flew
                     // to the top-right corner — "we hard code on top only").
