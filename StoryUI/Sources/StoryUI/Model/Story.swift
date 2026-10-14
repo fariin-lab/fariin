@@ -250,4 +250,7 @@ public extension Notification.Name {
     /// bucket id. The pager builds the next neighbours on this, not on the landing (see
     /// `StoryPager.Coordinator.prewarmWhenStarted`).
     static let storyLandingStarted = Notification.Name("storyLandingStarted")
+    /// A story clip's WHOLE file has finished downloading (`StoryPrefetcher.warmWhole`). Object: its
+    /// url string. A prepared neighbour still on the stream moves onto the file while out of sight.
+    static let storyWholeFileReady = Notification.Name("storyWholeFileReady")
 }

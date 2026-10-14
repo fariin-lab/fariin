@@ -187,6 +187,11 @@ public enum StoryPrefetcher {
                                  completion: { _ in
                                      lock.lock(); running.removeValue(forKey: key); lock.unlock()
                                      release(key)
+                                     // Owner 2026-10-14: say so, so a prepared neighbour can move
+                                     // onto the file BEFORE the turn lands (see `storyWholeFileReady`).
+                                     DispatchQueue.main.async {
+                                         NotificationCenter.default.post(name: .storyWholeFileReady, object: urlString)
+                                     }
                                  })
     }
 

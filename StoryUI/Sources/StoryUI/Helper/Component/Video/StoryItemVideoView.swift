@@ -125,6 +125,8 @@ final class StoryItemVideoView: UIView {
     private var kickedThisWait = false
     private var timeObserver: Any?
     private var endToken: NSObjectProtocol?
+    /// `storyWholeFileReady` for this clip: see `adoptWholeFileWhileWaiting`. Lives as long as the view.
+    private var wholeToken: NSObjectProtocol?
 
     /// The clip's own pixel size once the item reports it, so fit-vs-fill can be re-taken when the
     /// VIEW's size changes and not only when the video's does.
@@ -229,6 +231,11 @@ final class StoryItemVideoView: UIView {
         // fetches the current item's media on `update()` and builds the node separately. A story
         // being paused under a sheet should still be arriving.
         ensureContent()
+        wholeToken = NotificationCenter.default.addObserver(
+            forName: .storyWholeFileReady, object: nil, queue: .main) { [weak self] note in
+            guard let self, let url = note.object as? String, url == self.storyURL?.absoluteString else { return }
+            self.adoptWholeFileWhileWaiting()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -241,6 +248,7 @@ final class StoryItemVideoView: UIView {
         bufferObservation?.invalidate()
         reasonObservation?.invalidate()
         if let endToken { NotificationCenter.default.removeObserver(endToken) }
+        if let wholeToken { NotificationCenter.default.removeObserver(wholeToken) }
     }
 
     // MARK: - The session this view reports into
@@ -373,6 +381,23 @@ final class StoryItemVideoView: UIView {
     /// face (only the person either side of the one on screen, never a carousel card, never two
     /// away) builds its player paused, prerolls, and shows its real first frame; landing is just
     /// `play()`. Three players at most: the one on screen and one each side, the decoder cap.
+    /// ⛔ THE FILE SWAP HAPPENS OUT OF SIGHT, NOT AT THE LANDING — owner 2026-10-14, his recording of
+    /// build 915: Abdi's picture held still ~0.9s after the cube landed. 43651220 stopped the landing
+    /// swap (it restarted a picture already on screen), which left a prepared neighbour streaming,
+    /// and a streamed start is ~1.5s against 8-300ms from the file (measured 2026-10-13). So the
+    /// swap moved here: the moment the whole file lands, a prepared neighbour that is still waiting
+    /// to the side rebuilds on it, paused, and landing is play() on a local file. Never during a
+    /// turn (its face may be showing) and never once it has played.
+    private func adoptWholeFileWhileWaiting() {
+        guard mode == .pause, prepared, player != nil, streamedAsset != nil, !didBeginPlayback,
+              !StoryPager.personTurnActive, let storyURL,
+              let file = CacheManager.cachedFileIfUsable(for: storyURL) else { return }
+        StoryVideoTrace.note("prepared: whole file arrived, rebuilt on it out of sight")
+        teardownPlayer()
+        localFile = file
+        initializeVideoIfReady()
+    }
+
     func setPrepared(_ on: Bool) {
         guard on != prepared else { return }
         prepared = on
@@ -421,6 +446,12 @@ final class StoryItemVideoView: UIView {
         guard player == nil else { return }
         // ...or the person beside the one on screen, built paused — see `setPrepared`.
         guard mode == .play || prepared else { return }
+        // 2026-10-14: a whole file that is already here beats the stream, even if this item was
+        // mounted (and pointed at the stream) before the download finished.
+        if localFile == storyURL, !didRetryRemote, let storyURL,
+           let whole = CacheManager.cachedFileIfUsable(for: storyURL) {
+            localFile = whole
+        }
         guard contentLoaded, let file = localFile else { return }
 
         // Stories are sound-on media: `.playback` plays through the ringer switch. The default
