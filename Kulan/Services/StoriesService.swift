@@ -879,7 +879,7 @@ final class StoriesService {
             // case worth remembering, and the next sign-in puts it back through this same door.
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
-                self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
+                self.queuedUploads[pendingId] = nil   // finished or cancelled: nothing left to cancel
                 // ⚠️ OUTSIDE THE TOKEN GUARD, and that is the point of keeping them separate. This
                 // post is finished whoever is newest, so its placeholder must go — under the guard,
                 // an older post completing while a newer one is still uploading would never clear
@@ -904,24 +904,25 @@ final class StoriesService {
                 self.uploadTask = nil
             }
         }
-        if let t = uploadTask { queuedUploads.append(t) }   // cancellable as part of the chain
+        if let t = uploadTask { queuedUploads[pendingId] = t }   // cancellable on its own, by its placeholder id
     }
     private var currentUploadToken: UUID?
 
-    @MainActor func cancelUpload() {
-        currentUploadToken = nil   // invalidate any in-flight completion so it can't clobber a later post
-        // Cancel the WHOLE chain, not just the newest task (audit). Posts queue behind each other,
-        // so with A uploading and B queued, cancelling only B left A to finish and POST — while the
-        // X the user tapped was sitting on B's image, so they watched the thing they cancelled go
-        // up. Cancelling every queued task makes the button mean what it says.
-        for t in queuedUploads { t.cancel() }
-        queuedUploads.removeAll()
-        uploadTask?.cancel(); uploadTask = nil
-        uploading = false; inFlight.removeAll()
+    /// CANCEL ONE POST, the one whose X was tapped (owner, 2026-10-14: three stories uploading,
+    /// the X on one cancelled all three). Every other post keeps going.
+    ///
+    /// The queue still holds: a post waiting behind this one awaits its task, which ends at once —
+    /// `postStory` checks cancellation before its first write — so the next post simply starts.
+    /// Cancelling a post that is mid-upload rolls its documents back exactly as before.
+    @MainActor func cancelUpload(id: String) {
+        queuedUploads[id]?.cancel()
+        queuedUploads[id] = nil
+        inFlight.removeAll { $0.id == id }
+        uploading = !inFlight.isEmpty
     }
-    /// Every post task still in the queue (including the one currently uploading), so cancel can
-    /// reach all of them. Entries are dropped as they finish.
-    private var queuedUploads: [Task<Void, Never>] = []
+    /// Every post task still in the air (including the one currently uploading), keyed by its
+    /// placeholder id, so the X on one story reaches that story only. Entries are dropped as they finish.
+    private var queuedUploads: [String: Task<Void, Never>] = [:]
 
     // Snapshot contacts on the MAIN actor (live-mutated there) and resolve the audience:
     //  • included non-empty -> only those; • excluded non-empty -> everyone minus those; • else everyone.
@@ -1686,7 +1687,7 @@ final class StoriesService {
             }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
-                self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
+                self.queuedUploads[pending.id] = nil   // finished or cancelled: nothing left to cancel
                 self.inFlight.removeAll { $0.id == pending.id }   // outside the guard — see the photo path
                 self.uploading = !self.inFlight.isEmpty
                 if let failure { self.uploadError = failure }   // any post reports — see the photo path
@@ -1698,7 +1699,7 @@ final class StoriesService {
         // with video A uploading and B queued, the X reached only B — A finished and POSTED the
         // thing the user watched themselves cancel. The exact bug the photo path's comment says
         // was fixed once already; it had been re-introduced for video-first chains.
-        if let t = uploadTask { queuedUploads.append(t) }
+        if let t = uploadTask { queuedUploads[pending.id] = t }
     }
 
     /// A long video becomes SEVERAL stories, in order, instead of being cut down to the first 90

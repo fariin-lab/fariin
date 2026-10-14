@@ -5180,7 +5180,7 @@ struct StoryViewer: View {
     // ring is determinate — grows with % — but we only track an uploading flag, so the ring spins.)
     private var uploadingControls: some View {
         HStack(spacing: 12) {
-            Button { uploadSvc.cancelUpload(); onClose() } label: {
+            Button { uploadSvc.cancelUpload(id: currentStoryId); onClose() } label: {
                 UploadCancelRing(diameter: 28)
             }.buttonStyle(.plain)
             Text("Uploading…").font(.subheadline).foregroundStyle(.white)
@@ -5224,7 +5224,8 @@ struct StoryViewer: View {
         m.bottomInset = bottomInset
         m.onViews = { openViewers() }
         m.onDelete = { confirmDelete = true }
-        m.onCancelUpload = { uploadSvc.cancelUpload(); onClose() }
+        let uploadingId = currentStoryId   // the X cancels THIS story's upload, not every one
+        m.onCancelUpload = { uploadSvc.cancelUpload(id: uploadingId); onClose() }
     }
 
     private var ownerFooter: some View {
@@ -5494,7 +5495,11 @@ struct UploadingStoryViewer: View {
                 Spacer()
                 // Loading look: cancel X INSIDE the loading ring, then "Uploading…".
                 HStack(spacing: 12) {
-                    Button { stories.cancelUpload(); onClose() } label: {
+                    Button {
+                        // The picture on screen is the newest post, so that is the one cancelled.
+                        if let id = stories.inFlight.last?.id { stories.cancelUpload(id: id) }
+                        onClose()
+                    } label: {
                         UploadCancelRing(diameter: 28)
                     }.buttonStyle(.plain)
                     Text("Uploading…").font(.subheadline).foregroundStyle(.white)
