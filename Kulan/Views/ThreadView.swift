@@ -1276,7 +1276,7 @@ struct ThreadView: View {
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 100_000_000)   // let the pop begin
                         for _ in 0..<28 {
-                            guard WebLink.topViewController()?.transitionCoordinator != nil else { break }
+                            guard Self.navigationIsMoving() else { break }
                             try? await Task.sleep(nanoseconds: 50_000_000)
                         }
                         activateSearch()
@@ -4624,6 +4624,23 @@ struct ThreadView: View {
     }
 
     // MARK: - In-chat search (top bar + step through matches)
+
+    /// ⛔ IS ANY NAVIGATION STACK MID-SLIDE? (owner 2026-10-14, second report: the search keyboard
+    /// still came in from the left.) The wait above asked the TOP view controller, which is the root
+    /// hosting controller; its `transitionCoordinator` only looks at itself and its parents, never at
+    /// the navigation controller inside it, so it was always nil, the wait ended at once and the
+    /// keyboard rose 0.1s into the pop. This walks down to the navigation controllers themselves.
+    private static func navigationIsMoving() -> Bool {
+        func moving(_ vc: UIViewController?) -> Bool {
+            guard let vc else { return false }
+            if let nav = vc as? UINavigationController, nav.transitionCoordinator != nil { return true }
+            if vc.children.contains(where: { moving($0) }) { return true }
+            return moving(vc.presentedViewController)
+        }
+        let root = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }.first
+        return moving(root)
+    }
 
     private func activateSearch() {
         setUIMode(.search)
