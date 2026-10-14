@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: LINKS IN THE OFFICIAL CHAT, FASTER ATTACH SHEET.
+            THIS BUILD: CHAT CRASH FIX, CALL CARD PULL-OUT, NO BLUR ON PHOTOS.
+            Chats: opening a chat no longer crashes on iOS 27 (builds 919 and 920 crashed here).
+            Call card: the edge tab is now a handle on the hidden card itself, showing the call blurred. Pull it and the whole card slides out with the handle leading; the blur clears as it comes. Hiding it slides it off from where it is, not from the corner.
+            Attach sheet: a photo or video opens sharp straight away, never blurred first. The opening is slower, with a long gentle settle at the end. The top-left X also shows in the folder list and inside a folder.
+            Video editor: the trim bar fades in like the caption bar.
+            PLEASE TEST: open several chats; hide the call card to each side and pull it back out; open photos and videos from the attach sheet, in Recents and in a folder.
+
+            EARLIER: LINKS IN THE OFFICIAL CHAT, FASTER ATTACH SHEET.
             Official chat: a web address in a message (like fariin.com/help) is now a link. Tap it and it opens in the app's browser, like the link buttons.
             Attach sheet: your recent photos are loaded before the sheet opens, so it opens without a pause. The opened photo is sharp again (918 showed the rough preview) and no longer shrinks a little at the end of its opening. The X at full height now sits top-left of the sheet, 44pt glass, and the album button is back at the bottom.
             Security Checkup: the sheet slides up at its proper height; the setup pages' X has one ring, not two.
