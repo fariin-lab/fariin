@@ -118,7 +118,13 @@ struct SecurityCheckupSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var check = SecurityCheckup()
     @State private var path: [Item] = []
-    @State private var detent: PresentationDetent = .fraction(0.7)
+    @State private var detent: PresentationDetent = .fraction(0.8)
+    @State private var contentH: CGFloat = 0
+    /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
+    /// it is not added. 0.8 of the screen until the content has been measured once.
+    private var fitDetent: PresentationDetent {
+        contentH > 0 ? .height(contentH + 68) : .fraction(0.8)
+    }
     private var profile = ProfileStore.shared
 
     enum Item: Hashable { case passkey, chatKey, password, devices }
@@ -206,6 +212,14 @@ struct SecurityCheckupSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 28)
                 .padding(.bottom, 24)
+                // The sheet is sized to this (see `fitDetent`), so it shows everything without a scroll.
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { contentH = g.size.height }
+                            .onChange(of: g.size.height) { _, h in contentH = h }
+                    }
+                )
             }
             .background(Color(.systemGroupedBackground))
             .safeAreaInset(edge: .bottom) {
@@ -240,8 +254,12 @@ struct SecurityCheckupSheet: View {
                 }
             }
         }
-        // Owner 2026-10-14: opens at 70% of the screen; drag up for the rest.
-        .presentationDetents([.fraction(0.7), .large], selection: $detent)
+        // ⛔ TALL ENOUGH FOR EVERYTHING — owner 2026-10-14: at 70% the last rows needed a scroll;
+        // "always show all of it". The sheet is the content's own height (rows + Continue), never
+        // taller than the screen allows. A setup page pushed inside it gets the full height.
+        .presentationDetents([fitDetent, .large], selection: $detent)
+        .onChange(of: contentH) { _, _ in if path.isEmpty { detent = fitDetent } }
+        .onChange(of: path) { _, now in withAnimation { detent = now.isEmpty ? fitDetent : .large } }
         .presentationDragIndicator(.visible)
         .task { await check.run() }
         // Back from a setup page: ask again, so the tick follows what was just done.
