@@ -722,25 +722,21 @@ enum MediaOpen {
     /// whose speed at t = 0 is β·A, not zero. Ours started at rest, so it eased in slowly. The same
     /// spring through UIKit needs that start speed, in distances per second, slowed by f like the rest.
     ///
-    /// ⛔ SLOWER, WITH A GRADUAL SETTLE — owner 2026-10-14: "make the transition much slower; when the
-    /// image opens to 90 or 99%, make the zoom-back take more time and feel very smooth and gradual".
-    /// The same spring played 3x slower instead of 1.8x: its shape (damping ratio ~0.81, the same
-    /// ~1% overshoot) is unchanged, so the last few percent and the gentle settle back simply take
-    /// longer (settle ~1.3s instead of ~0.8s). The start push is slowed by the same factor.
-    static let attachOpenSlowdown: CGFloat = 3.0
-    static var attachOpenSpring: UISpringTimingParameters {
-        let f = attachOpenSlowdown
-        let v0 = (25 / (2 * 0.8)) / f
-        return UISpringTimingParameters(mass: 0.8, stiffness: 300 / (f * f), damping: 25 / f,
-                                        initialVelocity: CGVector(dx: v0, dy: v0))
-    }
+    /// ⛔ EXACT TIMINGS — owner 2026-10-14: "main opening 0.4s, final settle-back 0.5s, background
+    /// fade 0.15s", for photos, videos and media from a selection, shape unchanged. One spring cannot
+    /// do that: its open and its settle are one motion whose ratio the shape fixes (the spring above
+    /// settles in about twice its opening time). So the attach open runs the spring's own shape in two
+    /// timed steps (`MediaOpen.fly(phases:)`): 0.4s from the tile to the spring's peak, 1.3% past
+    /// the rest along the same path (its overshoot at damping ratio ~0.81), starting with a push and
+    /// coming to rest at the peak as the spring does; then 0.5s easing back to the rest. The corner
+    /// radius keeps its curve over the 0.4s; the black fades in 0.15s.
+    static let attachOpenPhases = OpenPhases(open: 0.4, settle: 0.5, overshoot: 0.013)
     static let attachBackdropFade: TimeInterval = 0.15
-    /// How long `attachOpenSpring` takes to settle, for the corner radius that rides beside it.
-    static var attachOpenDuration: TimeInterval {
-        let s = CASpringAnimation()
-        let f = Double(attachOpenSlowdown)
-        s.mass = 0.8; s.stiffness = 300 / (f * f); s.damping = 25 / f
-        return s.settlingDuration
+
+    struct OpenPhases {
+        let open: TimeInterval
+        let settle: TimeInterval
+        let overshoot: CGFloat   // fraction of the travel past the rest, at the peak
     }
 
     private static var keyWindow: UIWindow? {
@@ -817,6 +813,7 @@ enum MediaOpen {
                     destinationCornerRadius: CGFloat = 0,
                     timing: UISpringTimingParameters? = nil,
                     timingDuration: TimeInterval? = nil,
+                    phases: OpenPhases? = nil,
                     backdropFade: TimeInterval? = nil,
                     onStart: (() -> Void)? = nil,
                     present: @escaping () -> Void) -> FlightHandle {
@@ -860,11 +857,26 @@ enum MediaOpen {
         let handle = FlightHandle(container: container, content: content)
 
         // Nil = the house spring, as the chat viewer has always opened.
-        let flyDuration = timingDuration ?? duration
-        let animator = UIViewPropertyAnimator(duration: flyDuration, timingParameters: timing ?? spring)
+        let flyDuration = phases?.open ?? timingDuration ?? duration
+        // Two timed steps (see `attachOpenPhases`): to the peak past the rest, then back to it. The
+        // peak is on the same path, in window points (the clip ends as the whole window).
+        let start = source
+        let peak: CGRect = {
+            guard let phases else { return destination }
+            let k = 1 + phases.overshoot
+            return CGRect(x: start.minX + (destination.minX - start.minX) * k,
+                          y: start.minY + (destination.minY - start.minY) * k,
+                          width: start.width + (destination.width - start.width) * k,
+                          height: start.height + (destination.height - start.height) * k)
+        }()
+        let animator = phases == nil
+            ? UIViewPropertyAnimator(duration: flyDuration, timingParameters: timing ?? spring)
+            // A push at the start and at rest on the peak, as the spring reaches its overshoot.
+            : UIViewPropertyAnimator(duration: flyDuration, timingParameters:
+                UICubicTimingParameters(controlPoint1: CGPoint(x: 0.15, y: 0.6), controlPoint2: CGPoint(x: 0.35, y: 1)))
         animator.addAnimations {
             clipView.frame = window.bounds
-            container.frame = destination
+            container.frame = peak
             container.layer.cornerRadius = destinationCornerRadius
             if backdropFade == nil { backdrop.alpha = 1 }
         }
@@ -880,7 +892,7 @@ enum MediaOpen {
         radius.timingFunction = CAMediaTimingFunction(name: .easeOut)
         container.layer.add(radius, forKey: "cornerRadius")
 
-        animator.addCompletion { _ in
+        let land: () -> Void = {
             // Reveal the viewer while the copy still covers the same pixels, then drop the copy a tick
             // later. Presenting first would put the viewer OVER the copy mid-flight; removing the copy
             // first would show one frame of the chat underneath. Neither order flashes if they overlap.
@@ -892,6 +904,15 @@ enum MediaOpen {
                 backdrop.removeFromSuperview()
                 clipView.removeFromSuperview()
             }
+        }
+        animator.addCompletion { _ in
+            guard let phases else { land(); return }
+            // The settle back: from the peak to the rest, smooth at both ends.
+            let back = UIViewPropertyAnimator(duration: phases.settle, curve: .easeInOut) {
+                container.frame = destination
+            }
+            back.addCompletion { _ in land() }
+            back.startAnimation()
         }
         animator.startAnimation()
         // The screen being opened may come up NOW, over the flying copy, if it keeps its own photo

@@ -6135,9 +6135,8 @@ struct ThreadView: View {
         let flight = MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(size),
-                      // The reference picker's slower spring; the house one read as a "pop".
-                      timing: MediaOpen.attachOpenSpring,
-                      timingDuration: MediaOpen.attachOpenDuration,
+                      // Owner's exact timings: 0.4s open, 0.5s settle back, 0.15s black (`attachOpenPhases`).
+                      phases: MediaOpen.attachOpenPhases,
                       backdropFade: MediaOpen.attachBackdropFade,
                       // ⛔ THE TOOLS FADE IN DURING THE FLIGHT — owner 2026-10-14: they
                       // "pop" when they appear after the photo lands. The reference picker
@@ -6191,8 +6190,7 @@ struct ThreadView: View {
         MediaOpen.fly(image: still, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(still.size),
-                      timing: MediaOpen.attachOpenSpring,
-                      timingDuration: MediaOpen.attachOpenDuration,
+                      phases: MediaOpen.attachOpenPhases,
                       backdropFade: MediaOpen.attachBackdropFade,
                       onStart: {
                           MediaPresentGate.present {
@@ -6232,8 +6230,7 @@ struct ThreadView: View {
         let flight = MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(poster.size),
-                      timing: MediaOpen.attachOpenSpring,
-                      timingDuration: MediaOpen.attachOpenDuration,
+                      phases: MediaOpen.attachOpenPhases,
                       backdropFade: MediaOpen.attachBackdropFade,
                       onStart: {
                           MediaPresentGate.present {
