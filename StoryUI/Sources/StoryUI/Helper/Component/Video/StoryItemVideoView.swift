@@ -311,7 +311,12 @@ final class StoryItemVideoView: UIView {
         // neighbour may have built on the stream while `StoryPrefetcher.warmWhole` was still fetching;
         // landing on it then would still pay the stream's start. Measured: local file 8-300ms, stream
         // 1.5s+. So on the way to playing, a never-started streamed player is swapped for the file.
-        if newMode == .play, !didBeginPlayback, streamedAsset != nil, let storyURL,
+        // ⛔ BUT NEVER A PLAYER WHOSE FRAME IS ALREADY ON SCREEN — owner 2026-10-14: "the video does a
+        // small move, then plays", "restarts when the transition finishes". A prepared neighbour
+        // (9a448d14) has revealed its first frame before the turn lands, so tearing it down AT the
+        // landing put the cover back up, rebuilt, and revealed again: a visible restart on every
+        // person switch whose file had finished in time. Swapped only while nothing is shown yet.
+        if newMode == .play, !didBeginPlayback, !didShowFirstFrame, streamedAsset != nil, let storyURL,
            let file = CacheManager.cachedFileIfUsable(for: storyURL) {
             StoryVideoTrace.note("landing: whole file arrived, player rebuilt on it")
             teardownPlayer()
