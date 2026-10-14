@@ -78,6 +78,8 @@ jobs:
             Official chat: a web address in a message (like fariin.com/help) is now a link. Tap it and it opens in the app's browser, like the link buttons.
             Attach sheet: your recent photos are loaded before the sheet opens, so it opens without a pause. The opened photo is sharp again (918 showed the rough preview) and no longer shrinks a little at the end of its opening. The X at full height now sits top-left of the sheet, 44pt glass, and the album button is back at the bottom.
             Security Checkup: the sheet slides up at its proper height; the setup pages' X has one ring, not two.
+            Call card: pull the edge arrow and the card slides out under your finger, blurred with the arrow, clearing as it comes.
+            Attach sheet with photos selected: tapping an unselected photo opens that photo, not the selection.
             PLEASE TEST: open the Fariin official chat and tap fariin.com/help in a message; open a photo from the attach sheet; open Security Checkup and a setup page.
 
             EARLIER: STORY SWITCH TIMING RECORDED, ATTACH SHEET SELECTION.
