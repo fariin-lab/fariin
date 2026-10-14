@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import PencilKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
@@ -120,9 +121,12 @@ struct ChatImageEditor: View {
     // Memoized: filtering+cropping the FULL-RES image is expensive; recompute only when the filter
     // or aspect changes (onChange below), NOT on every caption keystroke / body re-eval.
     @State private var editedCache: UIImage?
-    private var edited: UIImage { editedCache ?? source }
+    /// The photo as it stands: the one this editor was built with, or the better one handed over
+    /// since (an attach open starts on a rough picture and the full file follows; see `arrival`).
+    private var base: UIImage { arrival.image ?? source }
+    private var edited: UIImage { editedCache ?? base }
     private func recomputeEdited() {
-        editedCache = Self.cropped(Self.filtered(source, filterIndex), aspect: Self.aspects[aspectIndex].1)
+        editedCache = Self.cropped(Self.filtered(base, filterIndex), aspect: Self.aspects[aspectIndex].1)
     }
 
     var body: some View {
@@ -192,14 +196,18 @@ struct ChatImageEditor: View {
                 DispatchQueue.main.async { chromeShown = true }   // animated by the scoped .animation only
             }
         }
-        // Nothing is tappable until the photo has landed (the reference blocks touches in flight too).
-        .allowsHitTesting(arrived)
+        // Nothing is tappable until the photo has landed (the reference blocks touches in flight too),
+        // nor until the full-resolution photo is in: an edit made on the rough preview would be lost.
+        .allowsHitTesting(arrived && arrival.fullReady)
         // The cover is really gone: release a tap on another tile that came in while it was leaving.
         .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }
         .onChange(of: size) { _, s in canvasSize = canvasArea(s) }
         .onChange(of: bottomChromeH) { _, _ in canvasSize = canvasArea(size) }
         .onChange(of: filterIndex) { _, _ in recomputeEdited() }
         .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
+        // A better picture arrived (the 1280pt one, then the full file): take it up. Nothing can
+        // have been edited yet, because the tools are held until `fullReady`.
+        .onReceive(arrival.$image.dropFirst()) { _ in recomputeEdited() }
     }
 
     // Chrome INSIDE the native safe area (no manual inset math). The canvas ignores the keyboard, so
@@ -626,5 +634,13 @@ struct ChatImageEditor: View {
 /// Whether the photo flying out of an attach tile has landed in the editor yet (see `arrival`).
 final class EditorArrival: ObservableObject {
     @Published var landed: Bool
-    init(landed: Bool) { self.landed = landed }
+    /// The best picture so far, for an editor opened before its photo had fully loaded (an attach
+    /// tile starts the flight on a rough picture). Nil = the one the editor was built with.
+    @Published var image: UIImage?
+    /// The full-resolution photo is in. False holds the tools (see `ChatImageEditor`).
+    @Published var fullReady: Bool
+    init(landed: Bool, fullReady: Bool = true) {
+        self.landed = landed
+        self.fullReady = fullReady
+    }
 }

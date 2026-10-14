@@ -4808,7 +4808,7 @@ struct ThreadView: View {
                 // now and goes through `attachTile`, which already closes the sheet and waits the
                 // same 0.35s before opening the next screen.
                 onClose: { showAttachPanel = false },
-                onPickPhoto: { ui, assetId in openAttachPhoto(ui, assetId: assetId) },
+                onPickPhoto: { ui, assetId, load in openAttachPhoto(ui, assetId: assetId, load: load) },
                 onPickVideo: { url, assetId, poster in openAttachVideo(url, assetId: assetId, poster: poster) },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
@@ -6058,7 +6058,10 @@ struct ThreadView: View {
 
     // MARK: Attach tile opens (the fly out of a grid tile; see MediaOpen.fly)
 
-    private func openAttachPhoto(_ ui: UIImage, assetId: String) {
+    /// `load`: the pictures still arriving for a photo tapped in the grid (nil = `ui` is already the
+    /// full photo, as from a selection). The flight starts on `ui` at once; the sharper picture
+    /// replaces the flying copy mid-air and reaches the editor; the full photo frees the tools.
+    private func openAttachPhoto(_ ui: UIImage, assetId: String, load: AttachPhotoLoad? = nil) {
         // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
         // editor and lands BACK on the sheet to pick another image (user request — closing
         // the sheet first meant X dumped you all the way to the chat).
@@ -6073,12 +6076,16 @@ struct ThreadView: View {
         // sitting part-way down the screen is measured, not assumed.
         guard let from = MediaOpenRects.liveRect(key),
               let to = ChatImageEditor.restRect(ui.size) else {
-            panelEditImage = EditImageWrap(image: ui)
+            // No geometry to fly from: the plain cover, still fed the better pictures as they come.
+            let arrival = EditorArrival(landed: true, fullReady: load == nil)
+            load?.onScreen = { arrival.image = $0 }
+            load?.onFull = { arrival.image = $0; arrival.fullReady = true }
+            panelEditImage = EditImageWrap(image: ui, arrival: arrival)
             return
         }
         MediaSourceVisibility.shared.hide(key)
-        let arrival = EditorArrival(landed: false)
-        MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
+        let arrival = EditorArrival(landed: false, fullReady: load == nil)
+        let flight = MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size),
                       // The reference picker's slower spring; the house one read as a "pop".
@@ -6105,6 +6112,10 @@ struct ThreadView: View {
             // The editor is opaque over the tile by now; give it back for the close to find.
             DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
         }
+        // The pictures that follow the tap (see `AttachRecentsStrip.pick`): the sharper one onto the
+        // flying copy and into the editor, the full one into the editor, which frees its tools.
+        load?.onScreen = { better in flight.replace(image: better); arrival.image = better }
+        load?.onFull = { full in arrival.image = full; arrival.fullReady = true }
     }
 
     /// Two or more selected: the pager (or the all-video editor) opens ON the tapped item, flying out

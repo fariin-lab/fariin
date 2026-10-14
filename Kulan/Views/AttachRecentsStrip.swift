@@ -141,7 +141,9 @@ struct AttachRecentsStrip: View {
     var onClose: () -> Void = {}
     /// The photo, and the PHAsset id of the tile it was tapped on: the editor flies out of that tile
     /// and back into it (`MediaOpenRects.Scope.attach`).
-    var onPickPhoto: (UIImage, String) -> Void
+    /// TAP a photo: the picture to start the flight on, the asset id, and the loader that hands over
+    /// the sharper picture and then the full-resolution photo as they arrive (see `pick`).
+    var onPickPhoto: (UIImage, String, AttachPhotoLoad) -> Void
     var onPickVideo: (URL, String, UIImage?) -> Void           // TAP a video → trim editor (file, asset id, still frame to fly)
     var onSendVideos: ([URL], String) -> Void = { _, _ in }     // SELECT + Send → send videos directly
     var onSendAlbum: ([UIImage], String, Bool) -> Void = { _, _, _ in }   // images, caption, viewOnce
@@ -692,9 +694,9 @@ struct AttachRecentsStrip: View {
 
     private func pick(_ a: PHAsset) {
         loadingPick = true
-        Task {
-            defer { Task { @MainActor in loadingPick = false } }
-            if a.mediaType == .video {
+        if a.mediaType == .video {
+            Task {
+                defer { Task { @MainActor in loadingPick = false } }
                 // The still frame is what flies out of the tile (the reference picker flies a
                 // picture for video too), fetched beside the file so the open waits for neither twice.
                 async let file = Self.videoURL(a)
@@ -703,8 +705,42 @@ struct AttachRecentsStrip: View {
                     let poster = await still
                     await MainActor.run { onPickVideo(url, a.localIdentifier, poster) }
                 }
-            } else if let ui = await Self.fullImage(a) {
-                await MainActor.run { onPickPhoto(ui, a.localIdentifier) }
+            }
+            return
+        }
+        // ⛔ THE FLIGHT STARTS AT ONCE, ON A ROUGH PICTURE — owner 2026-10-14: "the reference is fast,
+        // mine is too slow". Six agents read the reference picker: its zoom starts in the tap's own
+        // run loop, flying the grid's thumbnail, with a 1280pt aspect-fit picture arriving during
+        // the flight (its item view's immediate thumbnail, then its 1280x1280 "screen" request,
+        // opportunistic) and the full file later. Ours waited for the full-resolution bytes to
+        // decode before the flight began: hundreds of milliseconds of nothing after the tap, and
+        // THAT was the slowness, not the spring, whose numbers already match. Same recipe now.
+        let load = AttachPhotoLoad()
+        let id = a.localIdentifier
+        var started = false
+        let start: (UIImage) -> Void = { img in
+            guard !started else { return }
+            started = true
+            loadingPick = false
+            onPickPhoto(img, id, load)
+        }
+        let o = PHImageRequestOptions()
+        o.deliveryMode = .opportunistic   // a rough one at once, the real one when it is ready
+        o.resizeMode = .fast
+        o.isNetworkAccessAllowed = true
+        PHImageManager.default().requestImage(for: a, targetSize: CGSize(width: 1280, height: 1280),
+                                              contentMode: .aspectFit, options: o) { img, info in
+            guard let img else { return }
+            let degraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
+            DispatchQueue.main.async {
+                if !started { start(img) } else if !degraded { load.deliverScreen(img) }
+            }
+        }
+        Task {
+            let ui = await Self.fullImage(a)
+            await MainActor.run {
+                if let ui { start(ui); load.deliverFull(ui) }
+                else if !started { loadingPick = false }   // nothing of it could be loaded at all
             }
         }
     }
@@ -872,6 +908,7 @@ struct AttachRecentsStrip: View {
     }
 
     // Full-quality photo bytes (may pull from iCloud — network allowed).
+    // (The tap no longer waits for this: see `pick`.)
     private static func fullImage(_ asset: PHAsset) async -> UIImage? {
         await withCheckedContinuation { cont in
             let o = PHImageRequestOptions()
@@ -1177,4 +1214,22 @@ struct FolderNavHost: UIViewControllerRepresentable {
             if vc === rootHost { onPopped() }
         }
     }
+}
+
+/// What a tapped photo hands over while its pictures are still arriving. The flight starts on the
+/// rough picture it was given; `onScreen` brings the sharper 1280pt one to the flying copy and the
+/// editor; `onFull` brings the full-resolution photo to the editor. Either may already be here
+/// when its handler is set, in which case the handler runs at once.
+@MainActor final class AttachPhotoLoad {
+    private(set) var screen: UIImage?
+    private(set) var full: UIImage?
+    var onScreen: ((UIImage) -> Void)? { didSet { if full == nil, let screen, let onScreen { onScreen(screen) } } }
+    var onFull: ((UIImage) -> Void)? { didSet { if let full, let onFull { onFull(full) } } }
+    /// Ignored once the full photo is here: a 1280pt picture arriving after it must not replace it.
+    func deliverScreen(_ image: UIImage) {
+        guard full == nil else { return }
+        screen = image
+        onScreen?(image)
+    }
+    func deliverFull(_ image: UIImage) { full = image; onFull?(image) }
 }

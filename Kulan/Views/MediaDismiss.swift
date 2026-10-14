@@ -800,6 +800,7 @@ enum MediaOpen {
     ///            would jump at the hand-over.
     ///   - destinationCornerRadius: the media's radius at rest on that screen (the editor rounds tall photos).
     ///   - present: reveals the real viewer. Called with the copy still on screen and matching it exactly.
+    @discardableResult
     static func fly(image: UIImage,
                     from source: CGRect,
                     sourceCornerRadius: CGFloat = 14,
@@ -810,11 +811,11 @@ enum MediaOpen {
                     timingDuration: TimeInterval? = nil,
                     backdropFade: TimeInterval? = nil,
                     onStart: (() -> Void)? = nil,
-                    present: @escaping () -> Void) {
+                    present: @escaping () -> Void) -> FlightHandle {
         guard let window = keyWindow, source != .zero, !source.isEmpty else {
             onStart?()  // a caller that opens its screen at the start must still open it
             present()   // no geometry to fly from — never block opening the viewer
-            return
+            return FlightHandle()
         }
 
         let destination = destination ?? mediaFitRect(image.size, in: window.bounds)
@@ -848,6 +849,7 @@ enum MediaOpen {
         window.addSubview(backdrop)
         window.addSubview(clipView)
         clipView.addSubview(container)
+        let handle = FlightHandle(container: container, content: content)
 
         // Nil = the house spring, as the chat viewer has always opened.
         let flyDuration = timingDuration ?? duration
@@ -878,6 +880,7 @@ enum MediaOpen {
             // A screen already up since `onStart` (under the copy) only has to draw its photo, but
             // give it a few frames: the copy sits UNDER that screen, so overlap never shows twice.
             DispatchQueue.main.asyncAfter(deadline: .now() + (onStart == nil ? 0 : 0.05)) {
+                handle.finished = true
                 backdrop.removeFromSuperview()
                 clipView.removeFromSuperview()
             }
@@ -886,5 +889,35 @@ enum MediaOpen {
         // The screen being opened may come up NOW, over the flying copy, if it keeps its own photo
         // and background hidden until `present` (the attach editor does: its tools fade in mid-flight).
         onStart?()
+        return handle
+    }
+}
+
+/// A flight in the air. `replace` swaps the picture on the flying copy with a 0.07s fade, for an
+/// open that started on a rough picture: the reference gallery starts its zoom on the grid's
+/// thumbnail and fades its real item view in over it in exactly that time, while the sharper
+/// picture is still arriving.
+@MainActor final class FlightHandle {
+    private weak var container: UIView?
+    private weak var content: UIImageView?
+    fileprivate var finished = false
+    fileprivate init(container: UIView? = nil, content: UIImageView? = nil) {
+        self.container = container
+        self.content = content
+        finished = container == nil
+    }
+    func replace(image: UIImage) {
+        guard !finished, let container, let content, content.image !== image else { return }
+        let top = UIImageView(image: image)
+        top.contentMode = .scaleAspectFill
+        top.clipsToBounds = true
+        top.frame = container.bounds
+        top.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        top.alpha = 0
+        container.addSubview(top)
+        UIView.animate(withDuration: 0.07, animations: { top.alpha = 1 }) { _ in
+            content.image = image
+            top.removeFromSuperview()
+        }
     }
 }
