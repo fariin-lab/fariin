@@ -4809,7 +4809,11 @@ struct ThreadView: View {
                                   clip: MediaOpenRects.attachClipRect,
                                   to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size)) {
                         // Through the gate: a tap right after a close must not be dropped by SwiftUI.
-                        MediaPresentGate.present { panelEditImage = EditImageWrap(image: ui, sourceKey: key) }
+                        // A queued open runs later, outside the fly's no-animation transaction, so it
+                        // carries its own: otherwise the cover would slide up from the bottom again.
+                        MediaPresentGate.present {
+                            withoutPresentationAnimation { panelEditImage = EditImageWrap(image: ui, sourceKey: key) }
+                        }
                         // The editor is opaque over the tile by now; give it back for the close to find.
                         DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
                     }
