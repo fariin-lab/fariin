@@ -231,8 +231,8 @@ struct VideoApprovalView: View {
                 } else if isTallVideo {
                     // LONG PORTRAIT (9:16+, user spec): the view takes the video's own fitted rect and the
                     // ROUNDED CORNERS hug the video itself — standard ratios keep the untouched chain.
-                    // Owner 2026-10-14: no rounded card on tall photos and videos, just the picture ("don't add border, just make it photo").
                     base.aspectRatio(videoSize.width / videoSize.height, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 } else {
                     base
                 }
@@ -714,7 +714,11 @@ extension VideoApprovalView {
     @ViewBuilder var posterStandIn: some View {
         if let poster {
             let image = Image(uiImage: poster).resizable().scaledToFit()
-            image   // Owner 2026-10-14: no rounded card on tall photos and videos, just the picture ("don't add border, just make it photo").
+            if isTall(poster.size) {
+                image.clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            } else {
+                image
+            }
         } else {
             Color.clear
         }

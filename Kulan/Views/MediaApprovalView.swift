@@ -263,7 +263,7 @@ struct MediaApprovalView: View {
             // cornerRadius. Normal ratios: cornerRadius 0 → unchanged full-screen.
             ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
                           onZoom: { z in if page == index { imgZoom = z } },
-                          cornerRadius: 0,   // Owner 2026-10-14: no rounded card on tall photos and videos, just the picture ("don't add border, just make it photo").
+                          cornerRadius: isTall(ui.size) ? 22 : 0,
                           probe: fromAttach ? probes.probe(item.id) : nil)
                 .ignoresSafeArea()
         case .video(let id, let url, let thumb, let duration):
@@ -282,8 +282,8 @@ struct MediaApprovalView: View {
                 .background { if fromAttach, let t = thumb { Image(uiImage: t).resizable().scaledToFit() } }
             Group {
                 if let t = thumb, isTall(t.size) {
-                    // Owner 2026-10-14: no rounded card on tall photos and videos, just the picture ("don't add border, just make it photo").
                     player.aspectRatio(t.size.width / t.size.height, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     player.ignoresSafeArea()
