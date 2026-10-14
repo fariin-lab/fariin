@@ -47,7 +47,8 @@ final class CallService: NSObject {
         // when nothing is up.
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                object: nil, queue: .main) { [weak self] _ in
-            CallPiPController.shared.stopSystemPiP()
+            // Owner test, 2026-10-14: a minimized call's window IS its floating window now (no card).
+            if self?.minimized != true { CallPiPController.shared.stopSystemPiP() }
             self?.startVoiceMonitor()   // 1:1 audit r2 J3, 2026-10-08: back on screen with the card up
             // 1:1 audit r2 check, 2026-10-08: the freeze watch paused in the background comes back.
             if let self, self.remoteCameraOn, self.state != .idle, self.state != .ended {
@@ -3050,7 +3051,9 @@ final class CallService: NSObject {
         //
         // Unconditional and idempotent: stopSystemPiP no-ops when nothing is up, so there is no state to
         // get wrong here. Exactly one floating window can exist from this point.
-        CallPiPController.shared.stopSystemPiP()
+        // Owner test, 2026-10-14: except for a minimized call, whose only floating window is Apple's
+        // now (the card is off); it stays until its expand button or the chat list's call row.
+        if !minimized { CallPiPController.shared.stopSystemPiP() }
     }
 
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
