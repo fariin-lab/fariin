@@ -106,7 +106,12 @@ enum DiagLog {
         }
         Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if answered.claim() { add("  cache read DID NOT ANSWER in 3s (Firestore client stuck)") }
+            if answered.claim() {
+                add("  cache read DID NOT ANSWER in 3s (Firestore client stuck)")
+                // A cache read is disk only. No answer means the client's own worker is stopped,
+                // which nothing in this process can restart. See `SessionRecovery.noteWedged`.
+                await SessionRecovery.noteWedged("cache read")
+            }
         }
         let writes = Once()
         Task {
@@ -125,7 +130,10 @@ enum DiagLog {
         guard UserDefaults.standard.bool(forKey: pendingKey), !uploading else { return }
         uploading = true
         queue.async {
-            let text = fileURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+            // The tail only: the file may be up to twice `maxBytes` between trims, and the rule caps
+            // the text at 70,000, so a long log was refused ("insufficient permissions") and lost.
+            let full = fileURL.flatMap { try? Data(contentsOf: $0) } ?? Data()
+            let text = String(decoding: full.suffix(maxBytes), as: UTF8.self)
             Task { @MainActor in
                 defer { uploading = false }
                 guard !text.isEmpty else {
@@ -151,6 +159,9 @@ enum DiagLog {
             }
         }
     }
+
+    /// Waits until every line added so far is on disk. For the moment before the process ends.
+    static func flush() { queue.sync {} }
 
     private static func ms(since date: Date) -> Int { Int(Date().timeIntervalSince(date) * 1000) }
 

@@ -230,6 +230,9 @@ enum SessionRecovery {
         let now = Date()
         guard now >= nextStallAt else { return }
         DiagLog.snapshot(from)
+        // Two resets in this episode already answered and the server is still silent: resetting
+        // the same client again has never once helped (see `noteWedged`).
+        if stallStep >= 2 && stallEpisodeRecovered { noteWedged("two resets did not heal") }
         stallStep += 1
         let gap = stallGaps[min(stallStep - 1, stallGaps.count - 1)]
         nextStallAt = now.addingTimeInterval(jittered(gap))
@@ -240,6 +243,56 @@ enum SessionRecovery {
         Task { @MainActor in
             await recoverStall(announce: announce)
             stallRunning = false
+        }
+    }
+
+    /// ⛔ A FIRESTORE CLIENT THAT HAS STOPPED CANNOT BE STARTED AGAIN IN THIS PROCESS (owner,
+    /// 2026-10-14, 8th "dead until relaunch" report; the first one with the phone's own log).
+    ///
+    /// The log: a cache-only read, which is disk and nothing else, did not answer; then the network
+    /// switch did not answer either. Firestore runs everything on one serial worker, and in 11.15 that
+    /// worker waits with no limit for gRPC to hand back a stream it is closing (grpc_stream.cc:246,
+    /// grpc_unary_call.cc:103; firebase-ios-sdk issue 12522, open, no fix in any release). Once it
+    /// waits for good, every send, listener, lookup and call ring queues behind it. `terminate()`
+    /// queues behind it too, and the client is a singleton, so a fresh process is the only cure.
+    /// That is why his relaunch always fixed it and nothing in-app ever did.
+    ///
+    /// So when the client is proven stuck, the app ends its own process the moment he leaves it,
+    /// never while it is on screen and never during a live call. The next open, or an incoming
+    /// call's push, starts a fresh process with a working client. Unsent messages and posts are on
+    /// disk (Firestore's cache, the story outboxes) and go out from the fresh start.
+    ///
+    /// Proven stuck means one of: a cache read with no answer in 3s (DiagLog.snapshot); the network
+    /// switch with no answer; or a third stall in one episode after two resets that both answered
+    /// but did not bring the server back (the iOS 27 phone's pattern: cache fine, writes never
+    /// confirmed, resets "recovered" and changed nothing).
+    @MainActor private static var wedged = false
+    @MainActor private static var wedgedObserver: NSObjectProtocol?
+
+    @MainActor static func noteWedged(_ why: String) {
+        guard !wedged, Auth.auth().currentUser != nil else { return }
+        wedged = true
+        DiagLog.add("WEDGED (\(why)): fresh start when the app leaves the screen")
+        wedgedObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { endProcessWhenFree() }
+            }
+        if UIApplication.shared.applicationState == .background { endProcessWhenFree() }
+    }
+
+    /// In the background: end now, or once a live call is over (the call's audio keeps the process
+    /// running in the background, so this loop keeps ticking until then).
+    @MainActor private static func endProcessWhenFree() {
+        guard wedged else { return }
+        Task { @MainActor in
+            while inLiveCall {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+            // Back on screen meanwhile: wait for the next time he leaves.
+            guard UIApplication.shared.applicationState == .background else { return }
+            DiagLog.add("process ends for a fresh start")
+            DiagLog.flush()
+            exit(0)
         }
     }
 
@@ -332,6 +385,7 @@ enum SessionRecovery {
         guard offAnswered, onAnswered else {
             print("[Recovery] stall: the network switch did not answer in \(Int(switchTimeout))s, trying again later")
             DiagLog.add("  network switch DID NOT ANSWER (off \(offAnswered), on \(onAnswered))")
+            noteWedged("network switch")
             return
         }
         guard Auth.auth().currentUser?.uid == uid else { return }
