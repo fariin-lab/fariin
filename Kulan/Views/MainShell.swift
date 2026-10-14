@@ -587,9 +587,39 @@ struct CallsView: View {
 
     private var shown: [CallEntry] {
         var list = filter == 1 ? repo.calls.filter { $0.missedIncoming } : repo.calls
+        // Owner, 2026-10-14: the live call's row comes from the call itself (`liveEntry`), so the
+        // server's copy of it is left out, and the row is there from the moment of dialling.
+        if let live = liveEntry {
+            list.removeAll { $0.id == live.id }
+            if filter == 0 { list.insert(live, at: 0) }
+        }
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty { list = list.filter { $0.name.lowercased().contains(q) } }
         return list
+    }
+
+    /// ⛔ THE LIVE ROW IS LOCAL — owner, 2026-10-14: "Return" showed only after the call was
+    /// answered, and late. The row it sits on was the server's `call_<callId>` record, which exists
+    /// only once the call document has been created and the ring row written, and which this list
+    /// sees only on its next fetch (30 s TTL, no listener). The reference app's call list draws the
+    /// call that is up from the call's own state, not from the stored history. This does the same:
+    /// built from `CallService` while a 1:1 call is calling, ringing, connecting or active, and gone
+    /// the moment it ends (declined, cancelled, failed, hung up), when the stored record takes over.
+    private var liveEntry: CallEntry? {
+        let svc = CallService.shared
+        let s = svc.state
+        guard s == .outgoing || s == .active || s == .reconnecting, !svc.otherUid.isEmpty,
+              let me = AuthService.shared.uid else { return nil }
+        return CallEntry(
+            // Before the call document exists there is no id yet; the placeholder never matches a
+            // stored row, and the real id replaces it once the create lands.
+            id: svc.callId.map { "call_\($0)" } ?? "call_live",
+            cid: [me, svc.otherUid].sorted().joined(separator: "_"),
+            name: svc.otherName, photoUrl: svc.otherPhotoUrl, otherUid: svc.otherUid,
+            callerUid: svc.isCaller ? me : svc.otherUid,
+            outcome: s == .outgoing ? "ringing" : "ongoing",
+            video: svc.isVideoCall, durationSec: 0,
+            date: Date())   // newest; the live row shows no time
     }
     // Consecutive same-kind calls collapse into one "name (3)" row (like the native Phone app):
     // same person, same direction/outcome/type, same day, adjacent in the list.
@@ -601,8 +631,10 @@ struct CallsView: View {
     }
     private var shownRuns: [CallRun] {
         var runs: [CallRun] = []
+        let liveId = liveEntry?.id
         for e in shown {
             if let last = runs.last?.latest,
+               last.id != liveId, e.id != liveId,   // the live call is always a row of its own
                last.otherUid == e.otherUid, last.mine == e.mine,
                last.missed == e.missed, last.video == e.video,
                last.adhoc?.roomId == e.adhoc?.roomId,   // never merge two different rooms
@@ -643,10 +675,8 @@ struct CallsView: View {
     /// This run holds the 1:1 call that is up right now: its live row is `call_<callId>` (written at
     /// the ring, flipped to ongoing on connect; `ChatService.recordCallRinging`).
     private func isLiveCall(_ run: CallRun) -> Bool {
-        let svc = CallService.shared
-        let s = svc.state
-        guard s == .outgoing || s == .active || s == .reconnecting, let id = svc.callId else { return false }
-        return run.ids.contains("call_\(id)")
+        guard let live = liveEntry else { return false }
+        return run.ids.contains(live.id)
     }
 
     private func deleteSelectedCalls() {
@@ -964,7 +994,7 @@ struct CallsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !repo.hasLoaded && ConversationsRepository.shared.expectsChats {
+                if !repo.hasLoaded && ConversationsRepository.shared.expectsChats && liveEntry == nil {
                     // Shimmer only for an account with history on this device — a fresh sign-up goes
                     // straight to the empty state instead of fake rows (same rule as the chat list).
                     CallListSkeleton()
@@ -983,7 +1013,7 @@ struct CallsView: View {
                         }
                         // The empty states live INSIDE the list, under whatever links there are, so
                         // the create row above them is always there, even before the first call.
-                        if !repo.hasLoaded || repo.calls.isEmpty {
+                        if (!repo.hasLoaded || repo.calls.isEmpty) && liveEntry == nil {
                             EmptyStateView(title: "No Calls Yet", icon: "phone",
                                            text: "Your call history will appear here.")
                                 .callsPlaceholderRow()
