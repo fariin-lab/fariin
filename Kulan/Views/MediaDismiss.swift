@@ -705,6 +705,24 @@ enum MediaOpen {
                                         initialVelocity: .zero)
     }
 
+    /// The reference app's PHOTO PICKER open (attach grid -> editor), read off its gallery source:
+    /// spring stiffness 300, damping 25, mass 0.8, played 1.8x slower (`durationFactor`). Slowing a
+    /// spring by f is the same spring with stiffness / f² and damping / f, which is what this is.
+    /// Owner 2026-10-14: the house spring above made the attach open look like a "pop"; this one is
+    /// slower and lands with a ~1% settle. Its background fades in a fixed 0.15s, not on the spring.
+    static var attachOpenSpring: UISpringTimingParameters {
+        let f: CGFloat = 1.8
+        return UISpringTimingParameters(mass: 0.8, stiffness: 300 / (f * f), damping: 25 / f,
+                                        initialVelocity: .zero)
+    }
+    static let attachBackdropFade: TimeInterval = 0.15
+    /// How long `attachOpenSpring` takes to settle, for the corner radius that rides beside it.
+    static var attachOpenDuration: TimeInterval {
+        let s = CASpringAnimation()
+        s.mass = 0.8; s.stiffness = 300 / (1.8 * 1.8); s.damping = 25 / 1.8
+        return s.settlingDuration
+    }
+
     private static var keyWindow: UIWindow? {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow }
@@ -776,6 +794,9 @@ enum MediaOpen {
                     clip: CGRect? = nil,
                     to destination: CGRect? = nil,
                     destinationCornerRadius: CGFloat = 0,
+                    timing: UISpringTimingParameters? = nil,
+                    timingDuration: TimeInterval? = nil,
+                    backdropFade: TimeInterval? = nil,
                     present: @escaping () -> Void) {
         guard let window = keyWindow, source != .zero, !source.isEmpty else {
             present()   // no geometry to fly from — never block opening the viewer
@@ -814,18 +835,23 @@ enum MediaOpen {
         window.addSubview(clipView)
         clipView.addSubview(container)
 
-        let animator = UIViewPropertyAnimator(duration: duration, timingParameters: spring)
+        // Nil = the house spring, as the chat viewer has always opened.
+        let flyDuration = timingDuration ?? duration
+        let animator = UIViewPropertyAnimator(duration: flyDuration, timingParameters: timing ?? spring)
         animator.addAnimations {
             clipView.frame = window.bounds
             container.frame = destination
             container.layer.cornerRadius = destinationCornerRadius
-            backdrop.alpha = 1
+            if backdropFade == nil { backdrop.alpha = 1 }
+        }
+        if let backdropFade {
+            UIView.animate(withDuration: backdropFade, delay: 0, options: .curveEaseOut) { backdrop.alpha = 1 }
         }
         // cornerRadius is a CALayer property and does not ride a UIView animation block on its own.
         let radius = CABasicAnimation(keyPath: "cornerRadius")
         radius.fromValue = sourceCornerRadius
         radius.toValue = destinationCornerRadius
-        radius.duration = duration
+        radius.duration = flyDuration
         radius.timingFunction = CAMediaTimingFunction(name: .easeOut)
         container.layer.add(radius, forKey: "cornerRadius")
 

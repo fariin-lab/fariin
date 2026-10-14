@@ -4815,7 +4815,11 @@ struct ThreadView: View {
                     MediaSourceVisibility.shared.hide(key)
                     MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                                   clip: MediaOpenRects.attachClipRect,
-                                  to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size)) {
+                                  to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size),
+                                  // The reference picker's slower spring; the house one read as a "pop".
+                                  timing: MediaOpen.attachOpenSpring,
+                                  timingDuration: MediaOpen.attachOpenDuration,
+                                  backdropFade: MediaOpen.attachBackdropFade) {
                         // Through the gate: a tap right after a close must not be dropped by SwiftUI.
                         // A queued open runs later, outside the fly's no-animation transaction, so it
                         // carries its own: otherwise the cover would slide up from the bottom again.
