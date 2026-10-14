@@ -693,7 +693,10 @@ struct AttachRecentsStrip: View {
     //   • Selection active → tap opens the MIXED approval pager over the whole selection (images AND
     //     videos together — swipe between all of them, edit each, one caption, one send).
     private func openTapped(_ a: PHAsset) {
-        if selectedIds.isEmpty { pick(a) }
+        // ⛔ A TAP OPENS WHAT WAS TAPPED — owner 2026-10-14: with photos selected, tapping one that
+        // is NOT selected opened the selection instead. Only a selected tile opens the selection
+        // pager; any other tile opens on its own, as with nothing selected.
+        if selectedIds.isEmpty || !selectedIds.contains(a.localIdentifier) { pick(a) }
         else { openSelected(tapped: a.localIdentifier) }
     }
 
