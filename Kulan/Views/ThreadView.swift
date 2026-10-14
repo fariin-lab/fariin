@@ -100,7 +100,7 @@ struct ThreadView: View {
     @State private var deselectedIds: Set<String> = []
     @State private var multiVideoApprove: MultiVideoWrap? // ALL-video multi (main picker) → multi-video editor
     @State private var videoToApprove: VideoWrap?    // picked video → approval page (caption) before send
-    struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage }
+    struct EditImageWrap: Identifiable { let id = UUID(); let image: UIImage; var sourceKey: String? = nil }
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
     struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
@@ -4786,11 +4786,31 @@ struct ThreadView: View {
                 // now and goes through `attachTile`, which already closes the sheet and waits the
                 // same 0.35s before opening the next screen.
                 onClose: { showAttachPanel = false },
-                onPickPhoto: { ui in
+                onPickPhoto: { ui, assetId in
                     // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
                     // editor and lands BACK on the sheet to pick another image (user request — closing
                     // the sheet first meant X dumped you all the way to the chat).
-                    panelEditImage = EditImageWrap(image: ui)
+                    //
+                    // ⛔ OUT OF THE TILE, NOT UP FROM THE BOTTOM — owner, 2026-10-14. The cover's own
+                    // slide is what came up from the bottom edge. Now the chat viewer's pipeline does
+                    // it: the photo flies from the tile's live rect onto the editor's rest rect, and the
+                    // cover appears under the copy with no animation. The tile is hidden for the flight
+                    // so the photo is never on screen twice. The sheet itself is not touched.
+                    let key = MediaOpenRects.key(.attach, assetId)
+                    guard let from = MediaOpenRects.rect(key),
+                          let to = ChatImageEditor.restRect(ui.size) else {
+                        panelEditImage = EditImageWrap(image: ui)
+                        return
+                    }
+                    MediaSourceVisibility.shared.hide(key)
+                    MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
+                                  clip: MediaOpenRects.attachClipRect,
+                                  to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size)) {
+                        // Through the gate: a tap right after a close must not be dropped by SwiftUI.
+                        MediaPresentGate.present { panelEditImage = EditImageWrap(image: ui, sourceKey: key) }
+                        // The editor is opaque over the tile by now; give it back for the close to find.
+                        DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
+                    }
                 },
                 onPickVideo: { url in
                     // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
@@ -4899,7 +4919,11 @@ struct ThreadView: View {
                                 Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                 showAttachPanel = false
                             },
-                            selfDismissOnSend: false)
+                            selfDismissOnSend: false,
+                            sourceKey: wrap.sourceKey)
+            // Clear, so a drag-close fades the editor down to the SHEET underneath, not to black.
+            // The editor paints its own black at rest.
+            .presentationBackground(.clear)
         }
         // Single-video trim editor OVER the sheet: X returns to the sheet; Send delivers + closes the sheet.
         .fullScreenCover(item: $panelVideoApprove) { wrap in

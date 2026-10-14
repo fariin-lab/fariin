@@ -764,18 +764,25 @@ enum MediaOpen {
     ///   - clip: the region the source is allowed to draw in — the message list's frame. A bubble half
     ///           scrolled under the header must not appear to fly OVER the header, which is exactly what
     ///           a transition with no clipping view does.
+    ///   - destination: where the screen being opened draws the media at rest, window coordinates. Nil
+    ///            = fitted to the whole window, which is where the viewer draws it. The photo editor
+    ///            opened from the attach grid draws it ABOVE its tool bar, and landing anywhere else
+    ///            would jump at the hand-over.
+    ///   - destinationCornerRadius: the media's radius at rest on that screen (the editor rounds tall photos).
     ///   - present: reveals the real viewer. Called with the copy still on screen and matching it exactly.
     static func fly(image: UIImage,
                     from source: CGRect,
                     sourceCornerRadius: CGFloat = 14,
                     clip: CGRect? = nil,
+                    to destination: CGRect? = nil,
+                    destinationCornerRadius: CGFloat = 0,
                     present: @escaping () -> Void) {
         guard let window = keyWindow, source != .zero, !source.isEmpty else {
             present()   // no geometry to fly from — never block opening the viewer
             return
         }
 
-        let destination = mediaFitRect(image.size, in: window.bounds)
+        let destination = destination ?? mediaFitRect(image.size, in: window.bounds)
 
         // Backdrop, fading in underneath the media exactly as the close fades it out.
         let backdrop = UIView(frame: window.bounds)
@@ -811,13 +818,13 @@ enum MediaOpen {
         animator.addAnimations {
             clipView.frame = window.bounds
             container.frame = destination
-            container.layer.cornerRadius = 0
+            container.layer.cornerRadius = destinationCornerRadius
             backdrop.alpha = 1
         }
         // cornerRadius is a CALayer property and does not ride a UIView animation block on its own.
         let radius = CABasicAnimation(keyPath: "cornerRadius")
         radius.fromValue = sourceCornerRadius
-        radius.toValue = 0
+        radius.toValue = destinationCornerRadius
         radius.duration = duration
         radius.timingFunction = CAMediaTimingFunction(name: .easeOut)
         container.layer.add(radius, forKey: "cornerRadius")
