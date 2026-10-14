@@ -52,6 +52,83 @@ struct MediaApprovalView: View {
     var selfDismissOnSend: Bool = true
     @Environment(\.dismiss) private var dismiss
 
+    // ⛔ OUT OF THE TILE AND BACK — owner 2026-10-14: with a selection, tapping a tile still slid this
+    // page up from the bottom. Opened with an `arrival`, it starts on the tapped item, the item flies
+    // out of its tile (ThreadView.openAttachSelection), the tools fade in during the flight, and X /
+    // a drag down fly the CURRENT page back into its own tile through `MediaDismissHost`.
+    private let fromAttach: Bool
+    @ObservedObject private var arrival: EditorArrival
+    private var arrived: Bool { arrival.landed }
+    @State private var dismissing = false
+    @State private var closeToken = 0
+    @State private var chromeShown = false
+    @State private var imgZoom: CGFloat = 1          // the current image page's zoom (gates the drag-close)
+    @State private var probes = ProbeBox()           // where each image page draws, zoom included
+    final class ProbeBox {
+        var map: [String: ZoomRectProbe] = [:]
+        func probe(_ id: String) -> ZoomRectProbe {
+            if let p = map[id] { return p }
+            let p = ZoomRectProbe(); map[id] = p; return p
+        }
+    }
+
+    init(items: [ApprovalMedia], onRemove: @escaping (String) -> Void = { _ in },
+         onSend: @escaping (_ ordered: [SendMedia], _ caption: String, _ hd: Bool) -> Void,
+         selfDismissOnSend: Bool = true, startPage: Int = 0, arrival: EditorArrival? = nil) {
+        _items = State(initialValue: items)
+        self.onRemove = onRemove
+        self.onSend = onSend
+        self.selfDismissOnSend = selfDismissOnSend
+        _page = State(initialValue: items.indices.contains(startPage) ? startPage : 0)
+        self.fromAttach = arrival != nil
+        _arrival = ObservedObject(wrappedValue: arrival ?? EditorArrival(landed: true))
+    }
+
+    /// Bars around the media, measured, so the open can land on a tall video before this page exists.
+    private static var lastTopH: CGFloat = 56
+    private static var lastBottomH: CGFloat = 170
+
+    /// Where a page draws its media at rest, in window coordinates. Images and standard videos fill
+    /// the screen (`ignoresSafeArea`), fitted; a tall (9:16+) video fits between the two bars.
+    static func restRect(_ media: CGSize, video: Bool = false) -> CGRect? {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
+        let b = window.bounds, inset = window.safeAreaInsets
+        let tall = media.width > 0 && media.height >= media.width * (16.0 / 9.0) - 1
+        guard video, tall else { return mediaFitRect(media, in: b) }
+        let top = inset.top + lastTopH
+        let h = max(0, b.height - top - inset.bottom - lastBottomH)
+        return mediaFitRect(media, in: CGRect(x: inset.left, y: top, width: b.width - inset.left - inset.right, height: h))
+    }
+
+    private var currentKey: String? { fromAttach ? current.map { MediaOpenRects.key(.attach, $0.id) } : nil }
+
+    /// The current page's media on screen now (zoom included) and the image to fly home with.
+    private func currentMedia() -> (frame: CGRect, image: UIImage?)? {
+        guard let item = current, let still = item.thumb,
+              let rest = Self.restRect(still.size, video: item.isVideo) else { return nil }
+        switch item {
+        case .image(let id, _):
+            if imgZoom > 1.02, let r = probes.probe(id).imageWindowRect() { return (r, still) }
+            return (rest, still)
+        case .video:
+            let z = max(1, vZoom)
+            guard z > 1.01 else { return (rest, still) }
+            let w = rest.width * z, h = rest.height * z
+            return (CGRect(x: rest.midX - w / 2 + vPan.width, y: rest.midY - h / 2 + vPan.height, width: w, height: h), still)
+        }
+    }
+
+    /// X: straight home from where the media is, zoomed or not; the keyboard goes down first.
+    private func close() {
+        guard fromAttach else { dismiss(); return }
+        closeFlag.buttonClose = true
+        guard captionFocused else { closeToken += 1; return }
+        captionFocused = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { closeToken += 1 }
+    }
+    @State private var closeFlag = ZoomRectProbe()   // only its buttonClose flag is used
+
     @State private var page = 0
     @State private var caption = ""
     @State private var hd = false
@@ -84,7 +161,8 @@ struct MediaApprovalView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // While the still flies, its own black backdrop (under this cover) is the background.
+            Color.black.ignoresSafeArea().opacity(arrived ? 1 : 0)
             TabView(selection: $page) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                     pageView(item, index: i).tag(i)
@@ -92,6 +170,7 @@ struct MediaApprovalView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
+            .opacity(dismissing || !arrived ? 0 : 1)   // the flying copy stands in for the page
             if exporting {
                 ZStack { Color.black.opacity(0.45).ignoresSafeArea(); ProgressView().tint(.white).scaleEffect(1.3) }
             }
@@ -103,9 +182,49 @@ struct MediaApprovalView: View {
         )
         // Swiping to another page pauses everything (single-editor parity) and resets the video zoom/pan
         // so each page opens fit (zoomed out), never carrying the previous page's zoom.
-        .onChange(of: page) { _, _ in videoPlaying = [:]; vZoom = 1; vPan = .zero }
-        .safeAreaInset(edge: .top, spacing: 0) { topBar }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
+        .onChange(of: page) { _, _ in videoPlaying = [:]; vZoom = 1; vPan = .zero; imgZoom = 1 }
+        // The tools only fade (0.15s), never move: a withAnimation here would also animate the
+        // cover's first layout and slide them up from the bottom.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            topBar
+                .animation(.easeInOut(duration: 0.15)) { $0.opacity(chromeOpacity) }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { Self.lastTopH = $0 }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomControls
+                .animation(.easeInOut(duration: 0.15)) { $0.opacity(chromeOpacity) }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                    if !captionFocused { Self.lastBottomH = h }
+                }
+        }
+        .overlay {
+            if let key = currentKey {
+                MediaDismissHost(
+                    canBegin: { arrived && !captionFocused && !editCrop && !editPen && !exporting
+                                && ((imgZoom <= 1.02 && !vZoomed) || closeFlag.buttonClose) },
+                    media: { currentMedia() },
+                    onHideContent: { hide in
+                        dismissing = hide
+                        if hide { videoPlaying = [:] }
+                    },
+                    targetRect: { MediaOpenRects.liveRect(key) },
+                    targetId: { key },
+                    clipRect: { MediaOpenRects.attachClipRect },
+                    closeToken: closeToken,
+                    onDismiss: {
+                        // The copy IS the animation, so the cover goes without its own slide.
+                        MediaPresentGate.noteDismissed()
+                        withoutPresentationAnimation { dismiss() }
+                    },
+                    copyFromMediaFrame: true)
+            }
+        }
+        .onAppear {
+            // One hop, outside the no-animation transaction that presented the cover.
+            if fromAttach, !chromeShown { DispatchQueue.main.async { chromeShown = true } }
+        }
+        .onDisappear { if fromAttach { MediaPresentGate.noteClosed() } }
+        .allowsHitTesting(arrived)   // nothing is tappable until the still has landed
         // Per-IMAGE editing (the same tools as the single-photo editor), presented INLINE with the SAME
         // 0.28s cross-fade the single editor uses — they were fullScreenCovers (slide-up modals), which
         // made Crop/Pen feel different between single and multi editing.
@@ -143,7 +262,9 @@ struct MediaApprovalView: View {
             // screen-centered pinch zoom; tall (9:16+) images get rounded corners on the image itself via
             // cornerRadius. Normal ratios: cornerRadius 0 → unchanged full-screen.
             ZoomImageView(image: ui, onSingleTap: { captionFocused = false },
-                          cornerRadius: isTall(ui.size) ? 22 : 0)
+                          onZoom: { z in if page == index { imgZoom = z } },
+                          cornerRadius: isTall(ui.size) ? 22 : 0,
+                          probe: fromAttach ? probes.probe(item.id) : nil)
                 .ignoresSafeArea()
         case .video(let id, let url, let thumb, let duration):
             // EXACT single-video-editor behavior: starts PAUSED with the big Play button, tap toggles,
@@ -156,6 +277,9 @@ struct MediaApprovalView: View {
                             end: max((trimStart[id] ?? 0) + 0.1, trimEnd[id] ?? duration),
                             scrubTime: page == index ? scrubTime : nil,
                             onTime: { t in if page == index, scrubTime == nil { playheads[id] = t } })
+                // Opened out of a tile: the still waits under the player, fitted as it is, so the
+                // landing never shows black while the first frame decodes.
+                .background { if fromAttach, let t = thumb { Image(uiImage: t).resizable().scaledToFit() } }
             Group {
                 if let t = thumb, isTall(t.size) {
                     player.aspectRatio(t.size.width / t.size.height, contentMode: .fit)
@@ -203,7 +327,7 @@ struct MediaApprovalView: View {
 
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { close() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .liquidGlass(Circle(), interactive: true)
@@ -215,6 +339,8 @@ struct MediaApprovalView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
+
+    private var chromeOpacity: Double { !fromAttach || chromeShown ? 1 : 0 }
 
     private func toolButton(_ icon: String, active: Bool = false, label: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {

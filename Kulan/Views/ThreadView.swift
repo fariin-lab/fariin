@@ -106,13 +106,20 @@ struct ThreadView: View {
     }
     struct ComingSoonWrap: Identifiable { let id = UUID(); let icon: String; let title: String }
     @State private var mediaToApprove: MediaWrap?    // 2+ picked items (images AND/OR videos) → mixed approval pager
-    struct MediaWrap: Identifiable { let id = UUID(); let items: [ApprovalMedia] }
+    struct MediaWrap: Identifiable {
+        let id = UUID(); let items: [ApprovalMedia]
+        // Opened out of an attach tile while selecting: the page it starts on, and the flight's arrival.
+        var start = 0; var arrival: EditorArrival? = nil
+    }
     struct VideoWrap: Identifiable {   // picked video → approval page (caption)
         let id = UUID(); let url: URL
         // Set when it was opened out of an attach tile (see onPickVideo).
         var sourceKey: String? = nil; var poster: UIImage? = nil; var arrival: EditorArrival? = nil
     }
-    struct MultiVideoWrap: Identifiable { let id = UUID(); let clips: [ApprovalClip] }   // ALL-video multi → single-editor chassis + rail
+    struct MultiVideoWrap: Identifiable {   // ALL-video multi → single-editor chassis + rail
+        let id = UUID(); let clips: [ApprovalClip]
+        var start = 0; var arrival: EditorArrival? = nil   // see MediaWrap
+    }
 
     // A 2+ selection that is ENTIRELY videos routes to the multi-video editor (the single video editor's
     // exact page + thumbnail rail — user spec); any mix keeps the pager.
@@ -4801,87 +4808,8 @@ struct ThreadView: View {
                 // now and goes through `attachTile`, which already closes the sheet and waits the
                 // same 0.35s before opening the next screen.
                 onClose: { showAttachPanel = false },
-                onPickPhoto: { ui, assetId in
-                    // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
-                    // editor and lands BACK on the sheet to pick another image (user request — closing
-                    // the sheet first meant X dumped you all the way to the chat).
-                    //
-                    // ⛔ OUT OF THE TILE, NOT UP FROM THE BOTTOM — owner, 2026-10-14. The cover's own
-                    // slide is what came up from the bottom edge. Now the chat viewer's pipeline does
-                    // it: the photo flies from the tile's live rect onto the editor's rest rect, and the
-                    // cover appears under the copy with no animation. The tile is hidden for the flight
-                    // so the photo is never on screen twice. The sheet itself is not touched.
-                    let key = MediaOpenRects.key(.attach, assetId)
-                    // liveRect asks the tile's own view (converted to the window), so the sheet
-                    // sitting part-way down the screen is measured, not assumed.
-                    guard let from = MediaOpenRects.liveRect(key),
-                          let to = ChatImageEditor.restRect(ui.size) else {
-                        panelEditImage = EditImageWrap(image: ui)
-                        return
-                    }
-                    MediaSourceVisibility.shared.hide(key)
-                    let arrival = EditorArrival(landed: false)
-                    MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
-                                  clip: MediaOpenRects.attachClipRect,
-                                  to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size),
-                                  // The reference picker's slower spring; the house one read as a "pop".
-                                  timing: MediaOpen.attachOpenSpring,
-                                  timingDuration: MediaOpen.attachOpenDuration,
-                                  backdropFade: MediaOpen.attachBackdropFade,
-                                  // ⛔ THE TOOLS FADE IN DURING THE FLIGHT — owner 2026-10-14: they
-                                  // "pop" when they appear after the photo lands. The reference picker
-                                  // puts its gallery up at the START, tools fading in 0.15s with the
-                                  // black, photo flying under them. So the editor is presented now,
-                                  // showing only its tools until `arrival` says the photo landed.
-                                  onStart: {
-                                      // Through the gate: a tap right after a close must not be
-                                      // dropped by SwiftUI. A queued open runs later, outside this
-                                      // no-animation transaction, so it carries its own: otherwise
-                                      // the cover would slide up from the bottom again.
-                                      MediaPresentGate.present {
-                                          withoutPresentationAnimation {
-                                              panelEditImage = EditImageWrap(image: ui, sourceKey: key, arrival: arrival)
-                                          }
-                                      }
-                                  }) {
-                        arrival.landed = true
-                        // The editor is opaque over the tile by now; give it back for the close to find.
-                        DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
-                    }
-                },
-                onPickVideo: { url, assetId, poster in
-                    // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
-                    // the editor and lands BACK on the sheet to pick another (was closing the sheet first,
-                    // which dumped you all the way to the chat on a stray X).
-                    //
-                    // ⛔ VIDEOS TOO — owner 2026-10-14: "you forgot videos, it still comes from the
-                    // bottom". The photo's open exactly, with a still of the video as the flying copy.
-                    let key = MediaOpenRects.key(.attach, assetId)
-                    guard let poster, let from = MediaOpenRects.liveRect(key),
-                          let to = VideoApprovalView.restRect(poster.size) else {
-                        panelVideoApprove = VideoWrap(url: url)
-                        return
-                    }
-                    MediaSourceVisibility.shared.hide(key)
-                    let arrival = EditorArrival(landed: false)
-                    MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
-                                  clip: MediaOpenRects.attachClipRect,
-                                  to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(poster.size),
-                                  timing: MediaOpen.attachOpenSpring,
-                                  timingDuration: MediaOpen.attachOpenDuration,
-                                  backdropFade: MediaOpen.attachBackdropFade,
-                                  onStart: {
-                                      MediaPresentGate.present {
-                                          withoutPresentationAnimation {
-                                              panelVideoApprove = VideoWrap(url: url, sourceKey: key,
-                                                                            poster: poster, arrival: arrival)
-                                          }
-                                      }
-                                  }) {
-                        arrival.landed = true
-                        DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
-                    }
-                },
+                onPickPhoto: { ui, assetId in openAttachPhoto(ui, assetId: assetId) },
+                onPickVideo: { url, assetId, poster in openAttachVideo(url, assetId: assetId, poster: poster) },
                 onSendVideos: { urls, caption in
                     showAttachPanel = false
                     // SELECT + Send → send each selected video directly (no editor). The caption rides
@@ -4927,18 +4855,18 @@ struct ThreadView: View {
                                             localAlbumIsVideo: isVideo))
                 },
                 onOptimisticFailed: { clientId in repo.markFailed(clientId: clientId) },
-                onOpenMedia: { items in
+                onOpenMedia: { items, tapped in
                     // Tapping media while selecting → the mixed approval pager. A single item keeps its
                     // dedicated editor (image editor / video trim editor); 2+ open the pager. All open OVER
                     // the media sheet (sheet stays underneath) so X returns to it instead of the chat.
-                    if items.count == 1, case .image(_, let ui) = items[0] {
-                        panelEditImage = EditImageWrap(image: ui)
-                    } else if items.count == 1, case .video(_, let url, _, _) = items[0] {
-                        panelVideoApprove = VideoWrap(url: url)
-                    } else if let clips = ThreadView.videoClips(from: items) {
-                        panelMultiVideo = MultiVideoWrap(clips: clips)   // all videos → single-editor page + rail
+                    // ⛔ OUT OF THE TILE HERE TOO — owner 2026-10-14: with a selection, a tap still slid
+                    // the page up from the bottom. Every one of these now flies out of the tapped tile.
+                    if items.count == 1, case .image(let id, let ui) = items[0] {
+                        openAttachPhoto(ui, assetId: id)
+                    } else if items.count == 1, case .video(let id, let url, let thumb, _) = items[0] {
+                        openAttachVideo(url, assetId: id, poster: thumb)
                     } else {
-                        panelMediaApprove = MediaWrap(items: items)
+                        openAttachSelection(items, tapped: tapped)
                     }
                 },
                 onCaptionFocused: { attachExpandTick &+= 1 },
@@ -5012,7 +4940,10 @@ struct ThreadView: View {
                                   Task { await sendMixedGroup(ordered, caption: caption, hd: hd) }
                                   showAttachPanel = false
                               },
-                              selfDismissOnSend: false)
+                              selfDismissOnSend: false,
+                              startPage: wrap.start,
+                              arrival: wrap.arrival)
+            .presentationBackground(.clear)   // the pager paints its own black at rest
         }
         // Multi-VIDEO editor OVER the sheet (all-video selections): the single video editor's exact page
         // + the thumbnail rail. Sends each clip in order; the caption rides once, on the first.
@@ -5023,7 +4954,9 @@ struct ThreadView: View {
                     for u in urls { await sendVideo(from: u, caption: cap, hd: hd); cap = "" }
                 }
                 showAttachPanel = false
-            }, selfDismissOnSend: false, onRemove: { deselectedIds.insert($0) })
+            }, selfDismissOnSend: false, onRemove: { deselectedIds.insert($0) },
+               start: wrap.start, arrival: wrap.arrival)
+            .presentationBackground(.clear)   // the editor paints its own black at rest
         }
     }
 
@@ -6120,6 +6053,130 @@ struct ThreadView: View {
         }) {
             try await ChatService.sendMixedAlbum(cid: cid, items: items, caption: caption,
                                                  clientId: clientId, group: isGroup ? groupMembers : nil)
+        }
+    }
+
+    // MARK: Attach tile opens (the fly out of a grid tile; see MediaOpen.fly)
+
+    private func openAttachPhoto(_ ui: UIImage, assetId: String) {
+        // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
+        // editor and lands BACK on the sheet to pick another image (user request — closing
+        // the sheet first meant X dumped you all the way to the chat).
+        //
+        // ⛔ OUT OF THE TILE, NOT UP FROM THE BOTTOM — owner, 2026-10-14. The cover's own
+        // slide is what came up from the bottom edge. Now the chat viewer's pipeline does
+        // it: the photo flies from the tile's live rect onto the editor's rest rect, and the
+        // cover appears under the copy with no animation. The tile is hidden for the flight
+        // so the photo is never on screen twice. The sheet itself is not touched.
+        let key = MediaOpenRects.key(.attach, assetId)
+        // liveRect asks the tile's own view (converted to the window), so the sheet
+        // sitting part-way down the screen is measured, not assumed.
+        guard let from = MediaOpenRects.liveRect(key),
+              let to = ChatImageEditor.restRect(ui.size) else {
+            panelEditImage = EditImageWrap(image: ui)
+            return
+        }
+        MediaSourceVisibility.shared.hide(key)
+        let arrival = EditorArrival(landed: false)
+        MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
+                      clip: MediaOpenRects.attachClipRect,
+                      to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(ui.size),
+                      // The reference picker's slower spring; the house one read as a "pop".
+                      timing: MediaOpen.attachOpenSpring,
+                      timingDuration: MediaOpen.attachOpenDuration,
+                      backdropFade: MediaOpen.attachBackdropFade,
+                      // ⛔ THE TOOLS FADE IN DURING THE FLIGHT — owner 2026-10-14: they
+                      // "pop" when they appear after the photo lands. The reference picker
+                      // puts its gallery up at the START, tools fading in 0.15s with the
+                      // black, photo flying under them. So the editor is presented now,
+                      // showing only its tools until `arrival` says the photo landed.
+                      onStart: {
+                          // Through the gate: a tap right after a close must not be
+                          // dropped by SwiftUI. A queued open runs later, outside this
+                          // no-animation transaction, so it carries its own: otherwise
+                          // the cover would slide up from the bottom again.
+                          MediaPresentGate.present {
+                              withoutPresentationAnimation {
+                                  panelEditImage = EditImageWrap(image: ui, sourceKey: key, arrival: arrival)
+                              }
+                          }
+                      }) {
+            arrival.landed = true
+            // The editor is opaque over the tile by now; give it back for the close to find.
+            DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
+        }
+    }
+
+    /// Two or more selected: the pager (or the all-video editor) opens ON the tapped item, flying out
+    /// of its tile. A tap on a tile that is not in the selection opens on the first item, as before,
+    /// and flies from that item's tile when it is on screen.
+    private func openAttachSelection(_ items: [ApprovalMedia], tapped: String?) {
+        let start = tapped.flatMap { t in items.firstIndex { $0.id == t } } ?? 0
+        let item = items[start]
+        let clips = ThreadView.videoClips(from: items)
+        let key = MediaOpenRects.key(.attach, item.id)
+        guard let still = item.thumb, let from = MediaOpenRects.liveRect(key),
+              let to = clips != nil ? VideoApprovalView.restRect(still.size)
+                                    : MediaApprovalView.restRect(still.size, video: item.isVideo) else {
+            if let clips { panelMultiVideo = MultiVideoWrap(clips: clips, start: start) }
+            else { panelMediaApprove = MediaWrap(items: items, start: start) }
+            return
+        }
+        MediaSourceVisibility.shared.hide(key)
+        let arrival = EditorArrival(landed: false)
+        MediaOpen.fly(image: still, from: from, sourceCornerRadius: 0,
+                      clip: MediaOpenRects.attachClipRect,
+                      to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(still.size),
+                      timing: MediaOpen.attachOpenSpring,
+                      timingDuration: MediaOpen.attachOpenDuration,
+                      backdropFade: MediaOpen.attachBackdropFade,
+                      onStart: {
+                          MediaPresentGate.present {
+                              withoutPresentationAnimation {
+                                  if let clips {
+                                      panelMultiVideo = MultiVideoWrap(clips: clips, start: start, arrival: arrival)
+                                  } else {
+                                      panelMediaApprove = MediaWrap(items: items, start: start, arrival: arrival)
+                                  }
+                              }
+                          }
+                      }) {
+            arrival.landed = true
+            DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
+        }
+    }
+
+    private func openAttachVideo(_ url: URL, assetId: String, poster: UIImage?) {
+        // TAP a video → trim editor OVER the media sheet (sheet stays underneath): X closes just
+        // the editor and lands BACK on the sheet to pick another (was closing the sheet first,
+        // which dumped you all the way to the chat on a stray X).
+        //
+        // ⛔ VIDEOS TOO — owner 2026-10-14: "you forgot videos, it still comes from the
+        // bottom". The photo's open exactly, with a still of the video as the flying copy.
+        let key = MediaOpenRects.key(.attach, assetId)
+        guard let poster, let from = MediaOpenRects.liveRect(key),
+              let to = VideoApprovalView.restRect(poster.size) else {
+            panelVideoApprove = VideoWrap(url: url)
+            return
+        }
+        MediaSourceVisibility.shared.hide(key)
+        let arrival = EditorArrival(landed: false)
+        MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
+                      clip: MediaOpenRects.attachClipRect,
+                      to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(poster.size),
+                      timing: MediaOpen.attachOpenSpring,
+                      timingDuration: MediaOpen.attachOpenDuration,
+                      backdropFade: MediaOpen.attachBackdropFade,
+                      onStart: {
+                          MediaPresentGate.present {
+                              withoutPresentationAnimation {
+                                  panelVideoApprove = VideoWrap(url: url, sourceKey: key,
+                                                                poster: poster, arrival: arrival)
+                              }
+                          }
+                      }) {
+            arrival.landed = true
+            DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
         }
     }
 

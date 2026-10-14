@@ -150,7 +150,7 @@ struct AttachRecentsStrip: View {
     /// which are videos, caption, clientId. The real send reuses that clientId.
     var onOptimisticGroup: ([UIImage], [Bool], String, String) -> Void = { _, _, _, _ in }
     var onOptimisticFailed: (String) -> Void = { _ in }   // nothing resolved → don't strand the bubble
-    var onOpenMedia: ([ApprovalMedia]) -> Void = { _ in }        // tapping media WHILE selecting → the mixed approval pager
+    var onOpenMedia: ([ApprovalMedia], String?) -> Void = { _, _ in }   // tapping media WHILE selecting → the mixed approval pager (+ the tapped asset id)
     var onCaptionFocused: () -> Void = {}                        // caption field focused → parent grows the sheet to .large
     @Binding var hasSelection: Bool   // ≥1 selected → parent hides the source row (Photos/Files/…)
     /// Ids the approval screen removed while it was open over this sheet. The selection deliberately
@@ -687,7 +687,7 @@ struct AttachRecentsStrip: View {
     //     videos together — swipe between all of them, edit each, one caption, one send).
     private func openTapped(_ a: PHAsset) {
         if selectedIds.isEmpty { pick(a) }
-        else { openSelected() }
+        else { openSelected(tapped: a.localIdentifier) }
     }
 
     private func pick(_ a: PHAsset) {
@@ -735,7 +735,7 @@ struct AttachRecentsStrip: View {
 
     // Tapping media while a selection is active → load EVERY selected item (images AND videos, in tap
     // order) and open the mixed approval pager (swipe all, per-item edit, one caption, one send).
-    private func openSelected() {
+    private func openSelected(tapped: String? = nil) {
         let ids = selectedIds
         let byId = resolveSelected(ids)   // global store, NOT the visible album (cross-album selection)
         loadingPick = true
@@ -764,7 +764,7 @@ struct AttachRecentsStrip: View {
                 // KEEP the selection (user spec): the pager/editor opens OVER this sheet, and X returns
                 // here — clearing on open forced re-selecting everything after a preview round-trip.
                 // A SEND from the pager closes the whole sheet, which resets this state naturally.
-                onOpenMedia(out)
+                onOpenMedia(out, tapped)
             }
         }
     }

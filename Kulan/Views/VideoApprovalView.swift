@@ -48,8 +48,18 @@ struct VideoApprovalView: View {
     // coming from the bottom". Same as the photo editor: opened from an attach tile, a still of the
     // video flies out of the tile onto `restRect`, the tools fade in during the flight (`arrival`),
     // and X / a drag down fly it back through `MediaDismissHost`. Nil keeps the plain cover.
-    private let sourceKey: String?
-    private let poster: UIImage?
+    private let singleKey: String?
+    private let singlePoster: UIImage?
+    /// Several clips opened out of an attach tile: the fly-home follows whichever clip is showing.
+    private let clipsFromAttach: Bool
+    private var sourceKey: String? {
+        guard clipsFromAttach else { return singleKey }
+        return clipList.indices.contains(current) ? clipList[current].assetId.map { MediaOpenRects.key(.attach, $0) } : nil
+    }
+    private var poster: UIImage? {
+        guard clipsFromAttach else { return singlePoster }
+        return clipList.indices.contains(current) ? clipList[current].thumb : nil
+    }
     @ObservedObject private var arrival: EditorArrival
     private var arrived: Bool { arrival.landed }
     @State private var dismissing = false   // a close is flying: the live video hidden, the copy shows it
@@ -65,22 +75,27 @@ struct VideoApprovalView: View {
         self.onSend = onSend
         self.onSendMulti = nil
         self.selfDismissOnSend = selfDismissOnSend
-        self.sourceKey = poster == nil ? nil : sourceKey   // nothing to fly without a still
-        self.poster = poster
+        self.singleKey = poster == nil ? nil : sourceKey   // nothing to fly without a still
+        self.singlePoster = poster
+        self.clipsFromAttach = false
         _arrival = ObservedObject(wrappedValue: arrival)
     }
 
     // Multiple videos → the same editor with the thumbnail rail.
     init(clips: [ApprovalClip], onSendMulti: @escaping (_ finalURLs: [URL], _ caption: String, _ hd: Bool) -> Void,
-         selfDismissOnSend: Bool = true, onRemove: @escaping (String) -> Void = { _ in }) {
+         selfDismissOnSend: Bool = true, onRemove: @escaping (String) -> Void = { _ in },
+         start: Int = 0, arrival: EditorArrival? = nil) {
         _clipList = State(initialValue: clips)
+        // Opened on the tapped clip (owner 2026-10-14), not always the first.
+        _current = State(initialValue: clips.indices.contains(start) ? start : 0)
         self.onSend = { _, _, _ in }
         self.onSendMulti = onSendMulti
         self.selfDismissOnSend = selfDismissOnSend
         self.onRemove = onRemove
-        self.sourceKey = nil
-        self.poster = nil
-        _arrival = ObservedObject(wrappedValue: EditorArrival(landed: true))
+        self.singleKey = nil
+        self.singlePoster = nil
+        self.clipsFromAttach = arrival != nil
+        _arrival = ObservedObject(wrappedValue: arrival ?? EditorArrival(landed: true))
     }
 
     /// The last measured height of the bottom controls, so the open can land before this screen
@@ -173,7 +188,7 @@ struct VideoApprovalView: View {
                     // Opened out of a tile: the still that flew in waits UNDER the player, fitted the
                     // same way, so the hand-over never shows black while the first frame decodes.
                     .background {
-                        if let poster, current == 0 {
+                        if let poster {
                             Image(uiImage: poster).resizable().scaledToFit()
                         }
                     }
