@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: CALL CARD DRAG, ATTACH OPEN SPEED, SECURITY CHECKUP FIXES.
+            THIS BUILD: STORY SWITCH TIMING RECORDED, ATTACH SHEET SELECTION.
+            Stories: the phone now writes down the timing of every person switch (nothing on screen). Swipe through 2 or 3 video stories, keep the app open 10 seconds, then tell me; I read the record and fix the real cause of the late start.
+            Attach sheet: with photos or videos already selected, tapping one flies out of its tile and opens on the one you tapped. X or swipe down puts it back in its own tile.
+            Also: sign-in alerts switch is off by default; a 4pt gap between an official post's title and its text.
+            PLEASE TEST: swipe between video stories; select two photos, tap one, swipe, close.
+
+            EARLIER: CALL CARD DRAG, ATTACH OPEN SPEED, SECURITY CHECKUP FIXES.
             The floating call card follows your finger again while you drag it (it only jumped when you let go).
             Attach sheet: photos and videos open at the reference speed (a fast start, no slow motion), and their buttons only fade in (they slid up from the bottom). X while zoomed in closes straight back to the tile.
             Security Checkup: "Yes, these are mine" now stays green; the sheet fits its content; Passkey, Chat Key, Password and device pages open with the header in place.
