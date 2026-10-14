@@ -101,6 +101,7 @@ struct ChatImageEditor: View {
     @State private var canvasSize: CGSize = .zero
     @State private var bottomChromeH: CGFloat = 118   // measured live from the actual bottom bars (toolbar heights queried at runtime)
     @FocusState private var captionFocused: Bool
+    @State private var chromeShown = false   // set true on appear; see chromeOverlay's opacity
 
     private static let ctx = CIContext()
     private static let filters: [(String, String?)] = [
@@ -133,6 +134,9 @@ struct ChatImageEditor: View {
             canvasView(canvasArea(size))
                 .opacity(dismissing ? 0 : 1)
             chromeOverlay
+                // Opened out of an attach tile: the tools fade in over 0.15s (the reference
+                // picker's interface fade) instead of appearing all at once when the photo lands.
+                .opacity(sourceKey == nil || chromeShown ? 1 : 0)
             cropOverlay
         }
         .overlay {
@@ -163,6 +167,7 @@ struct ChatImageEditor: View {
             canvasSize = canvasArea(size)
             recomputeEdited()
             if startDrawing { isDrawing = true }
+            if sourceKey != nil, !chromeShown { withAnimation(.easeInOut(duration: 0.15)) { chromeShown = true } }
         }
         // The cover is really gone: release a tap on another tile that came in while it was leaving.
         .onDisappear { if sourceKey != nil { MediaPresentGate.noteClosed() } }

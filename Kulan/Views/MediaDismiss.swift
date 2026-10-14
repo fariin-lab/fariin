@@ -845,7 +845,8 @@ enum MediaOpen {
             if backdropFade == nil { backdrop.alpha = 1 }
         }
         if let backdropFade {
-            UIView.animate(withDuration: backdropFade, delay: 0, options: .curveEaseOut) { backdrop.alpha = 1 }
+            // Options 0 (ease-in-out), as the reference's gallery view fades its black in.
+            UIView.animate(withDuration: backdropFade, delay: 0, options: []) { backdrop.alpha = 1 }
         }
         // cornerRadius is a CALayer property and does not ride a UIView animation block on its own.
         let radius = CABasicAnimation(keyPath: "cornerRadius")
