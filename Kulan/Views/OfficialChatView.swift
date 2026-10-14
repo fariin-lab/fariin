@@ -906,6 +906,31 @@ struct AnnouncementRow: View {
     /// `ChatSearch.highlightRanges`); these posts marked nothing, so a hit looked like no hit.
     var searchTerm: String = ""
 
+    /// 2026-10-14 owner: "links clickable". The body was markdown only, so `[text](https://…)` was a
+    /// link but a plain address like "fariin.com/help" was dead text. Markdown first (keeps the line
+    /// breaks), then the system link detector marks any web address it finds that is not already a
+    /// link. An address typed without a scheme opens as https.
+    static func linked(_ text: String) -> AttributedString {
+        var out = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+        let plain = String(out.characters)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return out }
+        for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+            guard var url = match.url, let r = Range(match.range, in: plain),
+                  let lo = AttributedString.Index(r.lowerBound, within: out),
+                  let hi = AttributedString.Index(r.upperBound, within: out) else { continue }
+            let scheme = url.scheme?.lowercased() ?? ""
+            guard scheme == "http" || scheme == "https" else { continue }   // no mailto/tel/other schemes
+            if scheme == "http", !plain[r].lowercased().hasPrefix("http://"),
+               var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                parts.scheme = "https"
+                if let secure = parts.url { url = secure }
+            }
+            if out[lo..<hi].link == nil { out[lo..<hi].link = url }
+        }
+        return out
+    }
+
     static func highlighted(_ text: String, _ term: String) -> AttributedString {
         var out = AttributedString(text)
         guard term.count >= 2 else { return out }
@@ -996,9 +1021,16 @@ struct AnnouncementRow: View {
                         if searchTerm.count >= 2 {
                             Text(Self.highlighted(announcement.body, searchTerm))
                         } else {
-                            Text(.init(announcement.body))
+                            Text(Self.linked(announcement.body))
                         }
                     }
+                    // 2026-10-14 owner: links in the message open like the link buttons do, in the
+                    // in-app browser (WebLink), not Safari. Only web links; anything else is dropped.
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return .discarded }
+                        WebLink.open(url)
+                        return .handled
+                    })
                     .font(.system(size: 17))
                     .tint(Color(hex: 0x0A84FF))
                     .fixedSize(horizontal: false, vertical: true)
