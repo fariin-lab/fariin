@@ -982,7 +982,8 @@ struct AnnouncementRow: View {
                     .onTapGesture { onImageTap(url) }
             }
 
-            VStack(alignment: .leading, spacing: 0) {
+            // 2026-10-14 owner: title and message were touching; 4pt between them.
+            VStack(alignment: .leading, spacing: 4) {
                 if !announcement.title.isEmpty {
                     Text(Self.highlighted(announcement.title, searchTerm))
                         .font(.system(size: 17, weight: .semibold))
