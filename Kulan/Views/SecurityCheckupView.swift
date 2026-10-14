@@ -36,7 +36,7 @@ final class SecurityCheckup {
     func run() async {
         guard !running else { return }
         running = true
-        defer { running = false }
+        rerun = false
         async let a = Self.checkPasskey()
         async let b = Self.checkChatKey()
         async let c = Self.checkPassword()
@@ -45,8 +45,13 @@ final class SecurityCheckup {
         chatKey = await b
         password = await c
         let (status, list) = await d
-        devices = status
-        unreviewed = list
+        // A Yes that landed while this was in flight wins over this older answer; ask again.
+        if !rerun {
+            devices = status
+            unreviewed = list
+        }
+        running = false
+        if rerun { await run() }
     }
 
     private static func date(_ d: Date) -> String {
@@ -83,13 +88,20 @@ final class SecurityCheckup {
 
     /// The device list straight from the server (`fetchOnce` reads with `source: .server`). Every
     /// other device signed in after the last review counts as unreviewed.
+    ///
+    /// ⛔ BY DEVICE, NOT BY CLOCK — owner 2026-10-14: "I tap Yes, these are mine and it is still not
+    /// verified". A record written by an older build has no `createdAt`, which counted as signed in
+    /// in the future, so no review time could ever cover it. A device is reviewed once its id has
+    /// been confirmed; the review time only answers for ids from before this list existed.
     private static func checkDevices() async -> (Status, [DeviceSession]) {
         guard let list = try? await DeviceRegistry.shared.fetchOnce() else { return (.failed, []) }
         let others = list.filter { !$0.isThisDevice }
         let reviewed = reviewedAt()
+        let confirmed = reviewedIds()
         let unreviewed = others.filter { s in
-            guard let reviewed else { return true }
-            return (s.createdAt ?? .distantFuture) > reviewed
+            if confirmed.contains(s.id) { return false }
+            guard let reviewed, let created = s.createdAt else { return true }
+            return created > reviewed
         }
         if !unreviewed.isEmpty { return (.missing, unreviewed) }
         let total = list.count == 1 ? "Only this device" : "\(list.count) devices"
@@ -106,11 +118,27 @@ final class SecurityCheckup {
         guard let k = reviewKey() else { return nil }
         return UserDefaults.standard.object(forKey: k) as? Date
     }
-    /// Called when the owner answers "Yes, these are mine" on the review page.
-    static func markDevicesReviewed() {
-        guard let k = reviewKey() else { return }
-        UserDefaults.standard.set(Date(), forKey: k)
+    private static func idsKey() -> String? {
+        Auth.auth().currentUser.map { "security.devicesReviewedIds.\($0.uid)" }
     }
+    private static func reviewedIds() -> Set<String> {
+        guard let k = idsKey() else { return [] }
+        return Set(UserDefaults.standard.stringArray(forKey: k) ?? [])
+    }
+
+    /// The owner answered "Yes, these are mine": those devices are confirmed by id, and the row turns
+    /// green NOW rather than after the next server answer (a check already in flight would otherwise
+    /// land with the list from before the Yes). `run()` then asks the server again.
+    func confirmDevices() {
+        guard let k = Self.idsKey(), let t = Self.reviewKey() else { return }
+        let ids = Self.reviewedIds().union(unreviewed.map(\.id))
+        UserDefaults.standard.set(Array(ids), forKey: k)
+        UserDefaults.standard.set(Date(), forKey: t)
+        unreviewed = []
+        devices = .done("Reviewed just now")
+        rerun = true
+    }
+    private var rerun = false
 }
 
 struct SecurityCheckupSheet: View {
@@ -221,6 +249,7 @@ struct SecurityCheckupSheet: View {
                     }
                 )
             }
+            .scrollBounceBehavior(.basedOnSize)   // it fits, so it does not wobble or show a scroll bar
             .background(Color(.systemGroupedBackground))
             .safeAreaInset(edge: .bottom) {
                 Button { dismiss() } label: {
@@ -247,7 +276,7 @@ struct SecurityCheckupSheet: View {
                 case .devices:
                     DeviceReviewPage(devices: check.unreviewed,
                                      onYes: {
-                                         SecurityCheckup.markDevicesReviewed()
+                                         check.confirmDevices()
                                          path.removeAll()   // back to the checkup, which asks again
                                      },
                                      onNo: { dismiss() })   // the Devices page is behind this sheet
@@ -257,7 +286,9 @@ struct SecurityCheckupSheet: View {
         // ⛔ TALL ENOUGH FOR EVERYTHING — owner 2026-10-14: at 70% the last rows needed a scroll;
         // "always show all of it". The sheet is the content's own height (rows + Continue), never
         // taller than the screen allows. A setup page pushed inside it gets the full height.
-        .presentationDetents([fitDetent, .large], selection: $detent)
+        // ONE height at a time: with a second, taller stop the sheet could be dragged up and the
+        // Continue bar was left floating mid-sheet (owner's screenshot).
+        .presentationDetents(path.isEmpty ? [fitDetent] : [.large], selection: $detent)
         .onChange(of: contentH) { _, _ in if path.isEmpty { detent = fitDetent } }
         .onChange(of: path) { _, now in withAnimation { detent = now.isEmpty ? fitDetent : .large } }
         .presentationDragIndicator(.visible)
