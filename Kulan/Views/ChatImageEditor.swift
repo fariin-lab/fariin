@@ -207,7 +207,11 @@ struct ChatImageEditor: View {
         .onChange(of: aspectIndex) { _, _ in recomputeEdited() }
         // A better picture arrived (the 1280pt one, then the full file): take it up. Nothing can
         // have been edited yet, because the tools are held until `fullReady`.
-        .onReceive(arrival.$image.dropFirst()) { _ in recomputeEdited() }
+        // ⛔ `onChange`, NOT `onReceive` on the publisher — owner 2026-10-14 (build 918): "the image
+        // has blur". A `@Published` publisher fires from willSet, so inside its handler the property
+        // still held the ROUGH picture; the recompute read that and cached it, and the sharp one
+        // never showed. `onChange` runs after the value has changed.
+        .onChange(of: arrival.image.map { ObjectIdentifier($0) }) { _, _ in recomputeEdited() }
     }
 
     // Chrome INSIDE the native safe area (no manual inset math). The canvas ignores the keyboard, so
