@@ -444,7 +444,8 @@ struct LocationPickerSheet: View {
 
             VStack(spacing: 12) {
                 HStack {
-                    glassCircle("chevron.left", label: "Back") { onBack?() }
+                    // An X that closes the page (owner 2026-10-15), not a back chevron.
+                    glassCircle("xmark", label: "Close") { onBack?() }
                     Spacer()
                     Text("Location").font(.headline)
                     Spacer()

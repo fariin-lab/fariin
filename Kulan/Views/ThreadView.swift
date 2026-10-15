@@ -1687,7 +1687,7 @@ struct ThreadView: View {
                                     attachLocation = false
                                 },
                                 embedded: true,
-                                onBack: { attachReopen = true; attachLocation = false })
+                                onBack: { attachLocation = false })   // the X just closes (owner)
                 .modifier(EdgeSwipeBack { attachReopen = true; attachLocation = false })
                 .presentationDragIndicator(.visible)
         }
