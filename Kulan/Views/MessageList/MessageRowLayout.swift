@@ -980,7 +980,15 @@ enum MessageRowLayout {
                     let delta = want - grown.width
                     grown.size.width += delta
                     // A bubble of mine is right-aligned: it grows leftwards, away from its own edge.
-                    if b.isMe { grown.origin.x -= delta }
+                    if b.isMe {
+                        grown.origin.x -= delta
+                        // ⛔ A BIG EMOJI STAYS ON ITS SIDE — owner 2026-10-15, a reacted emoji reply
+                        // that jumped left. A jumbomoji has no visible bubble, so the widening above
+                        // showed only as the emoji (kept at the bubble's leading inset) moving left.
+                        // It moves with the right edge instead; text in a filled bubble still starts
+                        // at the left, as it should.
+                        if case .jumbomoji = b.body { plan.text.origin.x += delta }
+                    }
                 }
                 plan.bubble = grown
 
