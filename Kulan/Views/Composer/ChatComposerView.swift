@@ -246,6 +246,7 @@ final class ChatComposerView: UIView {
     private let onceToast = NoticePillView()
 
     private var holdStart: CGPoint?
+    private var pillIsCapsule = false
     private var displayLink: CADisplayLink?
 
     // MARK: - Init
@@ -406,7 +407,14 @@ final class ChatComposerView: UIView {
         stripReview.addSubview(playButton)
         stripReview.addSubview(waveform)
         stripReview.addSubview(totalLabel)
-        playButton.addAction(UIAction { [weak self] _ in self?.actions.togglePreview() }, for: .touchUpInside)
+        playButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            // The icon answers the finger now; the state that confirms it arrives a beat later.
+            let willPlay = !self.shown.previewPlaying
+            self.playButton.icon.image = UIImage(systemName: willPlay ? "pause.fill" : "play.fill",
+                                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 14))
+            self.actions.togglePreview()
+        }, for: .touchUpInside)
         waveform.onSeek = { [weak self] pct in self?.actions.seekPreview(pct) }
         totalLabel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .regular)
         totalLabel.textColor = .secondaryLabel
@@ -1028,6 +1036,13 @@ final class ChatComposerView: UIView {
         let span = pillSpan(width: W)
         let pw = span.right - span.left
         pill.frame = CGRect(x: span.left, y: 0, width: pw, height: H)
+        // ⛔ ROUND ENDS ON THE 44pt RECORDING BAR — owner 2026-10-15: "you forgot the corners, make
+        // them round like the text field". The fixed 20 is a full round end on the 40pt field and
+        // not on 44; a recording bar is one row, so it is a true capsule (Apple's own rounding).
+        if pillIsCapsule != s.recordingActive {
+            pillIsCapsule = s.recordingActive
+            pill.cornerConfiguration = s.recordingActive ? .capsule() : .uniformCorners(radius: .fixed(M.pillRadius))
+        }
 
         // Banners pinned to the top of the pill, the field row to its bottom.
         var y: CGFloat = 0
@@ -1099,11 +1114,15 @@ final class ChatComposerView: UIView {
         onceButton.frame = CGRect(x: stripSend.frame.minX - 12 - onceW, y: 0, width: onceW, height: sh)
         liveWave.frame = CGRect(x: stripX.frame.maxX + 12, y: (sh - 22) / 2,
                                 width: max(0, onceButton.frame.minX - 12 - (stripX.frame.maxX + 12)), height: 22)
-        playButton.frame = CGRect(x: stripX.frame.maxX + 8, y: (sh - 26) / 2, width: 26, height: 26)
+        // ⛔ A 44pt TARGET — owner 2026-10-15: "play / pause lags, the button doesn't work well". The
+        // control was the 26pt icon box, so a tap a little off it went to nothing. The icon stays
+        // 26pt where it was; the control around it is 44 (Apple's minimum), centred on it.
+        let playIcon = CGRect(x: stripX.frame.maxX + 8, y: (sh - 26) / 2, width: 26, height: 26)
+        playButton.frame = CGRect(x: playIcon.midX - 22, y: 0, width: 44, height: sh)
         let totalW = ceil(totalLabel.intrinsicContentSize.width)
         totalLabel.frame = CGRect(x: onceButton.frame.minX - 12 - totalW, y: 0, width: totalW, height: sh)
-        waveform.frame = CGRect(x: playButton.frame.maxX + M.stripSpacing, y: (sh - 22) / 2,
-                                width: max(0, totalLabel.frame.minX - M.stripSpacing - (playButton.frame.maxX + M.stripSpacing)),
+        waveform.frame = CGRect(x: playIcon.maxX + M.stripSpacing, y: (sh - 22) / 2,
+                                width: max(0, totalLabel.frame.minX - M.stripSpacing - (playIcon.maxX + M.stripSpacing)),
                                 height: 22)
 
         // The overlays are placed against the PADDED box, where the old `.overlay`s were aligned.
