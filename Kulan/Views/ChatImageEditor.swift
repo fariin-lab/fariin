@@ -274,7 +274,7 @@ struct ChatImageEditor: View {
                         .buttonStyle(.plain)
                         Spacer()
                     }
-                    .padding(.horizontal)
+                    .padding(.horizontal, 20)   // the reference's top button, 20pt in (2026-10-15)
                 }
             }
             .frame(height: 44)
