@@ -84,7 +84,7 @@ struct ChatImageEditor: View {
     private static var lastChromeH: CGFloat {
         get {
             let v = UserDefaults.standard.double(forKey: chromeKey)
-            return v > 0 ? v : 44 + 12 + 40 + 8
+            return v > 0 ? v : 40 + 16 + 40
         }
         set { UserDefaults.standard.set(Double(newValue), forKey: chromeKey) }
     }
@@ -96,7 +96,7 @@ struct ChatImageEditor: View {
         Self.lastChromeH = h
     }
     private static var chromeKey: String {
-        "attachEditor.chromeH.\(UIApplication.shared.preferredContentSizeCategory.rawValue)"
+        "attachEditor.chromeH.v2.\(UIApplication.shared.preferredContentSizeCategory.rawValue)"
     }
 
     /// Where the photo sits at rest, in window coordinates. The open flies onto it and the close
@@ -107,9 +107,22 @@ struct ChatImageEditor: View {
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
         let inset = window.safeAreaInsets, b = window.bounds
         let width = b.width - inset.left - inset.right
-        let height = max(0, b.height - inset.top - inset.bottom - (chromeH ?? lastChromeH) - 12)
-        return mediaFitRect(image, in: CGRect(x: inset.left, y: inset.top, width: width, height: height))
+        let height = max(0, b.height - inset.top - inset.bottom - topChromeH - (chromeH ?? lastChromeH) - photoToolsGap)
+        return mediaFitRect(image, in: CGRect(x: inset.left, y: inset.top + topChromeH, width: width, height: height))
     }
+
+    /// ⛔ THE REFERENCE PICKER'S EDITOR SIZES — owner 2026-10-15, two screenshots side by side
+    /// ("make it exactly like that"; "caption bar: system bar, content inside the safe area").
+    /// Measured on his phone at 2.15 px/pt: the top button row sits ON the safe-area top (44pt, no
+    /// extra padding); the photo starts 11pt under it, so the photo is app content BETWEEN the bars
+    /// and never under the ✕; 10pt from the photo to the tools; 16pt from the tools to the caption
+    /// bar; and the caption bar stands on the safe-area bottom like a system bar (0pt, it was 8).
+    /// Sides: the tools and the field start 26pt in, the send is 8pt from the right edge.
+    static let topChromeH: CGFloat = 44 + 11
+    static let photoToolsGap: CGFloat = 10
+    private static let toolsCaptionGap: CGFloat = 16
+    private static let barLeading: CGFloat = 26
+    private static let barTrailing: CGFloat = 8
 
     /// 9:16 or taller gets rounded corners at rest; the open lands on the same radius.
     static func restCornerRadius(_ image: CGSize) -> CGFloat {
@@ -265,11 +278,10 @@ struct ChatImageEditor: View {
                 }
             }
             .frame(height: 44)
-            .padding(.top, 4)
             Spacer(minLength: 0)
             Group {
                 if isDrawing { penBar.padding(.bottom, 8) }
-                else { bottomBar.padding(.bottom, 8) }
+                else { bottomBar.padding(.bottom, captionFocused ? 8 : 0) }
             }
             // Live-measure the bottom chrome so the image area excludes exactly its height (toolbar
             // heights queried at runtime). Skipped while the keyboard is up so the canvas
@@ -318,7 +330,7 @@ struct ChatImageEditor: View {
     private func canvasArea(_ s: CGSize) -> CGSize {
         // -12: breathing gap between the photo's bottom edge and the tool row (the fitted image was
         // touching the crop/pen/HD buttons).
-        CGSize(width: s.width, height: max(0, s.height - bottomChromeH - 12))
+        CGSize(width: s.width, height: max(0, s.height - Self.topChromeH - bottomChromeH - Self.photoToolsGap))
     }
 
     // The photo aspect-FITS the canvas area — fully visible, letterboxed on black, one uniform rule
@@ -358,6 +370,7 @@ struct ChatImageEditor: View {
         // fills from the top down to just above the tools/caption, so the reserved chrome band stays clear
         // and the two never overlap.
         .frame(width: area.width, height: area.height)
+        .padding(.top, Self.topChromeH)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -514,7 +527,7 @@ struct ChatImageEditor: View {
     // Bottom chrome (attachment approval toolbar): a row of round glass tool buttons, then the
     // caption capsule + round send. Minimal — no dead icons, everything works.
     private var bottomBar: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Self.toolsCaptionGap) {
             // Tool row: crop · draw · HD — HIDDEN while typing a caption (keyboard up). HD is album-level
             // in edit-only mode, so it's dropped there.
             if !captionFocused {
@@ -583,7 +596,8 @@ struct ChatImageEditor: View {
             }
             }   // end else (non-edit-only caption+send)
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, Self.barLeading)
+        .padding(.trailing, Self.barTrailing)
     }
 
     // Round glass tool button (crop · pen · HD): 40pt (user spec), white glyph, accent when active.
