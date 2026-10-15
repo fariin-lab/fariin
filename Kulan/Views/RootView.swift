@@ -912,7 +912,7 @@ struct OnboardingView: View {
                                 Text("Couldn't check @\(ChatService.sanitizeHandle(handle)). Check your connection.")
                                     .foregroundStyle(.secondary)
                             case .empty, .invalid:
-                                Text("Letters, numbers and _ only, 3–30 characters.")   // matches Limits.usernameMaxChars
+                                Text("Letters, numbers and _ only, \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters.")
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -1038,8 +1038,10 @@ struct OnboardingView: View {
         let n = name.trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }
-        guard ChatService.isValidHandle(h) else {
-            error = "Username: letters, numbers and _ only, 3–30 characters"; return   // matches Limits.usernameMaxChars
+        // Unchanged = not judged again (see SettingsView `save`): an admin-given short name stands.
+        let handleUnchanged = !h.isEmpty && h.lowercased() == (ProfileStore.shared.me?.handle ?? "").lowercased()
+        guard handleUnchanged || ChatService.isValidHandle(h) else {
+            error = "Username: letters, numbers and _ only, \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters"; return
         }
         // 2026-09-24 audit: the same offline guard and words as every other screen in this flow.
         guard NetworkState.shared.isOnline else {

@@ -104,7 +104,9 @@ enum Limits {
     /// are very often exactly four letters — Ubah, Amal, Deeq, Muna, Asha, Iqra, Nimo, Hani, Suad —
     /// and a five-character floor would refuse a large share of this app's users their own first
     /// name. The reasoning in full sits beside the server constant.
-    static let usernameMinChars = 4
+    /// ⛔ FIVE since 2026-10-15 (owner): regular users claim 5+; 4-character names are given out by
+    /// admins only. Mirrors `USERNAME_MIN` on the server, which is the one that counts.
+    static let usernameMinChars = 5
     static let usernameMaxChars = 30
     static let bioChars = 140
     static let profilePhotoBytes = 8 * 1024 * 1024              // 8 MB — storage.rules profiles/

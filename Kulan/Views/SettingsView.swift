@@ -2081,8 +2081,11 @@ struct EditProfileView: View {
         let n = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }
-        guard ChatService.isValidHandle(h) else {
-            error = "Username: letters, numbers and _ only, 3–30 characters"; return
+        // A username that has not changed is not judged again: an admin-given 4-character name
+        // (owner 2026-10-15, claims are 5+) must not stop its holder saving a new photo or bio.
+        let handleUnchanged = h.lowercased() == (profile.me?.handle ?? "").lowercased()
+        guard handleUnchanged || ChatService.isValidHandle(h) else {
+            error = "Username: letters, numbers and _ only, \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters"; return
         }
         // Audit 2026-09-24: offline, the name write does not fail, it waits for the server, so Save
         // greyed out and the sheet just sat there with nothing said. Refuse up front with the words
