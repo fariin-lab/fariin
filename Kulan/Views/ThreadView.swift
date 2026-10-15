@@ -2512,6 +2512,8 @@ struct ThreadView: View {
             m.hasServerTime ? m.createdAt : m.createdAt.addingTimeInterval(offsets[m.authorId] ?? 0)
         }
         let breaks: [Bool] = items.map { Self.breaksCluster($0) }
+        // Location cards (a cheap prefix test, once per row).
+        let isLoc: [Bool] = items.map { $0.text.hasPrefix(Message.locationMarker) }
 
         let n = items.count
         // joins[i]: row i continues the cluster of row i-1 (same day, same sender, both bubbles,
@@ -2535,7 +2537,10 @@ struct ThreadView: View {
             let last = i == n - 1 || !joins[i + 1]
             out.append(RowGeometry(
                 showDate: showDate, first: first, last: last,
-                gap: showDate ? 0 : (first ? 14 : 2),
+                // ⛔ 6, NOT 2, NEXT TO A LOCATION CARD — owner 2026-10-15: "the space between location
+                // bubbles is too small". 2pt suits a run of text; two map cards that close read as
+                // one block. Only where a location card meets its neighbour in a cluster.
+                gap: showDate ? 0 : (first ? 14 : ((isLoc[i] || (i > 0 && isLoc[i - 1])) ? 6 : 2)),
                 dateLabel: showDate ? dayLabel(when[i]) : nil))
         }
         geoCache.key = key
