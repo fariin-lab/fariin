@@ -133,8 +133,30 @@ struct VideoApprovalView: View {
     private func isTall(_ s: CGSize) -> Bool { s.width > 0 && s.height >= s.width * (16.0 / 9.0) - 1 }
 
     /// The last measured height of the bottom controls, so the open can land before this screen
-    /// exists to measure them: strip 40 + gap 12 + caption bar (4 above + 40) + 8 below.
-    private static var lastControlsH: CGFloat = 104
+    /// exists to measure them. Kept across launches (per text size), as the photo editor's is: an
+    /// in-memory guess made the first open of every run land off and jump.
+    /// Fallback = the block's own arithmetic: 10 above the strip + strip 40 + 16 + caption bar 40.
+    private static var lastControlsH: CGFloat {
+        get {
+            let v = UserDefaults.standard.double(forKey: controlsKey)
+            return v > 0 ? v : 10 + 40 + 16 + 40
+        }
+        set { UserDefaults.standard.set(Double(newValue), forKey: controlsKey) }
+    }
+    private static var controlsKey: String {
+        "videoEditor.controlsH.v2.\(UIApplication.shared.preferredContentSizeCategory.rawValue)"
+    }
+
+    /// ⛔ THE PHOTO EDITOR'S SIZES — owner 2026-10-15: "the image editor looks good now; the video one
+    /// too, same sizes". The same numbers as `ChatImageEditor`: the top row on the safe-area top (20pt
+    /// in), the video 11pt under it (between the bars, never under the X), 10pt above the trim strip,
+    /// 16pt from the strip to the caption bar, the caption bar on the safe-area bottom, rows 26pt in
+    /// on the left and 8pt on the right.
+    static let topChromeH: CGFloat = ChatImageEditor.topChromeH
+    private static let videoStripGap: CGFloat = 10
+    private static let stripCaptionGap: CGFloat = 16
+    private static let barLeading: CGFloat = 26
+    private static let barTrailing: CGFloat = 8
 
     /// Where the video sits at rest, in window coordinates: the safe-area box minus the bottom
     /// controls (the `safeAreaInset`), the video aspect-fit inside, as `.resizeAspect` draws it.
@@ -143,8 +165,8 @@ struct VideoApprovalView: View {
             .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return nil }
         let inset = window.safeAreaInsets, b = window.bounds
         let width = b.width - inset.left - inset.right
-        let height = max(0, b.height - inset.top - inset.bottom - (controlsH ?? lastControlsH))
-        return mediaFitRect(video, in: CGRect(x: inset.left, y: inset.top, width: width, height: height))
+        let height = max(0, b.height - inset.top - inset.bottom - topChromeH - (controlsH ?? lastControlsH))
+        return mediaFitRect(video, in: CGRect(x: inset.left, y: inset.top + topChromeH, width: width, height: height))
     }
     @State private var controlsH: CGFloat = VideoApprovalView.lastControlsH
 
@@ -241,6 +263,7 @@ struct VideoApprovalView: View {
                 .offset(x: pan.width + drag.width, y: pan.height + drag.height)
                 .opacity(dismissing || !arrived ? 0 : 1)   // the flying still stands in for it
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, Self.topChromeH)   // below the top row, as the photo editor
                 .contentShape(Rectangle())   // NO rounded corners on the frame (user request)
                 .gesture(
                     MagnificationGesture()
@@ -495,11 +518,12 @@ struct VideoApprovalView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(height: 44)
+        .padding(.horizontal, 20)
     }
 
     @ViewBuilder private var bottomControls: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Self.stripCaptionGap) {
             // Trim bar HIDES while the caption keyboard is up (user request; matches the multi pager) —
             // typing needs the space, and trimming while typing isn't a real flow.
             if !captionFocused {
@@ -517,7 +541,8 @@ struct VideoApprovalView: View {
             }
             captionBar
         }
-        .padding(.bottom, 8)
+        .padding(.top, captionFocused ? 0 : Self.videoStripGap)
+        .padding(.bottom, captionFocused ? 8 : 0)   // on the safe-area bottom, a little air over the keyboard
         .animation(.easeInOut(duration: 0.2), value: captionFocused)
         .animation(.easeInOut(duration: 0.15), value: thumbnails.isEmpty || duration <= 0)
     }
@@ -530,7 +555,8 @@ struct VideoApprovalView: View {
                        playhead: $playhead, scrubTime: $scrubTime,
                        playing: $playing, draggingPlayhead: $draggingPlayhead,
                        stripHeight: stripHeight, handleW: handleW, minDuration: minDuration)
-            .padding(.horizontal, 20)   // left/right margin so the strip + handles don't touch the edges
+            .padding(.leading, Self.barLeading)   // the caption row's extent (photo editor sizes)
+            .padding(.trailing, Self.barTrailing)
     }
 
     private var captionBar: some View {
@@ -548,7 +574,8 @@ struct VideoApprovalView: View {
             }
             .buttonStyle(.plain).disabled(exporting || !clipReady)   // nothing to send until the file is playable
         }
-        .padding(.horizontal, 16).padding(.top, 4)
+        .padding(.leading, Self.barLeading)
+        .padding(.trailing, Self.barTrailing)
     }
 
     private var trimLabel: String {
