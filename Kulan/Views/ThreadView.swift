@@ -186,6 +186,11 @@ struct ThreadView: View {
     @State private var attachGif = false
     /// The Add files page as a layer inside the attach sheet, as Location (owner 2026-10-15).
     @State private var attachFiles = false
+    /// ⛔ THE OLD MOTION, THE NEW PAGES — owner 2026-10-15, after trying them inside the sheet: "I
+    /// don't like it; keep the new design but the old animation: the attach sheet closes, then the
+    /// page opens". Each page is its own sheet again. Back (or the edge swipe) closes the page and
+    /// re-opens the attach sheet on the photos; a send closes everything.
+    @State private var attachReopen = false
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
@@ -1675,6 +1680,41 @@ struct ThreadView: View {
             // simply gets what the phone is set to.
             GifPickerView { gif in sendGif(gif) }
                 .environment(\.colorScheme, scheme)
+        }
+        .sheet(isPresented: $attachLocation, onDismiss: reopenAttachIfAsked) {
+            LocationPickerSheet(onSend: { lat, lon, label in
+                                    sendLocationShare(lat: lat, lon: lon, label: label)
+                                    attachLocation = false
+                                },
+                                embedded: true,
+                                onBack: { attachReopen = true; attachLocation = false })
+                .modifier(EdgeSwipeBack { attachReopen = true; attachLocation = false })
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $attachGif, onDismiss: reopenAttachIfAsked) {
+            GifPickerView(onPick: { gif in
+                              sendGif(gif)
+                              attachGif = false
+                          },
+                          embedded: true,
+                          onBack: { attachReopen = true; attachGif = false })
+                .modifier(EdgeSwipeBack { attachReopen = true; attachGif = false })
+                .presentationDragIndicator(.visible)
+                .environment(\.colorScheme, scheme)
+        }
+        .sheet(isPresented: $attachFiles, onDismiss: reopenAttachIfAsked) {
+            AttachFilesPage(onBack: { attachReopen = true; attachFiles = false },
+                            onSendRecent: { url in
+                                Task { await sendDocument(url) }
+                                attachFiles = false
+                            },
+                            onImported: { result in
+                                guard case .success = result else { return }
+                                handlePickedFile(result)
+                                attachFiles = false
+                            })
+                .modifier(EdgeSwipeBack { attachReopen = true; attachFiles = false })
+                .presentationDragIndicator(.visible)
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             handlePickedFile(result)
@@ -4972,53 +5012,6 @@ struct ThreadView: View {
                 .onChange(of: attachShowAlbums) { _, _ in attachGridScrolled = false }
                 .onChange(of: attachInAlbum) { _, _ in attachGridScrolled = false }
         }
-        // The Location page, in the sheet, over the photos (owner 2026-10-15).
-        .overlay {
-            if attachLocation {
-                LocationPickerSheet(onSend: { lat, lon, label in
-                                        sendLocationShare(lat: lat, lon: lon, label: label)
-                                        showAttachPanel = false
-                                    },
-                                    embedded: true,
-                                    onBack: { withAnimation(.smooth(duration: 0.32)) { attachLocation = false } },
-                                    onWantsFullHeight: { attachExpandTick &+= 1 })
-                    .background(Color(.systemBackground))
-                    .modifier(EdgeSwipeBack { withAnimation(.smooth(duration: 0.32)) { attachLocation = false } })
-                    .transition(.move(edge: .trailing))
-            }
-        }
-        // The Add files page, in the sheet, over the photos (owner 2026-10-15).
-        .overlay {
-            if attachFiles {
-                AttachFilesPage(onBack: { withAnimation(.smooth(duration: 0.32)) { attachFiles = false } },
-                                onSendRecent: { url in
-                                    Task { await sendDocument(url) }
-                                    showAttachPanel = false
-                                },
-                                onImported: { result in
-                                    guard case .success = result else { return }
-                                    handlePickedFile(result)
-                                    showAttachPanel = false
-                                })
-                    .modifier(EdgeSwipeBack { withAnimation(.smooth(duration: 0.32)) { attachFiles = false } })
-                    .transition(.move(edge: .trailing))
-            }
-        }
-        // The GIF picker, in the sheet, over the photos (owner 2026-10-15).
-        .overlay {
-            if attachGif {
-                GifPickerView(onPick: { gif in
-                                  sendGif(gif)
-                                  showAttachPanel = false
-                              },
-                              embedded: true,
-                              onBack: { withAnimation(.smooth(duration: 0.32)) { attachGif = false } },
-                              onWantsFullHeight: { attachExpandTick &+= 1 })
-                    .background(Color(.systemBackground))
-                    .modifier(EdgeSwipeBack { withAnimation(.smooth(duration: 0.32)) { attachGif = false } })
-                    .transition(.move(edge: .trailing))
-            }
-        }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
         // AND closes the sheet, landing in the chat.
@@ -5185,15 +5178,9 @@ struct ThreadView: View {
                     // be the grid's first cell is DELETED rather than kept as a second door. It goes
                     // first because it is the only one of the five that makes something new; the
                     // other four go and fetch something that already exists.
-                    attachTile("ic_gif_tile", "GIF", closesSheet: false) {
-                        withAnimation(.smooth(duration: 0.32)) { attachGif = true }
-                    }
-                    attachTile("ic_file", "Files", closesSheet: false) {
-                        withAnimation(.smooth(duration: 0.32)) { attachFiles = true }
-                    }
-                    attachTile("ic_location", "Location", closesSheet: false) {
-                        withAnimation(.smooth(duration: 0.32)) { attachLocation = true }
-                    }
+                    attachTile("ic_gif_tile", "GIF") { attachGif = true }
+                    attachTile("ic_file", "Files") { attachFiles = true }
+                    attachTile("ic_location", "Location") { attachLocation = true }
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
                 .padding(.horizontal, 6)
@@ -5369,6 +5356,13 @@ struct ThreadView: View {
     /// One source INSIDE the bar: icon over label, no glass of its own — the bar carries that now.
     /// The old spec (a 76×50 glass capsule per source with the label hanging below it) is what made
     /// three actions read as three loose blobs. See the row above.
+    /// A page closed by its back button: the attach sheet comes back on the photos.
+    private func reopenAttachIfAsked() {
+        guard attachReopen else { return }
+        attachReopen = false
+        showAttachPanel = true
+    }
+
     /// A location share, from the sheet or from the attach sheet's own page. The chat glides to the
     /// bottom as for any send (see the note at the picker sheet); `sendMarker` is the optimistic row.
     private func sendLocationShare(lat: Double, lon: Double, label: String?) {
