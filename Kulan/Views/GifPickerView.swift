@@ -331,21 +331,12 @@ struct GifPickerView: View {
             .padding(.top, 18)
             .padding(.bottom, 8)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            // ⛔ A SYSTEM BAR, NOT A FLOATING CAPSULE — owner 2026-10-15: "remove the border and the
-            // GIPHY text; the bar is system chrome, edge-attached". The buttons sit straight on the
-            // sheet's own background along the bottom edge, no glass outline, no caption under them.
-            // Liquid Glass, edge to edge (owner 2026-10-15, after the border went): the system-bar
-            // material, full width and down through the home-indicator area, so the GIFs blur as
-            // they pass under it. No capsule, so no outline.
-            categoryButtons
-                .padding(.horizontal, 12)
-                .padding(.top, 6).padding(.bottom, 4)
-                .background {
-                    Rectangle().fill(Color.clear)
-                        .liquidGlass(Rectangle())
-                        .ignoresSafeArea(edges: .bottom)
-                }
+        // ⛔ A FLOATING CAPSULE, LIKE THE MEDIA TABS — owner 2026-10-15 (third look today: an edge
+        // bar, then edge-to-edge glass, now "make it look like the Media / Files / Voice bar"). A
+        // `safeAreaBar` so the GIFs scroll on under it and show around the capsule; the capsule is
+        // the media tabs' own (`floatingGlass`).
+        .safeAreaBar(edge: .bottom, spacing: 0) {
+            categoryRow
         }
         .onChange(of: query) { _, _ in
             searchTask?.cancel()
@@ -430,7 +421,7 @@ struct GifPickerView: View {
     private var categoryRow: some View { categoryButtons.floatingGlass() }
 
     private var categoryButtons: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             ForEach(GifCategory.allCases, id: \.self) { c in
                 Button {
                     guard category != c else { return }
@@ -442,17 +433,20 @@ struct GifPickerView: View {
                         query = ""   // clearing re-runs the loader through onChange, under this mood
                     }
                 } label: {
+                    // ⛔ THE MEDIA TABS' LOOK — owner 2026-10-15, a picture of the Media / Files / Voice
+                    // bar: "make the bottom bar look like this". Same pieces as `MediaTabBar`: the
+                    // chosen one on the system's selected-segment fill in a capsule, its glyph in the
+                    // label colour, the rest in the secondary label colour; no accent tint.
                     Image(systemName: c.icon)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(category == c ? Color.accentColor : Color.secondary)
-                        .frame(maxWidth: .infinity).frame(height: 36)
+                        .font(.system(size: 17, weight: category == c ? .semibold : .regular))
+                        .foregroundStyle(category == c ? Color(uiColor: .label) : Color(uiColor: .secondaryLabel))
+                        .frame(maxWidth: .infinity).frame(height: 42 - 8)
                         .background {
                             if category == c {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color.accentColor.opacity(0.14))
+                                Capsule().fill(Color(uiColor: .tertiarySystemFill))
                             }
                         }
-                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -531,10 +525,13 @@ struct GifPickerView: View {
 
 private extension View {
     /// The mood row's own glass capsule where it floats over the grid (the search layout).
+    /// The media tabs' capsule (`MediaTabBar`): 4pt around the pill, 42pt tall, glass, 16pt in from
+    /// the screen's sides.
     func floatingGlass() -> some View {
-        padding(.horizontal, 6).padding(.vertical, 5)
+        padding(4)
+            .frame(height: 42)
             .liquidGlass(Capsule())
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 16)
             .padding(.bottom, 6)
     }
 }
