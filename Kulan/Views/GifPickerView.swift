@@ -277,16 +277,21 @@ struct GifPickerView: View {
                 }
             }
             .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
-        // Room for the floating rows: the buttons (and the field) on top, the mood row below.
-        .contentMargins(.top, searching ? 120 : 6, for: .scrollContent)
-        .contentMargins(.bottom, 96, for: .scrollContent)
-        .overlay(alignment: .top) {
+        // ⛔ BARS, NOT FLOATING OVER THE GIFS — owner 2026-10-15: "the X and search overlap the GIFs;
+        // the bottom bar is system chrome, the GIFs are app content inside the safe area". The top row
+        // and the mood row are edge-attached bars on the sheet's own background; the grid lives
+        // between them and never runs under either, so every tap on a bar is the bar's.
+        .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 10) {
                 HStack {
-                    glassCircle("chevron.left", label: "Back") { onBack?() }
+                    // An X that closes the sheet (owner 2026-10-15), not a back chevron.
+                    glassCircle("xmark", label: "Close") { onBack?() }
                     Spacer()
-                    glassCircle(searching ? "xmark" : "magnifyingglass", label: searching ? "Close search" : "Search GIFs") {
+                    Text("Choose GIF").font(.headline)
+                    Spacer()
+                    glassCircle(searching ? "xmark.circle" : "magnifyingglass", label: searching ? "Close search" : "Search GIFs") {
                         withAnimation(.easeInOut(duration: 0.2)) { searching.toggle() }
                         if searching {
                             onWantsFullHeight?()
@@ -310,16 +315,19 @@ struct GifPickerView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.top, 14)
+            .padding(.top, 18)
+            .padding(.bottom, 8)
+            .background(Color(.systemBackground))
         }
-        .overlay(alignment: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 2) {
                 categoryRow
                 // Giphy's terms ask for the attribution wherever its results are shown.
                 Text("Powered by GIPHY")
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
             }
-            .padding(.bottom, 4)
+            .padding(.top, 6)
+            .background(Color(.systemBackground))
         }
         .onChange(of: query) { _, _ in
             searchTask?.cancel()

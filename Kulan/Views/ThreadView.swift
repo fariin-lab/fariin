@@ -1697,7 +1697,7 @@ struct ThreadView: View {
                               attachGif = false
                           },
                           embedded: true,
-                          onBack: { attachReopen = true; attachGif = false })
+                          onBack: { attachGif = false })   // the X just closes (owner)
                 .modifier(EdgeSwipeBack { attachReopen = true; attachGif = false })
                 .presentationDragIndicator(.visible)
                 .environment(\.colorScheme, scheme)
