@@ -1703,7 +1703,7 @@ struct ThreadView: View {
                 .environment(\.colorScheme, scheme)
         }
         .sheet(isPresented: $attachFiles, onDismiss: reopenAttachIfAsked) {
-            AttachFilesPage(onBack: { attachReopen = true; attachFiles = false },
+            AttachFilesPage(onBack: { attachFiles = false },   // the X just closes (owner)
                             onSendRecent: { url in
                                 Task { await sendDocument(url) }
                                 attachFiles = false
