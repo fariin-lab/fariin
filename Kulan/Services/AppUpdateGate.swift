@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import FirebaseFunctions
+import FirebaseAuth
 
 /// ⛔ APP UPDATE CAMPAIGNS, THE PHONE'S HALF — owner 2026-10-15: "force only V1 to update, V2-V4 carry
 /// on; optional notices with Not Now; the server decides; changes from the admin panel without a new
@@ -45,6 +46,8 @@ import FirebaseFunctions
     private var shown: String?         // "<action>:<campaignId>" now on screen
     private var started = false
     private var ticker: Task<Void, Never>?
+    private var authHandle: AuthStateDidChangeListenerHandle?
+    private var lastUid: String?
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.cacheKey),
@@ -62,6 +65,18 @@ import FirebaseFunctions
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
                                                object: nil, queue: .main) { _ in
             Task { @MainActor in await AppUpdateGate.shared.check() }
+        }
+        // A campaign aimed at PEOPLE can only match once the server knows who this is, so a sign-in,
+        // a sign-out or an account switch asks again at once (check 5, 2026-10-15: it used to wait for
+        // the next return to the app, up to 10 minutes, with a targeted account already in).
+        lastUid = Auth.auth().currentUser?.uid
+        authHandle = Auth.auth().addStateDidChangeListener { _, user in
+            Task { @MainActor in
+                let gate = AppUpdateGate.shared
+                guard user?.uid != gate.lastUid else { return }
+                gate.lastUid = user?.uid
+                await gate.check()
+            }
         }
         ticker = Task { [weak self] in
             while !Task.isCancelled {
