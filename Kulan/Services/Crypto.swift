@@ -77,6 +77,45 @@ final class Crypto {
     private var readyTask: Task<Void, Error>?
     private var didWarm = false                 // one-time synchronous warm on the first decrypt
     private static let pubKeysDefaultsKey = "crypto.pubKeys.v1"   // disk cache of others' PUBLIC keys (not secret)
+    /// ⛔ EARLIER PUBLIC KEYS, PER PERSON — owner 2026-10-15: "messages I sent show a lock after I
+    /// switched accounts". A message is sealed between two keypairs. When one side's published key is
+    /// later REPLACED (the account signed in on a phone that did not hold its private key, which makes
+    /// and publishes a new one), every message sealed with the old key failed here, the sender's own
+    /// copies included, because decrypting asked only for the person's CURRENT key, and the old one
+    /// was overwritten in `pubKeysDefaultsKey`. The old public key is still the right key for those
+    /// messages. So every key a person has had is kept (here, newest first, 8 at most, and on their
+    /// profile as `publicKeyHistory`), and a message that will not open with the current key is tried
+    /// with the earlier ones before the lock is drawn. Public keys only: nothing secret is stored, and
+    /// box.open still authenticates every message against a key of THAT person.
+    private static let pubRingDefaultsKey = "crypto.pubRing.v1"
+
+    /// Earlier public keys of `uid` this phone knows, newest first.
+    private func earlierKeys(_ uid: String) -> [Bytes] {
+        let ring = UserDefaults.standard.dictionary(forKey: Self.pubRingDefaultsKey) as? [String: [String]] ?? [:]
+        return (ring[uid] ?? []).compactMap { Data(base64Encoded: $0).map { Bytes($0) } }
+    }
+
+    /// Adds keys (base64) to `uid`'s ring, newest first, 8 at most.
+    private func rememberKeys(_ uid: String, _ b64s: [String]) {
+        guard !uid.isEmpty, !b64s.isEmpty else { return }
+        var ring = UserDefaults.standard.dictionary(forKey: Self.pubRingDefaultsKey) as? [String: [String]] ?? [:]
+        var list = ring[uid] ?? []
+        for b in b64s where !b.isEmpty && !list.contains(b) { list.insert(b, at: 0) }
+        guard list != (ring[uid] ?? []) else { return }
+        ring[uid] = Array(list.prefix(8))
+        UserDefaults.standard.set(ring, forKey: Self.pubRingDefaultsKey)
+    }
+
+    /// box.open against `uid`'s current key, then their earlier ones (see `pubRingDefaultsKey`).
+    private func openFrom(_ uid: String, current: Bytes, box: Bytes, nonce: Bytes, sk: Bytes) -> Bytes? {
+        if let o = sodium.box.open(authenticatedCipherText: box, senderPublicKey: current,
+                                   recipientSecretKey: sk, nonce: nonce) { return o }
+        for old in earlierKeys(uid) where old != current {
+            if let o = sodium.box.open(authenticatedCipherText: box, senderPublicKey: old,
+                                       recipientSecretKey: sk, nonce: nonce) { return o }
+        }
+        return nil
+    }
 
     var isReady: Bool { mySecretKey != nil }
 
@@ -88,6 +127,8 @@ final class Crypto {
         var dict = (UserDefaults.standard.dictionary(forKey: Self.pubKeysDefaultsKey) as? [String: String]) ?? [:]
         let b64 = Data(key).base64EncodedString()
         guard dict[uid] != b64 else { return }
+        // The key being replaced still opens everything sealed with it: keep it (and the new one).
+        rememberKeys(uid, [dict[uid], b64].compactMap { $0 })
         dict[uid] = b64
         UserDefaults.standard.set(dict, forKey: Self.pubKeysDefaultsKey)
     }
@@ -218,9 +259,13 @@ final class Crypto {
     private static func publishKeyIfChanged(db: Firestore, uid: String, b64: String) async {
         do {
             let snap = try await db.collection("users").document(uid).getDocument()
-            if (snap.data()?["publicKey"] as? String) != b64 {
+            let published = snap.data()?["publicKey"] as? String
+            if published != b64 {
+                // The key it replaces goes into `publicKeyHistory`, with this one, so a phone that
+                // never saw the old key can still open messages sealed with it (`pubRingDefaultsKey`).
+                let keep = [published, b64].compactMap { $0 }
                 try await db.collection("users").document(uid)
-                    .setData(["publicKey": b64], merge: true)
+                    .setData(["publicKey": b64, "publicKeyHistory": FieldValue.arrayUnion(keep)], merge: true)
             }
         } catch {
             print("crypto: publishing public key failed:", error)
@@ -453,6 +498,7 @@ final class Crypto {
     private func fetchKeyResult(_ uid: String, source: FirestoreSource = .default) async -> KeyFetch {
         do {
             let snap = try await db.collection("users").document(uid).getDocument(source: source)
+            if let history = snap.data()?["publicKeyHistory"] as? [String] { rememberKeys(uid, history.reversed()) }
             if let b64 = snap.data()?["publicKey"] as? String,
                let data = Data(base64Encoded: b64) {
                 return .key(adoptKey(uid, data))
@@ -561,10 +607,7 @@ final class Crypto {
               let nonce = Data(base64Encoded: parts[1]),
               let box = Data(base64Encoded: parts[2]) else { return "🔒" }
 
-        guard let opened = sodium.box.open(authenticatedCipherText: Bytes(box),
-                                           senderPublicKey: otherPub,
-                                           recipientSecretKey: sk,
-                                           nonce: Bytes(nonce)),
+        guard let opened = openFrom(otherUid(cid), current: otherPub, box: Bytes(box), nonce: Bytes(nonce), sk: sk),
               let text = String(bytes: opened, encoding: .utf8) else {
             // Most likely their key rotated (new phone / reinstall) and ours is stale — refetch once
             // so the next render heals instead of showing this lock forever. See refreshKeyAfterFailure.
@@ -679,9 +722,8 @@ final class Crypto {
                   let wrappedKey = Data(base64Encoded: wp[0]),
                   let keyNonce = Data(base64Encoded: wp[1]),
                   let dataNonce = Data(base64Encoded: meta.n) else { return nil }
-            guard let fileKey = sodium.box.open(authenticatedCipherText: Bytes(wrappedKey),
-                                                senderPublicKey: authorPub, recipientSecretKey: sk,
-                                                nonce: Bytes(keyNonce)) else { return nil }
+            guard let fileKey = openFrom(author, current: authorPub, box: Bytes(wrappedKey),
+                                         nonce: Bytes(keyNonce), sk: sk) else { return nil }
             guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(cipher),
                                                      secretKey: fileKey, nonce: Bytes(dataNonce)) else { return nil }
             return Data(opened)
@@ -697,10 +739,8 @@ final class Crypto {
               let keyNonce = Data(base64Encoded: meta.kn),
               let dataNonce = Data(base64Encoded: meta.n) else { return nil }
 
-        guard let fileKey = sodium.box.open(authenticatedCipherText: Bytes(wrappedKey),
-                                            senderPublicKey: otherPub,
-                                            recipientSecretKey: sk,
-                                            nonce: Bytes(keyNonce)) else {
+        guard let fileKey = openFrom(otherUid(cid), current: otherPub, box: Bytes(wrappedKey),
+                                     nonce: Bytes(keyNonce), sk: sk) else {
             // Same key-rotation recovery the text path uses: a wrap that will not open is the
             // signature of a stale peer key, so drop it and refetch for the next attempt.
             // Once per file per session (2026-09-24 fix-all #70), keyed by its wrap nonce.
@@ -778,9 +818,8 @@ final class Crypto {
         guard wp.count == 2,
               let wrappedKey = Data(base64Encoded: wp[0]),
               let keyNonce = Data(base64Encoded: wp[1]) else { return "🔒" }
-        guard let msgKey = sodium.box.open(authenticatedCipherText: Bytes(wrappedKey),
-                                           senderPublicKey: authorPub, recipientSecretKey: sk,
-                                           nonce: Bytes(keyNonce)) else { return "🔒" }
+        guard let msgKey = openFrom(authorId, current: authorPub, box: Bytes(wrappedKey),
+                                    nonce: Bytes(keyNonce), sk: sk) else { return "🔒" }
         guard let opened = sodium.secretBox.open(authenticatedCipherText: Bytes(ct),
                                                  secretKey: msgKey, nonce: Bytes(dataNonce)),
               let text = String(bytes: opened, encoding: .utf8) else { return "🔒" }
