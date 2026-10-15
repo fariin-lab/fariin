@@ -1986,8 +1986,15 @@ struct FloatingCallWindow: View {
                         .frame(width: tabW + max(0, pull), height: pull > 0 ? h : tabH)
                         .contentShape(Rectangle())
                         .offset(y: (pull > 0 ? 0 : (h - tabH) / 2) + tabDrag.height)
+                        // ⛔ MEASURED ON THE SCREEN, NOT ON THIS VIEW — owner 2026-10-15, second report:
+                        // "on the right it does not follow my finger, on the left it does". This view
+                        // WIDENS as the card comes out (`tabW + pull`). On the left it grows rightward
+                        // and its leading edge, the drag's local origin, stays put; on the right it
+                        // grows leftward, so the origin ran away with the finger and each update saw
+                        // less movement than the finger made. In global space nothing the drag moves
+                        // can move its own reference, on either side.
                         .gesture(
-                            DragGesture(minimumDistance: 4)
+                            DragGesture(minimumDistance: 4, coordinateSpace: .global)
                                 .onChanged { v in
                                     let (_, maxDown) = limits(geo.size)
                                     let y = rubberBand(base.height + v.translation.height, max: maxDown) - base.height
