@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SECURITY CHECKUP OPENS AT ONCE.
+            THIS BUILD: SCREEN SHARE CARRIES YOUR PHONE'S SOUND.
+            Screen share: the sound playing on your phone (videos, music) now goes to the other person, mixed with your voice.
+            In-chat search: "Show as List" shows the results as a list, like the reference app.
+            In-chat search opened from the profile: the keyboard now rises from the bottom after the page closes.
+            PLEASE TEST: share your screen in a 1:1 call and play a video; search inside a chat and tap Show as List.
+
+            EARLIER: SECURITY CHECKUP OPENS AT ONCE.
             Devices: tapping Security Checkup opens the sheet straight away, already checked. The sheet is only as tall as what it shows and slides up at that height.
             Call card: pulling it out of the edge, keep holding and move it left or right; it follows your finger and lands on the nearest side when you let go. The arrow on the RIGHT edge now follows your finger in a chat, like the left one.
             Attach sheet: tall photos and videos open with their rounded corners again.
