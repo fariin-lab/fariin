@@ -257,6 +257,10 @@ struct AnnouncementAudience: Equatable {
     /// Hide from builds older than this. An announcement about a feature an old app does not have is
     /// worse than no announcement.
     var minBuild: Int = 0
+    /// Hide from builds NEWER than this; 0 = no limit (2026-10-15, owner: target by app version, so
+    /// a "please update" note reaches only the old builds). Set from the admin panel only. A build
+    /// from before this field ignores it and shows the post, which is what the note is for anyway.
+    var maxBuild: Int = 0
     /// Number of chosen recipients, carried for the admin history screen. The list itself is NEVER
     /// stored on the broadcast document — that would publish a list of user ids to every phone in the
     /// world. The copies under each recipient are the only record.
@@ -274,6 +278,7 @@ struct AnnouncementAudience: Equatable {
         countries = map["countries"] as? [String] ?? []
         ppm = (map["ppm"] as? NSNumber)?.intValue ?? 1_000_000
         minBuild = (map["minBuild"] as? NSNumber)?.intValue ?? 0
+        maxBuild = (map["maxBuild"] as? NSNumber)?.intValue ?? 0
         chosenCount = (map["chosenCount"] as? NSNumber)?.intValue ?? 0
     }
 
@@ -394,6 +399,7 @@ extension Announcement {
         if publishAt > now { return false }
         if let expiresAt, expiresAt <= now { return false }
         if build < audience.minBuild { return false }
+        if audience.maxBuild > 0, build > audience.maxBuild { return false }
         if isPersonal { return true }
 
         if audience.scope == .countries {
