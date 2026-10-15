@@ -269,21 +269,27 @@ struct GifPickerView: View {
     private var embeddedBody: some View {
         ScrollView {
             emptyStates
-            HStack(alignment: .top, spacing: 4) {
+            // Room at the screen's sides (owner 2026-10-15: "the GIFs touch left and right").
+            HStack(alignment: .top, spacing: 6) {
                 ForEach(0..<2, id: \.self) { col in
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: 6) {
                         ForEach(masonryColumns[col]) { g in gifCell(g) }
                     }
                 }
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
+        // ⛔ NO LINE UNDER THE HEADER — owner 2026-10-15: "the top header has a border; use the iOS 26
+        // native blur". The header was painted with a solid background, so the GIFs stopped at a hard
+        // edge. It is now a `safeAreaBar` with nothing painted: the GIFs scroll up under it and the
+        // system's own soft scroll-edge blur fades them, the way Apple's bars do.
+        .scrollEdgeEffectStyle(.soft, for: .top)
         // ⛔ BARS, NOT FLOATING OVER THE GIFS — owner 2026-10-15: "the X and search overlap the GIFs;
         // the bottom bar is system chrome, the GIFs are app content inside the safe area". The top row
         // and the mood row are edge-attached bars on the sheet's own background; the grid lives
         // between them and never runs under either, so every tap on a bar is the bar's.
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .safeAreaBar(edge: .top, spacing: 0) {
             // SEARCH TAKES THE WHOLE ROW — owner 2026-10-15 (screenshot): while searching, the title and
             // the left X go away; the row is the search field with one X on its right that ends the
             // search, the way the system search bar looks.
@@ -324,7 +330,6 @@ struct GifPickerView: View {
             .padding(.horizontal, 12)
             .padding(.top, 18)
             .padding(.bottom, 8)
-            .background(Color(.systemBackground))
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // ⛔ A SYSTEM BAR, NOT A FLOATING CAPSULE — owner 2026-10-15: "remove the border and the

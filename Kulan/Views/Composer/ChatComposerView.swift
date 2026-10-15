@@ -160,9 +160,8 @@ final class ChatComposerView: UIView {
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
     /// ⛔ THE CAMERA LIVES IN THE FIELD — owner 2026-10-15: "remove Camera from the attach sheet,
     /// show the camera in the input bar". Beside the GIF, the same dimmed ink, shown when the GIF is.
-    private let cameraButton = IconButton(image: UIImage(systemName: "camera",
-                                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)),
-                                          size: CGSize(width: 24, height: 24))
+    /// His own camera drawing (owner 2026-10-15, SVG), drawn like the GIF icon beside it.
+    private let cameraButton = IconButton(image: UIImage(named: "ic_camera_field"), size: CGSize(width: 24, height: 24))
     private let micButton = AccessibleActivationView()
     /// ⛔ THE REFERENCE APP'S OWN MIC AND PLUS — owner, 2026-09-27, both ringed: "use their recording
     /// icon and + icon". Their `mic` and `plus` vectors (`ic_composer_mic`, `ic_composer_plus`), drawn
