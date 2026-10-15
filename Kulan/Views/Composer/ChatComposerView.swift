@@ -43,6 +43,8 @@ final class ChatComposerView: UIView {
         static let recordBar: CGFloat = 44
         /// The X and the send inside the recording bar.
         static let stripCircle: CGFloat = 36
+        /// The X is smaller than the send (owner 2026-10-15: "make the X 32pt"), on the same centre.
+        static let stripX: CGFloat = 32
         static let stripInset: CGFloat = 4
     }
 
@@ -201,7 +203,7 @@ final class ChatComposerView: UIView {
         cfg.contentInsets = .zero
         cfg.baseBackgroundColor = .tertiarySystemFill
         cfg.baseForegroundColor = .label
-        cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
+        cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
         let b = UIButton(configuration: cfg)
         b.accessibilityLabel = "Cancel recording"
         return b
@@ -1108,7 +1110,9 @@ final class ChatComposerView: UIView {
         strip.frame = CGRect(x: 0, y: H - sh, width: pw, height: sh)
         stripRecording.frame = strip.bounds
         stripReview.frame = strip.bounds
-        stripX.frame = CGRect(x: M.stripInset, y: cy, width: c, height: c)
+        // 32pt on the old 36pt circle's centre (22pt in): 6pt from the bar's edge all round.
+        let xc = M.stripX
+        stripX.frame = CGRect(x: M.stripInset + (c - xc) / 2, y: (sh - xc) / 2, width: xc, height: xc)
         stripSend.frame = CGRect(x: pw - M.stripInset - c, y: cy, width: c, height: c)
         let onceW: CGFloat = 24
         onceButton.frame = CGRect(x: stripSend.frame.minX - 12 - onceW, y: 0, width: onceW, height: sh)
