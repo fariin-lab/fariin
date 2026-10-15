@@ -110,27 +110,32 @@ struct SettingsView: View {
                     // way every other avatar in the app does; the name under it still opens Edit,
                     // and the Edit button is always there. No photo = nothing to view, so the
                     // circle falls back to Edit, which is where a photo gets added.
-                    profileHeader
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
                     // ⛔ EDIT PROFILE / SHARE PROFILE under the name — owner 2026-10-13, with a picture of
                     // the two grey Liquid Glass capsules. ONLY these were added: the page is otherwise the
                     // design it had before the same day's redesign, which he asked to have back.
-                    // In the HEADER'S section, not a section of their own (owner, same day: "the space
-                    // between the username and the buttons is too big" — a section of their own added a
-                    // full section gap above them).
-                    HStack(spacing: 12) {
-                        profileButton("Edit profile") { showEdit = true }
-                        profileButton("Share profile") { showQR = true }
+                    //
+                    // ⛔ IN THE HEADER'S OWN ROW, not a second row — owner 2026-10-15 on build 942: a grey
+                    // tray "like UI" under both buttons, there at rest, not after a tap. As the LAST row
+                    // of the section, the buttons' row got the card-shaped (bottom-rounded) grey the
+                    // header row above it never showed, despite the same clear row background. The
+                    // borderless style (33c516c0) did not remove it. One row = the header row, which
+                    // has always drawn clean.
+                    VStack(spacing: 14) {
+                        profileHeader
+                        HStack(spacing: 12) {
+                            profileButton("Edit profile") { showEdit = true }
+                            profileButton("Share profile") { showQR = true }
+                        }
+                        // ⛔ ROOM FOR THE PRESS — owner 2026-10-13: a cut, border-like edge on the buttons
+                        // when tapped. Interactive glass grows under the finger and the list row clips at
+                        // its own edges. The margin keeps the growth inside the row.
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 5)
                     }
-                    // ⛔ ROOM FOR THE PRESS — owner 2026-10-13: a cut, border-like edge on the buttons when
-                    // tapped. Interactive glass grows under the finger and the list row clips at its own
-                    // edges, which these capsules touched exactly (zero insets). The margin is inside
-                    // the row so the growth has somewhere to go; the top inset moves into it.
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
+                    // Zero side insets, as the buttons' own row had: they keep their width. The header
+                    // is centred, so the circle and name do not move.
+                    .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 0, trailing: 0))
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                     .listRowSeparator(.hidden)
                 }
 
