@@ -241,13 +241,9 @@ struct SecurityCheckupSheet: View {
     /// ⛔ ONE SHEET, ALREADY ANSWERED — owner 2026-10-14: "it has two sheets, the loading one and the
     /// first one". It opened on four "Checking…" rows and then re-laid itself out (and resized) when
     /// the answers came. The Devices page now runs the check BEFORE presenting and hands it in here.
-    /// Closes the sheet with its own slide down (`AttachedBottomSheet`); the system dismiss would
-    /// drop the whole cover, dimming and all, in one block.
-    private let close: () -> Void
-    init(check: SecurityCheckup, close: @escaping () -> Void) {
-        _check = State(initialValue: check)
-        self.close = close
-    }
+    init(check: SecurityCheckup) { _check = State(initialValue: check) }
+    private func close() { dismiss() }
+    @State private var detent: PresentationDetent = .height(SecurityCheckupSheet.lastContentH + 68)
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
     /// it is not added. 0.8 of the screen until the content has been measured once.
@@ -260,8 +256,8 @@ struct SecurityCheckupSheet: View {
         get { let v = UserDefaults.standard.double(forKey: "securityCheckup.contentH"); return v > 0 ? v : 640 }
         set { UserDefaults.standard.set(Double(newValue), forKey: "securityCheckup.contentH") }
     }
-    private var fitHeight: CGFloat {
-        (contentH > 0 ? contentH : Self.lastContentH) + 68
+    private var fitDetent: PresentationDetent {
+        .height((contentH > 0 ? contentH : Self.lastContentH) + 68)
     }
     private var profile = ProfileStore.shared
 
@@ -431,12 +427,12 @@ struct SecurityCheckupSheet: View {
         // measured on this phone (kept across launches) and the answers are ready before it opens,
         // so the height it opens at is the height it keeps. A real change later (a row answered
         // differently) still follows the content.
-        // ⛔ 2026-10-15: owner, with both screenshots: the full-height sheet left half the screen
-        // empty, and the fitted system sheet floated like a popup. On iOS 26 the system floats every
-        // sheet shorter than the screen, so it cannot be both short and on the bottom edge. The
-        // height is now set here and `AttachedBottomSheet` holds it to the bottom edge.
-        .frame(maxHeight: fitHeight)
-        .animation(.smooth(duration: 0.3), value: contentH)
+        // ⛔ APPLE'S OWN SHEET — owner 2026-10-15: "why does it look custom, use Apple's native one".
+        // A drawn bottom sheet (fitted AND on the edge) was tried the same morning and REJECTED. On
+        // iOS 26 Apple floats any sheet shorter than the screen; that is the native look he chose.
+        .presentationDetents([fitDetent], selection: $detent)
+        .onChange(of: contentH) { _, _ in withAnimation { detent = fitDetent } }
+        .presentationDragIndicator(.visible)
         // The answers are kept ready by `SecurityCheckup.shared`; opening asks nothing unless they
         // are stale, and a refresh keeps the rows on screen until the new answers land.
         .task { check.refreshIfStale() }
@@ -587,85 +583,5 @@ private struct DeviceReviewPage: View {
     private func detail(_ d: DeviceSession) -> String {
         let when = d.createdAt.map { "signed in \($0.formatted(.relative(presentation: .named)))" } ?? "signed in"
         return d.location.isEmpty ? when.prefix(1).uppercased() + when.dropFirst() : "\(d.location) · \(when)"
-    }
-}
-
-/// A sheet only as tall as its content AND joined to the bottom edge, sliding up from below.
-///
-/// ⛔ WHY NOT `.sheet` — owner 2026-10-15, two screenshots: the full-height sheet left half the
-/// screen empty, and the fitted one "appears like a popup". On iOS 26 the system floats every sheet
-/// shorter than the screen (inset from the sides and bottom, rounded on all four corners), and only
-/// a full-height one sits on the edge; no public setting changes that. So this draws the sheet
-/// itself inside a cover presented WITHOUT animation (`present` below): the dimming fades, the card
-/// rises with a critically damped spring like the system sheet's, and a drag down or a tap on the
-/// dimming closes it. Sheets opened from inside it still present normally over it.
-struct AttachedBottomSheet<Content: View>: View {
-    /// Called once the slide down has finished; the presenter removes the cover then.
-    let onClosed: () -> Void
-    @ViewBuilder let content: (_ close: @escaping () -> Void) -> Content
-
-    @State private var shown = false
-    @State private var drag: CGFloat = 0
-    private static var spring: Animation { .spring(duration: 0.45, bounce: 0) }
-    private static var radius: CGFloat { 38 }
-
-    /// The presenter's half: show and hide the cover with no system slide of its own.
-    static func present(_ binding: Binding<Bool>, _ value: Bool) {
-        var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { binding.wrappedValue = value }
-    }
-
-    var body: some View {
-        GeometryReader { g in
-            let away = g.size.height + g.safeAreaInsets.bottom + 40
-            let pull = drag > 0 ? drag : drag / 8   // up resists, like the system sheet
-            ZStack(alignment: .bottom) {
-                Color.black.opacity(shown ? 0.25 * max(0.0, 1.0 - Double(drag) / 400.0) : 0.0)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { close() }
-                content(close)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: Self.radius,
-                                                      topTrailingRadius: Self.radius,
-                                                      style: .continuous))
-                    .background(alignment: .bottom) {
-                        UnevenRoundedRectangle(topLeadingRadius: Self.radius,
-                                               topTrailingRadius: Self.radius, style: .continuous)
-                            .fill(Color(.systemGroupedBackground))
-                            .ignoresSafeArea(edges: .bottom)
-                    }
-                    .overlay(alignment: .top) {
-                        Capsule().fill(Color(.tertiaryLabel))
-                            .frame(width: 36, height: 5)
-                            .padding(.top, 5)
-                    }
-                    .padding(.top, 12)   // never under the status bar
-                    .offset(y: shown ? pull : away)
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 8)
-                            .onChanged { v in drag = v.translation.height }
-                            .onEnded { v in
-                                if v.translation.height > 120 || v.predictedEndTranslation.height > 260 {
-                                    close()
-                                } else {
-                                    withAnimation(Self.spring) { drag = 0 }
-                                }
-                            }
-                    )
-            }
-        }
-        .presentationBackground(.clear)
-        .onAppear { withAnimation(Self.spring) { shown = true } }
-    }
-
-    private func close() {
-        guard shown else { return }
-        withAnimation(Self.spring, completionCriteria: .logicallyComplete) {
-            shown = false
-        } completion: {
-            drag = 0
-            onClosed()
-        }
     }
 }

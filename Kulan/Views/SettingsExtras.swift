@@ -289,7 +289,7 @@ struct DevicesView: View {
 
     private func openCheckup() {
         guard !showCheckup else { return }
-        AttachedBottomSheet<EmptyView>.present($showCheckup, true)
+        showCheckup = true
     }
     /// Seconds until this sign-in may sign out other devices (`DeviceRegistry.freshSessionWindow`).
     @State private var freshLeft: TimeInterval?
@@ -452,12 +452,7 @@ struct DevicesView: View {
             if !others.isEmpty { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
         }
         .sheet(item: $detail) { s in DeviceDetailView(session: s) }
-        // Our own bottom sheet: fitted AND on the bottom edge (see `AttachedBottomSheet`).
-        .fullScreenCover(isPresented: $showCheckup) {
-            AttachedBottomSheet(onClosed: { AttachedBottomSheet<EmptyView>.present($showCheckup, false) }) { close in
-                SecurityCheckupSheet(check: checkup, close: close)
-            }
-        }
+        .sheet(isPresented: $showCheckup) { SecurityCheckupSheet(check: checkup) }
         .onAppear {
             startListening()
             checkup.refreshIfStale()   // only if there is no recent clean answer
