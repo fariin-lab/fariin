@@ -327,14 +327,13 @@ struct GifPickerView: View {
             .background(Color(.systemBackground))
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 2) {
-                categoryRow
-                // Giphy's terms ask for the attribution wherever its results are shown.
-                Text("Powered by GIPHY")
-                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
-            }
-            .padding(.top, 6)
-            .background(Color(.systemBackground))
+            // ⛔ A SYSTEM BAR, NOT A FLOATING CAPSULE — owner 2026-10-15: "remove the border and the
+            // GIPHY text; the bar is system chrome, edge-attached". The buttons sit straight on the
+            // sheet's own background along the bottom edge, no glass outline, no caption under them.
+            categoryButtons
+                .padding(.horizontal, 12)
+                .padding(.top, 6).padding(.bottom, 4)
+                .background(Color(.systemBackground))
         }
         .onChange(of: query) { _, _ in
             searchTask?.cancel()
@@ -416,7 +415,9 @@ struct GifPickerView: View {
         if !Task.isCancelled { gifs = results; fetchCameBackEmpty = results.isEmpty }
     }
 
-    private var categoryRow: some View {
+    private var categoryRow: some View { categoryButtons.floatingGlass() }
+
+    private var categoryButtons: some View {
         HStack(spacing: 4) {
             ForEach(GifCategory.allCases, id: \.self) { c in
                 Button {
@@ -452,10 +453,6 @@ struct GifPickerView: View {
         //
         // Same treatment as the attachment sources bar and the media tabs: the control is the
         // surface, and it is the only surface.
-        .padding(.horizontal, 6).padding(.vertical, 5)
-        .liquidGlass(Capsule())
-        .padding(.horizontal, 10)
-        .padding(.bottom, 6)
         .animation(.easeInOut(duration: 0.15), value: category)
     }
 
@@ -517,5 +514,15 @@ struct GifPickerView: View {
         guard query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         if category == .favorites { gifs = GifFavorites.all() }
         else if category == .recent { gifs = GifRecents.all() }
+    }
+}
+
+private extension View {
+    /// The mood row's own glass capsule where it floats over the grid (the search layout).
+    func floatingGlass() -> some View {
+        padding(.horizontal, 6).padding(.vertical, 5)
+            .liquidGlass(Capsule())
+            .padding(.horizontal, 10)
+            .padding(.bottom, 6)
     }
 }
