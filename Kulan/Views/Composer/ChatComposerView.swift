@@ -222,8 +222,13 @@ final class ChatComposerView: UIView {
     private let overlayGroup = UIView()
     private let discGroup = UIView()
     private let pulseWrap = UIView()
-    private let haloOuter = UIView()
-    private let haloInner = UIView()
+    /// ⛔ BLOBS, NOT CIRCLES — owner 2026-10-15: "the recording animation looks ugly, use the
+    /// reference's; don't change my size". Same two layers, same sizes and the same level-driven
+    /// scale as before; their outline now morphs the way the reference's halo does (`BlobView`).
+    private let haloOuter = BlobView()
+    private let haloInner = BlobView()
+    /// The level the halo shows, eased toward the recorder's (the raw 30Hz level made it jump).
+    private var shownLevel: CGFloat = 0
     private let disc = UIView()
     private let discGlyph = UIImageView(image: UIImage(named: "ic_mic")?.withRenderingMode(.alwaysTemplate))
     private let lockTarget: UIVisualEffectView = {
@@ -666,8 +671,8 @@ final class ChatComposerView: UIView {
 
         // The disc is the ACCENT, which is white at night — so the glyph on it is `onAccent`, or
         // it draws nothing on the one control you are watching.
-        haloOuter.backgroundColor = accent.withAlphaComponent(0.12)
-        haloInner.backgroundColor = accent.withAlphaComponent(0.22)
+        haloOuter.color = accent.withAlphaComponent(0.12)
+        haloInner.color = accent.withAlphaComponent(0.22)
         disc.backgroundColor = accent
         discGlyph.tintColor = onAccent
         lockIcon.tintColor = .label
@@ -794,17 +799,21 @@ final class ChatComposerView: UIView {
         }
     }
 
+    // The fixed 1s "breathing" scale is gone (2026-10-15): the blobs' own morph is the idle motion,
+    // as in the reference, and two motions on one halo read as a wobble fighting a pulse.
     private func startPulse() {
         pulseWrap.layer.removeAllAnimations()
         pulseWrap.transform = .identity
-        UIView.animate(withDuration: 1.0, delay: 0, options: [.repeat, .autoreverse, .curveEaseInOut, .allowUserInteraction]) {
-            self.pulseWrap.transform = CGAffineTransform(scaleX: 1.08, y: 1.08)
-        }
+        shownLevel = 0
+        haloOuter.start()
+        haloInner.start()
     }
 
     private func stopPulse() {
         pulseWrap.layer.removeAllAnimations()
         pulseWrap.transform = .identity
+        haloOuter.stop()
+        haloInner.stop()
     }
 
     /// Rubber-band the visual mic offset: 1:1 up to the lock/cancel limit, then diminishing
@@ -864,7 +873,12 @@ final class ChatComposerView: UIView {
     fileprivate func tick() {
         refreshTimers()
         if shown.recordLocked && !shown.reviewing { liveWave.levels = recorder.levels }
-        let lvl = CGFloat(recorder.levels.last ?? 0)
+        // Eased toward the recorder's level: up quickly, down slowly, as a VU meter falls.
+        let raw = CGFloat(recorder.levels.last ?? 0)
+        shownLevel += (raw - shownLevel) * (raw > shownLevel ? 0.45 : 0.15)
+        let lvl = shownLevel
+        haloOuter.level = lvl
+        haloInner.level = lvl
         haloOuter.transform = CGAffineTransform(scaleX: 1.10 + 0.85 * lvl, y: 1.10 + 0.85 * lvl)
         haloInner.transform = CGAffineTransform(scaleX: 1 + 0.40 * lvl, y: 1 + 0.40 * lvl)
     }
@@ -1134,10 +1148,8 @@ final class ChatComposerView: UIView {
         pulseWrap.center = haloCenter
         haloOuter.bounds = haloBounds
         haloOuter.center = haloCenter
-        haloOuter.layer.cornerRadius = M.halo / 2
         haloInner.bounds = haloBounds
         haloInner.center = haloCenter
-        haloInner.layer.cornerRadius = M.halo / 2
         disc.bounds = CGRect(x: 0, y: 0, width: M.disc, height: M.disc)
         disc.center = CGPoint(x: M.halo / 2, y: M.halo / 2)
         disc.layer.cornerRadius = M.disc / 2

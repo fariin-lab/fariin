@@ -146,3 +146,88 @@ final class LiveLevelsView: UIView {
         path.fill()
     }
 }
+
+/// A soft shape whose outline keeps morphing, for the halo around the recording mic (owner
+/// 2026-10-15: "the recording animation looks ugly, use the reference's"). The reference draws its
+/// halo as blobs, not circles: eight points around a circle, each pulled in by a random amount, joined
+/// by a smooth closed curve, and the outline animates from one random shape to the next without
+/// stopping. Louder speaks faster: each morph takes 1 / speed seconds, speed rising from 0.9 to 4
+/// with the level (the reference's range). Size is NOT this view's business: the composer scales it
+/// by the level exactly as it scaled the old circles, so nothing about the halo's size changes.
+final class BlobView: UIView {
+    var color: UIColor = .clear { didSet { shape.fillColor = color.cgColor } }
+    /// 0…1, the recorder's smoothed level; read at the start of every morph.
+    var level: CGFloat = 0
+
+    private let shape = CAShapeLayer()
+    private var running = false
+    private static let points = 8
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        layer.addSublayer(shape)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        shape.frame = bounds
+        if !running { shape.path = Self.path(in: bounds.size, wobble: 0) }
+    }
+
+    func start() {
+        guard !running else { return }
+        running = true
+        morph()
+    }
+
+    func stop() {
+        running = false
+        shape.removeAllAnimations()
+        shape.path = Self.path(in: bounds.size, wobble: 0)
+    }
+
+    private func morph() {
+        guard running, bounds.width > 0 else { return }
+        let next = Self.path(in: bounds.size, wobble: 1)
+        let anim = CABasicAnimation(keyPath: "path")
+        anim.fromValue = shape.presentation()?.path ?? shape.path
+        anim.toValue = next
+        let speed = 0.9 + (4 - 0.9) * max(0, min(1, level))
+        anim.duration = 1 / Double(speed)
+        anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        shape.path = next
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in self?.morph() }
+        shape.add(anim, forKey: "morph")
+        CATransaction.commit()
+    }
+
+    /// A closed smooth curve through `points` points on a circle filling `size`, each pulled in by
+    /// up to 14% of the radius × `wobble` (0 = a circle). Always the same number of curve segments,
+    /// so any two shapes can be animated between.
+    private static func path(in size: CGSize, wobble: CGFloat) -> CGPath {
+        let r = min(size.width, size.height) / 2
+        let c = CGPoint(x: size.width / 2, y: size.height / 2)
+        guard r > 0 else { return CGMutablePath() }
+        let n = points
+        let pts: [CGPoint] = (0..<n).map { i in
+            let a = CGFloat(i) / CGFloat(n) * 2 * .pi
+            let rr = r * (1 - 0.14 * wobble * CGFloat.random(in: 0...1))
+            return CGPoint(x: c.x + cos(a) * rr, y: c.y + sin(a) * rr)
+        }
+        // Catmull-Rom through the points, as cubic Béziers (tension 1/6).
+        let p = CGMutablePath()
+        p.move(to: pts[0])
+        for i in 0..<n {
+            let p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n], p3 = pts[(i + 2) % n]
+            let c1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            p.addCurve(to: p2, control1: c1, control2: c2)
+        }
+        p.closeSubpath()
+        return p
+    }
+}
