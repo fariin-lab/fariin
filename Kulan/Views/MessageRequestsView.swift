@@ -265,7 +265,8 @@ struct MessageRequestsView: View {
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.primary)
                 .padding(.top, 14)
-            Text("Message requests from accounts you don\u{2019}t follow live here. To reply to their messages, you need to accept the request.")
+            // Kulan has no follow: a request is a chat from someone you haven't chatted with before.
+            Text("Messages from people you haven\u{2019}t chatted with before arrive here as requests. To reply, accept the request.")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
