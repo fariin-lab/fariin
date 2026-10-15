@@ -74,7 +74,16 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: LOCKED MESSAGES AFTER SWITCHING ACCOUNTS.
+            THIS BUILD: LOCATION, GIF AND FILES OPEN INSIDE THE ATTACH SHEET.
+            Attach sheet: Location, GIF and Files open inside the sheet. Back (top left) or a swipe from the left edge returns to the photos.
+            Attach sheet: new Location page (Places In This Area, blue pin, Send Location with the place name) and Add files page (Upload files, Recent files).
+            Chats: the camera moved from the attach sheet into the message field, beside GIF.
+            Calls: the screen share button is faded until it can be used, and white while you are sharing.
+            Voice: round ends on the recording bar, a smaller X, an easier play button, and Liquid Glass rings around the mic.
+            Video editor: the same sizes as the photo editor. Message Requests: Kulan's own sheet and icon. Fariin row shows the message.
+            PLEASE TEST: open Location, GIF and Files from the attach sheet and swipe back; take a photo from the field's camera; share your screen.
+
+            EARLIER: LOCKED MESSAGES AFTER SWITCHING ACCOUNTS.
             Chats: a message sealed with someone's earlier key now opens instead of showing a lock (for example after one of your accounts signed in on another phone).
             Attach sheet: the bar stays on the bottom of the sheet while it grows to full or shrinks back.
             Attach sheet: the photo editor has the reference sizes (photo between the bars, caption bar on the bottom edge). Videos and picked photos open with the same motion as a received photo.
