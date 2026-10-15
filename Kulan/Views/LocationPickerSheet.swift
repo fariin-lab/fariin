@@ -101,6 +101,17 @@ private func _locationTopInset() -> CGFloat {
 // the chosen coordinates (falls back to the live GPS fix when the map hasn't been moved).
 struct LocationPickerSheet: View {
     var onSend: (_ lat: Double, _ lon: Double, _ label: String?) -> Void
+    /// ⛔ INSIDE THE ATTACH SHEET — owner 2026-10-15, with a picture: "tapping Location closes the
+    /// attach sheet and then the location page appears; open it directly in the sheet, back goes to
+    /// the photos". Embedded, this page is a layer of the attach sheet (ThreadView `attachLocation`):
+    /// back chevron, "Location", search; "Places In This Area"; a blue pin; map controls on the right;
+    /// one big Send Location naming the spot. The logic below (naming, search, approximate fix, send)
+    /// is the same for both.
+    var embedded: Bool = false
+    var onBack: (() -> Void)? = nil
+    /// The search field wants the keyboard, and the sheet must be full height for it (embedded).
+    var onWantsFullHeight: (() -> Void)? = nil
+    @State private var searching = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var fetcher = LocationFetcher()
     @State private var camera: MapCameraPosition = .userLocation(fallback: .automatic)
@@ -188,6 +199,22 @@ struct LocationPickerSheet: View {
     }
 
     var body: some View {
+        Group {
+            if embedded { embeddedBody } else { sheetBody }
+        }
+        .alert("Location access is off", isPresented: $fetcher.denied) {
+            Button("Open Settings") {
+                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Allow location access in Settings to share where you are.") }
+        .onAppear {
+            fetcher.wantsFullAccuracy = true   // 2026-09-24 fix-all #210: sharing a spot needs metres
+            fetcher.request()
+        }
+    }
+
+    private var sheetBody: some View {
         ZStack(alignment: .top) {
             Map(position: $camera) {
                 UserAnnotation()
@@ -390,15 +417,212 @@ struct LocationPickerSheet: View {
             }
             .padding(.horizontal, 16).padding(.bottom, 8)
         }
-        .alert("Location access is off", isPresented: $fetcher.denied) {
-            Button("Open Settings") {
-                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+    }
+
+    // MARK: - Inside the attach sheet
+
+    private var embeddedBody: some View {
+        ZStack(alignment: .top) {
+            Map(position: $camera) {
+                UserAnnotation()
             }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Allow location access in Settings to share where you are.") }
-        .onAppear {
-            fetcher.wantsFullAccuracy = true   // 2026-09-24 fix-all #210: sharing a spot needs metres
-            fetcher.request()
+            .mapStyle(styleKind.style)
+            .mapControls { }   // the page draws its own controls
+            .ignoresSafeArea()
+            .onMapCameraChange(frequency: .continuous) { ctx in
+                center = ctx.camera.centerCoordinate
+                if searchFocused == false && !results.isEmpty && !searching { results = [] }
+            }
+            .onMapCameraChange(frequency: .onEnd) { ctx in
+                let c = ctx.camera.centerCoordinate
+                center = c
+                if userMovedMap { selectedName = nil }
+                resolveName(for: c)
+            }
+            .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in userMovedMap = true })
+            .overlay { blueCenterPin.allowsHitTesting(false) }
+
+            VStack(spacing: 12) {
+                HStack {
+                    glassCircle("chevron.left", label: "Back") { onBack?() }
+                    Spacer()
+                    Text("Location").font(.headline)
+                    Spacer()
+                    glassCircle(searching ? "xmark" : "magnifyingglass", label: searching ? "Close search" : "Search") {
+                        withAnimation(.easeInOut(duration: 0.2)) { searching.toggle() }
+                        if searching {
+                            onWantsFullHeight?()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
+                        } else {
+                            searchFocused = false; query = ""; results = []; searchNote = nil
+                        }
+                    }
+                }
+                if searching {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search by name or address", text: $query)
+                            .focused($searchFocused)
+                            .submitLabel(.search)
+                            .onSubmit { runSearch() }
+                            .onChange(of: query) { _, _ in searchSeq += 1; searchNote = nil }
+                    }
+                    .padding(.horizontal, 14).frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: true)
+                    .transition(.opacity)
+                } else {
+                    Button { searchNearby() } label: {
+                        Text("Places In This Area")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 20).frame(height: 42)
+                            .liquidGlass(Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                }
+                resultsList
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 18)   // under the sheet's grabber
+        }
+        // Map style and my location, a glass column on the right above Send.
+        .overlay(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                Menu {
+                    Picker("Map", selection: $styleKind) {
+                        ForEach(MapStyleKind.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                } label: {
+                    Image(systemName: "map").font(.system(size: 19, weight: .regular))
+                        .foregroundStyle(.primary).frame(width: 46, height: 46).contentShape(Rectangle())
+                }
+                Button {
+                    fetcher.request()
+                    userMovedMap = false; selectedName = nil
+                    withAnimation { camera = .userLocation(fallback: .automatic) }
+                } label: {
+                    Image(systemName: "location").font(.system(size: 19, weight: .regular))
+                        .foregroundStyle(.primary).frame(width: 46, height: 46).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .liquidGlass(Capsule(), interactive: true)
+            .padding(.trailing, 12)
+            .padding(.bottom, 92)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 8) {
+                if sendsApproximateFix && results.isEmpty {
+                    Label("Approximate location", systemImage: "location.circle")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.regularMaterial, in: Capsule())
+                }
+                Button {
+                    guard let c = sendCoordinate else { fetcher.request(); return }
+                    onSend(c.latitude, c.longitude, sendName)
+                } label: {
+                    VStack(spacing: 1) {
+                        Text("Send Location").font(.system(size: 17, weight: .semibold))
+                        Text(sendName ?? "Location").font(.system(size: 13)).opacity(0.85).lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity).frame(height: 58)
+                    .background(Color.blue, in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(sendCoordinate == nil)
+                .opacity(sendCoordinate == nil ? 0.5 : 1)
+            }
+            .padding(.horizontal, 24).padding(.bottom, 8)
+        }
+    }
+
+    /// The pin from his picture: a blue disc holding a white map pin, its point marked by a small
+    /// blue dot that sits exactly on the map's centre.
+    private var blueCenterPin: some View {
+        VStack(spacing: 2) {
+            Image(systemName: "mappin")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 58, height: 58)
+                .background(Color.blue, in: Circle())
+                .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+            Circle().fill(Color.blue).frame(width: 7, height: 7)
+        }
+        // The dot's centre (58 + 2 + 3.5 from the top of 67) onto the map's centre.
+        .offset(y: -(67 / 2 - 3.5))
+    }
+
+    private func glassCircle(_ symbol: String, label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// Search results or the nearby places, under the header.
+    @ViewBuilder private var resultsList: some View {
+        if !results.isEmpty {
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(results.prefix(12).enumerated()), id: \.offset) { _, item in
+                        Button { pick(item); searching = false } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "mappin.circle.fill").foregroundStyle(.blue).font(.system(size: 22))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.name ?? "Location").font(.system(size: 15, weight: .medium))
+                                        .foregroundStyle(.primary).lineLimit(1)
+                                    if let addr = item.placemark.title {
+                                        Text(addr).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 260)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        } else if let searchNote {
+            Text(searchNote)
+                .font(.system(size: 15)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+    }
+
+    /// "Places In This Area": points of interest around the pin (or the phone, before a pin).
+    private func searchNearby() {
+        searchSeq += 1
+        let seq = searchSeq
+        searchNote = nil
+        guard NetworkState.shared.isOnline else {
+            results = []
+            searchNote = "No internet connection. Check your connection and try again."
+            return
+        }
+        guard let c = center ?? fetcher.location else { fetcher.request(); return }
+        let req = MKLocalPointsOfInterestRequest(center: c, radius: 800)
+        MKLocalSearch(request: req).start { resp, _ in
+            guard seq == searchSeq else { return }
+            let items = resp?.mapItems ?? []
+            results = items
+            if items.isEmpty { searchNote = "No places found here" }
         }
     }
 

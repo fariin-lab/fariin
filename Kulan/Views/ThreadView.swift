@@ -179,6 +179,9 @@ struct ThreadView: View {
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
     @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
     @State private var showLocationShare = false     // Location tile → Select Location map
+    /// The Location page as a layer INSIDE the attach sheet (owner 2026-10-15): the sheet stays,
+    /// the page slides over the photos, back slides it away. See `LocationPickerSheet.embedded`.
+    @State private var attachLocation = false
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
@@ -1531,6 +1534,7 @@ struct ThreadView: View {
                      onExpanded: { attachSheetFull = $0 },
                      onDismiss: {
             recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false
+            attachLocation = false
             attachSheetFull = false; attachGridScrolled = false
             panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
             if let next = attachAfterClose { attachAfterClose = nil; next() }
@@ -1636,11 +1640,7 @@ struct ThreadView: View {
                 // Asking for the bottom directly is the smaller fix than inventing an optimistic
                 // location row: the marker is one short string, so the echo lands almost at once,
                 // and this is the same wire the down-arrow uses.
-                nativeScrollTarget = "BOTTOM"
-                // 2026-09-24 decision D-composer-1: now the optimistic row the note above describes
-                // exists (sendMarker), so the glide fires like any text send, and an offline location
-                // is queued and shown as failed instead of vanishing.
-                sendMarker(Message.locationMarkerText(lat: lat, lon: lon, label: label))
+                sendLocationShare(lat: lat, lon: lon, label: label)
             }
         }
         // DELETED HERE: the Share Contact picker sheet, with the attach tile that opened it. Contact
@@ -4968,6 +4968,20 @@ struct ThreadView: View {
                 .onChange(of: attachShowAlbums) { _, _ in attachGridScrolled = false }
                 .onChange(of: attachInAlbum) { _, _ in attachGridScrolled = false }
         }
+        // The Location page, in the sheet, over the photos (owner 2026-10-15).
+        .overlay {
+            if attachLocation {
+                LocationPickerSheet(onSend: { lat, lon, label in
+                                        sendLocationShare(lat: lat, lon: lon, label: label)
+                                        showAttachPanel = false
+                                    },
+                                    embedded: true,
+                                    onBack: { withAnimation(.smooth(duration: 0.32)) { attachLocation = false } },
+                                    onWantsFullHeight: { attachExpandTick &+= 1 })
+                    .background(Color(.systemBackground))
+                    .transition(.move(edge: .trailing))
+            }
+        }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
         // AND closes the sheet, landing in the chat.
@@ -5137,7 +5151,9 @@ struct ThreadView: View {
                     attachTile("ic_camera", "Camera") { showCamera = true }
                     attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
                     attachTile("ic_file", "Files") { showFileImporter = true }
-                    attachTile("ic_location", "Location") { showLocationShare = true }
+                    attachTile("ic_location", "Location", closesSheet: false) {
+                        withAnimation(.smooth(duration: 0.32)) { attachLocation = true }
+                    }
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
                 .padding(.horizontal, 6)
@@ -5313,10 +5329,21 @@ struct ThreadView: View {
     /// One source INSIDE the bar: icon over label, no glass of its own — the bar carries that now.
     /// The old spec (a 76×50 glass capsule per source with the label hanging below it) is what made
     /// three actions read as three loose blobs. See the row above.
-    private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+    /// A location share, from the sheet or from the attach sheet's own page. The chat glides to the
+    /// bottom as for any send (see the note at the picker sheet); `sendMarker` is the optimistic row.
+    private func sendLocationShare(lat: Double, lon: Double, label: String?) {
+        nativeScrollTarget = "BOTTOM"
+        // 2026-09-24 decision D-composer-1: the optimistic row exists (sendMarker), so the glide fires
+        // like any text send, and an offline location is queued and shown as failed.
+        sendMarker(Message.locationMarkerText(lat: lat, lon: lon, label: label))
+    }
+
+    private func attachTile(_ icon: String, _ label: String, closesSheet: Bool = true,
+                            _ action: @escaping () -> Void) -> some View {
         Button {
-            // The next picker opens once the sheet is really gone (its `onDismiss`), not after a
-            // guessed 0.35s: the sheet shrinks into the "+" on a spring, not the system's clock.
+            // A page that lives INSIDE the sheet (Location) opens in place; anything else opens once
+            // the sheet is really gone (its `onDismiss`), not after a guessed 0.35s.
+            guard closesSheet else { action(); return }
             attachAfterClose = action
             showAttachPanel = false
         } label: {

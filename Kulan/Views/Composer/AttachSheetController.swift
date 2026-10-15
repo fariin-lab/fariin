@@ -1,6 +1,7 @@
 import Observation
 import SwiftUI
 import UIKit
+import MapKit
 
 // ⛔ THE ATTACH SHEET IS OUR OWN CONTAINER, NOT `.sheet` — owner, 2026-09-28, build 789: "+ sometimes
 // does not open, sometimes does not close, it lags after many times; copy the reference app exactly".
@@ -668,8 +669,23 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         // `.opening` too: see `settleOpenNow`. Refusing here left the finger to the photo grid for
         // the length of the grow, and the grid rubber-banded past its ends.
         guard phase == .open || phase == .opening else { return false }
+        // ⛔ A MAP KEEPS ITS DRAG — owner 2026-10-15: Location opens inside this sheet now, and a
+        // vertical drag on the map moved the sheet instead of the map. Below the grabber strip a
+        // touch on a map belongs to the map; the strip at the top still moves the sheet.
+        if pan.location(in: shell).y > 28, Self.isOverMap(view.hitTest(pan.location(in: view), with: nil)) {
+            return false
+        }
         let v = pan.velocity(in: view)
         return abs(v.y) > abs(v.x)
+    }
+
+    private static func isOverMap(_ hit: UIView?) -> Bool {
+        var v = hit
+        while let cur = v {
+            if cur is MKMapView { return true }
+            v = cur.superview
+        }
+        return false
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer,
