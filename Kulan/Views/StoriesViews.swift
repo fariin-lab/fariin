@@ -1276,6 +1276,8 @@ struct StoryViewer: View {
     @State private var personPick: (StoryGroup, StoryPersonSheet.Action)?
     /// A chat opened from the person sheet is up over the stage: hold the story still.
     @State private var storyChatUp = false
+    /// "…" → Hide Stories is asking first; the author it would hide.
+    @State private var hideAskUid: String?
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
     // ⚠️ `carouselInteracting` IS DELETED. It said "a swipe is in flight, so stand the real story
@@ -1704,7 +1706,7 @@ struct StoryViewer: View {
     // the composer that was the whole "repost is frozen" report (see `StoryComposerPresenter`).
     private var sheetUp: Bool {
         shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil
-            || repostUp || repostLoading || shareURL != nil || ownRepostGone || storyChatUp
+            || repostUp || repostLoading || shareURL != nil || ownRepostGone || storyChatUp || hideAskUid != nil
         // ⛔ `repostLoading` (owner, 2026-10-12: "I tap Repost on a video story and the original
         // keeps playing, I can hear it"). The story was held only once the composer was up, but the
         // clip is copied (or downloaded) and the poster and face fetched BEFORE that, and for those
@@ -2168,8 +2170,23 @@ struct StoryViewer: View {
                   let url = URL(string: KulanApp.storyLink(id: s.id)) else { return }
             shareURL = StoryLinkPayload(url: url)
         }
+        // ⛔ ASK FIRST — owner 2026-10-15: "hide is a silent action, no confirmation". The Stories
+        // list has always asked ("Hide Stories?", StoriesTabView); this menu hid on the tap. Same
+        // words here. The story holds still while it asks (`sheetUp`).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
-            if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
+            if !currentIsMine { hideAskUid = currentBucketUid }
+        }
+        .alert("Hide Stories?", isPresented: Binding(get: { hideAskUid != nil },
+                                                     set: { if !$0 { hideAskUid = nil } })) {
+            Button("Hide Stories", role: .destructive) {
+                if let uid = hideAskUid { StoryPrefs.setHidden(uid, true); isPresented = false }
+                hideAskUid = nil
+            }
+            Button("Cancel", role: .cancel) { hideAskUid = nil }
+        } message: {
+            let n = groups.first(where: { $0.authorUid == hideAskUid })?.name ?? ""
+            Text("New story updates from \(n.isEmpty ? "this person" : n) "
+                 + "won't appear at the top of the stories list anymore.")
         }
         // "…" → Report (friend stories only): files a report doc for review (App Store 1.2).
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionReport"))) { _ in
@@ -2698,7 +2715,8 @@ struct StoryViewer: View {
                 handle(storyId: story.id, message: message, emoji: emoji, isLiked: isLiked)
             },
             onProfile: { user in
-                // ⚠️ NOT MY OWN. Tapping the header on my own story opened MY profile over my story,
+                // ⚠️ NOT MY OWN PROFILE (still true; since 2026-10-15 my own tap adds a story, below).
+                // Tapping the header on my own story opened MY profile over my story,
                 // which is a screen nobody navigated towards — his 2026-08-07 report, with the sheet
                 // half-raised over his own face. The header is there to say WHO this is, and on my
                 // own story I already know; the tap only means something when it is somebody else.
@@ -2706,7 +2724,17 @@ struct StoryViewer: View {
                 // Tested against the signed-in uid rather than `g.isMine`, because a mixed feed can
                 // page onto my own bucket mid-visit and the tap has to answer for the story that is
                 // on screen at that moment, not the one the viewer was opened with.
-                guard user.id != AuthService.shared.uid else { return }
+                // ⛔ ON MY OWN STORY THE TAP ADDS ANOTHER — owner 2026-10-15, with the reference app's
+                // header ("tap your own name: act like adding a story"). The header shows a "+ Add"
+                // pill there (StoryUI `UserView`), and the pill, my name and my photo all land here.
+                // The viewer closes first: the camera and the day's-limit alerts belong to the shell.
+                if user.id == AuthService.shared.uid {
+                    isPresented = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        NotificationCenter.default.post(name: .init("storyComposeRequested"), object: nil)
+                    }
+                    return
+                }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },

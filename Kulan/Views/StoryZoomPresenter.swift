@@ -428,7 +428,7 @@ final class StoryZoomContainerVC: UIViewController {
 enum StoryComposerPresenter {
     /// `clearBackground`: a page that is not black (a chat opened from a story) — the host is
     /// see-through and the clock follows the app's theme instead of the composer's white.
-    static func present<Content: View>(_ content: Content, onDismissed: @escaping () -> Void,
+    @MainActor static func present<Content: View>(_ content: Content, onDismissed: @escaping () -> Void,
                                        clearBackground: Bool = false) {
         guard let top = topController() else { onDismissed(); return }
         let vc = StoryComposerHostVC(rootView: AnyView(content))
