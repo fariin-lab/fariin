@@ -210,7 +210,11 @@ final class ChatComposerView: UIView {
         cfg.baseBackgroundColor = .tertiarySystemFill
         cfg.baseForegroundColor = .label
         cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        let b = UIButton(configuration: cfg)
+        // ⛔ TAPS AROUND IT COUNT — owner 2026-10-15: "the X works only when I hit the icon, the touch
+        // area is too small". The 32pt circle stays as drawn; its tap area reaches the bar's left
+        // end and its full height, and 6pt to the right (the play button starts just after).
+        let b = OutsetHitButton(configuration: cfg)
+        b.hitOutset = UIEdgeInsets(top: 12, left: 20, bottom: 12, right: 6)
         b.accessibilityLabel = "Cancel recording"
         return b
     }()
@@ -1465,6 +1469,15 @@ final class ComposerTextView: UITextView {
 }
 
 // MARK: - Small controls
+
+/// A system button whose tap area reaches past its drawn shape by `hitOutset` (see `stripX`).
+final class OutsetHitButton: UIButton {
+    var hitOutset: UIEdgeInsets = .zero
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.inset(by: UIEdgeInsets(top: -hitOutset.top, left: -hitOutset.left,
+                                      bottom: -hitOutset.bottom, right: -hitOutset.right)).contains(point)
+    }
+}
 
 /// A 40×40 tap target around a fixed-size glyph. The old `Image(...).frame(w,h).frame(40,40)`.
 /// ⛔ ITS TAP IS A GESTURE RECOGNISER, NOT UICONTROL TRACKING — his reports, 2026-08-26: the GIF
