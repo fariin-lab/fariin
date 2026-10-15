@@ -363,6 +363,39 @@ final class MessageRowCell: UICollectionViewCell {
 
     // MARK: - Taps
 
+    // ── The link card's press tint (owner 2026-10-15: "no animation, not feeling to click") ──
+    // Raw touches, not a recogniser: the tap recogniser only speaks when the finger lifts, and the
+    // tint has to come on as it lands. Touches are not cancelled by the recognisers (UIKit default),
+    // and a scroll that takes the touch over cancels it here, which lifts the tint. Not in selection
+    // mode, where a tap toggles the row, and not on the card's own button, which is its own target.
+    private var linkPressed = false
+    private func linkPress(_ touches: Set<UITouch>) -> Bool {
+        guard let m = model, !m.selecting, touches.count == 1, let t = touches.first else { return false }
+        let p = t.location(in: rowView)
+        return rowView.hitsLinkCard(p) && !rowView.hitsLinkButton(p) && !rowView.hitsCallJoin(p)
+    }
+    private func liftLinkPress() {
+        guard linkPressed else { return }
+        linkPressed = false
+        rowView.setLinkCardPressed(false)
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        if linkPress(touches) { linkPressed = true; rowView.setLinkCardPressed(true) }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesMoved(touches, with: event)
+        if linkPressed, !linkPress(touches) { liftLinkPress() }   // slid off the card
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        liftLinkPress()
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        liftLinkPress()
+    }
+
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
         guard let m = model else { return }
         let p = g.location(in: rowView)

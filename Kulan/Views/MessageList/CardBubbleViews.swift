@@ -136,8 +136,30 @@ final class LinkPreviewBubbleView: UIView {
         backing.addSubview(buttonLabel)
         backing.addSubview(glyphCircle)
         glyphCircle.addSubview(glyphIcon)
+        // Last, so it lies over everything the card draws; it follows the card's size.
+        pressDim.alpha = 0
+        pressDim.isUserInteractionEnabled = false
+        pressDim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        backing.addSubview(pressDim)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// ⛔ THE CARD ANSWERS THE FINGER — owner 2026-10-15: "when I tap a link preview there is no
+    /// animation, it does not feel tappable; add a small one like the reference". The reference
+    /// tints the card the moment it is touched and lets the tint go when the finger lifts. Same here:
+    /// a tint of the bubble's own accent over the card, on at once, fading out over 0.2s.
+    private let pressDim = UIView()
+    func setPressed(_ on: Bool) {
+        pressDim.frame = backing.bounds
+        if on {
+            pressDim.layer.removeAllAnimations()
+            pressDim.alpha = 1
+        } else {
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.pressDim.alpha = 0
+            }
+        }
+    }
 
     func configure(_ p: BubbleBody.LinkPreview, plan: LinkPreviewPlan, tint: UIColor, cid: String,
                    rowId: String = "") {
@@ -149,6 +171,9 @@ final class LinkPreviewBubbleView: UIView {
         // The call card is rounder than a web preview (owner, 2026-10-07: "make the Kulan Call
         // corners rounded, Apple's rounded corners"): 16pt continuous, the glyph marks the kind.
         backing.layer.cornerRadius = plan.glyph != nil ? 16 : 12
+        pressDim.backgroundColor = tint.withAlphaComponent(0.2)
+        pressDim.layer.removeAllAnimations()
+        pressDim.alpha = 0   // a recycled card never comes back pressed
         if let rect = plan.glyph {
             glyphCircle.isHidden = false
             glyphCircle.frame = rect

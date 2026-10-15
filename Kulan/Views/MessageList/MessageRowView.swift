@@ -1110,6 +1110,9 @@ final class MessageRowView: UIView {
     }
 
     /// The OG card — tapping it opens the link (or the person, on a profile card's button).
+    /// The link card's press tint (`LinkPreviewBubbleView.setPressed`), for the cell's touches.
+    func setLinkCardPressed(_ on: Bool) { linkView?.setPressed(on) }
+
     func hitsLinkCard(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, let l = b.linkPlan else { return false }
         return l.card.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
