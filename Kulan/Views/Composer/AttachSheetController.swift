@@ -50,6 +50,34 @@ import UIKit
                                          initialVelocity: CGVector(dx: velocity * k, dy: velocity * k))
         return UIViewPropertyAnimator(duration: duration, timingParameters: p)
     }
+
+    /// The SAME curve as `animator(damping:velocity:duration:)`, as progress 0→1 against wall-clock
+    /// seconds, for a snap that is stepped by hand (`AttachSheetController.stepper`). The scaled
+    /// spring m·x'' + c·x' + k·x = 0 with m = 5, k = 900·K², c = damping·K, x'(0) = velocity·K,
+    /// solved in closed form for displacement d = 1 − progress (d(0) = 1, d'(0) = −v0).
+    static func curve(damping: CGFloat, velocity: CGFloat, duration: TimeInterval) -> (Double) -> Double {
+        let probe = CASpringAnimation()
+        probe.mass = 5
+        probe.stiffness = 900
+        probe.damping = damping
+        probe.initialVelocity = velocity
+        let K = max(probe.settlingDuration / duration, 0.01)
+        let m = 5.0, k = 900 * K * K, c = Double(damping) * K, v0 = Double(velocity) * K
+        let w0 = (k / m).squareRoot()
+        let z = c / (2 * (k * m).squareRoot())
+        if z < 1 {
+            let wd = w0 * (1 - z * z).squareRoot()
+            let b = (z * w0 - v0) / wd
+            return { t in 1 - exp(-z * w0 * t) * (cos(wd * t) + b * sin(wd * t)) }
+        } else if z == 1 {
+            return { t in 1 - exp(-w0 * t) * (1 + (w0 - v0) * t) }
+        } else {
+            let r = (z * z - 1).squareRoot()
+            let r1 = -w0 * (z - r), r2 = -w0 * (z + r)
+            let a = (-v0 - r2) / (r1 - r2)
+            return { t in 1 - (a * exp(r1 * t) + (1 - a) * exp(r2 * t)) }
+        }
+    }
 }
 
 /// The bottom inset the hosted panel pads itself by. The host is told to ignore the container safe
@@ -182,7 +210,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         dim.frame = view.bounds
         if !keyboardUp { setBottom(bottomPad(forTop: sheetTop)) }
         // A size change (rotation) while resting re-seats the sheet; never under a running animation.
-        if phase == .open, animators.allSatisfy({ $0.state != .active }), scroll == nil {
+        if phase == .open, animators.allSatisfy({ $0.state != .active }), stepper == nil, scroll == nil {
             setTop(isExpanded ? expandedTop : compactTop)
         }
     }
@@ -268,7 +296,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         // While a snap is being followed frame by frame (`driveTick`), the panel is NOT laid out
         // here: this runs inside the animator, and animating the panel to its final size is exactly
         // the one-shot layout that broke the fast swipe.
-        guard !driving else { return }
+        guard !driving || stepper != nil else { return }
         if !keyboardUp { setBottom(bottomPad(forTop: y)) }
         setSide(forTop: y)
         layoutContent(size: f.size)
@@ -292,6 +320,17 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     private var link: CADisplayLink?
     private var driving = false
 
+    /// ⛔ THE SNAP IS STEPPED BY HAND, SHEET AND PANEL IN THE SAME FRAME — owner 2026-10-15, two
+    /// pictures mid-snap: going full the attach bar rode up with a gap under it; going small it sank
+    /// out of the bottom. The animator moved the shell in Core Animation while `driveTick` read the
+    /// shell's presentation and laid the panel out from it, which lands a frame later: the bar sat
+    /// where the bottom WAS, a whole frame's travel off (30-60pt in a fast snap). A finger drag never
+    /// did this because `setTop` moves both in one pass. The snap now does the same: each tick works
+    /// out the spring's value for the frame about to be shown (`targetTimestamp`) and calls `setTop`,
+    /// so the shell and the panel are committed together. Same spring (`RefSpring.curve`).
+    private var stepper: (start: CFTimeInterval?, from: CGFloat, to: CGFloat,
+                          curve: (Double) -> Double, duration: Double)?
+
     private func startDriving() {
         link?.invalidate()
         driving = true
@@ -301,6 +340,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     }
 
     private func stopDriving() {
+        stepper = nil
         guard driving || link != nil else { return }
         driving = false
         link?.invalidate()
@@ -308,6 +348,15 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     }
 
     @objc private func driveTick() {
+        if var st = stepper, let l = link {
+            if st.start == nil { st.start = l.timestamp; stepper = st }
+            let t = l.targetTimestamp - (st.start ?? l.timestamp)
+            let done = t >= st.duration
+            let y = done ? st.to : st.from + (st.to - st.from) * CGFloat(st.curve(t))
+            UIView.performWithoutAnimation { setTop(y) }
+            if done { finishDriving() }
+            return
+        }
         guard let p = shell.layer.presentation() else { return }
         let size = p.bounds.size
         let top = p.position.y - size.height / 2
@@ -669,7 +718,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             // on the spot and the drag moves the sheet from rest, as it would a moment later.
             if phase == .opening { settleOpenNow() }
             // Grabbed mid-snap: freeze it where it is and carry on from there.
-            if !animators.isEmpty {
+            if !animators.isEmpty || stepper != nil {
                 stopAll()
                 sheetTop = shell.frame.minY
             }
@@ -737,8 +786,11 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         if stay || distance < 0.5 {
             a = easeInOut(0.3) { [self] in setTop(target) }
         } else {
-            a = RefSpring.animator(damping: 124, velocity: abs(velocity) / distance, duration: 0.45)
-            a.addAnimations { [self] in setTop(target) }
+            // Full <-> half: stepped by hand (see `stepper`), the reference's spring unchanged.
+            startDriving()
+            stepper = (nil, sheetTop, target,
+                       RefSpring.curve(damping: 124, velocity: abs(velocity) / distance, duration: 0.45), 0.45)
+            return
         }
         // The panel follows the shell frame by frame (see `driveTick`); one exact layout at the end.
         a.addCompletion { [weak self] pos in if pos == .end { self?.finishDriving() } }
