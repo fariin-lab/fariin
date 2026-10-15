@@ -79,6 +79,7 @@ jobs:
             Voice: the circles around the big mic are soft moving shapes now that react to your voice.
             Security Checkup: slides up once at its size, no small sheet first and no jump to full height.
             Chats: pasting long text scrolls the box to where you are typing. Link previews darken when you touch them.
+            Attach sheet: a photo opens with the same motion as a photo someone sent you, no pop at the end.
             PLEASE TEST: record a voice note, lock it, pause it; open Security Checkup twice; paste a long link.
 
             EARLIER: ROUNDED CORNER WHEN A PHOTO CLOSES.
