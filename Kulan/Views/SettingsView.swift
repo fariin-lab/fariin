@@ -416,7 +416,12 @@ struct SettingsView: View {
                 .frame(height: 44)
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        // ⛔ BORDERLESS, NOT PLAIN — owner 2026-10-15, a picture from an iOS 26 phone: a grey shape
+        // behind both buttons "like a shadow". It was the LIST ROW's own highlight: a `.plain` button
+        // in a List row lights the whole row (row-shaped, card-rounded) on press, and it stayed up
+        // while the page the button opened was on screen. `.borderless` keeps each button's press
+        // to itself and the row never highlights, as in the app's other two-button rows.
+        .buttonStyle(.borderless)
         .liquidGlass(Capsule(), interactive: true)
     }
 }

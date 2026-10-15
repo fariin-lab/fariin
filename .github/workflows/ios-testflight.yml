@@ -78,6 +78,7 @@ jobs:
             Attach: drag the sheet up to full and keep going: the photos scroll and stay where you leave them (no jump back to the top).
             GIF button in the message field: opens the new GIF page (same as from the attach sheet).
             Voice bar: the X takes taps around it too (bar's left end and full height), not only on the icon.
+            Settings: no grey shape behind Edit profile and Share profile.
 
             EARLIER: GIF BOTTOM BAR IS LIQUID GLASS.
             GIF page: the mood bar along the bottom is now Liquid Glass, edge to edge; GIFs blur as they pass under it.
