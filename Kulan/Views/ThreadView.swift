@@ -6170,9 +6170,13 @@ struct ThreadView: View {
         let flight = MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(size),
-                      // Zoom in and stop, no zoom-out after (`attachPhotoOpenSpring`), 0.15s black.
-                      timing: MediaOpen.attachPhotoOpenSpring,
-                      timingDuration: MediaOpen.attachPhotoOpenDuration,
+                      // ⛔ THE CHAT VIEWER'S OWN OPEN — owner 2026-10-15: "at the end it does a small
+                      // pop; make it exactly like opening a photo someone sent me, which finishes
+                      // clean". The pushed start this used (1 - e^-15t) rushed 90% of the way and then
+                      // crept, and that change of pace read as a pop. Same spring as the received
+                      // photo now (`MediaOpen.spring`: response 0.25, critically damped, from rest).
+                      timing: MediaOpen.spring,
+                      timingDuration: MediaOpen.duration,
                       backdropFade: MediaOpen.attachBackdropFade,
                       // ⛔ THE TOOLS FADE IN DURING THE FLIGHT — owner 2026-10-14: they
                       // "pop" when they appear after the photo lands. The reference picker
