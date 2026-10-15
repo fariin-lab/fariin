@@ -74,7 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: NEW VOICE RECORDING BAR.
+            THIS BUILD: LOCKED MESSAGES AFTER SWITCHING ACCOUNTS.
+            Chats: a message sealed with someone's earlier key now opens instead of showing a lock (for example after one of your accounts signed in on another phone).
+            Attach sheet: the bar stays on the bottom of the sheet while it grows to full or shrinks back.
+            Attach sheet: the photo editor has the reference sizes (photo between the bars, caption bar on the bottom edge). Videos and picked photos open with the same motion as a received photo.
+            Search: finding people no longer hangs on the loading rows.
+            Message Requests: an icon and explanation when empty, and a one-time card explaining requests.
+            PLEASE TEST: switch accounts and open a chat you sent from; drag the attach sheet to full and back; search a username.
+
+            EARLIER: NEW VOICE RECORDING BAR.
             Voice: the recording bar is 44pt. Locked: X, a live waveform, the one-time 1 and send, all inside the bar. Paused: X, play, waveform, time, 1 and send.
             Voice: the circles around the big mic are soft moving shapes now that react to your voice.
             Security Checkup: slides up once at its size, no small sheet first and no jump to full height.
