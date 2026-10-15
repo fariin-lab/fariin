@@ -78,7 +78,8 @@ jobs:
             Security Checkup: a real bottom sheet now, on the bottom edge and only as tall as what it shows. Drag it down or tap above it to close.
             Security Checkup: checks again by itself after you change a passkey, password, Chat Key or device, so it opens with the answers ready, no spinner. The top line says when it last checked.
             Call card: pulling the tab out of the RIGHT edge now follows your finger exactly, like the left.
-            PLEASE TEST: open Security Checkup from Devices; add or remove a passkey and open it again; pull the call card tab from the right edge.
+            Attach sheet: the first tall photo you open after restarting the app lands at its right size, no jump a second later.
+            PLEASE TEST: open Security Checkup from Devices; add or remove a passkey and open it again; pull the call card tab from the right edge; restart the app, open the attach sheet, tap a tall photo.
 
             EARLIER: SCREEN SHARE CARRIES YOUR PHONE'S SOUND.
             Screen share: the sound playing on your phone (videos, music) now goes to the other person, mixed with your voice.
