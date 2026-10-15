@@ -81,6 +81,7 @@ jobs:
             Settings: no grey shape behind Edit profile and Share profile.
             Chats: a big emoji you sent stays on the right when someone reacts to it.
             App icon: black is the default now; blue is in Appearance > App Icon.
+            Message field: camera and GIF icons closer together (the reference app's spacing).
 
             EARLIER: GIF BOTTOM BAR IS LIQUID GLASS.
             GIF page: the bottom bar is a floating glass capsule like the Media / Files / Voice tabs (grey pill on the chosen one).

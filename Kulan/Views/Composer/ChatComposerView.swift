@@ -27,6 +27,10 @@ final class ChatComposerView: UIView {
         static let fieldFont = UIFont.systemFont(ofSize: 17)
         static let maxLines = 6
         static let inPillSpacing: CGFloat = 3    // field · GIF · mic (owner 2026-08-22: 3, down from 4)
+        /// Camera to GIF, centre to centre (owner 2026-10-15: "too much space; use the reference's").
+        /// The reference gives each field icon a 32pt slot with no gap between them, so its two icons
+        /// stand 32pt apart. Our slots stay 40pt for the finger and simply overlap by the difference.
+        static let fieldIconPitch: CGFloat = 32
         static let micTrailing: CGFloat = 4      // the pill's last icon (the GIF) 4pt from its edge
         static let strip: CGFloat = 14           // the locked strip's and hold row's side padding
         static let stripSpacing: CGFloat = 8
@@ -1000,7 +1004,7 @@ final class ChatComposerView: UIView {
         (shown.hasText || shown.textOnly) ? pillWidth
                       // ONE button inside the pill now, not two: the GIF. The mic left.
                       // Two now: the camera beside the GIF (2026-10-15).
-                      : pillWidth - M.micTrailing - 2 * M.button - 2 * M.inPillSpacing
+                      : pillWidth - M.micTrailing - M.button - M.fieldIconPitch - M.inPillSpacing
     }
 
     private var maxTextHeight: CGFloat {
@@ -1087,7 +1091,7 @@ final class ChatComposerView: UIView {
         // The GIF is the pill's last slot now that the mic has left it.
         gifButton.frame = CGRect(x: pw - M.micTrailing - M.button, y: fh - M.button,
                                  width: M.button, height: M.button)
-        cameraButton.frame = CGRect(x: gifButton.frame.minX - M.inPillSpacing - M.button, y: fh - M.button,
+        cameraButton.frame = CGRect(x: gifButton.frame.minX - M.fieldIconPitch, y: fh - M.button,
                                     width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
