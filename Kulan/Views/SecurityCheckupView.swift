@@ -620,7 +620,7 @@ struct AttachedBottomSheet<Content: View>: View {
             let away = g.size.height + g.safeAreaInsets.bottom + 40
             let pull = drag > 0 ? drag : drag / 8   // up resists, like the system sheet
             ZStack(alignment: .bottom) {
-                Color.black.opacity(shown ? 0.25 * max(0, 1 - drag / 400) : 0)
+                Color.black.opacity(shown ? 0.25 * max(0.0, 1.0 - Double(drag) / 400.0) : 0.0)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { close() }
