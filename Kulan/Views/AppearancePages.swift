@@ -826,7 +826,10 @@ struct ChatColorPage: View {
 /// in the picker would show as selected either, since the name matches none of its rows. So on launch
 /// we put them back on the default, which is the one honest outcome available.
 enum RetiredAppIcons {
-    private static let names: Set<String> = ["icon-blue", "icon-ivory", "icon-chrome"]
+    /// `icon-black` too since 2026-10-15: black became the primary icon, so it is no longer declared
+    /// as an alternate (its files stay, the QR code's centre mark uses them) and anyone on it lands on
+    /// the default, which is the same black.
+    private static let names: Set<String> = ["icon-blue", "icon-ivory", "icon-chrome", "icon-black"]
 
     @MainActor static func resetIfInUse() {
         guard let current = UIApplication.shared.alternateIconName, names.contains(current) else { return }
@@ -838,12 +841,13 @@ struct AppIconPage: View {
     @State private var current = UIApplication.shared.alternateIconName
     @State private var iconError: String?
 
-    /// One mark, several grounds. `nil` is the primary blue bubble from the asset catalog; the rest are
+    /// One mark, several grounds. `nil` is the primary (black, since 2026-10-15) bubble from the asset catalog; the rest are
     /// the same bubble composited onto a flat colour. The old tri-arrow icons (Blue/Ivory/Chrome) were
     /// the PREVIOUS logo and were removed at the user's request — an app whose icon picker offers two
     /// different logos does not look like it knows what it is.
     private let icons: [(name: String?, label: String)] = [
-        (nil, "Blue"), ("icon-black", "Black"), ("icon-graphite", "Graphite"),
+        // Black is the default (owner 2026-10-15); blue is an option like the rest.
+        (nil, "Black"), ("icon-bubble-blue", "Blue"), ("icon-graphite", "Graphite"),
         ("icon-indigo", "Indigo"), ("icon-emerald", "Emerald"), ("icon-crimson", "Crimson"),
         ("icon-sand", "Sand"),
     ]

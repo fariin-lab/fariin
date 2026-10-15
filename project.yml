@@ -75,7 +75,10 @@ targets:
             # variant only swaps itself in on a dark Home Screen and can never show in the in-app
             # picker — so the user could not find it and reasonably concluded it was never added. It is
             # both now: automatic on dark, and choosable outright.
-            icon-black:    { CFBundleIconFiles: [icon-black] }
+            # 2026-10-15, owner: "use the black one by default". Black is the PRIMARY icon now
+            # (AppIcon in the asset catalog); the blue bubble moved here as an option under a new
+            # name (`icon-blue` is a retired tri-arrow name, see RetiredAppIcons).
+            icon-bubble-blue: { CFBundleIconFiles: [icon-bubble-blue] }
             icon-graphite: { CFBundleIconFiles: [icon-graphite] }
             icon-indigo:   { CFBundleIconFiles: [icon-indigo] }
             icon-emerald:  { CFBundleIconFiles: [icon-emerald] }

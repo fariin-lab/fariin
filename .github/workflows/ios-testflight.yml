@@ -80,6 +80,7 @@ jobs:
             Voice bar: the X takes taps around it too (bar's left end and full height), not only on the icon.
             Settings: no grey shape behind Edit profile and Share profile.
             Chats: a big emoji you sent stays on the right when someone reacts to it.
+            App icon: black is the default now; blue is in Appearance > App Icon.
 
             EARLIER: GIF BOTTOM BAR IS LIQUID GLASS.
             GIF page: the mood bar along the bottom is now Liquid Glass, edge to edge; GIFs blur as they pass under it.
