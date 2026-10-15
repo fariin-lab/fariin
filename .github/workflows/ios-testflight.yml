@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: ATTACH SHEET DRAG CARRIES ON INTO THE PHOTOS.
+            THIS BUILD: GIF PAGE WITH APPLE'S OWN TOP BAR; YOUR FILES OPEN AT ONCE.
+            GIF page: the title, X and search are Apple's navigation bar now, with the iOS 26 blur; the mood bar sits on the bottom edge under the GIFs.
+            Files you sent open straight away (no download of your own file).
+
+            EARLIER: ATTACH SHEET DRAG CARRIES ON INTO THE PHOTOS.
             Attach: drag the sheet up to full and keep going: the photos scroll and stay where you leave them (no jump back to the top).
             GIF button in the message field: opens the new GIF page (same as from the attach sheet).
             Voice bar: the X takes taps around it too (bar's left end and full height), not only on the icon.

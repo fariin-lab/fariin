@@ -267,89 +267,74 @@ struct GifPickerView: View {
     // MARK: - Inside the attach sheet
 
     private var embeddedBody: some View {
-        ScrollView {
-            emptyStates
-            // Room at the screen's sides (owner 2026-10-15: "the GIFs touch left and right").
-            HStack(alignment: .top, spacing: 6) {
-                ForEach(0..<2, id: \.self) { col in
-                    LazyVStack(spacing: 6) {
-                        ForEach(masonryColumns[col]) { g in gifCell(g) }
+        // ⛔ APPLE'S OWN BAR ON TOP, A SYSTEM BAR BELOW — owner 2026-10-15, two pictures: "the header
+        // uses a custom blur, use the native iOS 26 blur", and for the mood bar "content inside the
+        // safe area is app content; the bar is system chrome, edge-attached".
+        //
+        // TOP: a real navigation bar (title, X, search as toolbar items). Its iOS 26 scroll-edge
+        // blur is the system's, drawn by the system; the hand-made header with its own material
+        // and fade is gone, and so is the `safeAreaBar` the system effect did not show under.
+        //
+        // BOTTOM: the mood capsule (the media tabs' look) sits in its own strip UNDER the grid, on
+        // the sheet's background. The GIFs end above it and never pass beneath it.
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    emptyStates
+                    // Room at the screen's sides (owner 2026-10-15: "the GIFs touch left and right").
+                    HStack(alignment: .top, spacing: 6) {
+                        ForEach(0..<2, id: \.self) { col in
+                            LazyVStack(spacing: 6) {
+                                ForEach(masonryColumns[col]) { g in gifCell(g) }
+                            }
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
                 }
+                categoryRow
+                    .padding(.top, 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-        }
-        // ⛔ NO LINE UNDER THE HEADER — owner 2026-10-15: "the top header has a border; use the iOS 26
-        // native blur". The header was painted with a solid background, so the GIFs stopped at a hard
-        // edge. It is now a `safeAreaBar` with nothing painted: the GIFs scroll up under it and the
-        // system's own soft scroll-edge blur fades them, the way Apple's bars do.
-        .scrollEdgeEffectStyle(.soft, for: .top)
-        // ⛔ BARS, NOT FLOATING OVER THE GIFS — owner 2026-10-15: "the X and search overlap the GIFs;
-        // the bottom bar is system chrome, the GIFs are app content inside the safe area". The top row
-        // and the mood row are edge-attached bars on the sheet's own background; the grid lives
-        // between them and never runs under either, so every tap on a bar is the bar's.
-        .safeAreaBar(edge: .top, spacing: 0) {
-            // SEARCH TAKES THE WHOLE ROW — owner 2026-10-15 (screenshot): while searching, the title and
-            // the left X go away; the row is the search field with one X on its right that ends the
-            // search, the way the system search bar looks.
-            Group {
+            .navigationTitle(searching ? "" : "Choose GIF")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
                 if searching {
-                    HStack(spacing: 10) {
+                    // SEARCH TAKES THE WHOLE ROW (owner 2026-10-15): the field, and one X on its right
+                    // that ends the search.
+                    ToolbarItem(placement: .principal) {
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("Search GIFs", text: $query)
                                 .focused($searchFocused)
                                 .submitLabel(.search)
                         }
-                        .padding(.horizontal, 14).frame(height: 44)
-                        .liquidGlass(Capsule(), interactive: true)
-                        glassCircle("xmark", label: "Close search") {
+                        .padding(.horizontal, 14).frame(height: 40)
+                        .frame(maxWidth: .infinity)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             searchFocused = false
                             query = ""
                             withAnimation(.easeInOut(duration: 0.2)) { searching = false }
-                        }
+                        } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close search")
                     }
-                    .transition(.opacity)
                 } else {
-                    HStack {
-                        // An X that closes the sheet (owner 2026-10-15), not a back chevron.
-                        glassCircle("xmark", label: "Close") { onBack?() }
-                        Spacer()
-                        Text("Choose GIF").font(.headline)
-                        Spacer()
-                        glassCircle("magnifyingglass", label: "Search GIFs") {
+                    // An X that closes the sheet (owner 2026-10-15), not a back chevron.
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { onBack?() } label: { Image(systemName: "xmark") }
+                            .accessibilityLabel("Close")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             withAnimation(.easeInOut(duration: 0.2)) { searching = true }
                             onWantsFullHeight?()
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
-                        }
+                        } label: { Image(systemName: "magnifyingglass") }
+                        .accessibilityLabel("Search GIFs")
                     }
-                    .transition(.opacity)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 18)
-            .padding(.bottom, 8)
-            // ⛔ APPLE'S BLUR UNDER THE HEADER — owner 2026-10-15, a picture: "there is no blur, use
-            // the Apple blur". The system scroll-edge effect did not show inside this sheet, so the
-            // header carries the system bar material itself, solid behind the buttons and fading out
-            // over its last stretch so the GIFs disappear into it with no line.
-            .background {
-                Rectangle().fill(.bar)
-                    .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-                                                 .init(color: .black, location: 0.6),
-                                                 .init(color: .clear, location: 1)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .padding(.bottom, -16)
-                    .ignoresSafeArea(edges: .top)
-            }
-        }
-        // ⛔ A FLOATING CAPSULE, LIKE THE MEDIA TABS — owner 2026-10-15 (third look today: an edge
-        // bar, then edge-to-edge glass, now "make it look like the Media / Files / Voice bar"). A
-        // `safeAreaBar` so the GIFs scroll on under it and show around the capsule; the capsule is
-        // the media tabs' own (`floatingGlass`).
-        .safeAreaBar(edge: .bottom, spacing: 0) {
-            categoryRow
         }
         .onChange(of: query) { _, _ in
             searchTask?.cancel()
@@ -360,18 +345,6 @@ struct GifPickerView: View {
             }
         }
         .task { await loadFirst() }
-    }
-
-    private func glassCircle(_ symbol: String, label: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
-                .liquidGlass(Circle(), interactive: true)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 
     /// The empty / offline / no-result pages, shared by both layouts.
