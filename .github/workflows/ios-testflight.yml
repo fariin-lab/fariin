@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: NO MORE POP WHEN A PHOTO OPENS FROM THE ATTACH SHEET.
+            THIS BUILD: APP UPDATES FROM THE ADMIN PANEL.
+            The app now asks the server whether this version must update, may update, or is fine (nothing shows until a campaign is made in the panel).
+            Stories: a repost cannot be one-time and cannot block screenshots. Chats: more space between location cards.
+            PLEASE TEST: in the panel's App updates, make a Mandatory campaign for your own @username with a minimum build above this one, activate it, open the app; then pause it.
+
+            EARLIER: NO MORE POP WHEN A PHOTO OPENS FROM THE ATTACH SHEET.
             Attach sheet: the zoom no longer skips its first frames while the editor is being built, and a photo opened right after closing one no longer flashes away. The hidden measurement stays in to confirm it.
             Location, GIF, Files: the attach sheet closes and the page opens as before; X closes; GIF bars fixed; Files ••• chooses Grid or List.
 
