@@ -6230,8 +6230,9 @@ struct ThreadView: View {
         MediaOpen.fly(image: still, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(still.size),
-                      timing: MediaOpen.attachOpenSpring,
-                      timingDuration: MediaOpen.attachOpenDuration,
+                      // The chat viewer's own open, as the single photo (owner 2026-10-15).
+                      timing: MediaOpen.spring,
+                      timingDuration: MediaOpen.duration,
                       backdropFade: MediaOpen.attachBackdropFade,
                       onStart: {
                           MediaPresentGate.present {
@@ -6271,8 +6272,9 @@ struct ThreadView: View {
         let flight = MediaOpen.fly(image: poster, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(poster.size),
-                      timing: MediaOpen.attachOpenSpring,
-                      timingDuration: MediaOpen.attachOpenDuration,
+                      // The chat viewer's own open, as the single photo (owner 2026-10-15).
+                      timing: MediaOpen.spring,
+                      timingDuration: MediaOpen.duration,
                       backdropFade: MediaOpen.attachBackdropFade,
                       onStart: {
                           MediaPresentGate.present {
