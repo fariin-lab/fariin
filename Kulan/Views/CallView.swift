@@ -595,19 +595,29 @@ struct CallView: View {
             // Same rules as the menu item it replaces: starting needs a connected call and nobody
             // else sharing; STOPPING is never disabled (audit M-165).
             let sharingOn = call.screenSharePhase != .off
+            // ⛔ THREE STATES YOU CAN SEE — owner 2026-10-15: "the user can't tell when screen share is
+            // disabled and when it is enabled". Not available yet (calling, or they are sharing):
+            // dimmed. Ready: the plain glass circle. Sharing: filled white with a dark icon, the way
+            // the speaker button shows "on" in the bar below.
+            let canStart = call.state == .active && call.connectedDate != nil && !call.remoteScreenSharing
             Button {
                 if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
             } label: {
                 if sharingOn {
-                    topCircle("rectangle.on.rectangle.slash")
+                    Image("ic_share_screen").renderingMode(.template).resizable()
+                        .scaledToFit().frame(width: 22, height: 22)
+                        .foregroundStyle(.black)
+                        .frame(width: 48, height: 48)
+                        .background(Color.white, in: Circle())
+                        .contentShape(Circle())
                 } else {
                     // Owner, 2026-10-10: his own Share Screen icon (asset ic_share_screen, template).
                     topCircle(image: Image("ic_share_screen").renderingMode(.template).resizable()
                         .scaledToFit().frame(width: 22, height: 22))
+                        .opacity(canStart ? 1 : 0.4)
                 }
             }
-            .disabled(!sharingOn && (!(call.state == .active && call.connectedDate != nil)
-                                     || call.remoteScreenSharing))
+            .disabled(!sharingOn && !canStart)
             .buttonStyle(CallControlStyle())
             .accessibilityLabel(sharingOn ? "Stop Sharing" : "Share Screen")
             .opacity(controlsVisible ? 1 : 0)        // r2 H2, as the minimize button
