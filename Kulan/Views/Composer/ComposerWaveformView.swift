@@ -106,3 +106,43 @@ extension ComposerWaveformView: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
+
+/// The LIVE waveform of a locked recording (owner 2026-10-15, with a picture: "X · waveform · 1 ·
+/// send" in one 44pt bar). Fed `AudioRecorder.levels` (0…1, 30Hz, the last 80) every display-link
+/// tick. The newest level stands at the right edge and older ones walk left; a quiet moment is a dot
+/// (a bar as tall as it is wide), sound rises into a bar. Nothing to tap: scrubbing is the review's.
+final class LiveLevelsView: UIView {
+    var levels: [Float] = [] { didSet { setNeedsDisplay() } }
+    var color: UIColor = .secondaryLabel { didSet { setNeedsDisplay() } }
+
+    private static let barWidth: CGFloat = 3
+    private static let spacing: CGFloat = 3
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ rect: CGRect) {
+        let w = bounds.width, h = bounds.height
+        guard w > 0, h > 0 else { return }
+        let step = Self.barWidth + Self.spacing
+        let fit = Int((w + Self.spacing) / step)
+        guard fit > 0 else { return }
+        let shown = Array(levels.suffix(fit))
+        let path = UIBezierPath()
+        // Right-aligned: the newest sample's bar ends at the right edge.
+        for (i, level) in shown.reversed().enumerated() {
+            let x = w - Self.barWidth - CGFloat(i) * step
+            let bh = max(Self.barWidth, h * CGFloat(max(0, min(1, level))))
+            let bar = CGRect(x: x, y: (h - bh) / 2, width: Self.barWidth, height: bh)
+            path.append(UIBezierPath(roundedRect: bar, cornerRadius: Self.barWidth / 2))
+        }
+        color.setFill()
+        path.fill()
+    }
+}

@@ -37,6 +37,13 @@ final class ChatComposerView: UIView {
         static let overlayTrailing: CGFloat = 12 // the old `.padding(.trailing, 12)` on the overlay
         static let toastLift: CGFloat = 8        // the old `.offset(y: -8)` on both toasts
         static let onceBlue = UIColor(red: 0x3D / 255, green: 0xA1 / 255, blue: 0xFD / 255, alpha: 1)
+        /// ⛔ THE RECORDING BAR IS 44 — owner 2026-10-15, three pictures: holding, locked and paused
+        /// are one 44pt pill each, with the X, the ① and the send INSIDE it (they were round buttons
+        /// outside a 40pt strip, and the locked bar said "Cancel" in words).
+        static let recordBar: CGFloat = 44
+        /// The X and the send inside the recording bar.
+        static let stripCircle: CGFloat = 36
+        static let stripInset: CGFloat = 4
     }
 
     /// The reference app's own clocks, read from its source (see `refControlSpring` in ThreadView
@@ -186,6 +193,30 @@ final class ChatComposerView: UIView {
     private let waveform = ComposerWaveformView()
     private let totalLabel = UILabel()
     private let onceButton = IconButton(image: nil, size: CGSize(width: 24, height: 24))
+    /// Inside the locked/paused bar (2026-10-15): the X (cancels, as the bin and "Cancel" did), the
+    /// live waveform while recording, and the send.
+    private let stripX: UIButton = {
+        var cfg = UIButton.Configuration.filled()
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = .zero
+        cfg.baseBackgroundColor = .tertiarySystemFill
+        cfg.baseForegroundColor = .label
+        cfg.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
+        let b = UIButton(configuration: cfg)
+        b.accessibilityLabel = "Cancel recording"
+        return b
+    }()
+    private let stripSend: UIButton = {
+        var cfg = UIButton.Configuration.filled()
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = .zero
+        cfg.baseForegroundColor = .white
+        cfg.image = UIImage(systemName: "arrow.up", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .bold))
+        let b = UIButton(configuration: cfg)
+        b.accessibilityLabel = "Send voice message"
+        return b
+    }()
+    private let liveWave = LiveLevelsView()
 
     // Over the bar, outside its bounds: the big mic and the lock target, and the two toasts.
     private let overlayGroup = UIView()
@@ -375,6 +406,14 @@ final class ChatComposerView: UIView {
         totalLabel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .regular)
         totalLabel.textColor = .secondaryLabel
         onceButton.addAction(UIAction { [weak self] _ in self?.actions.toggleVoiceOnce() }, for: .touchUpInside)
+        // 2026-10-15 redesign: X · live waveform · ① · send while recording; X · play · waveform ·
+        // time · ① · send while paused. The mic, timer and "Cancel" words of the old locked bar go.
+        strip.addSubview(stripX)
+        strip.addSubview(stripSend)
+        stripRecording.addSubview(liveWave)
+        for v in [stripMic, stripTimer, cancelButton] as [UIView] { v.isHidden = true }
+        stripX.addAction(UIAction { [weak self] _ in self?.actions.cancelRecording() }, for: .touchUpInside)
+        stripSend.addAction(UIAction { [weak self] _ in self?.actions.sendRecording() }, for: .touchUpInside)
 
         // The big mic + lock, drawn over everything and never hit-tested.
         addSubview(overlayGroup)
@@ -600,6 +639,7 @@ final class ChatComposerView: UIView {
         // tint, so a chat colour cannot reach one and miss the other.
         sendButton.configuration?.baseBackgroundColor = s.sendTint
         sendButton.tintColor = s.sendTint
+        stripSend.configuration?.baseBackgroundColor = s.sendTint
 
         // ⛔ 14. THE TRAIL IS 22 → 17 → 14, AND HE HAS ASKED TWICE. 22 filled a 26pt box almost edge
         // to edge; 17 was the first cut and he circled it again on 2026-08-27 — still too big.
@@ -612,12 +652,13 @@ final class ChatComposerView: UIView {
         // reading it as the loudest thing in a strip whose subject is the waveform.
         playButton.icon.image = UIImage(systemName: s.previewPlaying ? "pause.fill" : "play.fill",
                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 14))
-        playButton.icon.tintColor = accent
+        // 2026-10-15 picture: a black play and a grey wave, like the rest of the bar's glyphs.
+        playButton.icon.tintColor = .label
         playButton.accessibilityLabel = s.previewPlaying ? "Pause preview" : "Play preview"
         waveform.decibels = s.previewDecibels
         waveform.progress = s.previewProgress
-        waveform.played = accent
-        waveform.unplayed = accent.withAlphaComponent(0.35)
+        waveform.played = .label
+        waveform.unplayed = .secondaryLabel
         onceButton.icon.image = UIImage(systemName: s.voiceOnce ? "1.circle.fill" : "1.circle",
                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold))
         onceButton.icon.tintColor = s.voiceOnce ? M.onceBlue : .label
@@ -698,8 +739,9 @@ final class ChatComposerView: UIView {
         let s = shown
         // No "+" on a text-only request either — see `ChatComposerState.textOnly`.
         if b === plusButton { return (s.recordingActive || s.textOnly) ? 0 : 1 }
-        if b === trashButton { return s.recordLocked && s.reviewing ? 1 : 0 }
-        return (s.hasText || s.recordLocked) ? 1 : 0
+        // The bin and the send of a locked recording live INSIDE the bar now (`stripX`, `stripSend`).
+        if b === trashButton { return 0 }
+        return (s.hasText && !s.recordLocked) ? 1 : 0
     }
 
     // MARK: - Banners
@@ -821,6 +863,7 @@ final class ChatComposerView: UIView {
 
     fileprivate func tick() {
         refreshTimers()
+        if shown.recordLocked && !shown.reviewing { liveWave.levels = recorder.levels }
         let lvl = CGFloat(recorder.levels.last ?? 0)
         haloOuter.transform = CGAffineTransform(scaleX: 1.10 + 0.85 * lvl, y: 1.10 + 0.85 * lvl)
         haloInner.transform = CGAffineTransform(scaleX: 1 + 0.40 * lvl, y: 1 + 0.40 * lvl)
@@ -888,7 +931,8 @@ final class ChatComposerView: UIView {
         let slot = M.button + M.gap
         // A text-only request has no "+", so the pill starts at the edge — the same left the bar
         // already takes while a recording holds the row.
-        let left: CGFloat = s.textOnly ? 0 : (s.recordingActive ? (s.reviewing ? slot : 0) : slot)
+        // A recording takes the whole width, locked or paused too: its X and send are inside it.
+        let left: CGFloat = s.textOnly ? 0 : (s.recordingActive ? 0 : slot)
         // ⛔ THE TRAILING SLOT IS NOW ALWAYS RESERVED, not only when there is something to send.
         // The mic moved out of the pill and stands in that slot, so the pill stops at the same place
         // whether the mic or the send arrow is showing — which is also why typing no longer resizes
@@ -904,7 +948,7 @@ final class ChatComposerView: UIView {
         // can show; with nothing typed there is nothing in it, so the pill may use it.
         let right: CGFloat
         if s.textOnly { right = s.hasText ? width - slot : width }   // exactly `targetAlpha`'s send rule
-        else if s.recordingActive && !s.recordLocked { right = width }
+        else if s.recordingActive { right = width }
         else { right = width - slot }
         return (left, max(left, right))
     }
@@ -930,7 +974,7 @@ final class ChatComposerView: UIView {
     /// What the bar wants to be, for the host. Recording is exactly one row; otherwise the banners
     /// over the field, the field growing to six lines.
     func preferredHeight(forWidth width: CGFloat) -> CGFloat {
-        if shown.recordingActive { return M.button }
+        if shown.recordingActive { return M.recordBar }
         let span = pillSpan(width: width)
         var h: CGFloat = 0
         for b in shown.banners { h += ComposerBannerView.height(for: b) }
@@ -1013,37 +1057,38 @@ final class ChatComposerView: UIView {
             }
         }
 
-        // The hold row sits where the field row is; the strip is the whole (one-row) pill.
-        holdRow.frame = fieldRow.frame
+        // The hold row and the strip are the whole 44pt recording pill (`M.recordBar`).
+        let rh = s.recordingActive ? H : fh
+        holdRow.frame = s.recordingActive ? CGRect(x: 0, y: 0, width: pw, height: H) : fieldRow.frame
         let hx = M.strip
-        holdMic.frame = CGRect(x: hx, y: (fh - 24) / 2, width: 24, height: 24)
+        holdMic.frame = CGRect(x: hx, y: (rh - 24) / 2, width: 24, height: 24)
         let holdTimerW = ceil(holdTimer.intrinsicContentSize.width)
-        holdTimer.frame = CGRect(x: holdMic.frame.maxX + M.holdSpacing, y: 0, width: holdTimerW, height: fh)
+        holdTimer.frame = CGRect(x: holdMic.frame.maxX + M.holdSpacing, y: 0, width: holdTimerW, height: rh)
         // The hint sits CENTRED in what the timer leaves, the way the reference draws it.
         let chevW: CGFloat = 12, hintGap: CGFloat = 3
         let hintLabelW = ceil(holdHintLabel.intrinsicContentSize.width)
         let hintW = chevW + hintGap + hintLabelW
         let hintRoom = CGRect(x: holdTimer.frame.maxX + M.stripSpacing, y: 0,
-                              width: pw - M.strip - M.stripSpacing - (holdTimer.frame.maxX + M.stripSpacing), height: fh)
-        holdHint.frame = CGRect(x: hintRoom.midX - hintW / 2, y: 0, width: hintW, height: fh)
-        holdChevron.frame = CGRect(x: 0, y: 0, width: chevW, height: fh)
-        holdHintLabel.frame = CGRect(x: chevW + hintGap, y: 0, width: hintLabelW, height: fh)
+                              width: pw - M.strip - M.stripSpacing - (holdTimer.frame.maxX + M.stripSpacing), height: rh)
+        holdHint.frame = CGRect(x: hintRoom.midX - hintW / 2, y: 0, width: hintW, height: rh)
+        holdChevron.frame = CGRect(x: 0, y: 0, width: chevW, height: rh)
+        holdHintLabel.frame = CGRect(x: chevW + hintGap, y: 0, width: hintLabelW, height: rh)
 
-        strip.frame = CGRect(x: 0, y: H - M.button, width: pw, height: M.button)
+        // The locked / paused bar: X · (live wave | play · wave · time) · ① · send, all inside.
+        let sh = M.recordBar, c = M.stripCircle, cy = (sh - c) / 2
+        strip.frame = CGRect(x: 0, y: H - sh, width: pw, height: sh)
         stripRecording.frame = strip.bounds
         stripReview.frame = strip.bounds
+        stripX.frame = CGRect(x: M.stripInset, y: cy, width: c, height: c)
+        stripSend.frame = CGRect(x: pw - M.stripInset - c, y: cy, width: c, height: c)
         let onceW: CGFloat = 24
-        onceButton.frame = CGRect(x: pw - M.strip - onceW, y: 0, width: onceW, height: M.button)
-        stripMic.frame = CGRect(x: hx, y: (M.button - 24) / 2, width: 24, height: 24)
-        let stripTimerW = ceil(stripTimer.intrinsicContentSize.width)
-        stripTimer.frame = CGRect(x: stripMic.frame.maxX + M.stripSpacing, y: 0, width: stripTimerW, height: M.button)
-        cancelButton.frame = CGRect(x: stripTimer.frame.maxX + M.stripSpacing, y: 0,
-                                    width: max(0, onceButton.frame.minX - M.stripSpacing - (stripTimer.frame.maxX + M.stripSpacing)),
-                                    height: M.button)
-        playButton.frame = CGRect(x: hx, y: (M.button - 26) / 2, width: 26, height: 26)
+        onceButton.frame = CGRect(x: stripSend.frame.minX - 12 - onceW, y: 0, width: onceW, height: sh)
+        liveWave.frame = CGRect(x: stripX.frame.maxX + 12, y: (sh - 22) / 2,
+                                width: max(0, onceButton.frame.minX - 12 - (stripX.frame.maxX + 12)), height: 22)
+        playButton.frame = CGRect(x: stripX.frame.maxX + 8, y: (sh - 26) / 2, width: 26, height: 26)
         let totalW = ceil(totalLabel.intrinsicContentSize.width)
-        totalLabel.frame = CGRect(x: onceButton.frame.minX - M.stripSpacing - totalW, y: 0, width: totalW, height: M.button)
-        waveform.frame = CGRect(x: playButton.frame.maxX + M.stripSpacing, y: (M.button - 22) / 2,
+        totalLabel.frame = CGRect(x: onceButton.frame.minX - 12 - totalW, y: 0, width: totalW, height: sh)
+        waveform.frame = CGRect(x: playButton.frame.maxX + M.stripSpacing, y: (sh - 22) / 2,
                                 width: max(0, totalLabel.frame.minX - M.stripSpacing - (playButton.frame.maxX + M.stripSpacing)),
                                 height: 22)
 
@@ -1075,7 +1120,8 @@ final class ChatComposerView: UIView {
         // The Y is still the mic's line rather than the padded box's bottom, which is the part that
         // was actually wrong: the halo is 78 against a 40pt button, so hanging it off the box floated
         // it ~24pt high over the message above.
-        let discCenter = CGPoint(x: W - M.button / 2, y: H - M.button / 2)
+        // On the 44pt recording bar the disc centres on the bar (it is the bar's height then).
+        let discCenter = CGPoint(x: W - M.button / 2, y: s.recordingActive ? H / 2 : H - M.button / 2)
         overlayGroup.bounds = CGRect(x: 0, y: 0, width: M.halo, height: M.halo)
         overlayGroup.center = discCenter
         discGroup.bounds = overlayGroup.bounds
