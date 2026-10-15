@@ -200,6 +200,8 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     /// height, as every iOS 26 sheet does. Same here: `restInset` at rest (and while pulled down
     /// from rest), easing to 0 as the top travels up to full.
     private static let restInset: CGFloat = 8
+    /// The sheet's top corners; a photo closing onto a top-row tile is clipped by the same curve.
+    static let topCornerRadius: CGFloat = 38
 
     private func inset(forTop y: CGFloat) -> CGFloat {
         let span = compactTop - expandedTop
@@ -229,7 +231,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     /// through these two, so the grow/shrink to and from the "+" and the resting shape are one
     /// mechanism and never overwrite each other.
     private func restCorners() {
-        let top = UICornerRadius.fixed(38)
+        let top = UICornerRadius.fixed(Self.topCornerRadius)
         let bottom = UICornerRadius.containerConcentric(minimum: 55 - Self.restInset)
         shell.cornerConfiguration = .corners(topLeftRadius: top, topRightRadius: top,
                                              bottomLeftRadius: bottom, bottomRightRadius: bottom)

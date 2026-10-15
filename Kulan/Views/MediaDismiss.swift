@@ -40,6 +40,11 @@ struct MediaDismissHost: UIViewRepresentable {
     /// a copy flying home to a bubble half-scrolled under the header disappears BEHIND the bar instead
     /// of landing on top of it. The open (MediaOpen.fly) takes the same rect as `clip:`.
     var clipRect: () -> CGRect? = { nil }
+    /// The top corners of the region `clipRect` names, when it is a rounded sheet's (the attach grid,
+    /// under the sheet's 38pt top corners). 0 = a plain rectangle, as the chat viewport is.
+    /// ⛔ owner 2026-10-15: closing a photo from the top-left or top-right tile, the copy landed with
+    /// a SQUARE corner standing out past the sheet's rounded one, until the real tile took over.
+    var clipTopCornerRadius: CGFloat = 0
     /// Bump to run the BUTTON close through the same pipeline as the drag close: the copy flies home
     /// into its tile with the same landing spring (user report: the arrow used a different exit than
     /// the drag). the reference app's model too — their X runs the same dismiss animator the pan drives.
@@ -512,6 +517,14 @@ struct MediaDismissHost: UIViewRepresentable {
                 if let clip = parent.clipRect(), let rootView = c.superview,
                    clip.width > 1, clip.height > 1, clip != rootView.bounds {
                     let wrap = UIView(frame: rootView.bounds)
+                    if parent.clipTopCornerRadius > 0 {
+                        // The sheet's own top corners, on the clip, so the landing copy is cut by the
+                        // same curve as the tile under it. Constant through the flight: at the start the
+                        // wrap is the whole screen, whose corners are rounder than this anyway.
+                        wrap.layer.cornerRadius = parent.clipTopCornerRadius
+                        wrap.layer.cornerCurve = .continuous
+                        wrap.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+                    }
                     wrap.tag = Self.flightTag   // the copy moves inside this, so the sweep must see IT
                     Self.owners.setObject(self, forKey: wrap)   // …and know it is a live landing
                     wrap.clipsToBounds = true

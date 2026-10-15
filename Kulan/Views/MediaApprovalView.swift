@@ -210,6 +210,7 @@ struct MediaApprovalView: View {
                     targetRect: { MediaOpenRects.liveRect(key) },
                     targetId: { key },
                     clipRect: { MediaOpenRects.attachClipRect },
+                    clipTopCornerRadius: AttachSheetController.topCornerRadius,
                     closeToken: closeToken,
                     onDismiss: {
                         // The copy IS the animation, so the cover goes without its own slide.

@@ -203,6 +203,7 @@ struct ChatImageEditor: View {
                     targetRect: { MediaOpenRects.liveRect(sourceKey) },
                     targetId: { sourceKey },
                     clipRect: { MediaOpenRects.attachClipRect },
+                    clipTopCornerRadius: AttachSheetController.topCornerRadius,
                     closeToken: closeToken,
                     onDismiss: { instantDismiss() },
                     copyFromMediaFrame: true)
