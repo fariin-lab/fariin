@@ -846,6 +846,9 @@ struct StoryCameraView: View {
     /// Bottom-left. Opens the photo/album grid rather than Apple's picker, so a story can still be a
     /// VIDEO — the system picker here would hand back an image and quietly drop that.
     var onLibrary: () -> Void = {}
+    /// Open on TEXT rather than the camera — the pen beside the camera on My Story (owner
+    /// 2026-10-15: "so the user gets straight to what they want"). The switch still goes both ways.
+    var startInText = false
 
     /// CAMERA and TEXT are two things this ONE page can show, which is what the switch at the bottom
     /// promises. Text used to be a separate full-screen cover, so choosing it took the switch off
@@ -1198,6 +1201,11 @@ struct StoryCameraView: View {
             // all hold their reason here; the camera is now the fourth.
             SleepBlocker.shared.add("story-camera")
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            // Before the first frame, without the mode slide: the page simply opens on text.
+            if startInText {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { mode = .text }
+            }
         }
         .onAppear {
             // ⚠️ THE CHROME LEAVES BEFORE THE EDITOR ARRIVES — see `handingOver`. Both of these used

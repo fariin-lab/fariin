@@ -163,6 +163,8 @@ struct AddStorySheet: View {
     /// The door passes a closer; when it is absent `dismiss()` still runs, so this type keeps
     /// working anywhere it IS presented normally.
     var onDismiss: (() -> Void)? = nil
+    /// Open on text, not the camera (the pen on My Story). See `StoryCameraView.startInText`.
+    var startInText = false
     @Environment(\.dismiss) private var dismiss
 
     /// The one way out, so a future close cannot pick the wrong one.
@@ -211,7 +213,8 @@ struct AddStorySheet: View {
             // TEXT is a mode of the camera page now, not a cover raised over it, so the finished
             // story arrives here already rendered and goes straight to the audience sheet.
             onTextStory: { d, taps in shareTextStory = StoryShareData(data: d, stickers: taps) },
-            onLibrary: { showLibrary = true })
+            onLibrary: { showLibrary = true },
+            startInText: startInText)
         // These two are the CAMERA's editors. A photo taken here closes back to the camera, which is
         // where it was taken. The library has its own pair, presented from the library itself.
         .fullScreenCover(item: $editorImage) { item in
