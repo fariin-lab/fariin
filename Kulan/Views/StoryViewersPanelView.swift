@@ -97,7 +97,11 @@ final class StoryViewersPanelView: UIView {
     private let underline = UIView()
     private let search = UISearchTextField()
     private let table = UITableView(frame: .zero, style: .plain)
-    private let loadingView = UIActivityIndicatorView(style: .medium)
+    /// ⛔ SKELETON ROWS, NOT A SPINNER — owner 2026-10-15: "this loading, change it to skeleton".
+    /// Rows the shape of a viewer row (`StoryViewerSkeleton`), so nothing jumps when the real ones land.
+    /// The controller is kept: its view only animates while its controller is alive.
+    private let loadingHost = UIHostingController(rootView: StoryViewerSkeleton())
+    private var loadingView: UIView { loadingHost.view }
     private let emptyLabel = UILabel()
 
     private var filtered: [StoryViewerInfo] = []
@@ -206,9 +210,9 @@ final class StoryViewersPanelView: UIView {
         table.register(UITableViewCell.self, forCellReuseIdentifier: "viewer")
         addSubview(table)
 
-        loadingView.color = .white
-        loadingView.hidesWhenStopped = false
-        loadingView.startAnimating()
+        loadingHost.safeAreaRegions = []   // laid out by frame; no screen-edge padding of its own
+        loadingView.backgroundColor = .clear
+        loadingView.isUserInteractionEnabled = false
         loadingView.isHidden = true
         addSubview(loadingView)
 
@@ -280,7 +284,7 @@ final class StoryViewersPanelView: UIView {
         search.frame = CGRect(x: 16, y: underline.frame.maxY + 12, width: w - 32, height: 38)
         let top = search.frame.maxY + 10
         table.frame = CGRect(x: 0, y: top, width: w, height: max(0, bounds.height - top))
-        loadingView.center = CGPoint(x: w / 2, y: top + 44)
+        loadingView.frame = CGRect(x: 0, y: top, width: w, height: max(0, bounds.height - top))
         emptyLabel.frame = CGRect(x: 24, y: top + 40, width: w - 48, height: 22)
     }
 
@@ -453,5 +457,30 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
         } else {
             frozenOffsetY = nil
         }
+    }
+}
+
+/// The viewer list while it loads: rows the shape of `StoryViewerRowContent` (46pt face, name, the
+/// time under it, the ••• at the end), in the app's shimmer (`SkeletonFill`).
+struct StoryViewerSkeleton: View {
+    private let nameWidths: [CGFloat] = [130, 96, 150, 110, 84, 140]
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(nameWidths.indices, id: \.self) { i in
+                HStack(spacing: 12) {
+                    SkeletonCircle(size: 46)
+                    VStack(alignment: .leading, spacing: 7) {
+                        SkeletonBlock(width: nameWidths[i], height: 13)
+                        SkeletonBlock(width: 64, height: 10)
+                    }
+                    Spacer(minLength: 8)
+                    SkeletonBlock(width: 22, height: 6, radius: 3)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+            Spacer(minLength: 0)
+        }
+        .environment(\.colorScheme, .dark)
     }
 }

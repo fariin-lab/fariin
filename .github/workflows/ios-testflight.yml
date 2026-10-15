@@ -78,6 +78,7 @@ jobs:
             GIF page: the title, X and search are Apple's navigation bar now, with the iOS 26 blur; the mood bar sits on the bottom edge under the GIFs.
             Files you sent open straight away (no download of your own file).
             Share sheet: Copy Link copies, closes the sheet and says Link copied.
+            Story viewers: skeleton rows while the list loads, instead of a spinner.
 
             EARLIER: ATTACH SHEET DRAG CARRIES ON INTO THE PHOTOS.
             Attach: drag the sheet up to full and keep going: the photos scroll and stay where you leave them (no jump back to the top).
