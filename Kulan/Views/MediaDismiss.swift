@@ -755,6 +755,22 @@ enum MediaOpen {
     }
     static let attachBackdropFade: TimeInterval = 0.15
 
+    /// ⛔ NO ZOOM-OUT AT THE END — owner 2026-10-15: "keep the zoom-in, remove the extra zoom-out
+    /// settling after it; stop at the final size". `attachOpenSpring` runs ~2.9% PAST the rest at
+    /// 0.35s and shrinks back, which is that zoom-out. This is a critically damped spring started at
+    /// its own natural speed (ω = 15, damping 2ω, initial velocity ω): it moves as 1 − e^(−ωt), never
+    /// past the rest, with the same early pace (95% of the way at 0.2s) and at rest to the eye by
+    /// ~0.45s. Photos from the attach sheet use it; videos and multi-photo still use the old one.
+    static var attachPhotoOpenSpring: UISpringTimingParameters {
+        UISpringTimingParameters(mass: 1, stiffness: 225, damping: 30,
+                                 initialVelocity: CGVector(dx: 15, dy: 15))
+    }
+    static var attachPhotoOpenDuration: TimeInterval {
+        let s = CASpringAnimation()
+        s.mass = 1; s.stiffness = 225; s.damping = 30; s.initialVelocity = 15
+        return s.settlingDuration
+    }
+
     struct OpenPhases {
         let open: TimeInterval
         let settle: TimeInterval

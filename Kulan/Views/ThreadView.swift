@@ -6170,9 +6170,9 @@ struct ThreadView: View {
         let flight = MediaOpen.fly(image: ui, from: from, sourceCornerRadius: 0,
                       clip: MediaOpenRects.attachClipRect,
                       to: to, destinationCornerRadius: ChatImageEditor.restCornerRadius(size),
-                      // The reference open spring (`attachOpenSpring`), 0.15s black.
-                      timing: MediaOpen.attachOpenSpring,
-                      timingDuration: MediaOpen.attachOpenDuration,
+                      // Zoom in and stop, no zoom-out after (`attachPhotoOpenSpring`), 0.15s black.
+                      timing: MediaOpen.attachPhotoOpenSpring,
+                      timingDuration: MediaOpen.attachPhotoOpenDuration,
                       backdropFade: MediaOpen.attachBackdropFade,
                       // ⛔ THE TOOLS FADE IN DURING THE FLIGHT — owner 2026-10-14: they
                       // "pop" when they appear after the photo lands. The reference picker
