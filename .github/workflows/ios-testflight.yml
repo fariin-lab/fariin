@@ -79,6 +79,7 @@ jobs:
             Stories: a repost cannot be one-time and cannot block screenshots. Chats: more space between location cards.
             Files: tapping a file opens it once, even with several taps while it loads (no more 3 pages and 3 closes). The X on Files just closes. GIF search: the row becomes the search field with an X on its right. GIF mood bar: no border, no GIPHY text, sits on the bottom edge.
             Location: Send Location always names the place (tries again if the lookup fails; shows Finding place while it looks).
+            Attach: with the keyboard up, + opens the sheet while the keyboard is still going down (one motion, like the reference app), not after it.
             PLEASE TEST: in the panel's App updates, make a Mandatory campaign for your own @username with a minimum build above this one, activate it, open the app; then pause it.
 
             EARLIER: NO MORE POP WHEN A PHOTO OPENS FROM THE ATTACH SHEET.

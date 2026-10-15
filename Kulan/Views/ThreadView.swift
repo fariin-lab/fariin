@@ -8221,10 +8221,22 @@ struct ThreadView: View {
             // (the field resigns when it goes false), and the sheet waits for the keyboard's own
             // `didHide` instead of a stopwatch. `onceHidden` fires straight away when the keyboard
             // was never up.
+            //
+            // ⛔ 2026-10-15, owner: "the attach sheet comes late, check the reference app". Waiting for
+            // `didHide` played the two motions one after the other: keyboard all the way down, THEN
+            // the sheet. The reference app's source (its attachment menu opener) dismisses the input
+            // and, only when the keyboard was up, presents the menu a fixed 0.15 s later, so the menu
+            // grows out of "+" while the keyboard is still on its way down: one overlapping motion.
+            // Same here. That jitter note above was the old system-sheet presentation; this sheet is
+            // our own container presented without a UIKit animation, and it reads where "+" is at
+            // the moment it opens.
+            let keyboardWasUp = keyboard.height > 0
             inputFocused = false
-            // The sheet reads where the "+" is at the moment it opens (the keyboard has gone by
-            // then, so the bar is down), and hides and shows the button itself.
-            keyboard.onceHidden { showAttachPanel = true }
+            if keyboardWasUp {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showAttachPanel = true }
+            } else {
+                showAttachPanel = true
+            }
         }
         a.gif = {
             // Same as "+", all the way — owner, 2026-08-25, build 681: "the keyboard goes away, but
