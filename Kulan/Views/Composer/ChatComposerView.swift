@@ -158,6 +158,11 @@ final class ChatComposerView: UIView {
     private let fieldRow = UIView()
     private let textView = ComposerTextView()
     private let gifButton = IconButton(image: UIImage(named: "ic_gif"), size: CGSize(width: 24, height: 24))
+    /// ⛔ THE CAMERA LIVES IN THE FIELD — owner 2026-10-15: "remove Camera from the attach sheet,
+    /// show the camera in the input bar". Beside the GIF, the same dimmed ink, shown when the GIF is.
+    private let cameraButton = IconButton(image: UIImage(systemName: "camera",
+                                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)),
+                                          size: CGSize(width: 24, height: 24))
     private let micButton = AccessibleActivationView()
     /// ⛔ THE REFERENCE APP'S OWN MIC AND PLUS — owner, 2026-09-27, both ringed: "use their recording
     /// icon and + icon". Their `mic` and `plus` vectors (`ic_composer_mic`, `ic_composer_plus`), drawn
@@ -321,6 +326,7 @@ final class ChatComposerView: UIView {
         pill.contentView.addSubview(fieldRow)
         fieldRow.addSubview(textView)
         fieldRow.addSubview(gifButton)
+        fieldRow.addSubview(cameraButton)
         // ⛔ THE GLYPH IS IN THE GLASS, THE TOUCH IS NOT — his screenshot, 2026-08-27: "the recording
         // icon is not part of the composer, but the GIF icon is." He is reading it exactly right. The
         // mic was a bare sibling drawn OVER the pill, so it never sat on the pill's material: the
@@ -350,6 +356,9 @@ final class ChatComposerView: UIView {
         gifButton.icon.tintColor = UIColor.label.withAlphaComponent(0.55)
         gifButton.accessibilityLabel = "GIF"
         gifButton.addAction(UIAction { [weak self] _ in self?.actions.gif() }, for: .touchUpInside)
+        cameraButton.icon.tintColor = UIColor.label.withAlphaComponent(0.55)
+        cameraButton.accessibilityLabel = "Camera"
+        cameraButton.addAction(UIAction { [weak self] _ in self?.actions.camera() }, for: .touchUpInside)
         micGlyph.contentMode = .scaleAspectFit
         micGlyph.tintColor = .label
         // The glyph draws only — every touch on this slot is the sibling button's. Without this the
@@ -720,6 +729,7 @@ final class ChatComposerView: UIView {
         stripReview.alpha = s.reviewing ? 1 : 0
         stripReview.isUserInteractionEnabled = s.reviewing
         gifButton.alpha = (!s.recordingActive && !s.hasText && !s.textOnly) ? 1 : 0
+        cameraButton.alpha = gifButton.alpha
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
         // lives in its slot then). While a finger holds it only the glyph fades — the view stays, so
         // the gesture keeps tracking; a lock ends the gesture, and then the whole button can leave.
@@ -982,7 +992,8 @@ final class ChatComposerView: UIView {
     private func textWidth(pillWidth: CGFloat) -> CGFloat {
         (shown.hasText || shown.textOnly) ? pillWidth
                       // ONE button inside the pill now, not two: the GIF. The mic left.
-                      : pillWidth - M.micTrailing - M.button - M.inPillSpacing
+                      // Two now: the camera beside the GIF (2026-10-15).
+                      : pillWidth - M.micTrailing - 2 * M.button - 2 * M.inPillSpacing
     }
 
     private var maxTextHeight: CGFloat {
@@ -1069,6 +1080,8 @@ final class ChatComposerView: UIView {
         // The GIF is the pill's last slot now that the mic has left it.
         gifButton.frame = CGRect(x: pw - M.micTrailing - M.button, y: fh - M.button,
                                  width: M.button, height: M.button)
+        cameraButton.frame = CGRect(x: gifButton.frame.minX - M.inPillSpacing - M.button, y: fh - M.button,
+                                    width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
         // ⛔ A PASTE PAST THE LAST LINE — owner 2026-10-15: pasting a long link, the text ran off the

@@ -128,6 +128,8 @@ struct ChatComposerActions {
     var barTouched: () -> Void = {}
     var attach: () -> Void = {}
     var gif: () -> Void = {}
+    /// The camera, from its button in the field (owner 2026-10-15: moved here from the attach sheet).
+    var camera: () -> Void = {}
     var send: () -> Void = {}
     var dismissBanner: (ChatComposerBanner.Style) -> Void = { _ in }
     var holdBegan: () -> Void = {}

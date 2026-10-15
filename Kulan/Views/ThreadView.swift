@@ -5185,7 +5185,6 @@ struct ThreadView: View {
                     // be the grid's first cell is DELETED rather than kept as a second door. It goes
                     // first because it is the only one of the five that makes something new; the
                     // other four go and fetch something that already exists.
-                    attachTile("ic_camera", "Camera") { showCamera = true }
                     attachTile("ic_gif_tile", "GIF", closesSheet: false) {
                         withAnimation(.smooth(duration: 0.32)) { attachGif = true }
                     }
@@ -8221,6 +8220,11 @@ struct ThreadView: View {
             // keyboard was never up), exactly as the attach sheet does.
             inputFocused = false
             keyboard.onceHidden { showGifPicker = true }
+        }
+        // The camera button in the field (2026-10-15), the way the GIF opens: keyboard first.
+        a.camera = {
+            inputFocused = false
+            keyboard.onceHidden { showCamera = true }
         }
         a.send = { if editingMessage != nil { saveEdit() } else { send() } }
         a.dismissBanner = { style in
