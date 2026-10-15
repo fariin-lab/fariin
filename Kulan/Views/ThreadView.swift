@@ -8612,11 +8612,27 @@ struct ThreadView: View {
 
     private func startPreviewPlayback() {
         guard let url = previewURL else { return }
+        // ⚠️ MEASURING (owner 2026-10-15: "play on the recorded note takes time"). The player and the
+        // session are already warmed when the review appears, the way the reference app does it, so
+        // the delay is not the known one. One VOICE# line per tap says which part it is: setup still
+        // running on the tap, `play()` itself blocking, the route, or silence at the start of the
+        // recording that only sounds like a delay. Remove once the device log has answered.
+        let t0 = Date()
+        let wasWarm = previewPlayer != nil
         // Normally a no-op by now — `beginPreview` warmed both the player and the session as the
         // review appeared. It stays here so a play that somehow lands first still works.
         warmPreviewPlayback(url)
+        let t1 = Date()
         previewPlaying = previewPlayer?.play() ?? false
+        let t2 = Date()
         if previewPlaying { startPreviewTicker() }
+        let route = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let bars = previewWaveform
+        let quietBars = bars.firstIndex(where: { $0 > 6 }) ?? bars.count
+        let dur = previewPlayer?.duration ?? 0
+        let leadSilence = bars.isEmpty ? 0 : dur * Double(quietBars) / Double(bars.count)
+        DiagLog.add("VOICE# play warm=\(wasWarm) setup=\(Int(t1.timeIntervalSince(t0) * 1000))ms play()=\(Int(t2.timeIntervalSince(t1) * 1000))ms ok=\(previewPlaying) at=\(String(format: "%.2f", previewPlayer?.currentTime ?? 0))s dur=\(String(format: "%.2f", dur))s route=\(route) leadSilence=\(String(format: "%.2f", leadSilence))s bars=\(bars.prefix(8).map(String.init).joined(separator: "/"))")
+        DiagLog.flagForUpload()
     }
 
     private func stopPreviewPlayback() {

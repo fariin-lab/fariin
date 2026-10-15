@@ -195,7 +195,9 @@ final class ChatComposerView: UIView {
     private let stripTimer = ChatComposerView.timerLabel()
     private let cancelButton = UIButton(type: .custom)
     private let stripReview = UIView()
-    private let playButton = IconButton(image: nil, size: CGSize(width: 26, height: 26))
+    /// 18pt glyph in its 26pt slot (owner 2026-10-15: "make that icon small"); the slot and the 44pt
+    /// tap area are unchanged, so nothing else on the bar moves.
+    private let playButton = IconButton(image: nil, size: CGSize(width: 18, height: 18))
     private let waveform = ComposerWaveformView()
     private let totalLabel = UILabel()
     private let onceButton = IconButton(image: nil, size: CGSize(width: 24, height: 24))
