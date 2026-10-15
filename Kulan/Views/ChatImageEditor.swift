@@ -70,8 +70,34 @@ struct ChatImageEditor: View {
     }
 
     /// The last measured height of the bottom tools, so the OPEN can land on the rest rect before the
-    /// editor exists to measure it. 118 is the same first guess `bottomChromeH` starts from.
-    private static var lastChromeH: CGFloat = 118
+    /// editor exists to measure it.
+    ///
+    /// ⛔ KEPT ACROSS LAUNCHES — owner 2026-10-15, two screenshots: "first 9:16 photo after a restart
+    /// opens at the wrong size, a second later it jumps right; after that it is fine". This lived in
+    /// memory only and started every launch at a 118 guess, but the tools measure 104, so the first
+    /// open of each run landed 14pt short (the photo is height-limited, so smaller all round) and the
+    /// editor's own photo, laid out from the real measurement, replaced it at landing: the jump. The
+    /// measurement then overwrote the guess, which is why only the first open was wrong.
+    /// The fallback is the bar's own arithmetic (tool row 44 + gap 12 + caption bar 40 + 8 below, as
+    /// `VideoApprovalView.lastControlsH` does); the saved value is per text size, since a bigger
+    /// caption font makes the bar taller.
+    private static var lastChromeH: CGFloat {
+        get {
+            let v = UserDefaults.standard.double(forKey: chromeKey)
+            return v > 0 ? v : 44 + 12 + 40 + 8
+        }
+        set { UserDefaults.standard.set(Double(newValue), forKey: chromeKey) }
+    }
+    /// Only the attach editor's bar is what `restRect` lands on: edit-only has a taller Done button,
+    /// and the pen bar replaces the tools while drawing. A typed caption grows the bar, and every
+    /// open starts with an empty one.
+    private func remember(_ h: CGFloat) {
+        guard !editOnly, !isDrawing, caption.isEmpty, h > 0 else { return }
+        Self.lastChromeH = h
+    }
+    private static var chromeKey: String {
+        "attachEditor.chromeH.\(UIApplication.shared.preferredContentSizeCategory.rawValue)"
+    }
 
     /// Where the photo sits at rest, in window coordinates. The open flies onto it and the close
     /// lifts off it, so it is the SAME arithmetic as `canvasArea` + `canvasView`: the safe-area box,
@@ -107,7 +133,7 @@ struct ChatImageEditor: View {
     @State private var hd = false
     @State private var sent = false   // see send()
     @State private var canvasSize: CGSize = .zero
-    @State private var bottomChromeH: CGFloat = 118   // measured live from the actual bottom bars (toolbar heights queried at runtime)
+    @State private var bottomChromeH: CGFloat = ChatImageEditor.lastChromeH   // measured live from the actual bottom bars (toolbar heights queried at runtime)
     @FocusState private var captionFocused: Bool
     @State private var chromeShown = false   // set true on appear; see chromeOverlay's opacity
 
@@ -250,8 +276,8 @@ struct ChatImageEditor: View {
             .background(
                 GeometryReader { g in
                     Color.clear
-                        .onAppear { if !captionFocused { bottomChromeH = g.size.height; Self.lastChromeH = g.size.height } }
-                        .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h; Self.lastChromeH = h } }
+                        .onAppear { if !captionFocused { bottomChromeH = g.size.height; remember(g.size.height) } }
+                        .onChange(of: g.size.height) { _, h in if !captionFocused { bottomChromeH = h; remember(h) } }
                 }
             )
         }
