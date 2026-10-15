@@ -135,6 +135,8 @@ struct LocationPickerSheet: View {
     @State private var resolvedName: String?
     @State private var resolvedAddress: String?
     @State private var geocodeTask: Task<Void, Never>?
+    /// The spot whose name is being looked up right now (nil once it answered or gave up).
+    @State private var resolvingAt: CLLocationCoordinate2D?
 
     enum MapStyleKind: String, CaseIterable, Identifiable {
         case standard = "Map", satellite = "Satellite", hybrid = "Hybrid"
@@ -157,6 +159,15 @@ struct LocationPickerSheet: View {
         return selectedName ?? resolvedName
     }
 
+    /// Under "Send Location": the place, or "Finding place…" while it is looked up, or the
+    /// coordinates when no name could be found. Never the bare word "Location".
+    private var sendButtonSubtitle: String {
+        if let n = sendName, !n.isEmpty { return n }
+        if resolvingAt != nil { return "Finding place…" }
+        if let c = sendCoordinate { return String(format: "%.5f, %.5f", c.latitude, c.longitude) }
+        return "Finding place…"
+    }
+
     /// 2026-09-24 fix-all #210: Send would ship the phone's own fix, and that fix is approximate.
     /// A spot the person panned to or picked from search is their choice and stays exact.
     private var sendsApproximateFix: Bool {
@@ -173,19 +184,36 @@ struct LocationPickerSheet: View {
         // place's name. Drop it now; the new one appears when (and only if) it resolves.
         resolvedName = nil
         resolvedAddress = nil
+        resolvingAt = c
+        // ⛔ SOMETIMES "Location", SOMETIMES THE AREA — owner 2026-10-15. The lookup is throttled by
+        // the system when the map settles often, and one refused or empty answer left the button
+        // on the bare word "Location". Now: up to three tries with a growing wait, a wider fallback
+        // (area, district, city) when the spot has no building name, and if every try fails the
+        // button shows the coordinates, never the bare word.
         geocodeTask = Task {
             try? await Task.sleep(nanoseconds: 450_000_000)
-            guard !Task.isCancelled else { return }
-            let placemarks = try? await CLGeocoder()
-                .reverseGeocodeLocation(CLLocation(latitude: c.latitude, longitude: c.longitude))
-            guard !Task.isCancelled, let p = placemarks?.first else { return }
-            await MainActor.run {
-                // `name` is the building or landmark; the thoroughfare is the fallback so a spot in
-                // the middle of a street still says the street rather than a plus-code.
-                resolvedName = p.name ?? p.thoroughfare ?? p.locality ?? p.country
-                resolvedAddress = [p.thoroughfare, p.locality, p.country]
-                    .compactMap { $0 }.joined(separator: ", ")
+            for attempt in 0..<3 {
+                guard !Task.isCancelled else { return }
+                if attempt > 0 { try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_200_000_000) }
+                guard !Task.isCancelled else { return }
+                let placemarks = try? await CLGeocoder()
+                    .reverseGeocodeLocation(CLLocation(latitude: c.latitude, longitude: c.longitude))
+                guard !Task.isCancelled else { return }
+                if let p = placemarks?.first,
+                   let name = p.name ?? p.thoroughfare ?? p.subLocality ?? p.locality
+                       ?? p.subAdministrativeArea ?? p.administrativeArea ?? p.country {
+                    await MainActor.run {
+                        // `name` is the building or landmark; the street and then the area are the
+                        // fallbacks so a spot with no building still says where it is.
+                        resolvedName = name
+                        resolvedAddress = [p.thoroughfare, p.locality, p.country]
+                            .compactMap { $0 }.joined(separator: ", ")
+                        resolvingAt = nil
+                    }
+                    return
+                }
             }
+            await MainActor.run { resolvingAt = nil }
         }
     }
     @FocusState private var searchFocused: Bool
@@ -536,7 +564,7 @@ struct LocationPickerSheet: View {
                 } label: {
                     VStack(spacing: 1) {
                         Text("Send Location").font(.system(size: 17, weight: .semibold))
-                        Text(sendName ?? "Location").font(.system(size: 13)).opacity(0.85).lineLimit(1)
+                        Text(sendButtonSubtitle).font(.system(size: 13)).opacity(0.85).lineLimit(1)
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 20)
