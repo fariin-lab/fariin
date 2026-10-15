@@ -996,7 +996,22 @@ final class ChatComposerView: UIView {
                                  width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
-        textView.isScrollEnabled = fit > maxTextHeight
+        // ⛔ A PASTE PAST THE LAST LINE — owner 2026-10-15: pasting a long link, the text ran off the
+        // bottom of the field, last line cut in half. The field only becomes scrollable here, during
+        // layout, and nothing then scrolled it: it stayed at the top of the text while the caret sat
+        // at the end, below the field. When it turns scrollable, bring the caret into view, a turn
+        // later so the new frame and content size are in place first. Typing past the last line
+        // already worked because UIKit follows the caret of a field that is scrollable while typing.
+        let scrolls = fit > maxTextHeight
+        if textView.isScrollEnabled != scrolls {
+            textView.isScrollEnabled = scrolls
+            if scrolls {
+                DispatchQueue.main.async { [weak textView] in
+                    guard let textView else { return }
+                    textView.scrollRangeToVisible(textView.selectedRange)
+                }
+            }
+        }
 
         // The hold row sits where the field row is; the strip is the whole (one-row) pill.
         holdRow.frame = fieldRow.frame
