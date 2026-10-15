@@ -870,6 +870,14 @@ enum MediaOpen {
         window.addSubview(clipView)
         clipView.addSubview(container)
         let handle = FlightHandle(container: container, content: content)
+        if OpenTrace.active {
+            OpenTrace.note("fly source=\(OpenTrace.r(source)) clipStart=\(OpenTrace.r(clipView.frame)) "
+                           + "copyInClip=\(OpenTrace.r(container.frame)) "
+                           + "copyInWindow=\(OpenTrace.r(container.convert(container.bounds, to: window))) "
+                           + "dest=\(OpenTrace.r(destination)) image=\(OpenTrace.s(image.size)) "
+                           + "radius=\(Int(sourceCornerRadius))->\(Int(destinationCornerRadius))")
+            OpenTrace.sampler = OpenTrace.FrameSampler(container: container, clip: clipView)
+        }
 
         // Nil = the house spring, as the chat viewer has always opened.
         let flyDuration = phases?.open ?? timingDuration ?? duration
@@ -914,10 +922,13 @@ enum MediaOpen {
             withoutPresentationAnimation { present() }
             // A screen already up since `onStart` (under the copy) only has to draw its photo, but
             // give it a few frames: the copy sits UNDER that screen, so overlap never shows twice.
+            OpenTrace.note("land copy=\(OpenTrace.r(container.layer.presentation()?.frame)) in clip")
             DispatchQueue.main.asyncAfter(deadline: .now() + (onStart == nil ? 0 : 0.05)) {
                 handle.finished = true
                 backdrop.removeFromSuperview()
                 clipView.removeFromSuperview()
+                OpenTrace.sampler = nil
+                OpenTrace.end("copy removed")
             }
         }
         animator.addCompletion { _ in

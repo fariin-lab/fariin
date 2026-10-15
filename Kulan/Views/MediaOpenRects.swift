@@ -104,6 +104,9 @@ import Combine
 
     /// Where that card is RIGHT NOW, asked of the view itself. Falls back to the last written
     /// rectangle when there is no live view (a screen that reports rects but has no anchor).
+    /// The last rect written for `key` (read-only; OpenTrace logs it beside the live one).
+    static func recordedRect(_ key: String) -> CGRect? { rects[key] }
+
     static func liveRect(_ key: String) -> CGRect? {
         if let r = liveViewRect(key) { return r }
         return rects[key]

@@ -6225,8 +6225,16 @@ struct ThreadView: View {
         let size = (load?.pixelSize).flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil } ?? ui.size
         // liveRect asks the tile's own view (converted to the window), so the sheet
         // sitting part-way down the screen is measured, not assumed.
+        OpenTrace.note("photo rects live=\(OpenTrace.r(MediaOpenRects.liveViewRect(key))) "
+                       + "drawn=\(OpenTrace.r(MediaOpenRects.drawnRect(key))) "
+                       + "recorded=\(OpenTrace.r(MediaOpenRects.recordedRect(key))) "
+                       + "clip=\(OpenTrace.r(MediaOpenRects.attachClipRect)) "
+                       + "to=\(OpenTrace.r(ChatImageEditor.restRect(size))) size=\(OpenTrace.s(size)) "
+                       + "ui=\(OpenTrace.s(ui.size)) pixel=\(OpenTrace.s(load?.pixelSize)) "
+                       + "radius=\(Int(ChatImageEditor.restCornerRadius(size)))")
         guard let from = MediaOpenRects.liveRect(key),
               let to = ChatImageEditor.restRect(size) else {
+            OpenTrace.end("photo NO GEOMETRY: plain cover")
             // No geometry to fly from: the plain cover, still fed the better pictures as they come.
             let arrival = EditorArrival(landed: true, fullReady: load == nil)
             load?.onScreen = { arrival.image = $0 }
@@ -6257,7 +6265,9 @@ struct ThreadView: View {
                           // dropped by SwiftUI. A queued open runs later, outside this
                           // no-animation transaction, so it carries its own: otherwise
                           // the cover would slide up from the bottom again.
+                          OpenTrace.note("onStart (editor asked for)")
                           MediaPresentGate.present {
+                              OpenTrace.note("editor presenting")
                               // ⛔ UIKIT'S OWN SWITCH TOO, NOT ONLY THE TRANSACTION — owner 2026-10-14:
                               // "sometimes the buttons come up from the bottom, sometimes not". The
                               // call screen hit the same thing (`InstantCover`): on device a
@@ -6270,6 +6280,7 @@ struct ThreadView: View {
                           }
                       }) {
             arrival.landed = true
+            OpenTrace.note("landed (editor photo shown)")
             // The editor is opaque over the tile by now; give it back for the close to find.
             DispatchQueue.main.async { MediaSourceVisibility.shared.reveal() }
         }

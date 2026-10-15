@@ -702,6 +702,11 @@ struct AttachRecentsStrip: View {
     //   • Selection active → tap opens the MIXED approval pager over the whole selection (images AND
     //     videos together — swipe between all of them, edit each, one caption, one send).
     private func openTapped(_ a: PHAsset) {
+        // OpenTrace (2026-10-15, measurement only): which tile, where in the grid, what it is.
+        let idx = assets.firstIndex { $0.localIdentifier == a.localIdentifier } ?? -1
+        OpenTrace.begin("col=\(idx >= 0 ? idx % 3 : -1) row=\(idx >= 0 ? idx / 3 : -1) idx=\(idx) "
+                        + "type=\(a.mediaType == .video ? "video" : "photo") px=\(a.pixelWidth)x\(a.pixelHeight) "
+                        + "selectedCount=\(selectedIds.count) id=\(a.localIdentifier.prefix(8))")
         // ⛔ A TAP OPENS WHAT WAS TAPPED — owner 2026-10-14: with photos selected, tapping one that
         // is NOT selected opened the selection instead. Only a selected tile opens the selection
         // pager; any other tile opens on its own, as with nothing selected.
@@ -740,6 +745,7 @@ struct AttachRecentsStrip: View {
                         if info?[PHImageErrorKey] != nil, load.playback != nil { start(nil) }
                         return
                     }
+                    if !started { OpenTrace.note("start by=poster degraded=\(degraded) img=\(OpenTrace.s(img.size))") }
                     if !started { start(img) } else if !degraded { load.deliverScreen(img) }
                 }
             }
@@ -789,13 +795,18 @@ struct AttachRecentsStrip: View {
             guard let img else { return }
             let degraded = info?[PHImageResultIsDegradedKey] as? Bool ?? false
             DispatchQueue.main.async {
+                if !started { OpenTrace.note("start by=screen degraded=\(degraded) img=\(OpenTrace.s(img.size))") }
+                else { OpenTrace.note("later screen degraded=\(degraded) img=\(OpenTrace.s(img.size))") }
                 if !started { start(img) } else if !degraded { load.deliverScreen(img) }
             }
         }
         Task {
             let ui = await Self.fullImage(a)
             await MainActor.run {
-                if let ui { start(ui); load.deliverFull(ui) }
+                if let ui {
+                    OpenTrace.note("\(started ? "full arrived" : "start by=full") img=\(OpenTrace.s(ui.size))")
+                    start(ui); load.deliverFull(ui)
+                }
                 else if !started { loadingPick = false }   // nothing of it could be loaded at all
             }
         }
