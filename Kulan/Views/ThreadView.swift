@@ -182,6 +182,8 @@ struct ThreadView: View {
     /// The Location page as a layer INSIDE the attach sheet (owner 2026-10-15): the sheet stays,
     /// the page slides over the photos, back slides it away. See `LocationPickerSheet.embedded`.
     @State private var attachLocation = false
+    /// The GIF picker as a layer inside the attach sheet, as Location (owner 2026-10-15).
+    @State private var attachGif = false
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
@@ -1534,7 +1536,7 @@ struct ThreadView: View {
                      onExpanded: { attachSheetFull = $0 },
                      onDismiss: {
             recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false
-            attachLocation = false
+            attachLocation = false; attachGif = false
             attachSheetFull = false; attachGridScrolled = false
             panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
             if let next = attachAfterClose { attachAfterClose = nil; next() }
@@ -4982,6 +4984,20 @@ struct ThreadView: View {
                     .transition(.move(edge: .trailing))
             }
         }
+        // The GIF picker, in the sheet, over the photos (owner 2026-10-15).
+        .overlay {
+            if attachGif {
+                GifPickerView(onPick: { gif in
+                                  sendGif(gif)
+                                  showAttachPanel = false
+                              },
+                              embedded: true,
+                              onBack: { withAnimation(.smooth(duration: 0.32)) { attachGif = false } },
+                              onWantsFullHeight: { attachExpandTick &+= 1 })
+                    .background(Color(.systemBackground))
+                    .transition(.move(edge: .trailing))
+            }
+        }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
         // AND closes the sheet, landing in the chat.
@@ -5149,7 +5165,9 @@ struct ThreadView: View {
                     // first because it is the only one of the five that makes something new; the
                     // other four go and fetch something that already exists.
                     attachTile("ic_camera", "Camera") { showCamera = true }
-                    attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
+                    attachTile("ic_gif_tile", "GIF", closesSheet: false) {
+                        withAnimation(.smooth(duration: 0.32)) { attachGif = true }
+                    }
                     attachTile("ic_file", "Files") { showFileImporter = true }
                     attachTile("ic_location", "Location", closesSheet: false) {
                         withAnimation(.smooth(duration: 0.32)) { attachLocation = true }

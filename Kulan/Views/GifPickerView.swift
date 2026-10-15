@@ -69,6 +69,16 @@ enum GifFavorites {
 
 struct GifPickerView: View {
     let onPick: (GiphyService.Gif) -> Void
+    /// ⛔ INSIDE THE ATTACH SHEET — owner 2026-10-15, with a picture: "the same as Location: GIF opens
+    /// in the sheet, a back button top left goes back to the photos". Embedded, this is a layer of the
+    /// attach sheet (ThreadView `attachGif`): the grid edge to edge, the mood row floating at the
+    /// bottom, a glass back top-left and search top-right. Loading, recents, favourites, the masonry
+    /// and the cells are the same code as the full page.
+    var embedded: Bool = false
+    var onBack: (() -> Void)? = nil
+    var onWantsFullHeight: (() -> Void)? = nil
+    @State private var searching = false
+    @FocusState private var searchFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var picked = false   // 2026-09-24 decision D-composer-5: see `pick`
@@ -135,6 +145,10 @@ struct GifPickerView: View {
     }
 
     var body: some View {
+        if embedded { embeddedBody } else { pageBody }
+    }
+
+    private var pageBody: some View {
         NavigationStack {
             ScrollView {
                 // Recents live on their OWN clock tab (owner's 416 idea: heavy GIF use would let
@@ -232,19 +246,126 @@ struct GifPickerView: View {
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity)
             }
-            .task {
-                // Paint INSTANTLY from the cached trending page, then refresh quietly behind it.
-                // The old version opened EMPTY and made every open wait for the network.
-                if gifs.isEmpty, !Self.trendingCache.isEmpty { gifs = Self.trendingCache }
-                let fresh = await GiphyService.shared.search("")
-                if !fresh.isEmpty {
-                    Self.trendingCache = fresh
-                    Self.saveTrendingToDisk(fresh)
-                    if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
-                } else if gifs.isEmpty, category == .trending {
-                    fetchCameBackEmpty = true   // opened offline with nothing cached
+            .task { await loadFirst() }
+        }
+    }
+
+    /// Paint INSTANTLY from the cached trending page, then refresh quietly behind it. The old
+    /// version opened EMPTY and made every open wait for the network.
+    private func loadFirst() async {
+        if gifs.isEmpty, !Self.trendingCache.isEmpty { gifs = Self.trendingCache }
+        let fresh = await GiphyService.shared.search("")
+        if !fresh.isEmpty {
+            Self.trendingCache = fresh
+            Self.saveTrendingToDisk(fresh)
+            if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
+        } else if gifs.isEmpty, category == .trending {
+            fetchCameBackEmpty = true   // opened offline with nothing cached
+        }
+    }
+
+    // MARK: - Inside the attach sheet
+
+    private var embeddedBody: some View {
+        ScrollView {
+            emptyStates
+            HStack(alignment: .top, spacing: 4) {
+                ForEach(0..<2, id: \.self) { col in
+                    LazyVStack(spacing: 4) {
+                        ForEach(masonryColumns[col]) { g in gifCell(g) }
+                    }
                 }
             }
+            .padding(.horizontal, 6)
+        }
+        // Room for the floating rows: the buttons (and the field) on top, the mood row below.
+        .contentMargins(.top, searching ? 120 : 6, for: .scrollContent)
+        .contentMargins(.bottom, 96, for: .scrollContent)
+        .overlay(alignment: .top) {
+            VStack(spacing: 10) {
+                HStack {
+                    glassCircle("chevron.left", label: "Back") { onBack?() }
+                    Spacer()
+                    glassCircle(searching ? "xmark" : "magnifyingglass", label: searching ? "Close search" : "Search GIFs") {
+                        withAnimation(.easeInOut(duration: 0.2)) { searching.toggle() }
+                        if searching {
+                            onWantsFullHeight?()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
+                        } else {
+                            searchFocused = false
+                            query = ""
+                        }
+                    }
+                }
+                if searching {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search GIFs", text: $query)
+                            .focused($searchFocused)
+                            .submitLabel(.search)
+                    }
+                    .padding(.horizontal, 14).frame(height: 44)
+                    .liquidGlass(Capsule(), interactive: true)
+                    .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 14)
+        }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 2) {
+                categoryRow
+                // Giphy's terms ask for the attribution wherever its results are shown.
+                Text("Powered by GIPHY")
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
+            }
+            .padding(.bottom, 4)
+        }
+        .onChange(of: query) { _, _ in
+            searchTask?.cancel()
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)   // 300ms debounce
+                if Task.isCancelled { return }
+                await refresh()
+            }
+        }
+        .task { await loadFirst() }
+    }
+
+    private func glassCircle(_ symbol: String, label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .liquidGlass(Circle(), interactive: true)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// The empty / offline / no-result pages, shared by both layouts.
+    @ViewBuilder private var emptyStates: some View {
+        if category == .recent, gifs.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
+            ContentUnavailableView("No recent GIFs", systemImage: "clock",
+                                   description: Text("GIFs you send will appear here."))
+                .padding(.top, 40)
+        }
+        if category == .favorites, gifs.isEmpty, query.trimmingCharacters(in: .whitespaces).isEmpty {
+            ContentUnavailableView("No favourites yet", systemImage: "star",
+                                   description: Text("Hold a GIF and choose Add to Favourites."))
+                .padding(.top, 40)
+        }
+        if fetchCameBackEmpty, gifs.isEmpty {
+            let q = query.trimmingCharacters(in: .whitespaces)
+            Group {
+                if q.isEmpty {
+                    ContentUnavailableView("Could not load", systemImage: "wifi.slash")
+                } else {
+                    ContentUnavailableView.search(text: q)
+                }
+            }
+            .padding(.top, 40)
         }
     }
 
@@ -256,7 +377,9 @@ struct GifPickerView: View {
         picked = true
         GifRecents.note(g)
         onPick(g)
-        dismiss()
+        // Embedded, the attach sheet closes itself (its owner hides it); `dismiss` here would reach
+        // past the sheet to whatever presented the chat.
+        if !embedded { dismiss() }
     }
 
     // ONE loader for every state: a typed search wins; otherwise the selected mood. Recent is
