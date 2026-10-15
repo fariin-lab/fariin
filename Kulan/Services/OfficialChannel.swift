@@ -356,7 +356,16 @@ struct Announcement: Identifiable, Equatable {
     /// One-line version for the chat list. Deliberately the TITLE, not the body: a release note opens
     /// with "Fariin 2.4 is here", which is what somebody scanning a chat list needs, while the body
     /// opens with a sentence that reads as nothing out of context.
-    var preview: String { title.isEmpty ? body : title }
+    /// The chat list's line for the Fariin row. ⛔ TITLE AND TEXT — owner 2026-10-15: the row only ever
+    /// said the title ("New passkey added"), never what the post said. Now "Title: the message", on one
+    /// line (line breaks folded), the row truncating it as it does any chat's last message.
+    var preview: String {
+        let text = body.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        if title.isEmpty { return text }
+        if text.isEmpty { return title }
+        return "\(title): \(text)"
+    }
 
     /// Display order key. The publish time, not the write time, so a scheduled announcement lands
     /// where its date says rather than where it happened to be typed.
