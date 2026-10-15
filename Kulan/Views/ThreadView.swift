@@ -7308,6 +7308,10 @@ struct ThreadView: View {
                 searchArrow("chevron.up", enabled: searchIndex > 0) { stepSearch(-1) }
                 searchArrow("chevron.down", enabled: searchIndex < searchMatches.count - 1) { stepSearch(1) }
             }
+            // The jump arrow's own edge gap (owner 2026-10-15: the search arrows touched the edge;
+            // they replace the jump arrow but never took its trailing padding).
+            .padding(.trailing, composerSide)
+            .animation(keyboard.systemAnimation, value: composerSide)
         }
     }
 
