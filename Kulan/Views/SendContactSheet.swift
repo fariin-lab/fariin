@@ -27,7 +27,6 @@ struct SendContactSheet: View {
     @State private var searching = false
     @State private var selected = Set<String>()
     @State private var sending = false
-    @State private var copied = false
     @State private var showSystemShare = false
     /// The grid's own width, so the bottom button can line its edges up with the avatar circles
     /// rather than with the page margin. See `sideInset`.
@@ -334,7 +333,7 @@ struct SendContactSheet: View {
         Button {
             if selected.isEmpty { copyLink() } else { Task { await sendAll() } }
         } label: {
-            Text(selected.isEmpty ? (copied ? "Copied" : "Copy Link")
+            Text(selected.isEmpty ? "Copy Link"
                                   : "Send to \(selected.count)")
                 .font(.system(size: 17, weight: .semibold))
                 // ⛔ WHITE IN BOTH STATES (his order, 2026-08-21). It was the accent colour while
@@ -379,14 +378,14 @@ struct SendContactSheet: View {
         .padding(.bottom, 14)
     }
 
+    /// ⛔ COPY CLOSES THE SHEET — owner 2026-10-15: "when I tap Copy, the sheet should close by
+    /// itself". As the reference's share sheet does: copy, close, and say so on the page underneath
+    /// with the same notice a send uses, rather than a "Copied" label on a sheet still in the way.
     private func copyLink() {
         UIPasteboard.general.string = link
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        withAnimation(.easeOut(duration: 0.18)) { copied = true }
-        Task {
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
-            withAnimation(.easeOut(duration: 0.18)) { copied = false }
-        }
+        dismiss()
+        onSent("Link copied.")
     }
 
     /// Just the url. `contactText` is the sentence that goes into a CHAT bubble; a clipboard or
