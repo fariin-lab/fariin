@@ -61,11 +61,6 @@ enum FileRecents {
         for gone in list.dropFirst(maxCount) { try? FileManager.default.removeItem(at: url(gone)) }
         save(Array(list.prefix(maxCount)))
     }
-
-    static func clear() {
-        for r in all() { try? FileManager.default.removeItem(at: url(r)) }
-        UserDefaults.standard.removeObject(forKey: key)
-    }
 }
 
 struct AttachFilesPage: View {
@@ -77,6 +72,8 @@ struct AttachFilesPage: View {
 
     @State private var recents: [RecentFile] = FileRecents.all()
     @State private var importing = false
+    /// Grid or List for Recent (owner 2026-10-15: the ••• menu chooses it; "Clear Recent" is gone).
+    @AppStorage("files.recentLayout") private var layout = "list"
 
     var body: some View {
         ScrollView {
@@ -91,6 +88,14 @@ struct AttachFilesPage: View {
                     Text("Files you send will appear here.")
                         .font(.system(size: 15)).foregroundStyle(.secondary)
                         .padding(.top, 6)
+                } else if layout == "grid" {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 16) {
+                        ForEach(recents) { r in
+                            Button { onSendRecent(FileRecents.url(r)) } label: { gridCell(r) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 6)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(recents) { r in
@@ -119,11 +124,12 @@ struct AttachFilesPage: View {
             Text("Add files").font(.headline)
             Spacer()
             Menu {
-                Button(role: .destructive) {
-                    FileRecents.clear()
-                    recents = []
-                } label: { Label("Clear Recent", systemImage: "trash") }
-                    .disabled(recents.isEmpty)
+                // Grid or List, the chosen one ticked (owner 2026-10-15, with the reference's menu).
+                Picker("Layout", selection: $layout) {
+                    Label("Grid", systemImage: "square.grid.2x2").tag("grid")
+                    Label("List", systemImage: "list.bullet").tag("list")
+                }
+                .pickerStyle(.inline)
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -131,6 +137,10 @@ struct AttachFilesPage: View {
                     .liquidGlass(Circle(), interactive: true)
                     .contentShape(Circle())
             }
+            // ⛔ PLAIN, LIKE THE X — owner 2026-10-15: "the 3 dots look blurred". The menu's own
+            // button style drew its press/fade treatment over the glass; plain draws the glyph as is.
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
             .accessibilityLabel("More")
         }
         .padding(.horizontal, 16)
@@ -176,6 +186,18 @@ struct AttachFilesPage: View {
         .contentShape(Rectangle())
     }
 
+    private func gridCell(_ r: RecentFile) -> some View {
+        VStack(spacing: 6) {
+            RecentFileIcon(file: r, side: 84)
+            Text(r.name).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
+                .lineLimit(2).multilineTextAlignment(.center)
+            Text(ByteCountFormatter.string(fromByteCount: Int64(r.size), countStyle: .file))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .contentShape(Rectangle())
+    }
+
     /// "74.4 KB • Oct 14 at 9:21 PM › General"
     private func subtitle(_ r: RecentFile) -> String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(r.size), countStyle: .file)
@@ -201,6 +223,7 @@ struct AttachFilesPage: View {
 /// A picture's own thumbnail, otherwise a blue document badge with its extension.
 private struct RecentFileIcon: View {
     let file: RecentFile
+    var side: CGFloat = 54
     @State private var thumb: UIImage?
 
     private var ext: String { (file.name as NSString).pathExtension.lowercased() }
@@ -214,12 +237,12 @@ private struct RecentFileIcon: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.blue)
                     Text(ext.isEmpty ? "file" : String(ext.prefix(4)))
-                        .font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                        .font(.system(size: side * 0.28, weight: .bold)).foregroundStyle(.white)
                 }
             }
         }
-        .frame(width: 54, height: 54)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: side * 0.22, style: .continuous))
         .task(id: file.id) {
             guard isImage else { return }
             let u = FileRecents.url(file)
