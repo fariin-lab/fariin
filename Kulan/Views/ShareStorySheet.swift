@@ -511,9 +511,12 @@ struct ShareStorySheet: View {
                         // audience is created here, and no One-Time Story either — a one-time story
                         // is a kind of post, not a setting an existing story can be moved on to.
                         if editing == nil {
+                            // ⛔ NO ONE-TIME REPOST — owner 2026-10-15: a repost is someone else's story
+                            // passed on, so it cannot become a one-time story. The item stays in the
+                            // menu, dimmed (a nil handler), as on the Settings page.
                             NewAudienceButton(onCustom: { creating = true },
                                               canAddCustom: store.canAddCustom,
-                                              onOneTime: { oneTimePicking = true })
+                                              onOneTime: repostOf == nil ? { oneTimePicking = true } : nil)
                         }
                     }
                     // Sentence case, his reference. A section header uppercases its text by
