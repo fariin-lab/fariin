@@ -76,6 +76,7 @@ jobs:
           TF_CHANGELOG: |
             THIS BUILD: MEASURING THE ATTACH PHOTO OPEN.
             Attach sheet: each photo you open from the grid now writes a hidden measurement (nothing on screen, nothing else changes) so the centre-column pop can be found exactly.
+            Attach sheet: Location, GIF and Files close the sheet and open their page again (the old motion), with the new designs. Back returns to the photos.
             PLEASE TEST: open the attach sheet, open a LEFT photo, close it, then open the CENTRE photo next to it. Do it 2 or 3 times. Keep the app open for 10 seconds after, then say done.
 
             EARLIER: LOCATION, GIF AND FILES OPEN INSIDE THE ATTACH SHEET.
