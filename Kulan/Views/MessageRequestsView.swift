@@ -52,6 +52,11 @@ struct MessageRequestsView: View {
     /// untouched either way, since nothing here removes it until the data actually changes.
     @State private var acceptFailed = false
     @State private var declineFailed = false
+    /// ⛔ THE FIRST-TIME CARD — owner 2026-10-15, with the reference app's picture: shown the first
+    /// time this page opens and never again; deleting the app and installing it again shows it again.
+    /// That is exactly UserDefaults: it lives with the install and goes with it.
+    @AppStorage("messageRequests.introSeen") private var introSeen = false
+    @State private var showIntro = false
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
@@ -99,6 +104,19 @@ struct MessageRequestsView: View {
         // chat row is the exact thing the owner had removed from the chat list on 2026-09-02.
         .listStyle(.plain)
         .overlay { emptyLine }
+        .overlay(alignment: .bottom) {
+            if showIntro {
+                introCard
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .task {
+            guard !introSeen else { return }
+            try? await Task.sleep(for: .milliseconds(350))   // after the push has landed
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) { showIntro = true }
+        }
         .navigationTitle("Message Requests")
         .navigationBarTitleDisplayMode(.inline)
         // A pushed sub page has no business under the floating tab pill — ThreadView, ContactInfoView
@@ -200,13 +218,88 @@ struct MessageRequestsView: View {
         }
     }
 
-    /// A line, not a picture. There is nothing to illustrate here and an empty inbox is good news.
+    /// ⛔ AN ICON, A TITLE AND A LINE — owner 2026-10-15, with the reference app's empty page: the
+    /// single grey sentence read as unfinished. Its inbox glyph, a bold title, the explanation under it.
     @ViewBuilder private var emptyLine: some View {
         // 2026-09-24 feature-audit: not while older chats are still arriving; the row above says so.
         if requests.isEmpty, !repo.loadingWholeList {
-            Text("No message requests.")
+            VStack(spacing: 10) {
+                Image(systemName: "tray")
+                    .font(.system(size: 40, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .padding(.bottom, 4)
+                Text("No message requests")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("Messages from people you haven't chatted with yet will appear here.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 40)
+        }
+    }
+
+    /// The first-time explanation card, the reference app's: icon, ✕, title, text, Learn more / Got it.
+    private var introCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                Image("ic_message_request")
+                    .renderingMode(.template)
+                    .resizable().scaledToFit()
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Button { dismissIntro() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+                .offset(x: 10, y: -8)
+            }
+            Text("Message requests")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.primary)
+                .padding(.top, 14)
+            Text("Message requests from accounts you don\u{2019}t follow live here. To reply to their messages, you need to accept the request.")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
+            HStack(spacing: 10) {
+                Button {
+                    if let u = URL(string: "https://fariin.com/help") { WebLink.open(u) }
+                } label: {
+                    Text("Learn more")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Button { dismissIntro() } label: {
+                    Text("Got it")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color(.systemBackground))
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(Color.primary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 22)
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 24)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+    }
+
+    private func dismissIntro() {
+        introSeen = true
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.92)) { showIntro = false }
     }
 }
