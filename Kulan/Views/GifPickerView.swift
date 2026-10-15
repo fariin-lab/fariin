@@ -330,6 +330,19 @@ struct GifPickerView: View {
             .padding(.horizontal, 12)
             .padding(.top, 18)
             .padding(.bottom, 8)
+            // ⛔ APPLE'S BLUR UNDER THE HEADER — owner 2026-10-15, a picture: "there is no blur, use
+            // the Apple blur". The system scroll-edge effect did not show inside this sheet, so the
+            // header carries the system bar material itself, solid behind the buttons and fading out
+            // over its last stretch so the GIFs disappear into it with no line.
+            .background {
+                Rectangle().fill(.bar)
+                    .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                                 .init(color: .black, location: 0.6),
+                                                 .init(color: .clear, location: 1)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .padding(.bottom, -16)
+                    .ignoresSafeArea(edges: .top)
+            }
         }
         // ⛔ A FLOATING CAPSULE, LIKE THE MEDIA TABS — owner 2026-10-15 (third look today: an edge
         // bar, then edge-to-edge glass, now "make it look like the Media / Files / Voice bar"). A
