@@ -330,10 +330,17 @@ struct GifPickerView: View {
             // ⛔ A SYSTEM BAR, NOT A FLOATING CAPSULE — owner 2026-10-15: "remove the border and the
             // GIPHY text; the bar is system chrome, edge-attached". The buttons sit straight on the
             // sheet's own background along the bottom edge, no glass outline, no caption under them.
+            // Liquid Glass, edge to edge (owner 2026-10-15, after the border went): the system-bar
+            // material, full width and down through the home-indicator area, so the GIFs blur as
+            // they pass under it. No capsule, so no outline.
             categoryButtons
                 .padding(.horizontal, 12)
                 .padding(.top, 6).padding(.bottom, 4)
-                .background(Color(.systemBackground))
+                .background {
+                    Rectangle().fill(Color.clear)
+                        .liquidGlass(Rectangle())
+                        .ignoresSafeArea(edges: .bottom)
+                }
         }
         .onChange(of: query) { _, _ in
             searchTask?.cancel()
