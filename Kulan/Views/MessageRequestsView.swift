@@ -226,8 +226,11 @@ struct MessageRequestsView: View {
         // 2026-09-24 feature-audit: not while older chats are still arriving; the row above says so.
         if requests.isEmpty, !repo.loadingWholeList {
             VStack(spacing: 10) {
-                Image(systemName: "tray")
-                    .font(.system(size: 40, weight: .regular))
+                // The app's own request icon (the chat list menu's), not a system inbox (owner).
+                Image("ic_message_request")
+                    .renderingMode(.template)
+                    .resizable().scaledToFit()
+                    .frame(width: 44, height: 44)
                     .foregroundStyle(.primary)
                     .padding(.bottom, 4)
                 Text("No message requests")
