@@ -426,10 +426,19 @@ final class StoryZoomContainerVC: UIViewController {
 /// like any other presentation; `onDismissed` reports every way out — Post, Discard, the X, or the
 /// stage being torn down underneath — so the viewer can put its flag down.
 enum StoryComposerPresenter {
-    static func present<Content: View>(_ content: Content, onDismissed: @escaping () -> Void) {
+    /// `clearBackground`: a page that is not black (a chat opened from a story) — the host is
+    /// see-through and the clock follows the app's theme instead of the composer's white.
+    static func present<Content: View>(_ content: Content, onDismissed: @escaping () -> Void,
+                                       clearBackground: Bool = false) {
         guard let top = topController() else { onDismissed(); return }
         let vc = StoryComposerHostVC(rootView: AnyView(content))
         vc.onDismissed = onDismissed
+        if clearBackground {
+            vc.view.backgroundColor = .clear
+            vc.lightStatusBar = false
+            // The stage forces dark; the page wears the phone's own theme.
+            vc.overrideUserInterfaceStyle = AppWindowScheme.style
+        }
         top.present(vc, animated: true)
     }
 
@@ -460,7 +469,8 @@ final class StoryComposerHostVC: UIHostingController<AnyView> {
 
     @MainActor required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    var lightStatusBar = true
+    override var preferredStatusBarStyle: UIStatusBarStyle { lightStatusBar ? .lightContent : .default }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
