@@ -5424,7 +5424,12 @@ struct ThreadView: View {
     // Download the encrypted file, decrypt it, write to a temp file, and preview it (QuickLook).
     private func openFile(_ message: Message) {
         guard let s = message.fileUrl, let url = URL(string: s), let meta = message.enc else { return }
+        // ONE OPEN AT A TIME — owner 2026-10-15: a file sometimes opened 3 times and needed 3 closes.
+        // The download takes a moment, nothing showed, so the next taps each started their own open.
+        // Taps while this file is still loading are ignored.
+        guard FileOpenGate.begin(message.id) else { return }
         Task {
+            defer { Task { @MainActor in FileOpenGate.end(message.id) } }
             // 2026-09-24 audit: ALREADY HERE? The Documents auto-download setting now fetches files
             // ahead of the tap into this same path (DocumentPrefetch); open that copy, no download.
             if let local = DocumentPrefetch.cached(id: message.id, fileName: message.fileName),
@@ -11436,8 +11441,18 @@ final class SingleFilePreviewController: QLPreviewController, QLPreviewControlle
     }
 
     @MainActor static func present(_ url: URL) {
-        WebLink.topViewController()?.present(SingleFilePreviewController(url: url), animated: true)
+        guard let top = WebLink.topViewController() else { return }
+        // A file page already up (or on its way) is never covered by a second one.
+        if top is SingleFilePreviewController { return }
+        top.present(SingleFilePreviewController(url: url), animated: true)
     }
+}
+
+/// Which files are being fetched for opening right now (see `openFile`).
+@MainActor enum FileOpenGate {
+    private static var busy = Set<String>()
+    static func begin(_ id: String) -> Bool { busy.insert(id).inserted }
+    static func end(_ id: String) { busy.remove(id) }
 }
 
 struct FilePreview: UIViewControllerRepresentable {
