@@ -689,8 +689,10 @@ final class ChatComposerView: UIView {
 
         // The disc is the ACCENT, which is white at night — so the glyph on it is `onAccent`, or
         // it draws nothing on the one control you are watching.
-        haloOuter.color = accent.withAlphaComponent(0.12)
-        haloInner.color = accent.withAlphaComponent(0.22)
+        // The reference's two glass rings: outer 35% and middle 55% strength, each half tint (its
+        // `alpha` × `fill`), the rest is the frosted glass itself (`BlobView`).
+        haloOuter.color = accent.withAlphaComponent(0.35 * 0.5)
+        haloInner.color = accent.withAlphaComponent(0.55 * 0.5)
         disc.backgroundColor = accent
         discGlyph.tintColor = onAccent
         lockIcon.tintColor = .label

@@ -77,6 +77,7 @@ jobs:
             THIS BUILD: GIF BOTTOM BAR IS LIQUID GLASS.
             GIF page: the mood bar along the bottom is now Liquid Glass, edge to edge; GIFs blur as they pass under it.
             GIF page: space at the left and right of the GIFs; no line under the header, the GIFs fade under it with the iOS blur. Message field: your own camera icon.
+            Voice recording: the rings around the mic morph again, drawn as the reference app's glass (frosted, tinted, thin light edge, soft shadow) instead of Apple's Liquid Glass.
 
             EARLIER: APP UPDATES FROM THE ADMIN PANEL.
             The app now asks the server whether this version must update, may update, or is fine (nothing shows until a campaign is made in the panel).

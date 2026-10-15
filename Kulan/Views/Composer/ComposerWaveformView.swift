@@ -147,74 +147,126 @@ final class LiveLevelsView: UIView {
     }
 }
 
-/// One ring of the halo around the recording mic, in LIQUID GLASS (owner 2026-10-15: "make that
-/// animation effect liquid glass"; before that, the same day: "use the reference's animation").
+/// One ring of the halo around the recording mic, in THE REFERENCE APP'S GLASS (owner 2026-10-15:
+/// "remove the Liquid Glass from that animation, use the glass the reference uses").
 ///
-/// ⚠️ GLASS CANNOT TAKE A DRAWN OUTLINE. A `UIGlassEffect` view is shaped only by its corner
-/// configuration; masking it to a path breaks the glass rendering. So the reference's morphing blob
-/// is kept as MOTION rather than as an outline: the round glass disc flexes, a little wider here and
-/// taller there and slightly turned, from one random pose to the next without stopping, the way
-/// Liquid Glass gives under a finger. Louder moves faster: each pose takes 1 / speed seconds, speed
-/// 0.9…4 with the level (the reference's range). Size is NOT this view's business: the composer
-/// scales it by the level exactly as before, so the halo's size is unchanged.
+/// What the reference draws (read from its source, the recording blob's appearance): two outlines
+/// that morph through 8 points around a still centre circle, each a sheet of tinted glass, the outer
+/// one fainter than the middle one, edged with a thin light rim (1pt at 30%, weaker in dark mode)
+/// and lifted by a soft shadow (7%, blur 6, 2pt down). Its renderer is its own GPU code; here the
+/// same layers are made of plain Core Animation: a frosted backdrop clipped to the outline, the
+/// tint over it, the rim on top. Every layer takes the same path animation, so they morph as one.
+///
+/// Motion is the earlier blob's, which was the reference's: a new random outline whenever the last
+/// morph ends, 1 / speed seconds each, speed 0.9…4 with the level. Size is NOT this view's
+/// business: the composer scales it by the level exactly as before.
 final class BlobView: UIView {
-    /// The glass's tint (the chat accent, faint).
-    var color: UIColor = .clear { didSet { if color != oldValue { applyEffect() } } }
-    /// 0…1, the recorder's smoothed level; read at the start of every pose.
+    /// The glass's tint (the chat accent at the ring's strength).
+    var color: UIColor = .clear { didSet { fill.fillColor = color.cgColor } }
+    /// 0…1, the recorder's smoothed level; read at the start of every morph.
     var level: CGFloat = 0
 
-    private let glass = UIVisualEffectView(effect: nil)
+    private let frost = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let frostMask = CAShapeLayer()
+    private let fill = CAShapeLayer()
+    private let rim = CAShapeLayer()
     private var running = false
-    private var generation = 0
+    private static let points = 8
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = .clear
-        glass.isUserInteractionEnabled = false
-        glass.cornerConfiguration = .capsule()
-        addSubview(glass)
-        applyEffect()
+        frost.isUserInteractionEnabled = false
+        frost.layer.mask = frostMask
+        addSubview(frost)
+        fill.shadowColor = UIColor.black.cgColor
+        fill.shadowOpacity = 0.07
+        fill.shadowRadius = 3          // a blur of 6
+        fill.shadowOffset = CGSize(width: 0, height: 2)
+        layer.addSublayer(fill)
+        rim.fillColor = nil
+        rim.lineWidth = 1
+        layer.addSublayer(rim)
+        applyRim()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private func applyEffect() {
-        let g = UIGlassEffect(style: .regular)
-        g.tintColor = color
-        glass.effect = g
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        applyRim()
     }
+
+    private func applyRim() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        rim.strokeColor = UIColor.white.withAlphaComponent(dark ? 0.3 * 0.45 : 0.3).cgColor
+    }
+
+    private var shapes: [CAShapeLayer] { [frostMask, fill, rim] }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Bounds + centre: the pose is a transform on `glass`, and `frame` is undefined under one.
-        glass.bounds = CGRect(origin: .zero, size: bounds.size)
-        glass.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        frost.frame = bounds
+        for s in shapes { s.frame = bounds }
+        if !running { setPath(Self.path(in: bounds.size, wobble: 0)) }
     }
+
+    private func setPath(_ p: CGPath) { for s in shapes { s.path = p } }
 
     func start() {
         guard !running else { return }
         running = true
-        generation &+= 1
-        pose(generation)
+        morph()
     }
 
     func stop() {
         running = false
-        generation &+= 1
-        glass.layer.removeAllAnimations()
-        glass.transform = .identity
+        for s in shapes { s.removeAllAnimations() }
+        setPath(Self.path(in: bounds.size, wobble: 0))
     }
 
-    private func pose(_ gen: Int) {
-        guard running, gen == generation else { return }
-        let speed = 0.9 + (4 - 0.9) * Double(max(0, min(1, level)))
-        let sx = CGFloat.random(in: 0.9...1.0), sy = CGFloat.random(in: 0.9...1.0)
-        let turn = CGFloat.random(in: -0.12...0.12)
-        UIView.animate(withDuration: 1 / speed, delay: 0,
-                       options: [.curveEaseInOut, .allowUserInteraction, .beginFromCurrentState]) {
-            self.glass.transform = CGAffineTransform(rotationAngle: turn).scaledBy(x: sx, y: sy)
-        } completion: { [weak self] _ in
-            self?.pose(gen)
+    private func morph() {
+        guard running, bounds.width > 0 else { return }
+        let next = Self.path(in: bounds.size, wobble: 1)
+        let from = fill.presentation()?.path ?? fill.path
+        let speed = 0.9 + (4 - 0.9) * max(0, min(1, level))
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in self?.morph() }
+        for s in shapes {
+            let anim = CABasicAnimation(keyPath: "path")
+            anim.fromValue = from
+            anim.toValue = next
+            anim.duration = 1 / Double(speed)
+            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            s.path = next
+            s.add(anim, forKey: "morph")
         }
+        CATransaction.commit()
+    }
+
+    /// A closed smooth curve through `points` points on a circle filling `size`, each pulled in by
+    /// up to 14% of the radius × `wobble` (0 = a circle). Always the same number of curve segments,
+    /// so any two shapes can be animated between.
+    private static func path(in size: CGSize, wobble: CGFloat) -> CGPath {
+        let r = min(size.width, size.height) / 2
+        let c = CGPoint(x: size.width / 2, y: size.height / 2)
+        guard r > 0 else { return CGMutablePath() }
+        let n = points
+        let pts: [CGPoint] = (0..<n).map { i in
+            let a = CGFloat(i) / CGFloat(n) * 2 * .pi
+            let rr = r * (1 - 0.14 * wobble * CGFloat.random(in: 0...1))
+            return CGPoint(x: c.x + cos(a) * rr, y: c.y + sin(a) * rr)
+        }
+        // Catmull-Rom through the points, as cubic Béziers (tension 1/6).
+        let p = CGMutablePath()
+        p.move(to: pts[0])
+        for i in 0..<n {
+            let p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n], p3 = pts[(i + 2) % n]
+            let c1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let c2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            p.addCurve(to: p2, control1: c1, control2: c2)
+        }
+        p.closeSubpath()
+        return p
     }
 }
