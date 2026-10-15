@@ -255,7 +255,10 @@ struct ShareStorySheet: View {
     /// Computed rather than written into the state, so the choice he made for ordinary stories is
     /// still there when he stops using one-time — the switch does not silently learn a new default
     /// from a post he made under a rule.
-    private var captureProtected: Bool { oneTimeActive || captureProtectedChoice }
+    /// NEVER ON A REPOST (owner 2026-10-15: "a repost can't block screenshots, it is already
+    /// public"). Someone else's story was already shown to its own viewers; blocking captures of this
+    /// copy would protect nothing, so a repost posts with it off and the switch is shown off, dimmed.
+    private var captureProtected: Bool { repostOf == nil && (oneTimeActive || captureProtectedChoice) }
     @State private var oneTimePicking = false
     @State private var oneTimeViewers: Set<String> = []
     private var oneTimeActive: Bool { !oneTimeViewers.isEmpty }
@@ -554,15 +557,16 @@ struct ShareStorySheet: View {
                             get: { captureProtected },
                             // A locked switch that still moves under the finger is worse than one that
                             // does not move at all: it says the choice is yours and then takes it back.
-                            set: { if !oneTimeActive { captureProtectedChoice = $0 } }))
+                            set: { if !oneTimeActive && repostOf == nil { captureProtectedChoice = $0 } }))
                             // ⚠️ EXPLICIT GREEN, AND THAT IS NOT DECORATION. A `Toggle` wears the app's
                             // accent, and this app's accent is WHITE in dark mode — so the switch read as
                             // on-and-white against the track, which is his circle. Apple's own switch is
                             // `systemGreen` and everybody's eye already knows what that means.
                             .tint(Color(.systemGreen))
-                            .disabled(oneTimeActive)
+                            .disabled(oneTimeActive || repostOf != nil)
                     } footer: {
-                        Text(oneTimeActive ? Self.captureLockedFooter : Self.captureFooter)
+                        Text(repostOf != nil ? "A repost was already shared, so screenshots of it can't be blocked."
+                             : oneTimeActive ? Self.captureLockedFooter : Self.captureFooter)
                     }
                 }
             }
