@@ -284,33 +284,40 @@ struct GifPickerView: View {
         // and the mood row are edge-attached bars on the sheet's own background; the grid lives
         // between them and never runs under either, so every tap on a bar is the bar's.
         .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 10) {
-                HStack {
-                    // An X that closes the sheet (owner 2026-10-15), not a back chevron.
-                    glassCircle("xmark", label: "Close") { onBack?() }
-                    Spacer()
-                    Text("Choose GIF").font(.headline)
-                    Spacer()
-                    glassCircle(searching ? "xmark.circle" : "magnifyingglass", label: searching ? "Close search" : "Search GIFs") {
-                        withAnimation(.easeInOut(duration: 0.2)) { searching.toggle() }
-                        if searching {
-                            onWantsFullHeight?()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
-                        } else {
+            // SEARCH TAKES THE WHOLE ROW — owner 2026-10-15 (screenshot): while searching, the title and
+            // the left X go away; the row is the search field with one X on its right that ends the
+            // search, the way the system search bar looks.
+            Group {
+                if searching {
+                    HStack(spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search GIFs", text: $query)
+                                .focused($searchFocused)
+                                .submitLabel(.search)
+                        }
+                        .padding(.horizontal, 14).frame(height: 44)
+                        .liquidGlass(Capsule(), interactive: true)
+                        glassCircle("xmark", label: "Close search") {
                             searchFocused = false
                             query = ""
+                            withAnimation(.easeInOut(duration: 0.2)) { searching = false }
                         }
                     }
-                }
-                if searching {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search GIFs", text: $query)
-                            .focused($searchFocused)
-                            .submitLabel(.search)
+                    .transition(.opacity)
+                } else {
+                    HStack {
+                        // An X that closes the sheet (owner 2026-10-15), not a back chevron.
+                        glassCircle("xmark", label: "Close") { onBack?() }
+                        Spacer()
+                        Text("Choose GIF").font(.headline)
+                        Spacer()
+                        glassCircle("magnifyingglass", label: "Search GIFs") {
+                            withAnimation(.easeInOut(duration: 0.2)) { searching = true }
+                            onWantsFullHeight?()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
+                        }
                     }
-                    .padding(.horizontal, 14).frame(height: 44)
-                    .liquidGlass(Capsule(), interactive: true)
                     .transition(.opacity)
                 }
             }
