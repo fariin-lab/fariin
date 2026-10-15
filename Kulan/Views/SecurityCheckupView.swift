@@ -243,8 +243,13 @@ struct SecurityCheckupSheet: View {
     /// the answers came. The Devices page now runs the check BEFORE presenting and hands it in here.
     init(check: SecurityCheckup) { _check = State(initialValue: check) }
     private func close() { dismiss() }
-    @State private var detent: PresentationDetent = .height(SecurityCheckupSheet.lastContentH + 68)
-    @State private var contentH: CGFloat = 0
+    /// ⛔ ONE HEIGHT FOR THE WHOLE PRESENTATION — owner 2026-10-15: "a small sheet appears in the
+    /// centre, a second later another, long one; make it come like the device sheet". The device sheet
+    /// has one fixed detent and slides up once. This one opened at a guess and then replaced its detent
+    /// set with the measured height; a detent set that changes while the sheet is presenting makes iOS
+    /// fall back to full height for a moment. Now the height is fixed when the sheet is made, from the
+    /// last measurement kept on this phone, and a new measurement only serves the NEXT open.
+    private let openHeight: CGFloat = SecurityCheckupSheet.lastContentH + 68
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
     /// it is not added. 0.8 of the screen until the content has been measured once.
     /// The last measured content height on this phone, so the sheet PRESENTS at nearly its final
@@ -256,9 +261,7 @@ struct SecurityCheckupSheet: View {
         get { let v = UserDefaults.standard.double(forKey: "securityCheckup.contentH"); return v > 0 ? v : 640 }
         set { UserDefaults.standard.set(Double(newValue), forKey: "securityCheckup.contentH") }
     }
-    private var fitDetent: PresentationDetent {
-        .height((contentH > 0 ? contentH : Self.lastContentH) + 68)
-    }
+
     private var profile = ProfileStore.shared
 
     enum Item: Hashable, Identifiable {
@@ -351,12 +354,12 @@ struct SecurityCheckupSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 28)
                 .padding(.bottom, 24)
-                // The sheet is sized to this (see `fitDetent`), so it shows everything without a scroll.
+                // Measured for the NEXT open (see `openHeight`): an open sheet never changes height.
                 .background(
                     GeometryReader { g in
                         Color.clear
-                            .onAppear { contentH = g.size.height; Self.lastContentH = g.size.height }
-                            .onChange(of: g.size.height) { _, h in contentH = h; Self.lastContentH = h }
+                            .onAppear { Self.lastContentH = g.size.height }
+                            .onChange(of: g.size.height) { _, h in Self.lastContentH = h }
                     }
                 )
             }
@@ -430,8 +433,7 @@ struct SecurityCheckupSheet: View {
         // ⛔ APPLE'S OWN SHEET — owner 2026-10-15: "why does it look custom, use Apple's native one".
         // A drawn bottom sheet (fitted AND on the edge) was tried the same morning and REJECTED. On
         // iOS 26 Apple floats any sheet shorter than the screen; that is the native look he chose.
-        .presentationDetents([fitDetent], selection: $detent)
-        .onChange(of: contentH) { _, _ in withAnimation { detent = fitDetent } }
+        .presentationDetents([.height(openHeight)])
         .presentationDragIndicator(.visible)
         // The answers are kept ready by `SecurityCheckup.shared`; opening asks nothing unless they
         // are stale, and a refresh keeps the rows on screen until the new answers land.
