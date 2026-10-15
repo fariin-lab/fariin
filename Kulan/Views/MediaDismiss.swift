@@ -928,10 +928,10 @@ enum MediaOpen {
             // (`MediaPresentGate`), and the flight does not wait for that: it landed, the copy was
             // dropped 0.05s later, and the photo vanished until the held editor appeared. The copy
             // now stays until nothing is held any more (checked every 0.05s, 1s at most).
-            func dropCopy(_ tries: Int) {
+            @MainActor func dropCopy(_ tries: Int) {
                 if MediaPresentGate.isHolding, tries < 20 {
                     OpenTrace.note("copy kept: editor still held")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { dropCopy(tries + 1) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { MainActor.assumeIsolated { dropCopy(tries + 1) } }
                     return
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + (onStart == nil ? 0 : 0.05)) {
@@ -942,7 +942,7 @@ enum MediaOpen {
                     OpenTrace.end("copy removed")
                 }
             }
-            dropCopy(0)
+            MainActor.assumeIsolated { dropCopy(0) }
         }
         animator.addCompletion { _ in
             guard let phases else { land(); return }
