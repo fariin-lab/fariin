@@ -588,37 +588,28 @@ struct CallView: View {
             .accessibilityHidden(!controlsVisible)
             Spacer()
 
-            // No "Minimize" here: the chevron on the left already does it, and two controls for the
-            // same thing on one bar just read as one of them being broken.
-            Menu {
-                // Only once the call is really connected: moving a ringing call onto a
-                // multi-person one would invite people to a conversation that never started.
-                if CallFeatures.groupCalls {
-                    Button { showAddPeople = true } label: { Label("Add people", systemImage: "person.badge.plus") }
-                        .disabled(!(call.state == .active && call.connectedDate != nil))
-                }
-                // Same rule as Add people: a call that has not connected has nobody to show it to.
-                // Starting opens the system's broadcast sheet; its countdown is the consent.
-                let sharingOn = call.screenSharePhase != .off
-                Button {
-                    if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
-                } label: {
+            // ⛔ ONE BUTTON, NOT A MENU — owner 2026-10-15: "remove the dots button, put the screen
+            // share button there". The menu held Share Screen and End Call (End Call is the red
+            // button already) and Add people, which shows only with `CallFeatures.groupCalls`, OFF.
+            // ⚠️ If group calls are switched on, Add people needs a new home: it lived in this menu.
+            // Same rules as the menu item it replaces: starting needs a connected call and nobody
+            // else sharing; STOPPING is never disabled (audit M-165).
+            let sharingOn = call.screenSharePhase != .off
+            Button {
+                if sharingOn { call.stopScreenShareByUser() } else { call.toggleScreenShare() }
+            } label: {
+                if sharingOn {
+                    topCircle("rectangle.on.rectangle.slash")
+                } else {
                     // Owner, 2026-10-10: his own Share Screen icon (asset ic_share_screen, template).
-                    if sharingOn {
-                        Label("Stop Sharing", systemImage: "rectangle.on.rectangle.slash")
-                    } else {
-                        Label { Text("Share Screen") } icon: { Image("ic_share_screen") }
-                    }
+                    topCircle(image: Image("ic_share_screen").renderingMode(.template).resizable()
+                        .scaledToFit().frame(width: 22, height: 22))
                 }
-                // Audit M-165, 2026-10-07: STOPPING is never disabled. During "Reconnecting…" the
-                // rule above greyed out Stop Sharing too, and the share could not be ended from here.
-                // Owner, 2026-10-10: one sharer at a time, so dimmed while THEY share.
-                .disabled(!sharingOn && (!(call.state == .active && call.connectedDate != nil)
-                                         || call.remoteScreenSharing))
-                Button(role: .destructive) { CallKitManager.shared.end() } label: { Label("End Call", systemImage: "phone.down.fill") }
-            } label: { topCircle("ellipsis") }
+            }
+            .disabled(!sharingOn && (!(call.state == .active && call.connectedDate != nil)
+                                     || call.remoteScreenSharing))
             .buttonStyle(CallControlStyle())
-            .accessibilityLabel("More options")   // #19
+            .accessibilityLabel(sharingOn ? "Stop Sharing" : "Share Screen")
             .opacity(controlsVisible ? 1 : 0)        // r2 H2, as the minimize button
             .allowsHitTesting(controlsVisible)
             .accessibilityHidden(!controlsVisible)
@@ -659,7 +650,11 @@ struct CallView: View {
     }
 
     private func topCircle(_ icon: String) -> some View {
-        Image(systemName: icon)
+        topCircle(image: Image(systemName: icon))
+    }
+
+    private func topCircle(image: some View) -> some View {
+        image
             // 18, WHICH IS THE APP'S OWN NUMBER FOR A 48pt HEADER CIRCLE — the share sheet's search
             // and share buttons are exactly 48 and 18, set by him the same week. Left at the old 15
             // the glyph would be 0.31 of the circle instead of 0.375, so growing the button alone
