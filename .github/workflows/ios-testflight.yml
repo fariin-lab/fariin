@@ -74,7 +74,14 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: ROUNDED CORNER WHEN A PHOTO CLOSES.
+            THIS BUILD: NEW VOICE RECORDING BAR.
+            Voice: the recording bar is 44pt. Locked: X, a live waveform, the one-time 1 and send, all inside the bar. Paused: X, play, waveform, time, 1 and send.
+            Voice: the circles around the big mic are soft moving shapes now that react to your voice.
+            Security Checkup: slides up once at its size, no small sheet first and no jump to full height.
+            Chats: pasting long text scrolls the box to where you are typing. Link previews darken when you touch them.
+            PLEASE TEST: record a voice note, lock it, pause it; open Security Checkup twice; paste a long link.
+
+            EARLIER: ROUNDED CORNER WHEN A PHOTO CLOSES.
             Attach sheet: closing a photo back into a top-left or top-right tile, it now keeps the sheet's rounded corner instead of a square one.
             PLEASE TEST: open the top-right photo in the attach sheet and swipe it down.
 
