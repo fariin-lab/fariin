@@ -5153,6 +5153,8 @@ struct ThreadView: View {
                 .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
             }
             .padding(.horizontal, 16)
+            // Same gap to the SCREEN's sides at half and full, as the reference (2026-10-15).
+            .modifier(AttachSheetSideMargin())
             // ⛔ NO NUMBER HERE AGAIN — owner, 2026-08-24, second look with the gap circled: "the
             // space between the bar and the bottom of the screen is too much."
             //

@@ -58,6 +58,14 @@ import UIKit
 /// which brings its own inset.
 @Observable final class AttachSheetMetrics {
     var bottom: CGFloat = 0
+    /// How far the sheet's sides have come OUT from where they sit at rest (0 at half, `restInset`
+    /// at full). The attach bar adds it to its side margin so it holds still on the SCREEN.
+    var side: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    /// See `AttachSheetMetrics.side`.
+    @Entry var attachSheetSide: CGFloat = 0
 }
 
 private struct AttachSheetRoot: View {
@@ -65,6 +73,7 @@ private struct AttachSheetRoot: View {
     let content: AnyView
     var body: some View {
         content.safeAreaPadding(.bottom, metrics.bottom)
+            .environment(\.attachSheetSide, metrics.side)
     }
 }
 
@@ -259,6 +268,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         // the one-shot layout that broke the fast swipe.
         guard !driving else { return }
         if !keyboardUp { setBottom(bottomPad(forTop: y)) }
+        setSide(forTop: y)
         layoutContent(size: f.size)
         host.view.layoutIfNeeded()
     }
@@ -301,6 +311,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         let top = p.position.y - size.height / 2
         UIView.performWithoutAnimation {
             if !keyboardUp { setBottom(bottomPad(forTop: top)) }
+            setSide(forTop: top)
             layoutContent(size: size)
             host.view.layoutIfNeeded()
         }
@@ -310,6 +321,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     private func finishDriving() {
         stopDriving()
         if !keyboardUp { setBottom(bottomPad(forTop: sheetTop)) }
+        setSide(forTop: sheetTop)
         layoutContent(size: shell.bounds.size)
         host.view.layoutIfNeeded()
     }
@@ -748,6 +760,16 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
         let r = (v * 2).rounded() / 2
         if metrics.bottom != r { metrics.bottom = r }
     }
+
+    /// ⛔ THE BAR HOLDS STILL SIDEWAYS, HALF OR FULL — owner 2026-10-15, with the reference app's
+    /// sheet at both heights: its attach bar keeps the same gap to the screen's sides while the sheet
+    /// comes in 8pt at half and goes edge to edge at full. Ours kept its margin from the SHEET, so it
+    /// sat 8pt further in at half than at full. The sheet's lost inset is handed to the bar here, on
+    /// the same per-frame path as `setBottom`, so a drag or a snap carries it smoothly.
+    private func setSide(forTop y: CGFloat) {
+        let r = ((Self.restInset - inset(forTop: y)) * 2).rounded() / 2
+        if metrics.side != r { metrics.side = r }
+    }
 }
 
 // MARK: - SwiftUI door
@@ -855,4 +877,11 @@ private struct AttachSheetAnchor: UIViewControllerRepresentable {
             }
         }
     }
+}
+
+/// Adds the sheet's lost side inset (`AttachSheetMetrics.side`) to a row's side margins, so the row
+/// keeps one gap to the screen's sides at half and at full height.
+struct AttachSheetSideMargin: ViewModifier {
+    @Environment(\.attachSheetSide) private var side
+    func body(content: Content) -> some View { content.padding(.horizontal, side) }
 }
