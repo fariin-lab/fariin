@@ -442,6 +442,15 @@ struct LocationPickerSheet: View {
             .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in userMovedMap = true })
             .overlay { blueCenterPin.allowsHitTesting(false) }
 
+            // ⛔ THE HEADER IS THE SHEET'S HANDLE, NOT MAP — owner 2026-10-15: "with my finger on the
+            // top header I swipe down and the sheet doesn't close". The map ran under the title row,
+            // so a downward drag there panned the map. A plain strip behind the header takes those
+            // touches and leaves the drag to the sheet; the buttons on top still answer.
+            Color.white.opacity(0.001)
+                .frame(maxWidth: .infinity)
+                .frame(height: 76)
+                .contentShape(Rectangle())
+
             VStack(spacing: 12) {
                 HStack {
                     // An X that closes the page (owner 2026-10-15), not a back chevron.
