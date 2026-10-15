@@ -5442,6 +5442,16 @@ struct ThreadView: View {
             defer { Task { @MainActor in FileOpenGate.end(message.id) } }
             // 2026-09-24 audit: ALREADY HERE? The Documents auto-download setting now fetches files
             // ahead of the tap into this same path (DocumentPrefetch); open that copy, no download.
+            // ⛔ MY OWN FILE OPENS FROM MY OWN COPY — owner 2026-10-15: "opening the file takes time".
+            // Every first open downloaded and decrypted the file, even one this phone had just sent,
+            // and nothing showed meanwhile. The bytes kept at send (`sendDocument`) become the open
+            // copy at once; later opens find that copy below.
+            if DocumentPrefetch.cached(id: message.id, fileName: message.fileName) == nil,
+               let ck = message.clientId,
+               let mine = try? Data(contentsOf: FileManager.default.temporaryDirectory
+                                        .appendingPathComponent("sent-file-\(ck)")) {
+                DocumentPrefetch.write(mine, to: DocumentPrefetch.localURL(id: message.id, fileName: message.fileName))
+            }
             if let local = DocumentPrefetch.cached(id: message.id, fileName: message.fileName),
                let head = try? FileHandle(forReadingFrom: local).read(upToCount: 4) {
                 let safe = DocumentPrefetch.safeName(message.fileName)
@@ -5538,7 +5548,12 @@ struct ThreadView: View {
         }
         do {
             try await ChatService.sendFile(cid: cid, data: data, fileName: name, clientId: clientId, group: isGroup ? groupMembers : nil)
-            try? FileManager.default.removeItem(at: retryURL)
+            // Kept, not deleted (owner 2026-10-15, "opening a file takes time"): the sender already
+            // has these bytes, so `openFile` opens them from here instead of downloading and
+            // decrypting its own upload. Temporary storage; the system clears it when it needs room.
+            let sentURL = FileManager.default.temporaryDirectory.appendingPathComponent("sent-file-\(clientId)")
+            try? FileManager.default.removeItem(at: sentURL)
+            try? FileManager.default.moveItem(at: retryURL, to: sentURL)
         }
         catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the file. Try again." } }
     }
