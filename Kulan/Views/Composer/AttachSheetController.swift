@@ -146,6 +146,8 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
     private var scrollBounced = true
     private var lastTranslation: CGFloat = 0
     private var sheetMoved = false
+    /// This drag reached full height and carried on into the photos (see `pan`).
+    private var handedToScroll = false
 
     init(root: AnyView) {
         host = UIHostingController(rootView: AttachSheetRoot(metrics: metrics, content: root))
@@ -749,6 +751,7 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
             scrollBounced = scroll?.bounces ?? true
             lastTranslation = 0
             sheetMoved = false
+            handedToScroll = false
 
         case .changed:
             let t = g.translation(in: view).y
@@ -763,16 +766,32 @@ final class AttachSheetController: UIViewController, UIGestureRecognizerDelegate
                 if scroll?.bounces == true { scroll?.bounces = false }
                 setTop(max(expandedTop, sheetTop + dy))
                 pinScrollTop(scroll)
+            } else if sheetMoved && !handedToScroll {
+                // ⛔ ONE DRAG, SHEET THEN PHOTOS — owner 2026-10-15: dragging up to full height and
+                // keeping the finger going scrolled the photos, then on release they jumped back to
+                // the top. The release pinned the grid to the top for every drag that had moved the
+                // sheet, including this one. As in the reference, the drag now hands over: from here
+                // the photos scroll with their normal bounce, and the release leaves them where the
+                // finger put them and lets them glide on.
+                handedToScroll = true
+                scroll?.bounces = scrollBounced
             }
 
         case .ended, .cancelled, .failed:
             let s = scroll
             scroll = nil
             s?.bounces = scrollBounced
+            guard sheetMoved else { return }
+            // Handed over at full height and still there: the photos own the end of this drag. The
+            // sheet is already at full, so there is nothing to snap and the grid keeps its fling.
+            if handedToScroll && sheetTop <= expandedTop + 0.5 {
+                isExpanded = true
+                setTop(expandedTop)
+                return
+            }
             // The sheet took this drag: stop the grid's own fling so it cannot glide on (or bounce)
             // while the sheet snaps.
-            if sheetMoved { pinScrollTop(s); s?.setContentOffset(s?.contentOffset ?? .zero, animated: false) }
-            guard sheetMoved else { return }
+            pinScrollTop(s); s?.setContentOffset(s?.contentOffset ?? .zero, animated: false)
             let vy = g.state == .ended ? g.velocity(in: view).y : 0
             let y = sheetTop
 
