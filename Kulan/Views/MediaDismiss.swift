@@ -923,13 +923,26 @@ enum MediaOpen {
             // A screen already up since `onStart` (under the copy) only has to draw its photo, but
             // give it a few frames: the copy sits UNDER that screen, so overlap never shows twice.
             OpenTrace.note("land copy=\(OpenTrace.r(container.layer.presentation()?.frame)) in clip")
-            DispatchQueue.main.asyncAfter(deadline: .now() + (onStart == nil ? 0 : 0.05)) {
-                handle.finished = true
-                backdrop.removeFromSuperview()
-                clipView.removeFromSuperview()
-                OpenTrace.sampler = nil
-                OpenTrace.end("copy removed")
+            // ⛔ THE COPY WAITS FOR THE SCREEN — owner 2026-10-15, "sometimes it opens like a pop".
+            // Opened again right after a close, the new editor is HELD until the old one has gone
+            // (`MediaPresentGate`), and the flight does not wait for that: it landed, the copy was
+            // dropped 0.05s later, and the photo vanished until the held editor appeared. The copy
+            // now stays until nothing is held any more (checked every 0.05s, 1s at most).
+            func dropCopy(_ tries: Int) {
+                if MediaPresentGate.isHolding, tries < 20 {
+                    OpenTrace.note("copy kept: editor still held")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { dropCopy(tries + 1) }
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + (onStart == nil ? 0 : 0.05)) {
+                    handle.finished = true
+                    backdrop.removeFromSuperview()
+                    clipView.removeFromSuperview()
+                    OpenTrace.sampler = nil
+                    OpenTrace.end("copy removed")
+                }
             }
+            dropCopy(0)
         }
         animator.addCompletion { _ in
             guard let phases else { land(); return }
@@ -941,6 +954,17 @@ enum MediaOpen {
             back.startAnimation()
         }
         animator.startAnimation()
+        // ⛔ THE FLIGHT IS HANDED TO CORE ANIMATION BEFORE THE SCREEN IS BUILT — owner 2026-10-15,
+        // "sometimes it opens like a pop, any tile". `onStart` presents the editor, whose first build
+        // (tools, caption bar, the photo) can hold the main thread 20-200ms. Started in the same turn,
+        // the flight's first frames waited behind that work and then jumped to where they should
+        // already have been: the pop, worse the heavier the build. A received photo never popped
+        // because its viewer is shown only at the landing. Committed here first, the animation runs
+        // on the render server from its very first frame whatever the main thread does next.
+        if onStart != nil {
+            CATransaction.flush()
+            OpenTrace.note("flight committed, presenting editor")
+        }
         // The screen being opened may come up NOW, over the flying copy, if it keeps its own photo
         // and background hidden until `present` (the attach editor does: its tools fade in mid-flight).
         onStart?()

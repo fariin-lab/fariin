@@ -414,6 +414,9 @@ struct MediaRectReporter: ViewModifier {
         DispatchQueue.main.async(execute: q)
     }
 
+    /// A presentation is waiting for a close to finish (a flight must keep its copy up meanwhile).
+    static var isHolding: Bool { closing && queued != nil }
+
     static func present(_ block: @escaping () -> Void) {
         guard closing else { block(); return }
         queued = block   // newest tap wins; an older queued open is stale by definition
