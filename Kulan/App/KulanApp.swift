@@ -21,6 +21,8 @@ struct KulanApp: App {
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
                 // resolve — put them back on the default rather than leave them with a broken icon.
                 .task { RetiredAppIcons.resetIfInUse() }
+                // App update campaigns (2026-10-15): before anything else, signed in or not.
+                .task { AppUpdateGate.shared.start() }
                 // Voice notes whose send never finished keep a copy of their own bytes so a retry
                 // survives a restart. Anything still there after a week belongs to a send nobody is
                 // coming back for, so it goes — see AudioRecorder.sweepInFlight.
