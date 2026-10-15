@@ -77,6 +77,7 @@ jobs:
             THIS BUILD: APP UPDATES FROM THE ADMIN PANEL.
             The app now asks the server whether this version must update, may update, or is fine (nothing shows until a campaign is made in the panel).
             Stories: a repost cannot be one-time and cannot block screenshots. Chats: more space between location cards.
+            Files: tapping a file opens it once, even with several taps while it loads (no more 3 pages and 3 closes). The X on Files just closes.
             PLEASE TEST: in the panel's App updates, make a Mandatory campaign for your own @username with a minimum build above this one, activate it, open the app; then pause it.
 
             EARLIER: NO MORE POP WHEN A PHOTO OPENS FROM THE ATTACH SHEET.
