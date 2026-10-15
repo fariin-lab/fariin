@@ -104,18 +104,20 @@ struct MessageRequestsView: View {
         // chat row is the exact thing the owner had removed from the chat list on 2026-09-02.
         .listStyle(.plain)
         .overlay { emptyLine }
-        .overlay(alignment: .bottom) {
-            if showIntro {
-                introCard
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+        // ⛔ KULAN'S OWN SHEET, NOT ANOTHER APP'S CARD — owner 2026-10-15: "this looks like the X app,
+        // make it my app's design, use the sheet". The native sheet with Kulan's sheet layout (the
+        // Security Checkup / "Is this you?" pages): centred icon, bold title, grey text, the blue
+        // capsule and a text button. ONE fixed height, as the device sheet, so it slides up once.
+        .sheet(isPresented: $showIntro, onDismiss: { introSeen = true }) {
+            introSheet
+                .presentationDetents([.height(372)])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color(.systemGroupedBackground))
         }
         .task {
             guard !introSeen else { return }
             try? await Task.sleep(for: .milliseconds(350))   // after the push has landed
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) { showIntro = true }
+            showIntro = true
         }
         .navigationTitle("Message Requests")
         .navigationBarTitleDisplayMode(.inline)
@@ -240,67 +242,54 @@ struct MessageRequestsView: View {
         }
     }
 
-    /// The first-time explanation card, the reference app's: icon, ✕, title, text, Learn more / Got it.
-    private var introCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                Image("ic_message_request")
-                    .renderingMode(.template)
-                    .resizable().scaledToFit()
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Button { dismissIntro() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-                .offset(x: 10, y: -8)
-            }
+    /// The first-time explanation, in Kulan's sheet layout.
+    private var introSheet: some View {
+        VStack(spacing: 0) {
+            Image("ic_message_request")
+                .renderingMode(.template)
+                .resizable().scaledToFit()
+                .frame(width: 34, height: 34)
+                .foregroundStyle(Color.blue)
+                .frame(width: 72, height: 72)
+                .background(Color.blue.opacity(0.14), in: Circle())
+                .padding(.top, 30)
             Text("Message requests")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.primary)
-                .padding(.top, 14)
-            // Kulan has no follow: a request is a chat from someone you haven't chatted with before.
+                .font(.title2.weight(.bold))
+                .padding(.top, 16)
             Text("Messages from people you haven\u{2019}t chatted with before arrive here as requests. To reply, accept the request.")
-                .font(.system(size: 15))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 8)
-            HStack(spacing: 10) {
-                Button {
-                    if let u = URL(string: "https://fariin.com/help") { WebLink.open(u) }
-                } label: {
-                    Text("Learn more")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color(.tertiarySystemFill), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                Button { dismissIntro() } label: {
-                    Text("Got it")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color(.systemBackground))
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color.primary, in: Capsule())
-                }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 28)
+            Spacer(minLength: 20)
+            Button { dismissIntro() } label: {
+                Text("Got it")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(Color.blue, in: Capsule())
             }
-            .padding(.top, 22)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            Button {
+                if let u = URL(string: "https://fariin.com/help") { WebLink.open(u) }
+            } label: {
+                Text("Learn more")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.blue)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 22)
-        .padding(.bottom, 24)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .frame(maxWidth: .infinity)
     }
 
     private func dismissIntro() {
         introSeen = true
-        withAnimation(.spring(response: 0.36, dampingFraction: 0.92)) { showIntro = false }
+        showIntro = false
     }
 }
