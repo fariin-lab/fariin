@@ -184,6 +184,8 @@ struct ThreadView: View {
     @State private var attachLocation = false
     /// The GIF picker as a layer inside the attach sheet, as Location (owner 2026-10-15).
     @State private var attachGif = false
+    /// The Add files page as a layer inside the attach sheet, as Location (owner 2026-10-15).
+    @State private var attachFiles = false
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
@@ -1536,7 +1538,7 @@ struct ThreadView: View {
                      onExpanded: { attachSheetFull = $0 },
                      onDismiss: {
             recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false
-            attachLocation = false; attachGif = false
+            attachLocation = false; attachGif = false; attachFiles = false
             attachSheetFull = false; attachGridScrolled = false
             panelEditImage = nil; panelVideoApprove = nil; panelMediaApprove = nil; panelMultiVideo = nil
             if let next = attachAfterClose { attachAfterClose = nil; next() }
@@ -4981,6 +4983,24 @@ struct ThreadView: View {
                                     onBack: { withAnimation(.smooth(duration: 0.32)) { attachLocation = false } },
                                     onWantsFullHeight: { attachExpandTick &+= 1 })
                     .background(Color(.systemBackground))
+                    .modifier(EdgeSwipeBack { withAnimation(.smooth(duration: 0.32)) { attachLocation = false } })
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        // The Add files page, in the sheet, over the photos (owner 2026-10-15).
+        .overlay {
+            if attachFiles {
+                AttachFilesPage(onBack: { withAnimation(.smooth(duration: 0.32)) { attachFiles = false } },
+                                onSendRecent: { url in
+                                    Task { await sendDocument(url) }
+                                    showAttachPanel = false
+                                },
+                                onImported: { result in
+                                    guard case .success = result else { return }
+                                    handlePickedFile(result)
+                                    showAttachPanel = false
+                                })
+                    .modifier(EdgeSwipeBack { withAnimation(.smooth(duration: 0.32)) { attachFiles = false } })
                     .transition(.move(edge: .trailing))
             }
         }
@@ -4995,6 +5015,7 @@ struct ThreadView: View {
                               onBack: { withAnimation(.smooth(duration: 0.32)) { attachGif = false } },
                               onWantsFullHeight: { attachExpandTick &+= 1 })
                     .background(Color(.systemBackground))
+                    .modifier(EdgeSwipeBack { withAnimation(.smooth(duration: 0.32)) { attachGif = false } })
                     .transition(.move(edge: .trailing))
             }
         }
@@ -5168,7 +5189,9 @@ struct ThreadView: View {
                     attachTile("ic_gif_tile", "GIF", closesSheet: false) {
                         withAnimation(.smooth(duration: 0.32)) { attachGif = true }
                     }
-                    attachTile("ic_file", "Files") { showFileImporter = true }
+                    attachTile("ic_file", "Files", closesSheet: false) {
+                        withAnimation(.smooth(duration: 0.32)) { attachFiles = true }
+                    }
                     attachTile("ic_location", "Location", closesSheet: false) {
                         withAnimation(.smooth(duration: 0.32)) { attachLocation = true }
                     }
@@ -5480,6 +5503,8 @@ struct ThreadView: View {
             await MainActor.run { sendError = "File too large (max \(Limits.fileUploadBytes / (1024*1024)) MB)." }; return
         }
         let name = url.lastPathComponent
+        // The Add files page's "Recent" (owner 2026-10-15): a copy, so the row can send it again.
+        FileRecents.note(name: name, data: data, chat: title)
         // Optimistic bubble FIRST (instant feedback) — the encrypt+upload then runs in the background and
         // the server echo reconciles it by clientId. Was: awaited the whole upload before anything showed.
         let clientId = UUID().uuidString
