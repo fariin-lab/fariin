@@ -76,6 +76,7 @@ jobs:
           TF_CHANGELOG: |
             THIS BUILD: ATTACH SHEET DRAG CARRIES ON INTO THE PHOTOS.
             Attach: drag the sheet up to full and keep going: the photos scroll and stay where you leave them (no jump back to the top).
+            GIF button in the message field: opens the new GIF page (same as from the attach sheet).
 
             EARLIER: GIF BOTTOM BAR IS LIQUID GLASS.
             GIF page: the mood bar along the bottom is now Liquid Glass, edge to edge; GIFs blur as they pass under it.

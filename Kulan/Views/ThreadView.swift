@@ -1678,7 +1678,17 @@ struct ThreadView: View {
             //
             // `scheme` is the device's own value, read before this screen overrides it, so the sheet
             // simply gets what the phone is set to.
-            GifPickerView { gif in sendGif(gif) }
+            // ⛔ THE NEW DESIGN FROM THE FIELD TOO — owner 2026-10-15: "when I tap the GIF icon in the
+            // input, also use my new design". Same page the attach sheet opens (X, Choose GIF,
+            // search, glass mood bar); the X closes. No edge-swipe back: there is no attach sheet
+            // behind this one to go back to.
+            GifPickerView(onPick: { gif in
+                              sendGif(gif)
+                              showGifPicker = false
+                          },
+                          embedded: true,
+                          onBack: { showGifPicker = false })
+                .presentationDragIndicator(.visible)
                 .environment(\.colorScheme, scheme)
         }
         .sheet(isPresented: $attachLocation, onDismiss: reopenAttachIfAsked) {
