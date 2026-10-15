@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: MEASURING THE ATTACH PHOTO OPEN.
+            THIS BUILD: NO MORE POP WHEN A PHOTO OPENS FROM THE ATTACH SHEET.
+            Attach sheet: the zoom no longer skips its first frames while the editor is being built, and a photo opened right after closing one no longer flashes away. The hidden measurement stays in to confirm it.
+            Location, GIF, Files: the attach sheet closes and the page opens as before; X closes; GIF bars fixed; Files ••• chooses Grid or List.
+
+            EARLIER: MEASURING THE ATTACH PHOTO OPEN.
             Attach sheet: each photo you open from the grid now writes a hidden measurement (nothing on screen, nothing else changes) so the centre-column pop can be found exactly.
             Attach sheet: Location, GIF and Files close the sheet and open their page again (the old motion), with the new designs. Back returns to the photos.
             PLEASE TEST: open the attach sheet, open a LEFT photo, close it, then open the CENTRE photo next to it. Do it 2 or 3 times. Keep the app open for 10 seconds after, then say done.
