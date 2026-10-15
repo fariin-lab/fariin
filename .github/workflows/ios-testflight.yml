@@ -74,7 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: SHARE SCREEN BUTTON ON THE CALL SCREEN.
+            THIS BUILD: ROUNDED CORNER WHEN A PHOTO CLOSES.
+            Attach sheet: closing a photo back into a top-left or top-right tile, it now keeps the sheet's rounded corner instead of a square one.
+            PLEASE TEST: open the top-right photo in the attach sheet and swipe it down.
+
+            EARLIER: SHARE SCREEN BUTTON ON THE CALL SCREEN.
             Calls: the top-right dots button is now one Share Screen button. Tap to share, tap again to stop.
             Security Checkup: back to Apple's own sheet, sized to what it shows. It still opens with the answers ready.
             Attach sheet: a photo zooms in and stops at its size, no zoom-out after.
