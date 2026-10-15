@@ -3711,6 +3711,17 @@ enum ChatService {
     /// Do not move the query back onto the client.
     ///
     /// Server unreachable or refusing (old functions, rate limit): falls back to the exact lookup.
+    /// First of `op` and a `seconds` timer; nil when the timer wins (the slow read is cancelled).
+    private static func firstOf(_ seconds: Double, _ op: @escaping () async -> Any?) async -> Any? {
+        await withTaskGroup(of: Any?.self) { g in
+            g.addTask { await op() }
+            g.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); return nil }
+            let first = await g.next() ?? nil
+            g.cancelAll()
+            return first
+        }
+    }
+
     static func searchUsers(prefix: String) async -> [UserProfile] {
         var q = prefix.trimmingCharacters(in: .whitespaces).lowercased()
         if q.hasPrefix("@") { q.removeFirst() }
@@ -3723,8 +3734,13 @@ enum ChatService {
             guard let u = await findByHandle(q), u.id != uid else { return [] }
             return [u]
         }
-        guard let res = try? await Functions.functions(region: "me-central1")
-                .httpsCallable("searchUsernames").call(["query": q]),
+        // ⛔ BOUNDED — owner 2026-10-15: "search user loading takes a long time". The callable had
+        // Firebase's 70s default, so a slow or stuck connection held the skeleton for over a minute.
+        // 8s, then the exact-handle fallback below; the profile reads after it get 5s each, and a
+        // read that misses its deadline uses the copy already on the phone.
+        let callable = Functions.functions(region: "me-central1").httpsCallable("searchUsernames")
+        callable.timeoutInterval = 8
+        guard let res = try? await callable.call(["query": q]),
               let rows = (res.data as? [String: Any])?["results"] as? [[String: Any]] else {
             return (await findByHandle(q)).map { [$0] } ?? []
         }
@@ -3733,8 +3749,11 @@ enum ChatService {
         let found = await withTaskGroup(of: (Int, UserProfile?, Bool).self) { group in
             for (i, owner) in uids.enumerated() {
                 group.addTask {
-                    guard let d = try? await db.collection("users").document(owner).getDocument(),
-                          let data = d.data() else { return (i, nil, false) }
+                    let ref = db.collection("users").document(owner)
+                    let read = await Self.firstOf(5) { try? await ref.getDocument() } as? DocumentSnapshot
+                    let snap: DocumentSnapshot?
+                    if let read { snap = read } else { snap = try? await ref.getDocument(source: .cache) }
+                    guard let d = snap, let data = d.data() else { return (i, nil, false) }
                     let u = UserProfile(id: d.documentID, data: data)
                     return (i, u.isAwaitingDeletion || u.banned ? nil : u, !d.metadata.isFromCache)
                 }

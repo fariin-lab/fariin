@@ -1830,8 +1830,10 @@ struct ChatsView: View {
         searchingUsers = true
         try? await Task.sleep(nanoseconds: 400_000_000)
         if Task.isCancelled { return }
-        var found = await ChatService.searchUsers(prefix: q)
-        if found.isEmpty, let exact = await ChatService.findByHandle(q) { found = [exact] }
+        // No second exact-handle lookup here (2026-10-15): the server already puts the exact handle
+        // first, and `searchUsers` falls back to that lookup itself when the server fails. A query
+        // with no match paid for both round trips, one after the other.
+        let found = await ChatService.searchUsers(prefix: q)
         peopleCache[key] = found
         guard chatSearch.trimmingCharacters(in: .whitespaces) == q else { return }
         userHits = found
