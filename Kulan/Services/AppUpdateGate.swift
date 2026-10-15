@@ -61,7 +61,7 @@ import FirebaseFunctions
         Task { await check() }
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
                                                object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { Task { await AppUpdateGate.shared.check() } }
+            Task { @MainActor in await AppUpdateGate.shared.check() }
         }
         ticker = Task { [weak self] in
             while !Task.isCancelled {
