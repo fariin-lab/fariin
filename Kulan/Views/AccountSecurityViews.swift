@@ -42,12 +42,18 @@ enum AccountCall {
         }
     }
 
+    /// Calls that change something the Security Checkup reads; a success marks it stale.
+    private static let securityChanging: Set<String> = [
+        "passkeyRegistrationVerify", "deletePasskey", "confirmPasswordReset", "confirmEmailChange",
+    ]
+
     @discardableResult
     static func run(_ name: String, _ payload: [String: Any] = [:]) async throws -> [String: Any] {
         do {
             let result = try await Functions.functions(region: "me-central1")
                 .httpsCallable(name)
                 .call(payload)
+            if securityChanging.contains(name) { SecurityCheckup.settingChanged() }
             return result.data as? [String: Any] ?? [:]
         } catch {
             let ns = error as NSError

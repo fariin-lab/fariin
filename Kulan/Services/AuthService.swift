@@ -443,6 +443,7 @@ final class AuthService: NSObject {
         // rather than what we intended. `reload()` also refreshes providerData, which is what the
         // server reads to decide which of the two mails to send.
         try? await user.reload()
+        SecurityCheckup.settingChanged()
         await reportPasswordChanged(isFirst: isFirst)
     }
 
@@ -834,6 +835,7 @@ final class AuthService: NSObject {
 
     func connectEmail(email: String, password: String) async throws {
         try await link(EmailAuthProvider.credential(withEmail: email, password: password))
+        SecurityCheckup.settingChanged()
     }
 
     // MARK: - Re-authentication (required before deleting an account)

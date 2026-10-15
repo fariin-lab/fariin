@@ -283,11 +283,13 @@ struct DevicesView: View {
     /// ⛔ OWNER 2026-10-14: "the sheet comes late, before it came early". The button used to wait up
     /// to 3s for the four answers before opening anything. Now the answers are fetched while he looks
     /// at this page, and the tap only presents; anything still unanswered fills in on the open sheet.
-    @State private var checkup = SecurityCheckup()
+    /// 2026-10-15: one check for the whole app run, kept fresh by setting changes, so a tap shows
+    /// the latest answers with no scan and no spinner (see `SecurityCheckup.shared`).
+    private var checkup = SecurityCheckup.shared
 
     private func openCheckup() {
         guard !showCheckup else { return }
-        showCheckup = true
+        AttachedBottomSheet<EmptyView>.present($showCheckup, true)
     }
     /// Seconds until this sign-in may sign out other devices (`DeviceRegistry.freshSessionWindow`).
     @State private var freshLeft: TimeInterval?
@@ -450,10 +452,19 @@ struct DevicesView: View {
             if !others.isEmpty { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
         }
         .sheet(item: $detail) { s in DeviceDetailView(session: s) }
-        .sheet(isPresented: $showCheckup) { SecurityCheckupSheet(check: checkup) }
+        // Our own bottom sheet: fitted AND on the bottom edge (see `AttachedBottomSheet`).
+        .fullScreenCover(isPresented: $showCheckup) {
+            AttachedBottomSheet(onClosed: { AttachedBottomSheet<EmptyView>.present($showCheckup, false) }) { close in
+                SecurityCheckupSheet(check: checkup, close: close)
+            }
+        }
         .onAppear {
             startListening()
-            Task { await checkup.run() }   // ready before the button is tapped (see `checkup`)
+            checkup.refreshIfStale()   // only if there is no recent clean answer
+        }
+        // Another device signing in or out changes "Where you're signed in": check again.
+        .onChange(of: sessions.map(\.id)) { old, _ in
+            if loaded, !old.isEmpty { SecurityCheckup.settingChanged() }
         }
         .onDisappear { listener?.remove(); listener = nil }
         .task {

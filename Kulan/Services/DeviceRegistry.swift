@@ -423,6 +423,7 @@ final class DeviceRegistry: ObservableObject {
         // 2026-09-25: and its saved-account one-tap key (DeviceSessionKeys), so that phone asks for
         // the password next time instead of signing straight back in.
         await DeviceSessionKeys.revoke(deviceIds: [deviceId])
+        SecurityCheckup.settingChanged()
     }
 
     func signOutAllOthers(_ sessions: [DeviceSession]) async throws {

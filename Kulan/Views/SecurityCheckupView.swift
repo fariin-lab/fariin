@@ -14,8 +14,81 @@ import FirebaseAuth
 //   3. Checks run side by side; one slow answer does not hold up the other three.
 //   4. A refresh keeps the last answer on screen until the new one lands, so rows never flash.
 
+//
+// ⛔ ONE CHECK, KEPT READY — owner 2026-10-15: "scan in the background whenever the user changes a
+// setting; when I tap Security Checkup show the latest results at once, no new scan, no spinner".
+// Before, every visit to Devices built a fresh, empty check and the sheet ran a second one on open,
+// so the rows could start on "Checking…". Now there is one per app run (`shared`); a change to a
+// passkey, password, Chat Key or device marks it stale (`settingChanged()`) and one scan runs a
+// moment later, however many changes came in that moment. An answer is only shown when its scan
+// was not overtaken by a newer change, and nothing runs while the app is in the background (the
+// calls would fail there and read as "Couldn't check"); it runs when the app is back.
 @MainActor @Observable
 final class SecurityCheckup {
+    static let shared = SecurityCheckup()
+
+    /// A finished, clean scan younger than this is shown as it is; opening the sheet asks nothing.
+    private static let freshFor: TimeInterval = 5 * 60
+    /// When the last scan finished with every answer in, and for which account.
+    private(set) var lastCompleted: Date?
+    private var scannedUid: String?
+    /// Bumped by every setting change; an answer from a scan started before it is not shown.
+    private var generation = 0
+    private var stale = false
+    private var debounce: Task<Void, Never>?
+    private var waitingForActive = false
+
+    private init() {
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let c = SecurityCheckup.shared
+                if c.waitingForActive { c.waitingForActive = false; c.start() }
+            }
+        }
+    }
+
+    /// Something the checkup reads just changed (called from the places that change it). Callable
+    /// from anywhere; the scan itself starts after a short pause so a burst of changes costs one.
+    nonisolated static func settingChanged() {
+        Task { @MainActor in shared.markStale() }
+    }
+
+    private func markStale() {
+        generation &+= 1
+        stale = true
+        debounce?.cancel()
+        debounce = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            start()
+        }
+    }
+
+    /// Scan only when there is no recent clean answer: never scanned, a setting changed, a check
+    /// failed, another account signed in, or the answer is older than `freshFor`.
+    func refreshIfStale() {
+        if scannedUid != Auth.auth().currentUser?.uid { resetForNewAccount() }
+        let failed = [passkey, chatKey, password, devices].contains(.failed)
+        let old = lastCompleted.map { Date().timeIntervalSince($0) > Self.freshFor } ?? true
+        guard stale || failed || old else { return }
+        debounce?.cancel()
+        start()
+    }
+
+    private func resetForNewAccount() {
+        scannedUid = Auth.auth().currentUser?.uid
+        passkey = .checking; chatKey = .checking; password = .checking; devices = .checking
+        unreviewed = []
+        lastCompleted = nil
+        generation &+= 1
+    }
+
+    /// Background-safe start: in the background the scan waits for the app to come back.
+    private func start() {
+        guard UIApplication.shared.applicationState == .active else { waitingForActive = true; return }
+        Task { await run() }
+    }
     enum Status: Equatable {
         case checking
         case done(String)       // verified; the line under the title
@@ -35,23 +108,41 @@ final class SecurityCheckup {
 
     func run() async {
         guard !running else { return }
+        if scannedUid != Auth.auth().currentUser?.uid { resetForNewAccount() }
         running = true
         rerun = false
+        stale = false
+        let gen = generation
+        // An answer is shown only if no setting changed since this scan began (it would describe
+        // the account before the change) and the app is still in front (a call cut off by the
+        // background fails, and that failure says nothing about the account).
+        var allLanded = true
+        let usable = { (s: Status) -> Bool in
+            let ok = gen == self.generation
+                && (s != .failed || UIApplication.shared.applicationState == .active)
+            if !ok { allLanded = false }
+            return ok
+        }
         async let a = Self.checkPasskey()
         async let b = Self.checkChatKey()
         async let c = Self.checkPassword()
         async let d = Self.checkDevices()
-        passkey = await a
-        chatKey = await b
-        password = await c
+        let pa = await a; if usable(pa) { passkey = pa }
+        let ck = await b; if usable(ck) { chatKey = ck }
+        let pw = await c; if usable(pw) { password = pw }
         let (status, list) = await d
         // A Yes that landed while this was in flight wins over this older answer; ask again.
-        if !rerun {
+        if usable(status), !rerun {
             devices = status
             unreviewed = list
         }
+        // "Checked just now" only for a scan where every answer landed and was shown.
+        let clean = allLanded && !rerun
+            && ![passkey, chatKey, password, devices].contains { $0 == .checking || $0 == .failed }
+        if clean { lastCompleted = Date() }
         running = false
-        if rerun { await run() }
+        if UIApplication.shared.applicationState != .active { waitingForActive = true; return }
+        if rerun || gen != generation { await run() }
     }
 
     private static func date(_ d: Date) -> String {
@@ -137,6 +228,7 @@ final class SecurityCheckup {
         unreviewed = []
         devices = .done("Reviewed just now")
         rerun = true
+        stale = true
     }
     private var rerun = false
 }
@@ -149,8 +241,13 @@ struct SecurityCheckupSheet: View {
     /// ⛔ ONE SHEET, ALREADY ANSWERED — owner 2026-10-14: "it has two sheets, the loading one and the
     /// first one". It opened on four "Checking…" rows and then re-laid itself out (and resized) when
     /// the answers came. The Devices page now runs the check BEFORE presenting and hands it in here.
-    init(check: SecurityCheckup) { _check = State(initialValue: check) }
-    @State private var detent: PresentationDetent = .height(SecurityCheckupSheet.lastContentH + 68)
+    /// Closes the sheet with its own slide down (`AttachedBottomSheet`); the system dismiss would
+    /// drop the whole cover, dimming and all, in one block.
+    private let close: () -> Void
+    init(check: SecurityCheckup, close: @escaping () -> Void) {
+        _check = State(initialValue: check)
+        self.close = close
+    }
     @State private var contentH: CGFloat = 0
     /// Content + the Continue bar (8 + 52 + 8). A sheet height leaves out the bottom safe area, so
     /// it is not added. 0.8 of the screen until the content has been measured once.
@@ -163,8 +260,8 @@ struct SecurityCheckupSheet: View {
         get { let v = UserDefaults.standard.double(forKey: "securityCheckup.contentH"); return v > 0 ? v : 640 }
         set { UserDefaults.standard.set(Double(newValue), forKey: "securityCheckup.contentH") }
     }
-    private var fitDetent: PresentationDetent {
-        .height((contentH > 0 ? contentH : Self.lastContentH) + 68)
+    private var fitHeight: CGFloat {
+        (contentH > 0 ? contentH : Self.lastContentH) + 68
     }
     private var profile = ProfileStore.shared
 
@@ -201,7 +298,7 @@ struct SecurityCheckupSheet: View {
                       // New devices open an "Is this you?" page (the reference app's new-login
                       // question); only its Yes marks them reviewed. A tick row has nothing new to
                       // confirm, so it goes to the full list behind this sheet.
-                      if check.unreviewed.isEmpty { dismiss() } else { open = .devices }
+                      if check.unreviewed.isEmpty { close() } else { open = .devices }
                   }),
             Entry(id: "chatKey", title: "Chat Key", missingTitle: "Set a Chat Key",
                   why: "People who know your Chat Key can start a chat with you.",
@@ -270,7 +367,7 @@ struct SecurityCheckupSheet: View {
             .scrollBounceBehavior(.basedOnSize)   // it fits, so it does not wobble or show a scroll bar
             .background(Color(.systemGroupedBackground))
             .safeAreaInset(edge: .bottom) {
-                Button { dismiss() } label: {
+                Button { close() } label: {
                     Text("Continue")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.white)
@@ -288,7 +385,7 @@ struct SecurityCheckupSheet: View {
         // ⛔ FROM THE BOTTOM, NOT THE RIGHT — owner 2026-10-14: "page is coming right side, make it
         // coming bottom". Each setup page is its own sheet over the checkup (it used to be pushed
         // inside it), with its own bar and an X, and its own dismiss() closes just that sheet.
-        .sheet(item: $open, onDismiss: { Task { await check.run() } }) { item in
+        .sheet(item: $open, onDismiss: { check.refreshIfStale() }) { item in
             NavigationStack {
                 Group {
                     switch item {
@@ -306,7 +403,7 @@ struct SecurityCheckupSheet: View {
                                          onNo: {
                                              // The Devices page is behind the checkup: close both.
                                              open = nil
-                                             dismiss()
+                                             close()
                                          })
                     }
                 }
@@ -334,12 +431,17 @@ struct SecurityCheckupSheet: View {
         // measured on this phone (kept across launches) and the answers are ready before it opens,
         // so the height it opens at is the height it keeps. A real change later (a row answered
         // differently) still follows the content.
-        .presentationDetents([fitDetent], selection: $detent)
-        .onChange(of: contentH) { _, _ in withAnimation { detent = fitDetent } }
-        .presentationDragIndicator(.visible)
-        .task { await check.run() }
+        // ⛔ 2026-10-15: owner, with both screenshots: the full-height sheet left half the screen
+        // empty, and the fitted system sheet floated like a popup. On iOS 26 the system floats every
+        // sheet shorter than the screen, so it cannot be both short and on the bottom edge. The
+        // height is now set here and `AttachedBottomSheet` holds it to the bottom edge.
+        .frame(maxHeight: fitHeight)
+        .animation(.smooth(duration: 0.3), value: contentH)
+        // The answers are kept ready by `SecurityCheckup.shared`; opening asks nothing unless they
+        // are stale, and a refresh keeps the rows on screen until the new answers land.
+        .task { check.refreshIfStale() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await check.run() } }
+            if phase == .active { check.refreshIfStale() }
         }
     }
 
@@ -347,11 +449,18 @@ struct SecurityCheckupSheet: View {
         VStack(spacing: 10) {
             AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 96)
             Text("Security Checkup").font(.title2.weight(.bold))
-            Text("We checked your account against the server just now.")
+            Text(checkedLine)
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Says when the shown answers were checked; never "just now" for answers that are not.
+    private var checkedLine: String {
+        guard let t = check.lastCompleted else { return "Checking your account against the server…" }
+        if Date().timeIntervalSince(t) < 60 { return "We checked your account against the server just now." }
+        return "We checked your account against the server \(t.formatted(.relative(presentation: .named)))."
     }
 
     private var divider: some View {
@@ -478,5 +587,85 @@ private struct DeviceReviewPage: View {
     private func detail(_ d: DeviceSession) -> String {
         let when = d.createdAt.map { "signed in \($0.formatted(.relative(presentation: .named)))" } ?? "signed in"
         return d.location.isEmpty ? when.prefix(1).uppercased() + when.dropFirst() : "\(d.location) · \(when)"
+    }
+}
+
+/// A sheet only as tall as its content AND joined to the bottom edge, sliding up from below.
+///
+/// ⛔ WHY NOT `.sheet` — owner 2026-10-15, two screenshots: the full-height sheet left half the
+/// screen empty, and the fitted one "appears like a popup". On iOS 26 the system floats every sheet
+/// shorter than the screen (inset from the sides and bottom, rounded on all four corners), and only
+/// a full-height one sits on the edge; no public setting changes that. So this draws the sheet
+/// itself inside a cover presented WITHOUT animation (`present` below): the dimming fades, the card
+/// rises with a critically damped spring like the system sheet's, and a drag down or a tap on the
+/// dimming closes it. Sheets opened from inside it still present normally over it.
+struct AttachedBottomSheet<Content: View>: View {
+    /// Called once the slide down has finished; the presenter removes the cover then.
+    let onClosed: () -> Void
+    @ViewBuilder let content: (_ close: @escaping () -> Void) -> Content
+
+    @State private var shown = false
+    @State private var drag: CGFloat = 0
+    private static var spring: Animation { .spring(duration: 0.45, bounce: 0) }
+    private static var radius: CGFloat { 38 }
+
+    /// The presenter's half: show and hide the cover with no system slide of its own.
+    static func present(_ binding: Binding<Bool>, _ value: Bool) {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { binding.wrappedValue = value }
+    }
+
+    var body: some View {
+        GeometryReader { g in
+            let away = g.size.height + g.safeAreaInsets.bottom + 40
+            let pull = drag > 0 ? drag : drag / 8   // up resists, like the system sheet
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(shown ? 0.25 * max(0, 1 - drag / 400) : 0)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { close() }
+                content(close)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: Self.radius,
+                                                      topTrailingRadius: Self.radius,
+                                                      style: .continuous))
+                    .background(alignment: .bottom) {
+                        UnevenRoundedRectangle(topLeadingRadius: Self.radius,
+                                               topTrailingRadius: Self.radius, style: .continuous)
+                            .fill(Color(.systemGroupedBackground))
+                            .ignoresSafeArea(edges: .bottom)
+                    }
+                    .overlay(alignment: .top) {
+                        Capsule().fill(Color(.tertiaryLabel))
+                            .frame(width: 36, height: 5)
+                            .padding(.top, 5)
+                    }
+                    .padding(.top, 12)   // never under the status bar
+                    .offset(y: shown ? pull : away)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 8)
+                            .onChanged { v in drag = v.translation.height }
+                            .onEnded { v in
+                                if v.translation.height > 120 || v.predictedEndTranslation.height > 260 {
+                                    close()
+                                } else {
+                                    withAnimation(Self.spring) { drag = 0 }
+                                }
+                            }
+                    )
+            }
+        }
+        .presentationBackground(.clear)
+        .onAppear { withAnimation(Self.spring) { shown = true } }
+    }
+
+    private func close() {
+        guard shown else { return }
+        withAnimation(Self.spring, completionCriteria: .logicallyComplete) {
+            shown = false
+        } completion: {
+            drag = 0
+            onClosed()
+        }
     }
 }

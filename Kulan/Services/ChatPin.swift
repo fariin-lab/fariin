@@ -115,6 +115,7 @@ enum ChatPin {
         // answer carries this one's and is adopted.
         UserDefaults.standard.removeObject(forKey: stampKey)
         await MainActor.run { ChatPinState.shared.changed() }
+        SecurityCheckup.settingChanged()
     }
 
     static func remove() async throws {
@@ -123,6 +124,7 @@ enum ChatPin {
         UserDefaults.standard.set(false, forKey: statusKey)
         UserDefaults.standard.removeObject(forKey: stampKey)   // 2026-09-24 decision D4
         await MainActor.run { ChatPinState.shared.changed() }
+        SecurityCheckup.settingChanged()
     }
 
     /// Forget this device's copy. The server keeps nothing to forget here — deleting the account is
