@@ -503,7 +503,9 @@ struct CustomStoryEmojiHeader: View {
     var body: some View {
         VStack(spacing: 12) {
             ZStack {
-                Circle().fill(Color(.systemBackground))
+                // The cards' colour: white in light, grey in dark (owner 2026-10-16: it was black
+                // in dark mode, the page's own colour).
+                Circle().fill(Color(.secondarySystemGroupedBackground))
                 Circle().strokeBorder(Color(.separator), lineWidth: 0.5)
                 if let e = emoji, !e.isEmpty {
                     Text(e).font(.system(size: 52))
