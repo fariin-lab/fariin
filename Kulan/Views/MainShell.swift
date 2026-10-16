@@ -3493,8 +3493,24 @@ struct ArchivedChatsView: View {
                     // ones; "Nothing archived" is only true once they have.
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if !hasAnyArchived && archivedStories.isEmpty {
-                    EmptyStateView(title: "Nothing archived", icon: "archivebox",
-                                   text: "Chats you archive and stories you hide will show here.")
+                    // ⛔ THE MESSAGE REQUESTS EMPTY PAGE'S TYPE — owner 2026-10-16: "just update the
+                    // font size, exactly like the message requests page". Title 17 semibold, line 15
+                    // secondary (MessageRequestsView `emptyLine`); the archive icon stays as it was.
+                    VStack(spacing: 10) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 4)
+                        Text("Nothing archived")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text("Chats you archive and stories you hide will show here.")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.horizontal, 40)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     // ⛔ THE STRIP FLOATS OVER THE LIST AND MOVES WITH IT (his 2026-08-21: "when i
                     // scroll up archive chats is entering under story, story never moving").

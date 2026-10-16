@@ -563,8 +563,27 @@ struct PostedStoriesView: View {
                 // filter, and offering "Show all" is the way out of a corner the person filtered
                 // themselves into.
                 if all.isEmpty {
-                    ContentUnavailableView("No live stories", systemImage: "photo.on.rectangle.angled",
-                                           description: Text("Stories disappear after 24 hours."))
+                    // ⛔ THE MESSAGE REQUESTS EMPTY PAGE'S LAYOUT — owner 2026-10-16: "use the story
+                    // icon, and exactly the size and font of No message requests". The app's own
+                    // Stories icon at 44, title 17 semibold, line 15 secondary (MessageRequestsView
+                    // `emptyLine`), instead of the system's photo glyph and sizes.
+                    VStack(spacing: 10) {
+                        Image("ic_stories")
+                            .renderingMode(.template)
+                            .resizable().scaledToFit()
+                            .frame(width: 44, height: 44)
+                            .foregroundStyle(.primary)
+                            .padding(.bottom, 4)
+                        Text("No live stories")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text("Stories disappear after 24 hours.")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.horizontal, 40)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView {
                         Label("Nothing in \(filter.title)", systemImage: "line.3.horizontal.decrease.circle")
