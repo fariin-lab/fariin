@@ -53,6 +53,12 @@ public enum StoryMention {
 /// memory-only closure, installed by the app. Nil is a normal answer and falls straight through to
 /// the two caches and the network exactly as before, so this can never make a poster arrive later
 /// than it used to; it can only make one arrive sooner.
+/// "GET NOTIFICATIONS" ON SOMEBODY'S STORY — whether this author's new stories notify me. Only the
+/// app knows (owner, 2026-10-16). Nil, or a nil answer, means the menu does not offer it.
+public enum StoryNotifySeam {
+    public static var isOn: ((String) -> Bool?)?
+}
+
 public enum StoryPosterSource {
     /// Must be synchronous and memory-only — it is called on the main thread on the frame a story
     /// opens, which is the whole point of it.

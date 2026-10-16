@@ -49,6 +49,8 @@ struct KulanApp: App {
                     }
                     // 2026-10-10: a Stories-page card now holds only its small copy (`StoryImage
                     // .cardPixels`), so the open falls back to that as its first frame.
+                    // "Get notifications" in the story menu (owner 2026-10-16).
+                    StoryNotifyStore.installSeam()
                     StoryPosterSource.provider = {
                         DiskImageCache.shared.memoryImage($0)
                             ?? DiskImageCache.shared.memoryImage("\($0)#\(Int(StoryImage.cardPixels))")

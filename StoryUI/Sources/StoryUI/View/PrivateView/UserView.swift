@@ -30,6 +30,8 @@ struct UserView: View {
     var isPublicStory: Bool = false
     /// See `Story.canPassOn` — the host's one answer about Share, Copy Link and Repost.
     var canPassOn: Bool = false
+    /// The author, for "Get notifications" (`StoryNotifySeam`).
+    var userId: String = ""
 
     @Binding var isPresented: Bool
 
@@ -151,6 +153,16 @@ struct UserView: View {
                 })
             }
         } else {
+            // ⛔ GET NOTIFICATIONS, FIRST — owner, 2026-10-16, with the place drawn on his screenshot:
+            // this person's new stories notify me, like a chat. Off until turned on; the app answers
+            // whether it is (nil = not offered, e.g. the official account). The reference app's
+            // "Notify About Stories" / "Do Not Notify About Stories".
+            if let on = StoryNotifySeam.isOn?(userId) {
+                out.append(.init(title: on ? "Mute notifications" : "Get notifications",
+                                 systemImage: on ? "bell.slash" : "bell") {
+                    NotificationCenter.default.post(name: .init("storyActionNotify"), object: nil)
+                })
+            }
             // ⛔ THE WAYS TO PASS SOMEBODY ELSE'S STORY ON — his spec, 2026-09-11. They appear
             // together or not at all, and `canPassOn` is one answer from the host rather than
             // conditions written here: the audience must be Everyone, and an author who has blocked

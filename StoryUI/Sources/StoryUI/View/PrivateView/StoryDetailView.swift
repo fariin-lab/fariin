@@ -1318,6 +1318,7 @@ private extension StoryDetailView {
                 canEditAudience: canEditAudience,
                 isPublicStory: isPublicStory,
                 canPassOn: canPassOn,
+                userId: model.user.id,
                 isPresented: $isPresented
             )
         }

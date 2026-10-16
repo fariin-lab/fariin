@@ -783,6 +783,18 @@ service cloud.firestore {
         allow list, write: if false;
       }
 
+      // 2026-10-16 GET NOTIFICATIONS for one person's stories (owner): one document per author
+      // whose new stories push to me ({at, author}; `author` lets the server find it). Mine alone to read and change, so nobody can learn
+      // who follows their stories; the server reads it with admin rights (onStoryCreated).
+      match /storyNotify/{author} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && author != uid
+          && request.resource.data.keys().hasOnly(['at', 'author'])
+          && request.resource.data.author == author
+          && request.resource.data.at == request.time;
+      }
+
       match /blocked/{other} {
         allow read, delete: if signedIn() && request.auth.uid == uid;
         // 2026-09-26: `at` may be EARLIER than now, never later. Moving a block that was recorded
