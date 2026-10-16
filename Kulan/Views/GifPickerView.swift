@@ -309,6 +309,11 @@ struct GifPickerView: View {
                                 .submitLabel(.search)
                         }
                         .padding(.horizontal, 14).frame(height: 40)
+                        // ⛔ ITS OWN GLASS — owner 2026-10-16, circled: the field "disappearing". A
+                        // principal item gets no bar-button glass, so the bare text sat on the bar's
+                        // scroll-edge blur with the GIFs moving through it. The system's glass
+                        // capsule, as a search field in a bar wears on iOS 26.
+                        .liquidGlass(Capsule())
                         .frame(maxWidth: .infinity)
                     }
                     ToolbarItem(placement: .topBarTrailing) {
