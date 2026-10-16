@@ -999,7 +999,7 @@ struct StoriesTabView: View {
     /// The list's long press: the WHOLE ROW under the finger, not just its picture. Same menus as
     /// the grid and the strip.
     /// The Add Story row's press key — there is no group yet, so no group id to use.
-    private static let addRowKey = "me-add"
+    static let addRowKey = "me-add"
 
     private func listRowTarget(at p: CGPoint) -> StoryMenuTarget? {
         // ⛔ THE ADD STORY ROW HOLDS TOO — owner, 2026-10-11: "long press my story is not

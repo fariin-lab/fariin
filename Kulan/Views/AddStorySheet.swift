@@ -169,6 +169,12 @@ struct AddStorySheet: View {
     private func closeSelf() {
         if let onDismiss { onDismiss() } else { dismiss() }
     }
+    /// The way out after a POST, which is not the ✕'s slide: the picture flies into My Story
+    /// (`StoryCameraDoor.closeAfterPost`). Absent, a post closes like the ✕.
+    var onPostedClose: (() -> Void)? = nil
+    private func closeAfterPost() {
+        if let onPostedClose { onPostedClose() } else { closeSelf() }
+    }
     @State private var editorImage: EditorImage?
     @State private var editorVideo: EditorVideo?
     /// THE EDITOR FOR SOMETHING PICKED IN THE LIBRARY, presented FROM the library sheet rather than
@@ -215,12 +221,12 @@ struct AddStorySheet: View {
         // These two are the CAMERA's editors. A photo taken here closes back to the camera, which is
         // where it was taken. The library has its own pair, presented from the library itself.
         .fullScreenCover(item: $editorImage) { item in
-            StoryEditorView(source: item.image, onPosted: { onPosted(); closeSelf() })
+            StoryEditorView(source: item.image, onPosted: { onPosted(); closeAfterPost() })
         }
         // ⚠️ A RECORDED CLIP OPENS THE COMPOSER, NOT A SCREEN OF ITS OWN — his three reports of two
         // story editors on the video path end here. See `StoryEditorView.sourceVideo`.
         .fullScreenCover(item: $editorVideo) { item in
-            StoryEditorView.forVideo(url: item.url, onPosted: { onPosted(); closeSelf() })
+            StoryEditorView.forVideo(url: item.url, onPosted: { onPosted(); closeAfterPost() })
         }
         // THE PICKER DOES NOT CLOSE WHEN YOU PICK (owner 2026-08-04: "the media picker should not
         // close automatically after I select a photo… only close it when I tap the close button").
@@ -239,12 +245,12 @@ struct AddStorySheet: View {
                 onImage: { ui, id in libraryEditorImage = EditorImage(ui, assetID: id) },
                 onVideo: { url, id in libraryEditorVideo = EditorVideo(url, assetID: id) })
             .fullScreenCover(item: $libraryEditorImage) { item in
-                StoryEditorView(source: item.image, onPosted: { onPosted(); closeSelf() },
+                StoryEditorView(source: item.image, onPosted: { onPosted(); closeAfterPost() },
                                 sourceAssetID: item.assetID)
             }
             .fullScreenCover(item: $libraryEditorVideo) { item in
                 StoryEditorView.forVideo(url: item.url, assetID: item.assetID,
-                                         onPosted: { onPosted(); closeSelf() })
+                                         onPosted: { onPosted(); closeAfterPost() })
             }
         }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
@@ -253,7 +259,7 @@ struct AddStorySheet: View {
             // link: the photo editor reaches the same sheet by its own route (see `StoryEditorView`)
             // and passes them, so the field existed and this call simply never used it.
             ShareStorySheet(image: s.data, stickers: s.stickers,
-                            onPosted: { onPosted(); closeSelf() })
+                            onPosted: { onPosted(); closeAfterPost() })
         }
     }
 

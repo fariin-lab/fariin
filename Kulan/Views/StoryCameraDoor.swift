@@ -202,7 +202,8 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     static func open() {
         guard presented == nil, let top = topViewController() else { return }
         let sheet = AddStorySheet(onPosted: { Task { await StoriesRepository.shared.load(force: true) } },
-                                  onDismiss: { StoryCameraDoor.close() })
+                                  onDismiss: { StoryCameraDoor.close() },
+                                  onPostedClose: { StoryCameraDoor.closeAfterPost() })
         let host = UIHostingController(rootView: sheet)
         // ⚠️ `.overFullScreen`, NOT `.fullScreen`, AND THE CLOSING ANIMATION DEPENDS ON IT. A
         // `.fullScreen` presentation takes the presenting view out of the hierarchy. On the way out
@@ -235,6 +236,48 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         (host.presentingViewController ?? host).dismiss(animated: true)
     }
 
+    /// ⛔ A POSTED STORY DOES NOT SLIDE AWAY — owner, 2026-10-16, with the reference app filmed beside
+    /// ours: after Post Story, ours ran the ✕ close (the app sliding back over the camera), theirs
+    /// sends the picture into the My Story card while the sheet drops and the black lifts off the
+    /// page that was behind it all along.
+    ///
+    /// Everything that is on screen at the tap is copied into `StoryPostFlight`'s own window FIRST,
+    /// then the camera and everything it raised are taken down with no animation, so the real app is
+    /// already standing under the copies when they start to move. The ✕ keeps `close()`.
+    static func closeAfterPost() {
+        let source = StoryPostFlight.takePending()
+        guard let host = presented else { return }
+        var top: UIViewController = host
+        while let next = top.presentedViewController { top = next }
+        // From the TOP screen: the editor is a full-screen cover, which takes the camera's own view
+        // out of the window while it is up.
+        guard let window = top.view.window ?? host.view.window, let scene = window.windowScene
+        else { close(); return }
+        presented = nil
+
+        // The share sheet, as drawn (glass included), so it can keep falling after it is gone.
+        var sheet: (image: UIImage, frame: CGRect, radius: CGFloat)?
+        if top !== host, let v = top.presentationController?.presentedView ?? top.view {
+            let f = v.convert(v.bounds, to: nil)
+            if f.width > 1, f.height > 1 {
+                let img = UIGraphicsImageRenderer(bounds: f).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+                }
+                // The crop is square; the sheet is not. Its own corner where the system says it,
+                // else the iOS 26 sheet corner, so the editor's black behind the corners does not
+                // ride down with it.
+                let r = max(v.layer.cornerRadius, v.subviews.first?.layer.cornerRadius ?? 0)
+                sheet = (img, f, r > 0 ? r : 38)
+            }
+        }
+        // The editor's buttons and caption, which ride on the picture and fade off it.
+        let chrome = top.presentingViewController?.view?.snapshotView(afterScreenUpdates: false)
+
+        (host.presentingViewController ?? host).dismiss(animated: false)
+        StoryPostFlight.run(scene: scene, bounds: window.bounds, source: source,
+                            chrome: chrome, sheet: sheet)
+    }
+
     /// Present on whatever is actually on top — presenting on a controller that is itself covered
     /// does nothing at all and reads as a dead tap. Same walk as `WebLink`'s.
     private static func topViewController() -> UIViewController? {
@@ -244,5 +287,179 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         var top = root
         while let next = top?.presentedViewController { top = next }
         return top
+    }
+}
+
+/// THE POSTED PICTURE FLYING INTO MY STORY — the reference app's post exit, read from its source
+/// (`MediaEditorScreen.animateOut(finished: true)` and its share sheet's `animateOut`), 2026-10-16.
+///
+/// At the tap, all at once:
+///   • the share sheet drops by its own height, 0.3s ease-in-out;
+///   • the black behind the editor fades, 0.15s, uncovering the app that was there all along;
+///   • the picture flies to the My Story card: centre, scale, a centred crop to the card's shape and
+///     the corner radius, all 0.4s on their spring curve, which below 0.5s is the cubic
+///     (0.38, 0.70, 0.125, 1.0) (`CAAnimationUtils`, the `kCAMediaTimingFunctionSpring` branch);
+///   • the editor's buttons and caption ride on the picture and fade off it, 0.25s.
+/// The card is hidden while the copy flies and shown again under it as the copy goes.
+///
+/// ⚠️ ONE PLACE WE DO NOT COPY THEM: they fade a snapshot of the destination AVATAR in over the last
+/// 0.25s, because their circle shows the profile photo. Our card shows the story picture itself,
+/// the same one that is flying, so that fade would only swap a picture for an older copy of it.
+///
+/// No card on screen (the camera was opened from somewhere else): their fallback, the picture
+/// fades, shrinks to 0.8 and drops by a screen height, 0.4s.
+@MainActor enum StoryPostFlight {
+    struct Source { let image: UIImage; let rect: CGRect; let cornerRadius: CGFloat }
+
+    private static var pending: Source?
+    private static var window: UIWindow?
+
+    /// The editor names the picture and where it is drawn, just before it reports the post.
+    static func prepare(imageData: Data, rect: CGRect, cornerRadius: CGFloat) {
+        guard rect.width > 1, rect.height > 1, let img = UIImage(data: imageData) else { pending = nil; return }
+        pending = Source(image: img, rect: rect, cornerRadius: cornerRadius)
+    }
+
+    static func takePending() -> Source? {
+        defer { pending = nil }
+        return pending
+    }
+
+    private static let flight: TimeInterval = 0.4
+    private static func springCurve() -> UICubicTimingParameters {
+        UICubicTimingParameters(controlPoint1: CGPoint(x: 0.38, y: 0.70),
+                                controlPoint2: CGPoint(x: 0.125, y: 1.0))
+    }
+
+    /// My Story's card, wherever this layout draws it, if it is on screen now. The row turns into the
+    /// uploading row a frame after the post; all three sit in the same slot.
+    private static func destination(in bounds: CGRect) -> (key: String, rect: CGRect, radius: CGFloat)? {
+        var ids = [StoryDoor.uploadingSourceKey]
+        if let mine = StoriesRepository.shared.mine?.id { ids.append(mine) }
+        ids.append(StoriesTabView.addRowKey)
+        for id in ids {
+            let key = MediaOpenRects.key(.storyRow, id)
+            guard let r = MediaOpenRects.liveViewRect(key), bounds.intersects(r) else { continue }
+            return (key, r, MediaOpenRects.registeredCornerRadius(key) ?? 12)
+        }
+        return nil
+    }
+
+    static func run(scene: UIWindowScene, bounds: CGRect, source: Source?,
+                    chrome: UIView?, sheet: (image: UIImage, frame: CGRect, radius: CGFloat)?) {
+        window?.isHidden = true
+        let overlay = UIWindow(windowScene: scene)
+        overlay.frame = bounds
+        overlay.windowLevel = .normal + 1
+        overlay.isUserInteractionEnabled = false
+        overlay.backgroundColor = .clear
+        let root = UIViewController()
+        root.view.backgroundColor = .clear
+        overlay.rootViewController = root
+        let stage = root.view!
+        window = overlay
+
+        let dim = UIView(frame: bounds)
+        dim.backgroundColor = .black
+        stage.addSubview(dim)
+
+        // The picture, in its own clipping box the size of the editor's card.
+        var card: UIView?
+        var chromeView: UIView?
+        if let source {
+            let box = UIView()
+            box.bounds = CGRect(origin: .zero, size: source.rect.size)
+            box.center = CGPoint(x: source.rect.midX, y: source.rect.midY)
+            box.clipsToBounds = true
+            box.layer.cornerCurve = .continuous
+            box.layer.cornerRadius = source.cornerRadius
+            let photo = UIImageView(image: source.image)
+            photo.contentMode = .scaleAspectFill
+            photo.frame = box.bounds
+            box.addSubview(photo)
+            if let chrome {
+                // Placed so the editor's own pixels line up with the card they were drawn over.
+                chrome.frame = CGRect(x: -source.rect.minX, y: -source.rect.minY,
+                                      width: bounds.width, height: bounds.height)
+                box.addSubview(chrome)
+                chromeView = chrome
+            }
+            stage.addSubview(box)
+            card = box
+        }
+
+        var sheetView: UIImageView?
+        if let sheet {
+            let v = UIImageView(image: sheet.image)
+            v.frame = sheet.frame
+            v.clipsToBounds = true
+            v.layer.cornerCurve = .continuous
+            v.layer.cornerRadius = sheet.radius
+            stage.addSubview(v)
+            sheetView = v
+        }
+
+        overlay.isHidden = false
+
+        // The sheet drops, the black lifts: both start on the tap.
+        if let sheetView {
+            let drop = bounds.height - sheetView.frame.minY
+            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseInOut) {
+                sheetView.transform = CGAffineTransform(translationX: 0, y: drop)
+            }
+        }
+        UIView.animate(withDuration: 0.15, delay: 0, options: .curveEaseInOut) { dim.alpha = 0 }
+        if let chromeView {
+            UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseInOut) { chromeView.alpha = 0 }
+        }
+
+        let finish: (String?) -> Void = { hiddenKey in
+            if hiddenKey != nil { MediaSourceVisibility.shared.reveal() }
+            if window === overlay { overlay.isHidden = true; window = nil }
+        }
+
+        guard let card, let source else {
+            // Nothing to fly: let the sheet finish falling.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { finish(nil) }
+            return
+        }
+
+        guard let dest = destination(in: bounds) else {
+            let anim = UIViewPropertyAnimator(duration: flight, timingParameters: springCurve())
+            anim.addAnimations {
+                card.transform = CGAffineTransform(translationX: 0, y: bounds.height).scaledBy(x: 0.8, y: 0.8)
+            }
+            UIView.animate(withDuration: flight, delay: 0, options: .curveEaseInOut) { card.alpha = 0 }
+            anim.addCompletion { _ in finish(nil) }
+            anim.startAnimation()
+            return
+        }
+
+        // Hide the real card while its copy is on the way. The row becomes the uploading row a frame
+        // later, and that is the one that must stay hidden then.
+        var hiddenKey = dest.key
+        MediaSourceVisibility.shared.hide(hiddenKey)
+        DispatchQueue.main.async {
+            let uploading = MediaOpenRects.key(.storyRow, StoryDoor.uploadingSourceKey)
+            if hiddenKey != uploading, MediaOpenRects.liveViewRect(uploading) != nil {
+                hiddenKey = uploading
+                MediaSourceVisibility.shared.hide(uploading)
+            }
+        }
+
+        // Their maths: scale by width, crop the height to the card's shape around the middle, and
+        // divide the radius by the scale so it lands at the card's real corner.
+        let w = source.rect.width, h = source.rect.height
+        let scale = dest.rect.width / w
+        let aspect = dest.rect.height / dest.rect.width
+        let anim = UIViewPropertyAnimator(duration: flight, timingParameters: springCurve())
+        anim.addAnimations {
+            card.center = CGPoint(x: dest.rect.midX, y: dest.rect.midY)
+            card.transform = CGAffineTransform(scaleX: scale, y: scale)
+            card.bounds = CGRect(x: 0, y: (h - w * aspect) / 2, width: w, height: w * aspect)
+            card.layer.cornerRadius = scale > 0 ? dest.radius / scale : 0
+        }
+        anim.addCompletion { _ in finish(hiddenKey) }
+        anim.startAnimation()
     }
 }

@@ -1652,7 +1652,13 @@ struct StoryEditorView: View {
                                 r.modified = r.modified || repostHasEdits
                                 return r
                             },
-                            onPosted: { onPosted(); dismiss() })
+                            onPosted: {
+                                // The posted picture and where the card draws it: the post's exit
+                                // flies it from here into My Story (`StoryPostFlight`). 40 is the
+                                // card's own corner, below.
+                                StoryPostFlight.prepare(imageData: s.data, rect: cardRect, cornerRadius: 40)
+                                onPosted(); dismiss()
+                            })
         }
         .toolbar(.hidden, for: .navigationBar)
     }
