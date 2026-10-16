@@ -21,19 +21,13 @@ private func fariinLink(_ handle: String) -> String { KulanApp.userLink(handle: 
 /// 2026-09-24 fix-all #126: internal (was private) so the group invite sheet draws its link with
 /// this same generator rather than a second one.
 func qrImage(from string: String, clearCentre: CGFloat = 0) -> UIImage? {
+    // ⛔ ROUND DOTS AND ROUNDED CORNER EYES — owner 2026-10-16, with a picture: "redesign my QR
+    // code, make it like this". Every data module is a dot; the three finder patterns are a rounded
+    // ring with a rounded centre. Error correction stays "H", so the softer shapes and the logo hole
+    // still scan. The hole (`clearCentre`) is cut by whole modules as before.
     let filter = CIFilter.qrCodeGenerator()
     filter.message = Data(string.utf8)
     filter.correctionLevel = "H"
-    guard clearCentre > 0 else {
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
-              let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return UIImage(cgImage: cg)
-    }
-    // ⛔ THE MIDDLE IS LEFT OUT WHOLE MODULES AT A TIME — owner 2026-10-13: "my logo is overlapping
-    // the QR code, remove my logo's background". A white plate laid over the finished code cut
-    // modules in half along its edges, which read as a ragged hole. Here the code is drawn module by
-    // module and a square of whole modules in the centre is skipped, so the hole has clean edges and
-    // the mark sits in it with no plate. Odd-sized so it stays centred on the middle module.
     guard let output = filter.outputImage,
           let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
     let n = cg.width
@@ -43,18 +37,45 @@ func qrImage(from string: String, clearCentre: CGFloat = 0) -> UIImage? {
                               space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
     else { return nil }
     ctx.draw(cg, in: CGRect(x: 0, y: 0, width: n, height: n))
-    var hole = Int((CGFloat(n) * clearCentre).rounded())
-    if hole % 2 != n % 2 { hole += 1 }
-    let lo = (n - hole) / 2, hi = lo + hole
+    func dark(_ x: Int, _ y: Int) -> Bool { x >= 0 && y >= 0 && x < n && y < n && px[y * n + x] < 128 }
+
+    // Where the symbol starts (the generator may add a quiet margin): the first dark module on the
+    // top-left diagonal is the top-left eye's corner.
+    var m = 0
+    while m < n / 2, !dark(m, m) { m += 1 }
+    let eyes = [(m, m), (n - m - 7, m), (m, n - m - 7)]
+    func inEye(_ x: Int, _ y: Int) -> Bool {
+        eyes.contains { x >= $0.0 && x < $0.0 + 7 && y >= $0.1 && y < $0.1 + 7 }
+    }
+
+    var lo = 0, hi = 0
+    if clearCentre > 0 {
+        var hole = Int((CGFloat(n) * clearCentre).rounded())
+        if hole % 2 != n % 2 { hole += 1 }
+        lo = (n - hole) / 2; hi = lo + hole
+    }
+
     let scale: CGFloat = 10
+    let side = CGFloat(n) * scale
     let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
-    return UIGraphicsImageRenderer(size: CGSize(width: CGFloat(n) * scale, height: CGFloat(n) * scale), format: fmt).image { r in
-        UIColor.white.setFill(); r.fill(CGRect(x: 0, y: 0, width: CGFloat(n) * scale, height: CGFloat(n) * scale))
+    return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: fmt).image { r in
+        UIColor.white.setFill(); r.fill(CGRect(x: 0, y: 0, width: side, height: side))
         UIColor.black.setFill()
-        for y in 0..<n { for x in 0..<n where px[y * n + x] < 128 {
-            if (lo..<hi).contains(x) && (lo..<hi).contains(y) { continue }
-            r.fill(CGRect(x: CGFloat(x) * scale, y: CGFloat(y) * scale, width: scale, height: scale))
+        // Data modules: dots, 86% of a module, so neighbours stay apart and read as dots.
+        let d = scale * 0.86, inset = (scale - d) / 2
+        for y in 0..<n { for x in 0..<n where dark(x, y) && !inEye(x, y) {
+            if hi > lo, (lo..<hi).contains(x), (lo..<hi).contains(y) { continue }
+            UIBezierPath(ovalIn: CGRect(x: CGFloat(x) * scale + inset, y: CGFloat(y) * scale + inset,
+                                        width: d, height: d)).fill()
         } }
+        // Eyes: a 7-module rounded ring (1 module thick) and a 3-module rounded centre.
+        for (ex, ey) in eyes {
+            let outer = CGRect(x: CGFloat(ex) * scale, y: CGFloat(ey) * scale, width: 7 * scale, height: 7 * scale)
+            let ring = UIBezierPath(roundedRect: outer, cornerRadius: scale * 2.2)
+            ring.append(UIBezierPath(roundedRect: outer.insetBy(dx: scale, dy: scale), cornerRadius: scale * 1.4).reversing())
+            ring.fill()
+            UIBezierPath(roundedRect: outer.insetBy(dx: 2 * scale, dy: 2 * scale), cornerRadius: scale * 1.0).fill()
+        }
     }
 }
 
