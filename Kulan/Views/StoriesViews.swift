@@ -928,9 +928,17 @@ enum StoryPrefs {
     /// A plain dictionary rather than the space-joined sets above, because a story name can contain
     /// spaces and those sets split on them.
     private static let audienceNamesKey = "storyAudienceNames"
+    /// ⛔ NOT `lock` — build 942 watchdog kill, 2026-10-16 (.ips, main thread stuck in
+    /// `StoriesTabView.visibleFriends` -> `set`). This runs off the main thread while a story posts,
+    /// and `UserDefaults.set` posts a change notification that SwiftUI's @AppStorage observer answers
+    /// by taking SwiftUI's own update lock. Holding `lock` across that write meant: this thread holds
+    /// `lock` and waits for SwiftUI, the main thread is mid-update holding SwiftUI's lock and waits for
+    /// `lock` in `set`. Its own lock keeps two posts' read-modify-write in order; the main thread
+    /// never takes it.
+    private static let audienceNamesLock = NSLock()
     static func rememberAudienceName(storyId: String, tag: StoryAudienceTag) {
         guard tag.label == "custom", !tag.name.isEmpty else { return }
-        lock.lock(); defer { lock.unlock() }
+        audienceNamesLock.lock(); defer { audienceNamesLock.unlock() }
         var d = UserDefaults.standard.dictionary(forKey: audienceNamesKey) as? [String: String] ?? [:]
         // Same append-only shape as the seen/liked stores, and the same answer to it: a story is
         // gone in 24 hours but its name would sit here forever.
@@ -944,7 +952,8 @@ enum StoryPrefs {
         UserDefaults.standard.set(d, forKey: audienceNamesKey)
     }
     static func audienceName(storyId: String) -> String? {
-        lock.lock(); defer { lock.unlock() }
+        // A plain read: UserDefaults is thread-safe, and taking either lock here on the main thread
+        // would bring back the deadlock above.
         return (UserDefaults.standard.dictionary(forKey: audienceNamesKey) as? [String: String])?[storyId]
     }
 
