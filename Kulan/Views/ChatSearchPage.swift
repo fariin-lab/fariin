@@ -534,12 +534,21 @@ struct ChatSearchPage: View {
 /// cannot say it two ways.
 struct NoSearchResults: View {
     let query: String
+    /// ⛔ THE MESSAGE REQUESTS EMPTY PAGE'S TYPE — owner 2026-10-16: "exactly the size, type and
+    /// font of the message requests page". Title 17 semibold, line 15 secondary
+    /// (MessageRequestsView `emptyLine`). Same words, still no icon.
     var body: some View {
-        ContentUnavailableView {
+        VStack(spacing: 10) {
             Text("No Results")
-        } description: {
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
             Text("There were no results for \"\(query)\".\nTry a new search.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
