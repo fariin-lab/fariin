@@ -1628,7 +1628,8 @@ private extension StoryDetailView {
                         // happen. The host resolves it and shows the profile over the story instead.
                         if url.scheme == "kulan", url.host == "u",
                            let handle = url.pathComponents.last(where: { $0 != "/" }), !handle.isEmpty {
-                            NotificationCenter.default.post(name: .init("storyActionMention"), object: handle)
+                            // The same pressed wash a link gets, then the profile (owner 2026-10-16).
+                            flashCaptionMention(url, handle: handle)
                             return .handled
                         }
                         guard url.scheme == "http" || url.scheme == "https" else { return .systemAction }
@@ -1676,6 +1677,15 @@ private extension StoryDetailView {
     /// The story is deliberately NOT paused here. A sticker link pauses because its Visit bubble
     /// stands on screen waiting for a second tap; a caption link opens on the first one, and the
     /// pause/resume pair would be straddling a trip out of the app.
+    /// `flashCaptionLink`'s wash for a mention: lit for the same beat, then the host opens the person.
+    private func flashCaptionMention(_ url: URL, handle: String) {
+        withAnimation(.easeOut(duration: 0.08)) { pressedCaptionLink = url }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.easeOut(duration: 0.18)) { pressedCaptionLink = nil }
+            NotificationCenter.default.post(name: .init("storyActionMention"), object: handle)
+        }
+    }
+
     private func flashCaptionLink(_ url: URL) {
         withAnimation(.easeOut(duration: 0.08)) { pressedCaptionLink = url }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
@@ -1703,8 +1713,8 @@ private extension StoryDetailView {
                 a[ar].foregroundColor = .white
             }
         }
-        // @MENTIONS. Semibold and NOT underlined, so the two kinds of tappable text stay tellable
-        // apart at a glance — a link goes out of the app, a mention goes to a person inside it.
+        // @MENTIONS. Underlined like a link since 2026-10-16 (owner's picture); it was semibold and
+        // bare. A link still goes out of the app, a mention to a person inside it.
         //
         // They carry our own scheme rather than a real url: the host resolves the username against
         // the app's username collection and opens that profile (see `StoryMention`). The library has
@@ -1714,7 +1724,10 @@ private extension StoryDetailView {
         // the app's own username rule. Being STRICTER than the rule would leave real mentions dead;
         // being looser would light up an email's domain half, which the detector above has already
         // claimed as part of a link.
-        if let re = try? NSRegularExpression(pattern: "@([A-Za-z][A-Za-z0-9_.]{1,29})") {
+        // ⛔ ONE CHARACTER IS ENOUGH — owner 2026-10-16: "@v" and other 1-3 letter names were plain
+        // text and could not be tapped. The app's own name rule is the server's business; a name
+        // nobody holds answers "No Fariin user found" when tapped, which is honest.
+        if let re = try? NSRegularExpression(pattern: "@([A-Za-z][A-Za-z0-9_.]{0,29})") {
             for m in re.matches(in: text, range: full) {
                 guard let sr = Range(m.range, in: text),
                       let ar = Range(sr, in: a),
@@ -1724,7 +1737,9 @@ private extension StoryDetailView {
                 else { continue }
                 a[ar].link = url
                 a[ar].foregroundColor = .white
-                a[ar].font = .system(size: 16, weight: .semibold)
+                // ⛔ UNDERLINED, REGULAR WEIGHT — owner 2026-10-16, with his picture: a mention looks
+                // like a link (white line under it). It was semibold and not underlined.
+                a[ar].underlineStyle = .single
             }
         }
         // ⛔ THE PRESSED RUN CARRIES A WASH — owner, 2026-08-23: "user not feeling to touch link,
