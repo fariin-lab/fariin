@@ -273,9 +273,35 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         // The editor's buttons and caption, which ride on the picture and fade off it.
         let chrome = top.presentingViewController?.view?.snapshotView(afterScreenUpdates: false)
 
-        (host.presentingViewController ?? host).dismiss(animated: false)
+        // ⛔ EVERY SCREEN THE CAMERA RAISED GOES INVISIBLE FIRST — owner, 2026-10-16, two screenshots
+        // from the library route: mid-flight the editor and the real share sheet were still behind
+        // the picture, then the photo picker with the sheet on it, then the list. The one-call
+        // teardown below did not take the stack down at once there; the levels went one by one over
+        // seconds. Why iOS held them is not proven (`POSTEXIT#` logs whether it refused). Whatever
+        // it does with them now, nobody sees it: the copies in the flight's window are all the
+        // camera there is to see.
+        var chain: [UIViewController] = []
+        var level: UIViewController? = host
+        while let vc = level { chain.append(vc); level = vc.presentedViewController }
+        for vc in chain {
+            vc.presentationController?.containerView?.alpha = 0
+            vc.view.alpha = 0
+        }
+
+        let presenter = host.presentingViewController ?? host
+        presenter.dismiss(animated: false)
+        let held = presenter.presentedViewController != nil
+        DiagLog.add("POSTEXIT# levels=\(chain.count) heldAfterDismiss=\(held)")
+        if held { DiagLog.flagForUpload() }
         StoryPostFlight.run(scene: scene, appWindow: window, source: source,
                             chrome: chrome, sheet: sheet)
+        // And if it is still up when the flight lands, it is taken down again: an invisible camera
+        // left over the app would swallow every touch.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            guard presenter.presentedViewController === host else { return }
+            DiagLog.add("POSTEXIT# still up after flight, dismissing again")
+            presenter.dismiss(animated: false)
+        }
     }
 
     /// Present on whatever is actually on top — presenting on a controller that is itself covered
