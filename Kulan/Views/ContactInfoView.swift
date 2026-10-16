@@ -65,7 +65,7 @@ struct ContactInfoView: View {
     }
 
     init(cid: String, name: String, photoUrl: String?, posterUrl: String? = nil,
-         source: ProfileSource = .chat, isSelf: Bool = false,
+         source: ProfileSource = .chat, isSelf: Bool = false, showsBack: Bool = false,
          previewUid: String? = nil,
          onSearch: @escaping () -> Void = {}) {
         self.previewUid = previewUid
@@ -75,6 +75,7 @@ struct ContactInfoView: View {
         self.posterUrl = posterUrl
         self.source = source
         self.isSelf = isSelf
+        self.showsBack = showsBack
         self.onSearch = onSearch
         let me = AuthService.shared.uid ?? ""
         let other = previewUid ?? (cid.split(separator: "_").map(String.init).first { $0 != me } ?? "")
