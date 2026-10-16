@@ -122,6 +122,11 @@ struct Story: Identifiable, Hashable, Codable {
     var isVideo: Bool = false
     var duration: Double = 0   // video length in seconds (photos: 0 → viewer uses the 5s standard)
     var thumbUrl: String = ""  // video poster frame (photos: empty)
+    /// An official story's bottom button ("Learn more" and where it goes), set in the admin panel.
+    /// OPTIONAL on purpose: stories are cached as JSON, and the synthesized decoder only tolerates a
+    /// missing key on an optional, so a default value here would fail every story saved before it.
+    var buttonText: String?
+    var buttonUrl: String?
     /// A base64 JPEG about 30px wide, carried in the story document itself. See `blurThumbBase64`
     /// and `StoryUI.Story.blurThumb` — this is the cover that cannot be missing.
     var blurThumb: String = ""

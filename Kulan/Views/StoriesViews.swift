@@ -1815,6 +1815,12 @@ struct StoryViewer: View {
                         : (OfficialChannel.isOfficial(g.authorUid) || !canMessage) ? Self.replyLocked : nil
                     // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.
                     let canRepost = canPassOn && s.repostOf == nil
+                    // Fariin's own button (owner 2026-10-16: "Learn more" set in the admin panel)
+                    // takes the locked line's place. Hoisted with the rest, same type-checker reason.
+                    let actionURL = OfficialChannel.isOfficial(g.authorUid) ? s.buttonUrl.flatMap(URL.init(string:)) : nil
+                    let plainConfig: StoryInteractionConfig? = actionURL != nil
+                        ? StoryInteractionConfig(actionTitle: s.buttonText, actionURL: actionURL)
+                        : locked.map { StoryInteractionConfig(lockedText: $0) }
                     return StoryUI.Story(
                         id: s.id,
                         mediaURL: s.mediaUrl,
@@ -1931,7 +1937,7 @@ struct StoryViewer: View {
                             // red and said "Reacted" while the author got nothing. Hidden, it
                             // promises nothing; turning receipts back on brings it back.
                             storyType: plainOnly
-                                ? (locked == nil ? .plain() : .plain(config: StoryInteractionConfig(lockedText: locked)))
+                                ? .plain(config: plainConfig)
                                 : canMessage
                                     ? .message(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
                                                                               showRepostButton: canRepost),

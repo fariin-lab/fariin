@@ -30,7 +30,9 @@ struct MessageView: View {
                 switch story.config.storyType {
                 case .plain(let config):
                     HStack(spacing: 12) {
-                        if let locked = config?.lockedText {
+                        if let title = config?.actionTitle, let url = config?.actionURL {
+                            actionPill(title, url)
+                        } else if let locked = config?.lockedText {
                             lockedPill(locked)
                         } else {
                             Spacer()
@@ -127,6 +129,29 @@ private extension MessageView {
     
     /// The closed reply bar: the host's sentence and Apple's lock, dimmed, in a hairline capsule the
     /// height of the reply pill. Same look the app's overlay had (16pt, white 55%, 1pt white 28%).
+    /// An official story's button ("Learn more"): the reply pill's size and place, filled white so
+    /// it reads as something to press. Opens through the host, which pauses the story while the
+    /// page is up and picks the browser or the app for the link.
+    func actionPill(_ title: String, _ url: URL) -> some View {
+        Button {
+            StoryLinkOpener.handler?(url)
+        } label: {
+            HStack(spacing: 6) {
+                Text(title)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(.black)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity)
+            .frame(height: Constant.MessageView.height)
+            .background(Capsule().fill(Color.white))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     func lockedPill(_ text: String) -> some View {
         HStack(spacing: 6) {
             Text(text)

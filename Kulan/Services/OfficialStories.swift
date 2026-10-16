@@ -115,6 +115,9 @@ final class OfficialStories {
         s.thumbUrl = r["thumbUrl"] as? String ?? ""
         s.caption = r["caption"] as? String ?? ""
         s.duration = (r["duration"] as? NSNumber)?.doubleValue ?? 0
+        if let t = r["buttonText"] as? String, !t.isEmpty, let u = r["buttonUrl"] as? String, !u.isEmpty {
+            s.buttonText = t; s.buttonUrl = u
+        }
         s.audienceLabel = "everyone"
         return s
     }
