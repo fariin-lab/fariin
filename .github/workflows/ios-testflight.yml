@@ -74,7 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: POST STORY WITHOUT THE THREE PAGES.
+            THIS BUILD: GET NOTIFICATIONS FOR SOMEONE'S STORIES.
+            Story menu (someone else's story): Get notifications / Mute notifications, per person, off by default. A bar confirms it with the person's name.
+            Hiding someone's stories also mutes their story notifications.
+            Custom story page: the emoji circle sits right under the header.
+            NOTE: the notification itself needs the server update; until then the choice may not stay on.
+
+            EARLIER: POST STORY WITHOUT THE THREE PAGES.
             Post Story from the photo picker: the editor, the sheet and the picker no longer show behind the flying picture; you go straight to the Stories list.
             PLEASE TEST: Add Story, open the photo picker, pick a photo, Next, Post Story, several times.
 
