@@ -535,6 +535,15 @@ struct CustomStoryEmojiHeader: View {
 }
 
 extension View {
+    /// ⛔ THE FORWARD SHEET'S ROW SPACING (`ForwardPicker.row`) — owner 2026-10-16: the people lists
+    /// on the story audience pages had more space than the forward page. 5pt above and below, 16
+    /// at the sides, 44 minimum, the separator starting at the name after a 40pt photo.
+    func forwardRowSpacing() -> some View {
+        frame(minHeight: 44)
+            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
+    }
+
     /// The header's row in a grouped List: no card behind it, full width.
     func emojiHeaderRow() -> some View {
         listRowBackground(Color.clear)
@@ -794,18 +803,20 @@ struct StoryHiddenListPage: View {
                                 Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
                                     .foregroundStyle(.primary)
                             }
-                            .frame(width: 36, height: 36)
+                            .frame(width: 40, height: 40)
                             Text("Add People").foregroundStyle(.primary)
                             Spacer()
                         }
                         .contentShape(Rectangle())
                     }
+                    .forwardRowSpacing()
                 }
                 ForEach(hiddenPeople) { c in
                     HStack(spacing: 12) {
-                        AvatarView(name: c.name, photoUrl: c.photo, size: 36)
+                        AvatarView(name: c.name, photoUrl: c.photo, size: 40)
                         Text(c.name.isEmpty ? (isLoading ? " " : "Fariin user") : c.name).lineLimit(1)
                     }
+                    .forwardRowSpacing()
                 }
                 .onDelete { idx in
                     let list = hiddenPeople
@@ -1196,17 +1207,19 @@ struct CustomStoryDetailView: View {
                             Image(systemName: "plus").font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(.primary)
                         }
-                        .frame(width: 36, height: 36)
+                        .frame(width: 40, height: 40)
                         Text("Add Viewers").foregroundStyle(.primary)
                         Spacer()
                     }
                     .contentShape(Rectangle())
                 }
+                .forwardRowSpacing()
                 ForEach(viewers) { c in
                     HStack(spacing: 12) {
-                        AvatarView(name: c.name, photoUrl: c.photo, size: 36)
+                        AvatarView(name: c.name, photoUrl: c.photo, size: 40)
                         Text(c.name).lineLimit(1)
                     }
+                    .forwardRowSpacing()
                 }
                 .onDelete { idx in
                     // Swipe a viewer away. There is no other way to remove one, and a list you can
