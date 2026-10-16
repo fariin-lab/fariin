@@ -256,6 +256,11 @@ struct NoticePlan {
     var wallpaperBlur: WallpaperBlurState?
     /// The answer buttons under the notice, in ROW coordinates like `capsule`. See `NoticeRow.actions`.
     var buttons: [NoticeButtonPlan] = []
+    /// `.storyCard`: the story picture and its ring, in CAPSULE coordinates, and what fills them.
+    var image: CGRect? = nil
+    var ring: CGRect? = nil
+    var storyThumbUrl: String? = nil
+    var flightKey: String = ""
 }
 
 struct NoticeButtonPlan {
@@ -375,7 +380,8 @@ enum MessageRowLayout {
             p.capsule.origin.y += y + 6
             for i in p.buttons.indices { p.buttons[i].rect.origin.y += y + 6 }
             // The buttons hang under the pill, so the row is as tall as the lowest of them.
-            let bottom = p.buttons.map(\.rect.maxY).max() ?? p.capsule.maxY
+            // A story card holds its button inside, so the card itself can be the lowest thing.
+            let bottom = max(p.capsule.maxY, p.buttons.map(\.rect.maxY).max() ?? 0)
             contentHeight = bottom - p.capsule.minY + 12      // .padding(.vertical, 6)
             body = .notice(p)
         case .call(let c):
@@ -2437,6 +2443,13 @@ enum MessageRowLayout {
             }
             attr.append(NSAttributedString(string: n.text, attributes: [
                 .font: BubbleMetrics.noticeFont, .foregroundColor: UIColor.label]))
+            Self.boldName(n.boldName, in: attr, size: BubbleMetrics.noticeFont.pointSize)
+        case .storyCard:
+            let para = NSMutableParagraphStyle(); para.alignment = .center
+            attr = NSMutableAttributedString(string: n.text, attributes: [
+                .font: UIFont.systemFont(ofSize: 15), .foregroundColor: UIColor.label,
+                .paragraphStyle: para])
+            Self.boldName(n.boldName, in: attr, size: 15)
         case .unsupported:
             attr = NSMutableAttributedString(string: n.text, attributes: [
                 .font: UIFont.systemFont(ofSize: 12, weight: .medium),
@@ -2457,6 +2470,39 @@ enum MessageRowLayout {
                                   onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
             plan.buttons = noticeButtons(n.actions, under: rect, rowWidth: width)
             return plan
+        case .storyCard:
+            // ⛔ THE STORY MENTION CARD (owner 2026-10-16, the reference app's picture): the story in
+            // a ring at the top, the line under it, View Story inside the card at the bottom.
+            let cardW = min(236, width - BubbleMetrics.rowMargin * 2), pad: CGFloat = 16
+            let ringSide: CGFloat = 116, gap: CGFloat = 5
+            let ring = CGRect(x: (cardW - ringSide) / 2, y: pad, width: ringSide, height: ringSide)
+            let image = ring.insetBy(dx: gap + 2.5, dy: gap + 2.5)
+            let textW = cardW - pad * 2
+            let size = BubbleText.size(attr, width: textW)
+            let textY = ring.maxY + 12
+            let text = CGRect(x: (cardW - size.width) / 2, y: textY, width: size.width, height: size.height)
+            let buttonH: CGFloat = 38, buttonW = min(textW, 164)
+            let buttonY = text.maxY + 14
+            let cardH = buttonY + buttonH + pad
+            let rect = CGRect(x: (width - cardW) / 2, y: 0, width: cardW, height: cardH)
+            var plan = NoticePlan(capsule: rect, text: text, attr: attr, style: .storyCard,
+                                  onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
+            plan.image = image
+            plan.ring = ring
+            plan.storyThumbUrl = n.storyThumbUrl
+            plan.flightKey = n.flightKey
+            if let a = n.actions.first {
+                let battr = NSAttributedString(string: a.title, attributes: [
+                    .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: UIColor.label])
+                let bs = BubbleText.size(battr, width: buttonW - 16)
+                plan.buttons = [NoticeButtonPlan(
+                    id: a.id,
+                    rect: CGRect(x: rect.minX + (cardW - buttonW) / 2, y: buttonY, width: buttonW, height: buttonH),
+                    text: CGRect(x: (buttonW - bs.width) / 2, y: (buttonH - bs.height) / 2,
+                                 width: bs.width, height: bs.height),
+                    attr: battr)]
+            }
+            return plan
         case .unsupported:
             let hPad: CGFloat = 14, vPad: CGFloat = 10
             let boxMax: CGFloat = 300
@@ -2470,6 +2516,14 @@ enum MessageRowLayout {
                               attr: attr, style: .unsupported,
                               onWallpaper: n.onWallpaper, wallpaperBlur: n.wallpaperBlur)
         }
+    }
+
+    /// Bolds the first occurrence of `name` (the story mention lines).
+    private static func boldName(_ name: String?, in attr: NSMutableAttributedString, size: CGFloat) {
+        guard let name, !name.isEmpty else { return }
+        let r = (attr.string as NSString).range(of: name)
+        guard r.location != NSNotFound else { return }
+        attr.addAttribute(.font, value: UIFont.systemFont(ofSize: size, weight: .semibold), range: r)
     }
 
     /// A row of equal pill buttons centred under a notice: at least as wide as the notice, never

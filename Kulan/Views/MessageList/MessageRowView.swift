@@ -393,10 +393,29 @@ final class RowNoticePillView: UIView {
     private let fill = BubbleFillView()
     private let label = UILabel()
     private let rim = BubbleShapeView()
+    /// `.storyCard` only (story mentions, owner 2026-10-16): the story picture and the app's story
+    /// ring around it (unseen gradient, 0x34C76F → 0x3DA1FD, as `StoryRingView` draws it).
+    private let thumb = RowImageView(frame: .zero)
+    private let ring = CAGradientLayer()
+    private let ringMask = CAShapeLayer()
+    private var flightKey = ""
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         addSubview(fill)
+        thumb.clipsToBounds = true
+        thumb.isHidden = true
+        addSubview(thumb)
+        ring.colors = [UIColor(red: 0x34/255, green: 0xC7/255, blue: 0x6F/255, alpha: 1).cgColor,
+                       UIColor(red: 0x3D/255, green: 0xA1/255, blue: 0xFD/255, alpha: 1).cgColor]
+        ring.startPoint = CGPoint(x: 0, y: 1)
+        ring.endPoint = CGPoint(x: 1, y: 0)
+        ringMask.fillColor = nil
+        ringMask.strokeColor = UIColor.black.cgColor
+        ringMask.lineWidth = 2.5
+        ring.mask = ringMask
+        ring.isHidden = true
+        layer.addSublayer(ring)
         label.numberOfLines = 0
         label.lineBreakMode = .byWordWrapping
         label.textAlignment = .center
@@ -407,8 +426,9 @@ final class RowNoticePillView: UIView {
 
     func configure(_ plan: NoticePlan, dark: Bool) {
         label.attributedText = plan.attr
-        label.textAlignment = plan.style == .pill ? .center : .left
+        label.textAlignment = plan.style == .unsupported ? .left : .center
         label.frame = plan.text
+        configureStory(plan)
 
         let size = plan.capsule.size
         rim.frame = CGRect(origin: .zero, size: size)
@@ -435,6 +455,25 @@ final class RowNoticePillView: UIView {
             rim.shape.strokeColor = plan.onWallpaper
                 ? BubblePalette.rim(dark).cgColor
                 : UIColor.white.withAlphaComponent(0.06).cgColor
+        case .storyCard:
+            // The pill's own surface (the incoming bubble's), as a rounded card.
+            let path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 26)
+            let bubbleFill: BubbleFill
+            switch Theme.receivedSurface(dark, onWallpaper: plan.onWallpaper, blur: plan.wallpaperBlur) {
+            case .flat:
+                bubbleFill = (plan.onWallpaper && UIAccessibility.isReduceTransparencyEnabled)
+                    ? .background : .received
+            case .slice(let state): bubbleFill = .wallpaperSlice(state)
+            case .material: bubbleFill = .material
+            }
+            fill.apply(bubbleFill, path: path, bounds: CGRect(origin: .zero, size: size))
+            fill.alpha = 1
+            rim.shape.path = path.cgPath
+            rim.shape.lineWidth = plan.onWallpaper ? BubbleMetrics.rimWidth : 0.5
+            rim.shape.lineDashPattern = nil
+            rim.shape.strokeColor = plan.onWallpaper
+                ? BubblePalette.rim(dark).cgColor
+                : UIColor.white.withAlphaComponent(0.06).cgColor
         case .unsupported:
             let path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 14)
             fill.apply(.received, path: path, bounds: CGRect(origin: .zero, size: size))
@@ -443,6 +482,41 @@ final class RowNoticePillView: UIView {
             rim.shape.lineWidth = 1
             rim.shape.strokeColor = UIColor.secondaryLabel.withAlphaComponent(0.25).cgColor
             rim.shape.lineDashPattern = [4, 3]
+        }
+    }
+}
+
+extension RowNoticePillView {
+    /// The story mention card's picture, ring and flight source. Hidden on every other notice.
+    fileprivate func configureStory(_ plan: NoticePlan) {
+        guard plan.style == .storyCard, let img = plan.image, let ringRect = plan.ring else {
+            thumb.isHidden = true; thumb.reset(); ring.isHidden = true
+            setFlightKey("")
+            return
+        }
+        thumb.isHidden = false
+        thumb.frame = img
+        thumb.layer.cornerRadius = img.width / 2
+        thumb.configure(url: plan.storyThumbUrl, enc: nil, cid: "", cornerRadius: img.width / 2)
+        thumb.layer.cornerCurve = .circular   // a true circle; `.continuous` at half the side is not
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        ring.isHidden = false
+        ring.frame = ringRect
+        ringMask.frame = CGRect(origin: .zero, size: ringRect.size)
+        ringMask.path = UIBezierPath(ovalIn: CGRect(origin: .zero, size: ringRect.size).insetBy(dx: 1.25, dy: 1.25)).cgPath
+        CATransaction.commit()
+        setFlightKey(plan.flightKey)
+    }
+
+    /// The picture is where the story flies out of and back into (`ThreadView.openStory`), as the
+    /// story reply card's thumbnail is. Circular: the radius is half the side.
+    fileprivate func setFlightKey(_ key: String) {
+        if key != flightKey, !flightKey.isEmpty { MediaOpenRects.releaseView(flightKey, ifItIs: thumb) }
+        flightKey = key
+        guard !key.isEmpty else { return }
+        MediaOpenRects.captureView(key, thumb)
+        if thumb.window != nil {
+            MediaOpenRects.capture(key, thumb.convert(thumb.bounds, to: nil), cornerRadius: thumb.bounds.width / 2)
         }
     }
 }
@@ -1628,7 +1702,10 @@ final class MessageRowView: UIView {
     func noticeAction(at point: CGPoint) -> String? {
         guard let p = plan, case .notice(let n) = p.body else { return nil }
         // A little slop around each pill: they are short targets.
-        return n.buttons.first { $0.rect.insetBy(dx: -2, dy: -6).contains(point) }?.id
+        if let hit = n.buttons.first(where: { $0.rect.insetBy(dx: -2, dy: -6).contains(point) })?.id { return hit }
+        // A story mention card opens its story from anywhere on the card, as its button does.
+        if n.style == .storyCard, n.capsule.contains(point) { return n.buttons.first?.id }
+        return nil
     }
 
     /// The contact card's "message" button, specifically. Tapping the card ELSEWHERE opens the

@@ -3465,7 +3465,8 @@ struct ThreadView: View {
             },
             editPendingIds: editPendingIds,   // 2026-09-24 feature-audit
             timer: timerSeconds > 0 ? (timerSince, timerSeconds) : nil,
-            liveRestrictRequestId: liveRestrictRequestId)
+            liveRestrictRequestId: liveRestrictRequestId,
+            otherName: isGroup ? "" : personName(otherUid))
 
         var out: [String: MessageRowModel] = [:]
         // owner audit 2026-10-06 chat #45: one pass for grouping and dates, shared with the signatures.
@@ -4097,6 +4098,15 @@ struct ThreadView: View {
             },
             onTapNoticeAction: { _, action in
                 pendingKeyboardDismiss = false
+                // A story mention card (owner 2026-10-16): the story flies out of its picture, the
+                // way a story reply's card opens it. A story that has gone says so (`openStory`).
+                if action.hasPrefix("storymention:") {
+                    let msgId = String(action.dropFirst("storymention:".count))
+                    if let m = loadedMessage(id: msgId), let sm = m.storyMention {
+                        openStory(sm.id, m.authorId, anchorId: "storymention-\(msgId)")
+                    }
+                    return
+                }
                 // Asked again at the tap: the request may have been answered or lapsed since the
                 // row was drawn.
                 guard liveRestrictRequestId != nil else {

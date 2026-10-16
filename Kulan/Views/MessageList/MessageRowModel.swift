@@ -374,6 +374,7 @@ struct NoticeRow: Equatable {
     enum Style: Equatable {
         case pill                      // the day separator / system event / pin notice capsule
         case unsupported               // dashed-border card for a newer app version's message
+        case storyCard                 // a story mention: the story in a ring, the line, View Story
     }
     var text: String
     var symbol: String?                // leading SF Symbol, inline with the text (the timer glyph)
@@ -384,6 +385,11 @@ struct NoticeRow: Equatable {
     /// Answer buttons drawn under the notice, left to right (owner, 2026-10-12: a Restricted chat
     /// request arrives with Reject and Accept). Empty on every other notice.
     var actions: [NoticeAction] = []
+    /// `.storyCard` only: the story's picture, and the key its flight opens from and closes into.
+    var storyThumbUrl: String? = nil
+    var flightKey: String = ""
+    /// A person's name inside `text`, drawn bold (the story mention lines).
+    var boldName: String? = nil
 }
 
 /// One button under a notice. `id` is what the tap reports back to the thread.

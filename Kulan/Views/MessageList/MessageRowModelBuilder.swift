@@ -48,6 +48,8 @@ struct MessageRowContext {
     var timer: (since: Date?, seconds: Int)? = nil
     /// The Restricted chat request notice I can answer right now, or nil. See `ThreadView`.
     var liveRestrictRequestId: String? = nil
+    /// The other person's name in a 1:1 (story mention cards: "You mentioned NAME in a story").
+    var otherName: String = ""
 }
 
 /// ⚠️ `@MainActor` because it genuinely is main-actor work, not to silence a warning: it reads
@@ -121,6 +123,8 @@ enum MessageRowModelBuilder {
                 text: "This message was sent using a newer version of the app. Update to the latest version to view it.",
                 symbol: nil, style: .unsupported, tapTargetId: nil,
                 onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur))
+        } else if let sm = msg.storyMention, !ctx.isGroup {
+            content = .notice(storyMentionRow(msg, sm, ctx: ctx))
         } else if msg.isSystem {
             content = .notice(systemNotice(msg, ctx: ctx))
         } else if msg.isCall {
@@ -762,6 +766,31 @@ enum MessageRowModelBuilder {
             : " \(who) turned off disappearing messages."
         return NoticeRow(text: line, symbol: "timer", style: .pill, tapTargetId: nil,
                          onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur)
+    }
+
+    // ── Story mention ──
+
+    /// ⛔ THE STORY MENTION CARD — owner 2026-10-16, with the reference app's pictures: the story in a
+    /// ring, "You mentioned NAME in a story" / "NAME mentioned you in a story", View Story. Once the
+    /// story is gone (deleted or expired, the same live test a story reply uses) it becomes one
+    /// centred line saying so. See `StoryMentions` for how the message is sent.
+    private static func storyMentionRow(_ m: Message, _ sm: StoryMentionRef, ctx: MessageRowContext) -> NoticeRow {
+        let mine = m.authorId == ctx.me
+        let name = mine ? (ctx.otherName.isEmpty ? "them" : ctx.otherName) : ctx.nameFor(m.authorId)
+        guard ctx.storyIsLive(sm.id, m.authorId) else {
+            let line = mine ? "The story where you mentioned \(name) is no longer available"
+                            : "The story where \(name) mentioned you is no longer available"
+            return NoticeRow(text: line, symbol: nil, style: .pill, tapTargetId: nil,
+                             onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur,
+                             boldName: name)
+        }
+        let line = mine ? "You mentioned \(name) in a story" : "\(name) mentioned you in a story"
+        return NoticeRow(text: line, symbol: nil, style: .storyCard, tapTargetId: nil,
+                         onWallpaper: ctx.onWallpaper, wallpaperBlur: ctx.wallpaperBlur,
+                         actions: [NoticeAction(id: "storymention:\(m.id)", title: "View Story")],
+                         storyThumbUrl: sm.thumbUrl,
+                         flightKey: MediaOpenRects.key(.storyRow, "storymention-\(m.id)"),
+                         boldName: name)
     }
 
     // ── Call rows ──
