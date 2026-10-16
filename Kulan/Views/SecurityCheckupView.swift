@@ -350,6 +350,16 @@ struct SecurityCheckupSheet: View {
                             }
                         }
                     }
+                    // ⛔ THE REST OF THE TOOLS — 2026-10-15: fariin.com/safety. People reading this
+                    // sheet are already thinking about their account; the page shows everything
+                    // else (requests, block, report, scams). Inside the measured content, so the
+                    // sheet's fitted height includes it.
+                    Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
+                        Text("How Fariin keeps you safe")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.blue)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 28)

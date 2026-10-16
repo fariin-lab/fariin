@@ -7716,10 +7716,17 @@ struct ThreadView: View {
                 // ONE LINE, his reference's wording. Who is asking, and their picture, are now the card
                 // at the top of the conversation — saying the name again down here, plus a sentence
                 // explaining what two labelled buttons already say, was three lines to answer yes or no.
-                Text("Accept message request from \(title)?")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                // ⛔ "STAY SAFE" ON THE SAME LINE — 2026-10-15: a request from a stranger is where
+                // scams start, so the line links to fariin.com/safety's "when something is wrong"
+                // part. Appended, not a line of its own: the owner cut this bar down to one line.
+                Button { if let u = URL(string: "https://fariin.com/safety#help") { WebLink.open(u) } } label: {
+                    (Text("Accept message request from \(title)? ")
+                        .foregroundStyle(.secondary)
+                     + Text("Stay safe").foregroundStyle(Theme.defaultBubble(dark)).fontWeight(.semibold))
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                }
+                .buttonStyle(.plain)
                 HStack(spacing: 10) {
                     Button {
                         // Close first (2026-09-24 audit): the await only returns on the server's

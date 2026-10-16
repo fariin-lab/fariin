@@ -1378,6 +1378,21 @@ struct PrivacySettingsView: View {
                 Text("Require Face ID, Touch ID or your passcode to unlock Fariin.")
             }
 
+            // ⛔ SAFETY TIPS — 2026-10-15: fariin.com/safety (every safety tool on one page) was
+            // reachable only from the website. This page is where people come when they are
+            // worried. Last, not first: the audience card's place at the top is the owner's.
+            Section {
+                Button { if let u = URL(string: "https://fariin.com/safety") { WebLink.open(u) } } label: {
+                    HStack {
+                        Text("Safety Tips").foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "arrow.up.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                }
+            } footer: {
+                Text("How Fariin keeps your chats private, and what to do if something feels wrong.")
+            }
+
             // HIDDEN, not removed (owner, 2026-08-02: "Dont delete just hide… i need Modern Header
             // defuilt user make cant change it"). The page and the classic header stay wired and
             // working; this is the only door to them, and it is off the wall. Nobody who already
