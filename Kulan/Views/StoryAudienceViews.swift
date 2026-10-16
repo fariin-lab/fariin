@@ -429,8 +429,14 @@ struct SelectViewersView: View {
                                 Spacer(minLength: 8)
                                 StoryTick(on: selected.contains(c.id))
                             }
+                            .frame(minHeight: 44)
                             .contentShape(Rectangle())
                         }
+                        // ⛔ THE FORWARD SHEET'S ROW SPACING — owner 2026-10-16: "these users have
+                        // more space, make it exactly like the forward page". Same insets and the
+                        // same separator start as `ForwardPicker.row`.
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 52 }
                     }
                 } header: {
                     Text(letter)
