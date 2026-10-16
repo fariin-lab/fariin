@@ -171,6 +171,8 @@ struct ContactInfoView: View {
     /// the button back; this says why it moved back instead of leaving it silent.
     @State private var glowWriteFailed = false
     @State private var openChat = false
+    /// The chat's bar is being held (`ChatHeaderView.onPullDown`): the sheet may be dragged away.
+    @State private var chatBarHeld = false
     @State private var showAllMedia = false
     @State private var showVerify = false
     @State private var showDisappear = false
@@ -1178,7 +1180,8 @@ struct ContactInfoView: View {
             .navigationDestination(isPresented: $openChat) {
                 ThreadView(cid: cid, title: name, photoUrl: photoUrl)
                     // Only in the sheet over a story: pulling the header down closes the sheet.
-                    .environment(\.chatSheetPullDown, source == .story ? ({ dismiss() } as (() -> Void)?) : nil)
+                    .environment(\.chatSheetPullDown,
+                                 source == .story ? ({ held in chatBarHeld = held } as ((Bool) -> Void)?) : nil)
             }
             // ⛔ THE SHEET LETS GO OF THE DRAG WHILE A CONVERSATION IS OPEN INSIDE IT — his
             // 2026-08-18 "open a friend's story, tap the profile, tap Message, and scrolling down
@@ -1200,7 +1203,7 @@ struct ContactInfoView: View {
             // Turning interactive dismissal off for exactly as long as the chat is up hands the drag
             // back to the list. The way out of the chat is the back chevron that is already in the
             // bar above it, and the moment that is tapped the sheet can be dragged down again.
-            .interactiveDismissDisabled(openChat)
+            .interactiveDismissDisabled(openChat && !chatBarHeld)
             // ⛔ UP FROM THE BOTTOM, AS DISAPPEARING MESSAGES — owner 2026-10-16: Encryption and
             // Restricted chat slid in sideways. Both are sheets now with that page's chrome (its
             // own bar, the X at the top left); the pages themselves are unchanged.

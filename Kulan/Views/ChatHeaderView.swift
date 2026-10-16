@@ -39,7 +39,12 @@ final class ChatHeaderView: UIView {
     /// that one touch, so Apple's own sheet drag takes it: follows the finger, springs back or closes,
     /// exactly as on the profile. The first try moved the sheet by hand and did not follow the
     /// finger. Non-nil = enabled; every other chat's bar is untouched.
-    var onPullDown: (() -> Void)? { didSet { attachSheetHandle() } }
+    ///
+    /// ⚠️ 2026-10-16 second pass: the flag that matters is SwiftUI's `interactiveDismissDisabled`,
+    /// which it answers through the presentation delegate; flipping UIKit's `isModalInPresentation`
+    /// alone left the sheet rubber-banding a little and stopping. So this hands the answer to the
+    /// sheet's owner: true = the bar is held, the sheet may close; false = locked again.
+    var onPullDown: ((Bool) -> Void)? { didSet { attachSheetHandle() } }
 
     /// Their `titleIcon`: setting nil hides the slot so the row closes up.
     var titleIcon: UIImage? {
@@ -508,8 +513,9 @@ private final class SheetHandleTouch: UIGestureRecognizer {
     }
     private var relock: DispatchWorkItem?
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let h = header, h.onPullDown != nil, let sheet = h.sheetController else { return }
+        guard let h = header, let unlock = h.onPullDown, let sheet = h.sheetController else { return }
         relock?.cancel()
+        unlock(true)
         sheet.isModalInPresentation = false
     }
     /// Locked again a moment AFTER the finger lifts, not at the lift: the sheet decides close or
@@ -519,8 +525,10 @@ private final class SheetHandleTouch: UIGestureRecognizer {
         state = .failed
         guard let h = header, let sheet = h.sheetController else { return }
         relock?.cancel()
+        let unlock = h.onPullDown
         let work = DispatchWorkItem { [weak sheet] in
             guard let sheet, sheet.presentingViewController != nil, !sheet.isBeingDismissed else { return }
+            unlock?(false)
             sheet.isModalInPresentation = true
         }
         relock = work
