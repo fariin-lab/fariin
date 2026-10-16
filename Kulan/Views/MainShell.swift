@@ -3738,9 +3738,9 @@ struct ArchivedChatsView: View {
                         // the chat list's `ic_archive` and drawn in a different hand — two bottom bars
                         // that do the opposite halves of one action, looking like two different apps.
                         // Same asset, same 22pt, same template rendering as the chat list's.
-                        // 2026-09-24 fix-all #57: bulk Mute, first, the same menu the main list's bar has.
-                        bulkMuteMenu
-                        Spacer()
+                        // ⛔ NO BULK MUTE HERE — owner 2026-10-16, circled on the Archived page:
+                        // "remove that button". (It was added 2026-09-24 fix-all #57; the main chat
+                        // list's bar keeps its own.) This page's copy of the menu is deleted with it.
                         Button { unarchiveSelected() } label: {
                             Image("ic_archive").renderingMode(.template).resizable().scaledToFit()
                                 .frame(width: 22, height: 22)
@@ -3817,29 +3817,6 @@ struct ArchivedChatsView: View {
     }
 
     private func exitSelect() { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } }
-    /// 2026-09-24 fix-all #57: the main list's bulk Mute (`ChatsView.bulkMuteMenu`), same durations,
-    /// same icon, same `setMute` per selected chat, Unmute offered when any of them is muted now.
-    private var bulkMuteMenu: some View {
-        let anyMuted = repo.conversations.contains {
-            selection.contains($0.id) && $0.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
-        }
-        return Menu {
-            if anyMuted { Button("Unmute") { muteSelected(until: 0) } }
-            Button("Mute for 1 hour") { muteSelected(until: ChatService.muteUntil(1)) }
-            Button("Mute for 8 hours") { muteSelected(until: ChatService.muteUntil(8)) }
-            Button("Mute for 1 week") { muteSelected(until: ChatService.muteUntil(168)) }
-            Button("Mute Always") { muteSelected(until: ChatService.muteUntil(nil)) }
-        } label: {
-            Image("ic_menu_mute").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 22, height: 22)
-        }
-        .tint(.primary).disabled(selection.isEmpty)
-    }
-    private func muteSelected(until: Double) {
-        let ids = selection
-        Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setMute(id, until: until) } } } }
-        exitSelect()
-    }
     private func unarchiveSelected() {
         let ids = selection
         Task { for id in ids { await ChatService.setArchived(id, false) } }
