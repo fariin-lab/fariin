@@ -2007,7 +2007,7 @@ struct StoryViewer: View {
                 ContactInfoView(cid: [me, g.authorUid].sorted().joined(separator: "_"),
                                 name: g.name, photoUrl: g.photoUrl,
                                 source: .story,   // no chat underneath → no Search/Wallpaper (audit)
-                                isSelf: g.authorUid == me)
+                                isSelf: g.authorUid == me, showsBack: true)
             }
             // FULL HEIGHT, not half (owner 2026-08-03: "if someone upload story then i open, then i
             // click his profile — open FULL profile sheet"). At `.medium` this profile has half a

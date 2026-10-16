@@ -30,6 +30,10 @@ struct ContactInfoView: View {
     var posterUrl: String? = nil
     var source: ProfileSource = .chat
     var isSelf: Bool = false   // your OWN profile (opened from your own story) → no call-yourself buttons
+    /// ⛔ A BACK CHEVRON AT THE TOP LEFT — owner 2026-10-16: opened from a story this page is the
+    /// root of a sheet, so the slot was empty and the only way back was the drag. The story viewer
+    /// passes true; a pushed profile keeps the system's own back button.
+    var showsBack: Bool = false
     /// ⛔ PREVIEW: MY OWN PROFILE, DRAWN THE WAY EVERYBODY ELSE SEES IT (owner, 2026-08-20).
     ///
     /// Deliberately NOT `isSelf`. That flag strips the page down — no settings card, no danger card,
@@ -926,6 +930,12 @@ struct ContactInfoView: View {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
             }
             .tint(barGlyph)
+        } else if showsBack {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.backward").font(.system(size: 17, weight: .semibold))
+            }
+            .tint(barGlyph)
+            .accessibilityLabel("Back")
         }
     }
 
