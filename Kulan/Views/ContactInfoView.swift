@@ -1188,11 +1188,16 @@ struct ContactInfoView: View {
             // back to the list. The way out of the chat is the back chevron that is already in the
             // bar above it, and the moment that is tapped the sheet can be dragged down again.
             .interactiveDismissDisabled(openChat)
-            .navigationDestination(isPresented: $showVerify) {
-                VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
+            // ⛔ UP FROM THE BOTTOM, AS DISAPPEARING MESSAGES — owner 2026-10-16: Encryption and
+            // Restricted chat slid in sideways. Both are sheets now with that page's chrome (its
+            // own bar, the X at the top left); the pages themselves are unchanged.
+            .sheet(isPresented: $showVerify) {
+                SlideUpPage {
+                    VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
+                }
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
-            .navigationDestination(isPresented: $showRestricted) { RestrictedChatView(cid: cid) }
+            .sheet(isPresented: $showRestricted) { SlideUpPage { RestrictedChatView(cid: cid) } }
             // ⛔ ONLY THE GIVE PATH REACHES THIS — see `glowActionButton`. The sheet's own button is
             // what performs the give, so backing out of it with the ✕ or a swipe leaves the
             // relationship exactly as it was.
@@ -2753,3 +2758,24 @@ struct ProfilePhotoViewer: View {
 }
 
 
+/// A contact-info page shown as a sheet, with `DisappearingMessagesView`'s chrome: its own bar,
+/// inline title (the page's), and the X at the top left that closes it.
+private struct SlideUpPage<Content: View>: View {
+    @Environment(\.dismiss) private var dismiss
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        NavigationStack {
+            content
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    if #available(iOS 26.0, *) {
+                        ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                            .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
+                    }
+                }
+        }
+    }
+}
