@@ -232,8 +232,61 @@ struct Verification: Equatable, Hashable {
 /// failure: showing a badge we are not sure about is the one outcome a verification system must
 /// never produce.
 enum VerificationIndex {
-    private static var records: [String: Verification] = [:]
+    /// ⛔ SEEDED FROM THE PHONE, NOT EMPTY AT LAUNCH — owner 2026-10-16: on the Stories list the tick
+    /// arrived after the cards, every time. This table lived in memory only, so each launch started
+    /// it blank and a row's tick waited for that person's profile to be read again, which the Stories
+    /// list does late or not at all. It is now saved to a small file (the same map the server sends,
+    /// so `Verification.init?(_:)` reads it back) and loaded on first use, so a tick this phone has
+    /// seen before is there on the first frame; a fresh server answer still corrects it as before.
+    /// The file goes with `clear()` on sign-out.
+    private static var records: [String: Verification] = loadFromDisk()
     private static let lock = NSLock()
+    private static var saveScheduled = false
+
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("verification-index.plist")
+    }
+
+    private static func loadFromDisk() -> [String: Verification] {
+        guard let url = fileURL, let data = try? Data(contentsOf: url),
+              let raw = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: [String: Any]]
+        else { return [:] }
+        var out: [String: Verification] = [:]
+        for (key, map) in raw { if let v = Verification(map) { out[key] = v } }
+        return out
+    }
+
+    /// Written a second after the last change, off the main thread, so a screen that records forty
+    /// rows costs one write.
+    private static func scheduleSave() {
+        lock.lock()
+        if saveScheduled { lock.unlock(); return }
+        saveScheduled = true
+        lock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+            lock.lock()
+            saveScheduled = false
+            let snapshot = records
+            lock.unlock()
+            guard let url = fileURL else { return }
+            var raw: [String: [String: Any]] = [:]
+            for (key, v) in snapshot {
+                var m: [String: Any] = ["status": v.status.rawValue, "isVerified": v.showsBadge,
+                                        "verifiedBy": v.verifiedBy, "verifiedName": v.verifiedName,
+                                        "verifiedHandle": v.verifiedHandle, "version": v.version]
+                if let k = v.kind { m["type"] = k.rawValue }
+                if let d = v.verifiedAt { m["verifiedAt"] = d.timeIntervalSince1970 * 1000 }
+                if let d = v.lastUpdated { m["lastUpdated"] = d.timeIntervalSince1970 * 1000 }
+                raw[key] = m
+            }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            if let data = try? PropertyListSerialization.data(fromPropertyList: raw, format: .binary, options: 0) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+    }
 
     /// Takes the DECODED value, not the raw map: the profile has already parsed it once, and parsing
     /// it a second time here would be a second place for the two answers to differ.
@@ -272,6 +325,7 @@ enum VerificationIndex {
         if before?.showsBadge != after?.showsBadge || before?.status != after?.status || before?.kind != after?.kind {
             VerificationSignal.bump()
         }
+        if before != after { scheduleSave() }
     }
 
     /// Convenience for the user path, which is every caller today.
@@ -296,6 +350,7 @@ enum VerificationIndex {
     /// Sign-out: the next account must not inherit a map of who was verified.
     static func clear() {
         lock.lock(); records.removeAll(); lock.unlock()
+        if let url = fileURL { try? FileManager.default.removeItem(at: url) }
         VerificationSignal.bump()
     }
 }

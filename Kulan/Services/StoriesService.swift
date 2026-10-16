@@ -3046,6 +3046,8 @@ final class StoriesRepository {
                     group.addTask { [db] in
                         let snap = try? await db.collection("users").document(u).getDocument()
                         if let snap, snap.exists, let f = snap.data() {
+                            // The tick comes in the same read (owner 2026-10-16: it arrived late).
+                            VerificationIndex.record(uid: u, verification: Verification(f["verification"] as? [String: Any]))
                             return (u, f["name"] as? String ?? "", f["photoUrl"] as? String)
                         }
                         // Doc genuinely doesn't exist → negative-cache ("", nil) so a profileless author
