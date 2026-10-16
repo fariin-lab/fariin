@@ -813,8 +813,7 @@ struct StoriesTabView: View {
                                  backThumbUrl: backPosted.map(postedURL) ?? "",
                                  backBlurThumb: backPosted?.blurThumb ?? "",
                                  rectKey: StoryDoor.uploadingSourceKey,   // audit #13: the door's anchor
-                                 onCamera: { composeStory() },
-                                 onPen: { composeStory(text: true) })
+                                 onCamera: { composeStory() })
                 }
                 .buttonStyle(.plain)
             } else if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
@@ -836,7 +835,6 @@ struct StoriesTabView: View {
                                  backBlurThumb: mine.stories.count > 1 ? mine.stories[mine.stories.count - 2].blurThumb : "",
                                  rectKey: mine.id,
                                  onCamera: { composeStory() },
-                                 onPen: { composeStory(text: true) },
                                  pressKey: StoryListRow.pressKey(mine.id))
                 }
                 .buttonStyle(.plain)
@@ -850,7 +848,6 @@ struct StoriesTabView: View {
                                  seen: true,
                                  rectKey: Self.addRowKey,   // the lift's picture — see `listLift`
                                  onCamera: { composeStory() },
-                                 onPen: { composeStory(text: true) },
                                  pressKey: StoryListRow.pressKey(Self.addRowKey))
                 }
                 .buttonStyle(.plain)
@@ -1616,7 +1613,7 @@ struct StoriesTabView: View {
     ///
     /// The database is still the enforcement and this is not a second one: `dailyLimitReached` is
     /// false whenever the count is unknown, so nothing here can lock somebody out on its own.
-    private func composeStory(text: Bool = false) {
+    private func composeStory() {
         guard AppLimits.shared.storiesEnabled else { storiesOff = true; return }
         if storyBudget.dailyLimitReached {
             storyLimitReached = true
@@ -1626,7 +1623,7 @@ struct StoriesTabView: View {
         } else {
             // The door, not a cover binding — it presents the camera itself, so nothing needs to be
             // mounted on this screen or on the tab shell for it.
-            StoryCameraDoor.open(text: text)
+            StoryCameraDoor.open()
         }
     }
 

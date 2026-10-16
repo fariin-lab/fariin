@@ -199,11 +199,10 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// `open()` convinced a camera is still up and refusing to present another.
     private static weak var presented: UIViewController?
 
-    static func open(text: Bool = false) {
+    static func open() {
         guard presented == nil, let top = topViewController() else { return }
         let sheet = AddStorySheet(onPosted: { Task { await StoriesRepository.shared.load(force: true) } },
-                                  onDismiss: { StoryCameraDoor.close() },
-                                  startInText: text)
+                                  onDismiss: { StoryCameraDoor.close() })
         let host = UIHostingController(rootView: sheet)
         // ⚠️ `.overFullScreen`, NOT `.fullScreen`, AND THE CLOSING ANIMATION DEPENDS ON IT. A
         // `.fullScreen` presentation takes the presenting view out of the hierarchy. On the way out

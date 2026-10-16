@@ -75,8 +75,6 @@ struct StoryListRow: View {
     var rectKey: String? = nil
     /// The camera circle on the right of my own row.
     var onCamera: (() -> Void)? = nil
-    /// Text story straight away — drawn left of the camera when set.
-    var onPen: (() -> Void)? = nil
     /// The whole row's press key (`pressKey(_:)`). nil = no long press on this row.
     var pressKey: String? = nil
 
@@ -94,22 +92,6 @@ struct StoryListRow: View {
                 .modifier(MediaRectReporter(id: pressKey.map { _ in textKey } ?? "", scope: .storyRow,
                                             cornerRadius: 0))
             Spacer(minLength: 8)
-            // ⛔ THE PEN, LEFT OF THE CAMERA — owner 2026-10-15: "so the user gets straight to what
-            // they want". Opens the same page on Text instead of the camera. Apple's pencil until he
-            // supplies his own icon, as he did the camera's.
-            if let onPen {
-                Button(action: onPen) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityLabel("Text Story")
-                .padding(.trailing, 4)
-            }
             if let onCamera {
                 // Owner 2026-10-11: his camera icon, on Liquid Glass.
                 Button(action: onCamera) {
