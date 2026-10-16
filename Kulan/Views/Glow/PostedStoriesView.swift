@@ -568,7 +568,7 @@ struct PostedStoriesView: View {
                     // Stories icon at 44, title 17 semibold, line 15 secondary (MessageRequestsView
                     // `emptyLine`), instead of the system's photo glyph and sizes.
                     VStack(spacing: 10) {
-                        Image("ic_stories")
+                        Image("ic_stories_stack")   // the Settings Stories icon (owner 2026-10-16)
                             .renderingMode(.template)
                             .resizable().scaledToFit()
                             .frame(width: 44, height: 44)
