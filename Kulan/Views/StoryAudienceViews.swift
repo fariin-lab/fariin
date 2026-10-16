@@ -1203,6 +1203,10 @@ struct CustomStoryDetailView: View {
                 Text("Choose which of your chats can view your story. Changes won't affect stories you've already sent.")
             }
         }
+        // ⛔ THE CIRCLE SITS UNDER THE HEADER — owner, 2026-10-16, with the empty band circled: a
+        // grouped List opens with its own top margin before the first section, and the first
+        // section here is the emoji, so it floated ~45pt below the bar.
+        .contentMargins(.top, 8, for: .scrollContent)
         .navigationTitle(a.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
