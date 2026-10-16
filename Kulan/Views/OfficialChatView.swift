@@ -624,9 +624,34 @@ struct OfficialChatInfoView: View {
 
     // MARK: Profile card
 
+    /// Fariin's live official stories, as the Stories row has them (`OfficialStories`).
+    private var storyGroup: StoryGroup? {
+        StoriesRepository.shared.others.first { OfficialChannel.isOfficial($0.authorUid) }
+    }
+
     private var profileCard: some View {
         VStack(spacing: 10) {
-            OfficialAvatar(size: 112)
+            // ⛔ THE STORY RING ON THE CHANNEL'S PICTURE — owner 2026-10-16, circled: a person's page
+            // rings their photo while they have a story up, Fariin's did not. Same ring as the chat
+            // list (`StoryRingView`, one arc per story, seen ones grey), the mark shrunk inside it
+            // with a gap, and a tap opens the stories from this circle.
+            if let g = storyGroup, !g.stories.isEmpty {
+                OfficialAvatar(size: 104)
+                    .modifier(MediaRectReporter(id: "officialinfo-\(g.id)", scope: .storyRow, cornerRadius: 52))
+                    .overlay {
+                        StoryRingView(seen: StoryPrefs.seenFlags(g.stories, upTo: g.lastViewedAt), lineWidth: 3)
+                            .frame(width: 118, height: 118)
+                    }
+                    .frame(width: 118, height: 118)
+                    .contentShape(Circle())
+                    .onTapGesture {
+                        StoryDoor.open(g, from: "officialinfo-\(g.id)", deliveredToMe: true)
+                    }
+                    .accessibilityLabel("Fariin's story")
+                    .accessibilityAddTraits(.isButton)
+            } else {
+                OfficialAvatar(size: 112)
+            }
             HStack(spacing: 6) {
                 Text(OfficialChannel.name).font(.system(size: 26, weight: .bold))
                 VerifiedTick(size: 22)
