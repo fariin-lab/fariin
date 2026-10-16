@@ -1014,10 +1014,19 @@ private final class CMActionRow: UIView {
         addSubview(title)
 
         // An SF Symbol name, or one of the app's own assets when we have drawn our own glyph.
-        icon.image = UIImage(systemName: action.icon)
-            ?? UIImage(named: action.icon)?.withRenderingMode(.alwaysTemplate)
+        // ⛔ A SYMBOL AT ITS OWN SIZE, CENTRED — owner 2026-10-16: Hide Stories' eye looked small
+        // beside the drawn chat and profile marks. Aspect-fitting a wide symbol (eye.slash) into the
+        // 24pt square made it ~18 tall; the drawn icons fill the square. Symbols now draw at 19pt
+        // (about the drawn icons' visual size) and are centred instead of squeezed.
+        if let symbol = UIImage(systemName: action.icon,
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)) {
+            icon.image = symbol
+            icon.contentMode = .center
+        } else {
+            icon.image = UIImage(named: action.icon)?.withRenderingMode(.alwaysTemplate)
+            icon.contentMode = .scaleAspectFit
+        }
         icon.tintColor = color
-        icon.contentMode = .scaleAspectFit
         addSubview(icon)
 
         isAccessibilityElement = true
