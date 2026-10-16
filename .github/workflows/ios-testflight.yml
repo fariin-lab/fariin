@@ -74,7 +74,12 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD: POST STORY FLIES INTO MY STORY; OFFICIAL STORIES.
+            THIS BUILD: POST STORY, CLOSER TO THE REFERENCE.
+            Post Story: the page behind the sheet shows as a smaller rounded card and grows back to full screen as the sheet drops.
+            Post Story: the picture no longer shows twice while it flies into My Story; the status bar stays white during it.
+            PLEASE TEST: Stories tab open, Add Story, pick a photo, Post Story, several times; compare with the reference.
+
+            EARLIER: POST STORY FLIES INTO MY STORY; OFFICIAL STORIES.
             Post Story: the sheet drops, the black lifts, and your picture flies into your My Story card (no slide back). The camera X still slides.
             Official Stories: Fariin in the Stories row, read-only viewer.
             Fariin chat: unmuted by default; broadcasts from before your account existed are hidden; no in-app banner for Fariin security messages.
