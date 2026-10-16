@@ -2075,6 +2075,21 @@ service cloud.firestore {
           // that is not in the future. The edit window is measured from `createdAt`, so a forged
           // far-future time would have been an edit window that never closed.
           && !request.resource.data.keys().hasAny(['edits', 'editedAt'])
+          // ⛔ A STORY MENTION ONLY INTO A CHAT THAT ALREADY EXISTS — owner 2026-10-16: "mentioning
+          // someone in my story must not message people I have never chatted with, and must not
+          // create a chat". `exists`/`get` read the state BEFORE this write (and before the batch
+          // that would create the conversation), so a mention can neither open a chat nor knock on
+          // a request. Existing means `isFriendOf`'s rule: an accepted 1:1, or an older chat that
+          // carries a message, between exactly these two people, not a group.
+          && (!('storyMention' in request.resource.data)
+              || (cid.matches('.+_.+')
+                  && exists(/databases/$(database)/documents/conversations/$(cid))
+                  && get(/databases/$(database)/documents/conversations/$(cid)).data.get('type', '') != 'group'
+                  && get(/databases/$(database)/documents/conversations/$(cid)).data.get('users', []).size() == 2
+                  && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.get('users', [])
+                  && (get(/databases/$(database)/documents/conversations/$(cid)).data.get('startedBy', '') != ''
+                        ? get(/databases/$(database)/documents/conversations/$(cid)).data.get('accepted', false) == true
+                        : get(/databases/$(database)/documents/conversations/$(cid)).data.get('lastMessage', '') != '')))
           && (!('createdAt' in request.resource.data)
               || !(request.resource.data.createdAt is timestamp)
               || request.resource.data.createdAt < request.time + duration.value(2, 'm'))
