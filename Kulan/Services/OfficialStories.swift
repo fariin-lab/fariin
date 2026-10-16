@@ -141,13 +141,20 @@ final class OfficialStories {
     /// The official chat's own mark (`welcome-mark`), stored where avatars and the viewer look for
     /// a picture, under a local url nothing on a server answers. Same arrangement as the demo
     /// photos (`DemoMode.profilePhoto`).
-    private static var avatarSeeded = false
+    ///
+    /// ⛔ SEEDED ON EVERY PUBLISH, NOT ONCE — owner 2026-10-16: the Fariin card and story header lost
+    /// the logo. Since the saved answer is shown at launch (a2812610), the first seed ran in the
+    /// launch window, before the image caches settle, and a once-per-launch flag never put it back.
+    /// The bytes are made once and kept; storing them again is cheap.
+    private static var avatarBytes: (UIImage, Data)? = {
+        guard let img = UIImage(named: "welcome-mark"), let data = img.jpegData(compressionQuality: 0.9)
+        else { return nil }
+        return (img, data)
+    }()
     private static func avatarURL() -> String {
         let urlStr = "https://fariin.local/official-fariin-avatar.jpg"
-        guard !avatarSeeded, let url = URL(string: urlStr),
-              let img = UIImage(named: "welcome-mark"),
-              let data = img.jpegData(compressionQuality: 0.9) else { return urlStr }
-        avatarSeeded = true
+        guard let url = URL(string: urlStr), let bytes = avatarBytes else { return urlStr }
+        let (img, data) = bytes
         DiskImageCache.shared.store(img, data: data, for: urlStr)
         let resp = URLResponse(url: url, mimeType: "image/jpeg",
                                expectedContentLength: data.count, textEncodingName: nil)
