@@ -110,7 +110,7 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
     /// corner (the 15/16 Pro class); on a device whose real corner differs, concentric supplies the
     /// true number and this is never reached. The old 12 was chosen to "look like a card without
     /// pretending to match the hardware", which was the wrong goal: he wants it to match.
-    private static let appleCardRadius: CGFloat = 55
+    static let appleCardRadius: CGFloat = 55
 
     private static func makeCard(of view: UIView, bounds: CGRect) -> UIView? {
         guard let snapshot = view.snapshotView(afterScreenUpdates: false) else { return nil }
@@ -274,7 +274,7 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         let chrome = top.presentingViewController?.view?.snapshotView(afterScreenUpdates: false)
 
         (host.presentingViewController ?? host).dismiss(animated: false)
-        StoryPostFlight.run(scene: scene, bounds: window.bounds, source: source,
+        StoryPostFlight.run(scene: scene, appWindow: window, source: source,
                             chrome: chrome, sheet: sheet)
     }
 
@@ -317,7 +317,9 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
     /// The editor names the picture and where it is drawn, just before it reports the post.
     static func prepare(imageData: Data, rect: CGRect, cornerRadius: CGFloat) {
         guard rect.width > 1, rect.height > 1, let img = UIImage(data: imageData) else { pending = nil; return }
-        pending = Source(image: img, rect: rect, cornerRadius: cornerRadius)
+        // Decoded now, at the tap: left lazy, the decode lands on the flight's first frame and the
+        // picture visibly jumps where it should start moving.
+        pending = Source(image: img.preparingForDisplay() ?? img, rect: rect, cornerRadius: cornerRadius)
     }
 
     static func takePending() -> Source? {
@@ -345,8 +347,9 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         return nil
     }
 
-    static func run(scene: UIWindowScene, bounds: CGRect, source: Source?,
+    static func run(scene: UIWindowScene, appWindow: UIWindow, source: Source?,
                     chrome: UIView?, sheet: (image: UIImage, frame: CGRect, radius: CGFloat)?) {
+        let bounds = appWindow.bounds
         window?.isHidden = true
         let overlay = UIWindow(windowScene: scene)
         overlay.frame = bounds
@@ -358,6 +361,11 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         overlay.rootViewController = root
         let stage = root.view!
         window = overlay
+
+        // The share sheet's own dim, black at 0.5, over the page behind; it goes with the sheet.
+        let sheetDim = UIView(frame: bounds)
+        sheetDim.backgroundColor = UIColor(white: 0, alpha: 0.5)
+        stage.addSubview(sheetDim)
 
         let dim = UIView(frame: bounds)
         dim.backgroundColor = .black
@@ -401,13 +409,46 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 
         overlay.isHidden = false
 
-        // The sheet drops, the black lifts: both start on the tap.
+        // ⛔ THE PAGE BEHIND IS A CARD UNTIL THE SHEET HAS GONE — owner, 2026-10-16, his screenshots
+        // of the reference: the chat list shows up shrunk, rounded and grey, and grows back to full
+        // screen as the sheet drops. A sheet up holds the root at (width − 32) / width with its top
+        // at the status bar, 38pt corners and black around it (`NavigationController`,
+        // `NavigationModalFrame`); the sheet's dismiss returns it in 0.3s ease-in-out. The real app
+        // view is moved, not a picture of it, so it is live the moment it is back.
+        if let rootView = appWindow.rootViewController?.view, let holder = rootView.superview {
+            let w = bounds.width, h = bounds.height
+            let s = (w - 32) / w
+            let statusBar = scene.statusBarManager?.statusBarFrame.height ?? appWindow.safeAreaInsets.top
+            let backdrop = UIView(frame: holder.bounds)
+            backdrop.backgroundColor = .black
+            holder.insertSubview(backdrop, belowSubview: rootView)
+            let oldMask = rootView.layer.masksToBounds
+            let oldRadius = rootView.layer.cornerRadius
+            let oldCurve = rootView.layer.cornerCurve
+            rootView.layer.cornerCurve = .continuous
+            rootView.layer.masksToBounds = true
+            rootView.layer.cornerRadius = 38 / s   // drawn at 38 once scaled
+            rootView.transform = CGAffineTransform(translationX: 0, y: statusBar - h * (1 - s) / 2)
+                .scaledBy(x: s, y: s)
+            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseInOut) {
+                rootView.transform = .identity
+                rootView.layer.cornerRadius = StoryCameraSlideAnimator.appleCardRadius
+            } completion: { _ in
+                rootView.layer.cornerRadius = oldRadius
+                rootView.layer.masksToBounds = oldMask
+                rootView.layer.cornerCurve = oldCurve
+                backdrop.removeFromSuperview()
+            }
+        }
+
+        // The sheet drops, its dim and the black lift: all start on the tap.
         if let sheetView {
             let drop = bounds.height - sheetView.frame.minY
             UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseInOut) {
                 sheetView.transform = CGAffineTransform(translationX: 0, y: drop)
             }
         }
+        UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseInOut) { sheetDim.alpha = 0 }
         UIView.animate(withDuration: 0.15, delay: 0, options: .curveEaseInOut) { dim.alpha = 0 }
         if let chromeView {
             UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseInOut) { chromeView.alpha = 0 }
