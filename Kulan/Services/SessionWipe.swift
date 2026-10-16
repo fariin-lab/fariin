@@ -86,6 +86,7 @@ enum SessionWipe {
         // the sharp one — their admin permissions, which would put a live Send Announcement screen in
         // a stranger's Settings until the listener caught up.
         OfficialChannelStore.shared.reset()
+        OfficialStories.shared.reset()   // the Fariin row in Stories: this account's answer only
         // Its launch copy is a separate key and `reset()` does not touch it — it is per-uid, but the
         // next account should not inherit a row at all, not even for the frame before its own
         // listeners answer.

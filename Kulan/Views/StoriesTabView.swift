@@ -1499,11 +1499,13 @@ struct StoriesTabView: View {
         // Owner 2026-10-11: the app's own outline icons, not system symbols — the chat-list menu's
         // chat mark and Settings' profile mark; Hide is eye.slash (owner 2026-10-16: not the Archive mark), as in the story. `CMContextMenu` falls back to an
         // asset when the name is not a symbol.
-        [CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
-         CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g },
-         // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
-         // `hideTarget`.
-         CMAction(title: "Hide Stories", icon: "eye.slash", destructive: true) { hideTarget = g }]
+        // Fariin (official stories, 2026-10-16) has a chat but no profile: no View Profile.
+        let official = OfficialChannel.isOfficial(g.authorUid)
+        return [CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) }]
+            + (official ? [] : [CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g }])
+            // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
+            // `hideTarget`.
+            + [CMAction(title: "Hide Stories", icon: "eye.slash", destructive: true) { hideTarget = g }]
     }
 
     /// My own card's menu, the strip's again: the one action a card of my own stories offers that a
@@ -1636,6 +1638,8 @@ struct StoriesTabView: View {
     }
 
     private func openStoryChat(_ g: StoryGroup) {
-        path.append(ChatTarget(id: storyCid(g.authorUid), name: g.name, photo: g.photoUrl))
+        // Fariin's chat is the official channel, not a 1:1 with a person (official stories).
+        let cid = OfficialChannel.isOfficial(g.authorUid) ? OfficialChannel.cid : storyCid(g.authorUid)
+        path.append(ChatTarget(id: cid, name: g.name, photo: g.photoUrl))
     }
 }

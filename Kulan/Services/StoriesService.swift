@@ -2106,6 +2106,8 @@ final class StoriesService {
         // document, so a receipt or a watermark for one is a write that can only ever fail — and it
         // would fail against the REAL database, under the real account, for a story that is not there.
         guard !StoriesRepository.isDemoAuthor(story.authorUid) else { return }
+        // Nor for Fariin: not an account, and its stories are not in `stories`. Seen stays local.
+        guard !OfficialChannel.isOfficial(story.authorUid) else { return }
         // Advance my per-author watermark to this story's POST time — never backwards, one write
         // per advance. (Was a wall-clock serverTimestamp, which made watching 1 of 5 stories mark
         // the whole ring seen; the watermark now means "the newest story of theirs I've watched".)
@@ -3094,6 +3096,8 @@ final class StoriesRepository {
         // Read from the cache, not built here: this method is not main-actor isolated and building
         // them draws with UIKit. Same arrangement `demoChats` already uses.
         if DemoMode.chatsInjected { groups.append(contentsOf: DemoMode.demoStories) }
+        // Fariin's official stories, as one more person in the row. See `OfficialStories`.
+        if let official = OfficialStories.group { groups.append(official) }
 
         // Unseen first, then by most-recent story. (Watermarks are applied on commit below,
         // so hasUnseen here can be pessimistic — the row re-sorts from live state anyway.)

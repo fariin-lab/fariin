@@ -580,6 +580,7 @@ struct RootView: View {
         OfficialChannelStore.shared.start()
         AdminStore.shared.start()
         OfficialConfig.shared.start()
+        OfficialStories.shared.refresh()   // the Fariin row in Stories, ready before the tab opens
         // The server's copy of every limit the app enforces. Cheapest of the lot — one document,
         // usually a handful of numbers — and it has to be running before Add Story can be pressed,
         // because that button asks it whether there is any allowance left before it opens anything.

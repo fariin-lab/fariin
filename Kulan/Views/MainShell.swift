@@ -200,7 +200,10 @@ struct MainShell: View {
         // audit M-089, 2026-10-07: back from the background, look for calls missed meanwhile so the
         // badge shows them. The repository's 30 s TTL keeps a quick app switch from re-reading.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await CallsRepository.shared.load() } }
+            if phase == .active {
+                Task { await CallsRepository.shared.load() }
+                OfficialStories.shared.refresh()   // Fariin's stories; a 5-minute floor inside
+            }
         }
         // Load call history at startup so the badge is right before the tab is ever opened
         // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).

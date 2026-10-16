@@ -1,3 +1,4 @@
+                            storyType: plainOnly
 import SwiftUI
 import PhotosUI
 import Photos
@@ -1772,8 +1773,13 @@ struct StoryViewer: View {
                 // the app reads), so the story header cannot disagree with the chat list about who
                 // is verified.
                 user: StoryUIUser(id: g.authorUid, name: g.name, image: g.photoUrl ?? "",
-                                  isVerified: VerificationIndex.isVerified(g.authorUid),
-                                  isGoldVerified: VerificationIndex.of(g.authorUid)?.kind?.isGold == true),
+                                  // Fariin is not in the index; its badge is the official setting (2026-10-16).
+                                  isVerified: OfficialChannel.isOfficial(g.authorUid)
+                                      ? OfficialConfig.shared.badge != .none
+                                      : VerificationIndex.isVerified(g.authorUid),
+                                  isGoldVerified: OfficialChannel.isOfficial(g.authorUid)
+                                      ? OfficialConfig.shared.badge == .gold
+                                      : VerificationIndex.of(g.authorUid)?.kind?.isGold == true),
                 isMine: g.isMine,   // drives the "…" menu: my story shows Delete, others show Hide Stories
                 stories: g.stories.map { s in
                     // ⚠️ HOISTED OUT OF THE CALL BELOW, and it is not a tidy-up. That initialiser
@@ -1784,7 +1790,11 @@ struct StoryViewer: View {
                     // exactly what tips it over. One `let`, resolved once.
                     // Videos too since 2026-10-11 (owner: "user repost video and image") — the
                     // composer takes the clip itself now, see `beginRepost`.
-                    let canPassOn = StoryShareRights.allows(s)
+                    // Official stories are announcements: nothing to share, repost or copy (2026-10-16).
+                    let canPassOn = !OfficialChannel.isOfficial(g.authorUid) && StoryShareRights.allows(s)
+                    // Fariin: no reply bar and no heart, like my own (owner 2026-10-16). Hoisted for the
+                    // same type-checker reason as `canPassOn`.
+                    let plainOnly = g.isMine || OfficialChannel.isOfficial(g.authorUid)
                     // A repost cannot be reposted again (owner, 2026-10-12: "Ali reposts Abdi, Ahmed cannot repost that, but can repost Ali's own story"). Share and Copy Link are unchanged.
                     let canRepost = canPassOn && s.repostOf == nil
                     return StoryUI.Story(
@@ -1902,7 +1912,7 @@ struct StoryViewer: View {
                             // `setStoryReaction` sends nothing, by design. The heart still turned
                             // red and said "Reacted" while the author got nothing. Hidden, it
                             // promises nothing; turning receipts back on brings it back.
-                            storyType: g.isMine
+                            storyType: plainOnly
                                 ? .plain()
                                 : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: StoryPrefs.viewReceiptsOn,
@@ -2704,6 +2714,8 @@ struct StoryViewer: View {
                 // page onto my own bucket mid-visit and the tap has to answer for the story that is
                 // on screen at that moment, not the one the viewer was opened with.
                 guard user.id != AuthService.shared.uid else { return }
+                // Fariin has no profile to open (it is not an account); its chat is the place for it.
+                guard !OfficialChannel.isOfficial(user.id) else { return }
                 // Open the profile OVER the story (paused) — do NOT close the viewer.
                 if let g = groups.first(where: { $0.authorUid == user.id }) { profileSheet = g }
             },
