@@ -4569,7 +4569,9 @@ struct ChatRow: View, Equatable {
                 // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
                 // other row, so nothing about the list's rhythm changes.
                 if OfficialChannel.isOfficial(conv.id) {
-                    OfficialAvatar(size: 56)
+                    // `photoSize`, not 56 (owner 2026-10-16): with an official story up, the mark
+                    // shrinks inside the ring with the same gap as everybody else's photo.
+                    OfficialAvatar(size: photoSize)
                 } else {
                     AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
                                size: photoSize)

@@ -130,7 +130,10 @@ struct StoryListRow: View {
                     .font(.system(size: 17, weight: .semibold))   // the reference app's name size
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                if let badgeUid, !badgeUid.isEmpty { VerifiedMark(uid: badgeUid, size: 15) }
+                // Fariin is not in the verified index; its tick is the channel's own (`VerifiedTick`,
+                // the colour the owner set), as on the chat list (owner 2026-10-16).
+                if let badgeUid, OfficialChannel.isOfficial(badgeUid) { VerifiedTick(size: 15) }
+                else if let badgeUid, !badgeUid.isEmpty { VerifiedMark(uid: badgeUid, size: 15) }
             }
             Text(subtitle)
                 .font(.system(size: 15))
