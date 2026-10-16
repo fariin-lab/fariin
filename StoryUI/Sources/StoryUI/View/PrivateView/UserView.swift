@@ -159,7 +159,9 @@ struct UserView: View {
             // "Notify About Stories" / "Do Not Notify About Stories".
             if let on = StoryNotifySeam.isOn?(userId) {
                 out.append(.init(title: on ? "Mute notifications" : "Get notifications",
-                                 systemImage: on ? "bell.slash" : "bell") {
+                                 systemImage: on ? "bell.slash" : "bell",
+                                 // His own bell (owner 2026-10-16), the one the profile's mute uses.
+                                 assetImage: on ? "ic_bell_off" : "ic_bell") {
                     NotificationCenter.default.post(name: .init("storyActionNotify"), object: nil)
                 })
             }
