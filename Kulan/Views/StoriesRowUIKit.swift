@@ -1867,7 +1867,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Send Message", icon: "message") { [weak self] in self?.onMessage(g) },
                 CMAction(title: "View Profile", icon: "person.crop.circle") { [weak self] in self?.onProfile(g) },
-                CMAction(title: "Hide Stories", icon: "archivebox", destructive: true) { [weak self] in
+                CMAction(title: "Hide Stories", icon: "eye.slash", destructive: true) { [weak self] in
                     self?.confirmHide(g)
                 },
                 // The name is lifted with the card now (his "also show Name"). It comes from the card

@@ -1493,13 +1493,13 @@ struct StoriesTabView: View {
     /// hold the same way; the layout is the only thing that differs between them.
     private func friendActions(_ g: StoryGroup) -> [CMAction] {
         // Owner 2026-10-11: the app's own outline icons, not system symbols — the chat-list menu's
-        // chat mark, Settings' profile mark and the Archive mark. `CMContextMenu` falls back to an
+        // chat mark and Settings' profile mark; Hide is eye.slash (owner 2026-10-16: not the Archive mark), as in the story. `CMContextMenu` falls back to an
         // asset when the name is not a symbol.
         [CMAction(title: "Send Message", icon: "ic_menu_chat") { openStoryChat(g) },
          CMAction(title: "View Profile", icon: "ic_account") { profileGroup = g },
          // The alert, not the hide: `StoryPrefs.setHidden` happens on the confirmation. See
          // `hideTarget`.
-         CMAction(title: "Hide Stories", icon: "ic_archive", destructive: true) { hideTarget = g }]
+         CMAction(title: "Hide Stories", icon: "eye.slash", destructive: true) { hideTarget = g }]
     }
 
     /// My own card's menu, the strip's again: the one action a card of my own stories offers that a
