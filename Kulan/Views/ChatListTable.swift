@@ -1081,7 +1081,21 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         // first responder is a search in progress, never a leftover.
         let active = item.searchController?.isActive ?? false
         let inUse = bar.searchTextField.isFirstResponder || bar.searchTextField.isEditing
-        if !active, !inUse, bar.showsCancelButton { bar.setShowsCancelButton(false, animated: false) }
+        if !active, !inUse, bar.showsCancelButton {
+            bar.setShowsCancelButton(false, animated: false)
+            // ⛔ AND HAND THE BUTTON BACK TO THE CONTROLLER — owner 2026-10-16: search, open a
+            // profile, come back, tap search: no X. Opening a result closes the search
+            // (`dismissSearch`) in the same moment the profile is pushed, so this page leaves the
+            // window before the controller has hidden its button. That leftover is what the line
+            // above clears, but the controller still counts its button as shown and does not
+            // show it again on the next search. Turning its automatic button off and on makes it
+            // take the bar's real state as its own. Best reading of the code, not yet seen on a
+            // phone.
+            if let sc = item.searchController, sc.automaticallyShowsCancelButton {
+                sc.automaticallyShowsCancelButton = false
+                sc.automaticallyShowsCancelButton = true
+            }
+        }
     }
 
     // ⛔ NO `UINavigationBarAppearance` ON THIS PAGE — 2026-09-24. `scrolledAppearance` and
