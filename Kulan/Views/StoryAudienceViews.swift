@@ -505,8 +505,8 @@ struct CustomStoryEmojiHeader: View {
             ZStack {
                 // The cards' colour: white in light, grey in dark (owner 2026-10-16: it was black
                 // in dark mode, the page's own colour).
+                // No border ring (owner 2026-10-16: the thin light outline read as a white circle).
                 Circle().fill(Color(.secondarySystemGroupedBackground))
-                Circle().strokeBorder(Color(.separator), lineWidth: 0.5)
                 if let e = emoji, !e.isEmpty {
                     Text(e).font(.system(size: 52))
                 } else {

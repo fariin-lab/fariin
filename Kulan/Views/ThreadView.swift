@@ -1461,6 +1461,7 @@ struct ThreadView: View {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid,
                                     onDeleteForMe: { m in deleteForMe(m) },
+                                    onDeleteForEveryone: { m in deleteForEveryoneFromViewer(m) },
                                     clipProvider: { MediaOpenRects.clipRect })
                         .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
                 } else {
@@ -1475,6 +1476,7 @@ struct ThreadView: View {
                                         Task { await sendPhoto(data, viewOnce: viewOnce, caption: caption) }
                                     },
                                     onDeleteForMe: { m in deleteForMe(m) },
+                                    onDeleteForEveryone: { m in deleteForEveryoneFromViewer(m) },
                                     clipProvider: { MediaOpenRects.clipRect })
                 }
             }
@@ -5827,6 +5829,21 @@ struct ThreadView: View {
             return
         }
         repo.hideForMe(m.id)
+    }
+
+    /// Delete for Everyone from the photo viewer, the bubble's way: the message becomes a tombstone
+    /// NOW and the server work runs behind it. The viewer used to await the server before closing,
+    /// a whole round trip with nothing moving (owner 2026-10-16: "is taking time").
+    private func deleteForEveryoneFromViewer(_ m: Message) {
+        let undoable = repo.markDeletedLocally(m.id)
+        Task {
+            if await !ChatService.deleteMessage(cid: cid, messageId: m.id) {
+                await MainActor.run {
+                    if undoable { repo.restoreAfterFailedDelete(m.id) }
+                    showJumpToast("Couldn't delete for everyone")
+                }
+            }
+        }
     }
 
     /// The signal came back: everything that failed on the way down gets one more go, without

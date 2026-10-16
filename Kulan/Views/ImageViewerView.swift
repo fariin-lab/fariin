@@ -100,6 +100,9 @@ struct ImageViewerView: View {
     // trash offers only Delete for Everyone (own media). When present, the viewer offers BOTH options
     // like the message bubble's delete.
     var onDeleteForMe: ((Message) -> Void)? = nil
+    // Delete-for-everyone wired by the conversation: the bubble becomes a tombstone at once and the
+    // server works behind it, so the viewer closes without waiting. nil keeps the awaited path.
+    var onDeleteForEveryone: ((Message) -> Void)? = nil
     // The visible viewport of the screen the media came from (window coords) — the drag-close's landing
     // is clipped through it (the reference app's clippingAreaInsets). The conversation wires this to the message
     // list's live viewport; profile/gallery leave it nil (no clipping, same as before).
@@ -114,11 +117,13 @@ struct ImageViewerView: View {
     init(message: Message, cid: String,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
          onDeleteForMe: ((Message) -> Void)? = nil,
+         onDeleteForEveryone: ((Message) -> Void)? = nil,
          clipProvider: @escaping () -> CGRect? = { nil },
          rectScope: MediaOpenRects.Scope = .chat) {
         self.gallery = [message]; self.cid = cid
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
+        self.onDeleteForEveryone = onDeleteForEveryone
         self.clipProvider = clipProvider
         self.rectScope = rectScope
         _current = State(initialValue: message.id)
@@ -127,6 +132,7 @@ struct ImageViewerView: View {
     init(message: Message, in gallery: [Message], cid: String,
          onSendEdited: ((Data, String, Bool) -> Void)? = nil,
          onDeleteForMe: ((Message) -> Void)? = nil,
+         onDeleteForEveryone: ((Message) -> Void)? = nil,
          clipProvider: @escaping () -> CGRect? = { nil },
          rectScope: MediaOpenRects.Scope = .chat) {
         let list = gallery.isEmpty ? [message] : gallery
@@ -134,6 +140,7 @@ struct ImageViewerView: View {
         self.cid = cid
         self.onSendEdited = onSendEdited
         self.onDeleteForMe = onDeleteForMe
+        self.onDeleteForEveryone = onDeleteForEveryone
         self.clipProvider = clipProvider
         self.rectScope = rectScope
         _current = State(initialValue: message.id)
@@ -302,6 +309,7 @@ struct ImageViewerView: View {
                     // deleteMessage routes album pages (synthetic "<parentId>-<i>" ids) to a real
                     // album-item removal — the raw id used to target a nonexistent doc, which the
                     // server refused, so an album photo could never be deleted for everyone.
+                    if let onDeleteForEveryone { onDeleteForEveryone(message); dismiss(); return }
                     Task {
                         if await ChatService.deleteMessage(cid: cid, messageId: message.id) {
                             await MainActor.run { dismiss() }
