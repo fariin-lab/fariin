@@ -774,8 +774,15 @@ final class OfficialChannelStore {
             byId[a.id] = merged
         }
 
+        // ⛔ NOTHING FROM BEFORE THE ACCOUNT EXISTED — owner 2026-10-16: an account made today saw
+        // every broadcast ever sent to all users. Broadcasts are one shared document list that every
+        // phone reads, and nothing compared them with when the account was made. A broadcast that
+        // went out before this account's creation is now not for it; a personal copy was written to
+        // this person, so it always is. No creation date known = no filter (the old behaviour).
+        let joinedAt = Auth.auth().currentUser?.metadata.creationDate
         let next = byId.values
             .filter { $0.reaches(uid: uid, build: build, region: region, now: now) }
+            .filter { a in a.isPersonal || joinedAt.map { a.sortAt >= $0 } ?? true }
             // Delete-for-me: what had ARRIVED by the moment of clearing is gone (see `arrivedAt`).
             .filter { $0.arrivedAt.timeIntervalSince1970 * 1000 > cleared }
             // BLOCKING STOPS THE NEWS, NOT THE ALARM. Read from another mainstream messenger's own block sheet, which
